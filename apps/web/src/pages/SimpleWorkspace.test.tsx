@@ -11433,7 +11433,7 @@ it("shows no scheduled status line on a pass scheduled while Scarlet still works
     const pass = container.querySelector<HTMLElement>('[aria-label="Dialogue pass"]')!;
     const line = pass.querySelector<HTMLElement>(".simple-pass-line")!;
     // The decided call stays in For you with its tabs above it, and nothing extra renders on the line below.
-    expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
+    expect(reviewModes(pass)).toEqual(tabs());
     expect([...line.children].map(part => part.textContent)).toEqual([""]);
     expect(pass.querySelector(".simple-pass-ok")).toBeNull();
   });
@@ -11455,16 +11455,16 @@ it("leaves another request's edit open when a pass with its full list open leave
   await show();
   await act(async () => {});
   const pass = () => container.querySelector<HTMLElement>('[aria-label="Dialogue pass"]')!;
-  const list = () => pass().querySelector(".simple-pass-list")?.getAttribute("aria-label");
+  const lists = () => [...pass().querySelectorAll(".simple-pass-list")].map(list => list.getAttribute("aria-label"));
   expect(pass().closest(".simple-pin")).not.toBeNull();
   // The link is worded for the rows it opens: the applied cut and the pass's two calls, which are listed among its
   // edits. So it isn't "See it".
-  expect(reviewModes(pass())).toEqual([["For you", "true"], ["See all", "false"]]);
-  // Its full list is open. While it waits on the editor only its calls and flagged edits are marked: its applied cut
-  // isn't, and neither is a call this staged pass can't place on the working cut.
+  expect(reviewModes(pass())).toEqual(tabs());
+  // Its optional line is open, so every edit is listed. While it waits on the editor only its calls and flagged edits
+  // are marked: its applied cut isn't, and neither is a call this staged pass can't place on the working cut.
   await click(seeAll(pass())!);
   await act(async () => {});
-  expect(list()).toBe("Every edit");
+  expect(lists()).toEqual(["Calls that need you", "Optional edits"]);
   expect(pass().querySelectorAll(".simple-pass-list > li")).toHaveLength(3);
   expect(ticks()).toEqual([]);
   // The editor opens an edit of the other request, with the list still open.
@@ -11472,7 +11472,7 @@ it("leaves another request's edit open when a pass with its full list open leave
   await act(async () => {});
   expect(openTitle()).toBe("music bed");
   // Scarlet starts on a call sent back earlier, and that request takes the place above the box. The pass's line is
-  // mounted anew in the conversation with its list still open: the same list, so the open edit stays open.
+  // mounted anew in the conversation with its optional line still open: the same list, so the open edit stays open.
   const base = data.tasks.find(t => t.id === "task_done")!;
   const revision = { ...base, id: "task_revise", kind: "revise" as const, state: "running" as const, finishedAt: undefined, changeIds: [], expectedSeconds: undefined,
     instruction: "Start it later.", createdAt: new Date().toISOString(), startedAt: new Date().toISOString(),
@@ -11480,7 +11480,8 @@ it("leaves another request's edit open when a pass with its full list open leave
   await event(d => ({ ...d, tasks: [...d.tasks, revision], changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "revising" as const } : c) }));
   await act(async () => {});
   expect(pass().closest(".simple-pin")).toBeNull();
-  expect(list()).toBe("Every edit");
+  // While its call is revised nothing of the pass waits on the editor, so it has the one list of every edit, open.
+  expect(lists()).toEqual(["Every edit"]);
   expect(openTitle()).toBe("music bed");
   expect(editPanel()).not.toBeNull();
   // Closed, the timeline goes back to the pass's open list. While its call is revised nothing of it waits on the
@@ -11520,13 +11521,13 @@ it("says a stopped pass's cut wasn't checked, lists a skipped call as Skipped, a
   expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ choices: [{ index: 0, choice: "cut" }, { index: 2, choice: "keep" }], applyWhenDone: false }));
   expect(note().textContent).toBe("Breath before the price.");
   expect(note().querySelector(".edit-card-unchecked")).toBeNull();
-  // Every call of the pass is listed, in timeline order, the one made before the pass stopped included. The skipped
-  // call keeps its place, its number no longer amber, and says how it was decided. A call's number is its place among
-  // all three of the pass's calls.
+  // For you lists the calls that wait. The skipped call stays there for its moment, its number no longer amber, and
+  // says how it was decided; the one made before the pass stopped is Done's. A call's number is its place among all
+  // three of the pass's calls.
   expect(passCard().querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Calls that need you");
   expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-check"),
     r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([["1", false, "A clean retake.", "Kept"], ["3", false, "Repeated aside.", "Rejected"], ["2", true, "Breath before the price.", expect.stringMatching(/^−/)]]);
+    .toEqual([["3", false, "Repeated aside.", "Rejected"], ["2", true, "Breath before the price.", expect.stringMatching(/^−/)]]);
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
   expect(buttonIn(call(), "Keep")?.getAttribute("aria-pressed")).toBe("false");
   // The last call applies the pass, leaving in what was skipped. The working cut had moved on, so the engine refused
@@ -11688,7 +11689,8 @@ const loggedActions = async (during: () => Promise<void>) => {
 it("logs which edit a shortcut kept or stepped to, where the key alone says only that it was pressed", async () => {
   appliedEdits();
   await show();
-  await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
+  // The list goes from the edit that waits ("wrap", edit 3) to the two optional ones under it.
+  await click(editRowsIn(turnFor("chg_approved_2"))[2]!);
   await act(async () => {});
   const lines = await loggedActions(async () => {
     await press("ArrowDown");
@@ -11698,9 +11700,9 @@ it("logs which edit a shortcut kept or stepped to, where the key alone says only
     await press("k");
   });
   expect(lines).toEqual([
+    "[action] step to=edit edit=1 of=3 change=chg_approved_2",
     "[action] step to=edit edit=2 of=3 change=chg_approved_2",
-    "[action] step to=edit edit=3 of=3 change=chg_approved_2",
-    "[action] keep-edit edit=3 of=3 change=chg_approved_2 flagged=true",
+    "[action] keep-edit edit=2 of=3 change=chg_approved_2",
   ]);
 });
 
@@ -12224,13 +12226,13 @@ it("underlines the chat actions, makes edit result links stand out, and keeps am
     expect(look("Finish when ready")).toBe("silver underline gray");
     const review = turnFor("chg_approved_2");
     const needed = review.querySelector(".simple-pass-need")!;
-    const every = seeAll(review)!;
-    // The active choice is underlined, with amber for the review count and its selected mode.
+    const other = tabNamed(review, "Done");
+    // The tab shown is underlined, with amber for the review count and for For you while it is the one shown.
     expect(styled(needed, "color", "border-bottom-color")).toEqual(["white", "orange"]);
-    expect(styled(every, "color", "border-bottom-color")).toEqual(["silver", "transparent"]);
+    expect(styled(other, "color", "border-bottom-color")).toEqual(["silver", "transparent"]);
     expect(styled(needed.querySelector(".simple-review-tab-count")!, "color")).toEqual(["orange"]);
-    await click(every);
-    expect(styled(every, "color", "border-bottom-color")).toEqual(["white", "white"]);
+    await click(other);
+    expect(styled(other, "color", "border-bottom-color")).toEqual(["white", "white"]);
     expect(styled(needed, "color", "border-bottom-color")).toEqual(["silver", "transparent"]);
     // Answer shows on the question once the box is aimed elsewhere.
     await act(async () => composer.props!.onClearTarget!());
@@ -12243,7 +12245,7 @@ it("underlines the chat actions, makes edit result links stand out, and keeps am
   }
 });
 
-it("draws a revision of one applied edit under that edit's row, at work, and under the sentence while the list is closed", async () => {
+it("draws a revision of one applied edit under that edit's row in Working, at work", async () => {
   appliedEdits();
   idle();
   const base = data.tasks.find(t => t.id === "task_done")!;
@@ -12260,17 +12262,20 @@ it("draws a revision of one applied edit under that edit's row, at work, and und
   await showFolded();
   await act(async () => {});
   const sub = () => container.querySelector<HTMLElement>('.subunit[data-run="task_fix"]')!;
-  const owner = () => sub().closest<HTMLElement>(".unit")!;
+  const owner = () => container.querySelector<HTMLElement>(".simple-pin .unit")!;
   // It is no block of its own: it is inside the request that made the edit, which holds the place above the message
   // box while Scarlet is on it.
   expect(container.querySelector('.unit[data-run="task_fix"]')).toBeNull();
-  expect(owner().closest(".simple-pin")).not.toBeNull();
+  expect(owner().getAttribute("data-run")).toBe("task_made");
   expect(owner().querySelector(":scope > .unit-msg .simple-revising")).toBeNull();
-  // While only the edit that needs the editor is listed it sits under what the request made: named for its edit, with
-  // the editor's words and Scarlet at work.
+  // For you lists only the edit that needs the editor. The edit being revised is Working's row, with its request
+  // directly under it: the editor's words and Scarlet at work.
   expect(owner().querySelector(".simple-edits")?.getAttribute("aria-label")).toBe("Edits that need you");
-  expect(sub().parentElement?.classList.contains("simple-pass")).toBe(true);
-  expect([tagIn(sub()), wordsOf(sub().querySelector(".subunit-msg p"))]).toEqual(["Edit at 0:00", "Make the captions bigger."]);
+  expect(sub()).toBeNull();
+  await click(tabNamed(owner(), "Working"));
+  DBG(owner(), "t19 working " + sub()?.outerHTML.slice(0, 600));
+  expect(owner().querySelector(".simple-edits")?.getAttribute("aria-label")).toBe("With Scarlet");
+  expect(wordsOf(sub().querySelector(".subunit-msg p"))).toBe("Make the captions bigger.");
   expect(sub().querySelector('[aria-label="Scarlet’s work"] .working-text')).not.toBeNull();
   // Its Stop is its own heading's last word, and the request that holds it has none: Scarlet isn't on that one.
   expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
@@ -12280,8 +12285,7 @@ it("draws a revision of one applied edit under that edit's row, at work, and und
   expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Pause editing", owner().querySelector(":scope > .unit-msg")]]);
   expect([...owner().querySelectorAll(":scope > .unit-msg .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing"]);
   expect([...sub().querySelectorAll(".subunit-msg > .unit-actions button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))).toEqual(["Stop this edit"]);
-  // Opened, the list has it directly under the row it revises, and that row's word moves while Scarlet works.
-  await click(seeAll(owner())!);
+  // It is directly under the row it revises, and that row's word moves while Scarlet works.
   const row = sub().previousElementSibling as HTMLElement;
   expect([row.className, row.querySelector(".simple-edit-title")?.textContent]).toEqual(["simple-edit", "captions"]);
   expect([row.querySelector(".simple-edit-check")?.textContent, row.querySelector(".simple-edit-check")?.classList.contains("working-text")]).toEqual(["Revising…", true]);
