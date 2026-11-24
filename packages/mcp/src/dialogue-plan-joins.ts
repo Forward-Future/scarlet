@@ -167,9 +167,19 @@ export async function verifySurvivingJoins(
         const { heard, word, side } = partialWordRepeat;
         const target = side === "start" ? contributing[0]! : contributing.at(-1)!;
         // Only the cut responsible for this outside edge can repair it. A neighbor may have been staged explicitly.
-        if (side === "start" ? target.d.start === join.start : target.d.end === join.end)
+        const plays = `“${heard}” from a cut-off “${word}” beside another “${word}”`;
+        if (forReview) {
+          // A held cut plays only once the editor has heard it, so what its join would play is evidence on it, as a
+          // phrase played twice is. Refused, it left the retake playing with no one asked: “and that's what makes this
+          // so ‖ and that's what makes this so” was refused for 11 ms of a cut-off “and”, and the pass marked a To do
+          // instead (reimann 2, 2026-11-23).
+          const evidence = `As staged, the ${side === "start" ? "outgoing" : "incoming"} audio plays ${plays}.`;
+          target.d.held = [target.d.held, evidence].filter(Boolean).join(" ");
+          report.push({ cut: target.c.input, kind: target.c.kind, ...(target.c.words && { words: target.c.words }), asked: target.c.decision,
+            outcome: "review", range: [r2(target.d.start), r2(target.d.end)], evidence });
+        } else if (side === "start" ? target.d.start === join.start : target.d.end === join.end)
           issues.push({ cut: target.c.input, partialWordRepeat, words: word,
-            reason: `The ${side === "start" ? "outgoing" : "incoming"} audio plays “${heard}” from a cut-off “${word}” beside another “${word}”.` });
+            reason: `The ${side === "start" ? "outgoing" : "incoming"} audio plays ${plays}.` });
       }
       // A restart cut that runs past the restart takes words the sentence needs, and nothing at the join says them
       // again. Only a tool that takes removals can say they go on purpose (dropWords).

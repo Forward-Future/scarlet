@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 23, 2026
 
 - While you review an edit, cuts still waiting on your call play as Scarlet would make them, and show on the timeline as a gap with their number, so retakes nearby no longer look missed.
+- When Scarlet can't take out a repeated line cleanly, it now asks you about the cut instead of leaving the line in and marking a To do.
 - The talking-head example skill no longer includes Matt’s own camera setup or editor name, so any editor can adapt it.
 - Scarlet now knows what was said earlier in the chat, so a message like “tell me the timestamps” or “the two clips you just found” is read as being about the request before it, links and times Scarlet showed you while it worked included.
 - What Scarlet finds for you at a place in the video, such as a clip to play there, is now listed under your request and opens on the timeline like any edit, and a web address in Scarlet's reply or on an edit's card is a link that opens in your browser.
