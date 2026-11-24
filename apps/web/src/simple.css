@@ -1069,6 +1069,25 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 @media (hover: hover) {
   .review-sec-body[aria-label="Working"] li:not(:hover, :focus-within) > .subunit .unit-actions { opacity: 0; }
 }
+/* While Scarlet is on it, an edit in Working is one row (the editor asked on 2026-11-24): the ring round its number
+   turns, and the line that says what Scarlet is doing is left to screen readers. Stop is at the row's right while the
+   pointer or the keyboard is on it. One waiting its turn, asking or stopped keeps its line under the row, and so does a
+   recheck Scarlet began itself. */
+.review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) { position: relative; }
+.review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) > button { padding-right: 30px; }
+.review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) > .subunit { position: static; margin: 0; padding: 0; border: 0; }
+.review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) > .subunit > .req {
+  position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) > .subunit > .subunit-msg { top: 4px; right: 6px; }
+.review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) > button .edit-badge { position: relative; border-color: transparent; }
+.review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) > button .edit-badge::after { content: ""; position: absolute; inset: -1.2px;
+  border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
+@media (prefers-reduced-motion: no-preference) {
+  .review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) > button .edit-badge::after { animation: req-mark-turn 1s linear infinite; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .review-sec-body[aria-label="Working"] li:has(> .subunit > .req > .req-now):not(:has(.is-auto)) > button .edit-badge::after { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
+}
 .review-rail-foot { flex: none; max-height: 55%; overflow-y: auto; padding: 0 12px 8px; border-top: 1px solid var(--color-line); }
 .review-sec { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 6px; border: 0; background: none; color: var(--color-muted);
   font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; cursor: pointer; }
