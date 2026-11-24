@@ -17,14 +17,14 @@ it("puts every row under exactly one tab: waiting, then with Scarlet, then decid
   expect(rowPlace(["kept", "kept"], is)).toBe("done");
 });
 
-it("shows For you until Working or Done is pressed, its optional line open or not", () => {
+it("shows For you until Working or Done is pressed, low risk edits included or not", () => {
   expect([undefined, "need", "all", "working", "done"].map(tabShown)).toEqual(["you", "you", "you", "working", "done"]);
 });
 
-it("lists a tab's rows top to bottom: For you's waiting rows, then the optional ones while their line is open", () => {
+it("lists a tab's rows top to bottom: For you's waiting rows, with the low risk ones in their place among them while included", () => {
   const rows = [row("a", "optional", 1), row("b", "you", 2), row("c", "working", 3), row("d", "done", 4), row("e", "you", 5), row("f", "optional", 6)];
   expect(keys(rowsOfTab(rows, "you", false, undefined))).toEqual(["b", "e"]);
-  expect(keys(rowsOfTab(rows, "you", true, undefined))).toEqual(["b", "e", "a", "f"]);
+  expect(keys(rowsOfTab(rows, "you", true, undefined))).toEqual(["a", "b", "e", "f"]);
   expect(keys(rowsOfTab(rows, "working", true, undefined))).toEqual(["c"]);
   expect(keys(rowsOfTab(rows, "done", false, undefined))).toEqual(["d"]);
 });
@@ -71,7 +71,7 @@ it("builds a request's stops from its rows, its calls and what was rejected, and
   // A moment stands at its first edit's time and has no number of its own.
   expect(stops.map(s => [s.place, s.at, s.num])).toEqual([["you", 1, 7], ["optional", 2, undefined], ["you", 3, 1], ["done", 0, undefined]]);
   expect(stopsShown(stops, undefined, { numbers: false }).map(s => s.call ?? s.row)).toEqual([first, "cut 1"]);
-  expect(stopsShown(stops, "all", { numbers: false }).map(s => s.call ?? s.row)).toEqual([first, "cut 1", moment]);
+  expect(stopsShown(stops, "all", { numbers: false }).map(s => s.call ?? s.row)).toEqual([first, moment, "cut 1"]);
   // Done holds only the rejected edit, which is no stop.
   expect(stopsShown(stops, "done", { numbers: false })).toEqual([]);
 });

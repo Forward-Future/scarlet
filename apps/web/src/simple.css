@@ -60,9 +60,8 @@
 
 /* The tag in the box shows where a message goes: the line that names it is there for screen readers only. */
 .simple-target { position: absolute; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-/* The chat has no lines across it: the bubbles set its parts apart. */
-.simple-workspace .composer-dock { border-top: 0; }
-.simple-pin:has(> .unit:not([hidden])) + .simple-target + .composer-dock { padding-top: 9px; }
+.simple-target + .composer-dock { border-top: 1px solid var(--color-line); padding-top: 12px; }
+.simple-pin:has(> .unit:not([hidden])) + .simple-target + .composer-dock { border-top: 0; padding-top: 9px; }
 
 .simple-decide { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 clamp(16px, 2vw, 28px) 16px; padding: 9px 10px 9px 14px;
   border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); font-size: 12.5px; color: var(--color-muted); }
@@ -199,7 +198,6 @@
    edit waiting on the editor adds one amber line under the time naming it: "Cut 23 needs you". */
 .simple-timeline-need { display: block; padding: 6px 10px 7px; border-top: 1px solid var(--color-line); text-align: left;
   font-size: 12px; line-height: 1.35; color: var(--color-warn); }
-.simple-timeline-add { display: block; padding: 6px 10px 7px; border-top: 1px solid var(--color-line); text-align: left; font-size: 12px; line-height: 1.35; color: var(--color-fg); }
 
 /* What a request's rows share: the row that carries Stop when there is no heading, a quiet figure, and the steps so far. */
 .run-stop { margin-left: auto; }
@@ -242,11 +240,9 @@
 .edit-badge { justify-self: start; display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 1.2px solid var(--color-muted);
   background: var(--color-raised); color: var(--color-fg); font-size: 10px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .edit-badge.is-check { border-color: var(--color-warn); color: var(--color-warn); }
-/* Kept: the same round badge, filled, with a small tick on its corner. It keeps the badge's size, so a row kept doesn't
-   widen the numbers' column and shift every row of the list (2026-11-24). */
-.edit-badge.is-kept { position: relative; border-color: var(--color-fg); background: var(--color-fg); color: var(--color-bg); }
-.edit-badge.is-kept svg { position: absolute; right: -6px; bottom: -4px; width: 9px; height: 9px; padding: 1px; border-radius: 50%;
-  background: var(--color-fg); box-shadow: 0 0 0 1.5px var(--color-bg); color: var(--color-bg); stroke-width: 2.8; }
+.edit-badge.is-kept { display: inline-flex; align-items: center; gap: 1.5px; width: auto; padding: 0 4px 0 5px; border-radius: 9px;
+  border-color: var(--color-fg); background: var(--color-fg); color: var(--color-bg); }
+.edit-badge.is-kept svg { stroke-width: 2.6; }
 /* Which version a revised edit or call is on ("v2"): plain small text, as a row's figure is. The same after a row's
    words in either kind of list, where a call's row ends in it, and before the note on a call's card, where hovering it
    shows the earlier version and the note that sent it back. */
@@ -430,7 +426,7 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-pass-toggle:is(:hover, :focus-visible) { text-decoration-thickness: 2px; }
 .simple-pass-toggle:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
 /* Keep the review choices together above the list, including when its rows scroll in a pinned request. */
-.simple-review-tabs { display: flex; flex: none; align-items: baseline; gap: 18px; margin: 12px 0 5px; border-bottom: 1px solid var(--color-line); }
+.simple-review-tabs { display: flex; flex: none; align-items: baseline; gap: 18px; margin: 12px 0 12px; border-bottom: 1px solid var(--color-line); }
 .simple-review-tab { display: inline-flex; align-items: baseline; gap: 6px; min-height: 28px; margin-bottom: -1px; padding: 4px 0; border: 0;
   border-bottom: 2px solid transparent; background: none; color: var(--color-muted); font: inherit; font-weight: 600;
   line-height: 19px; white-space: nowrap; cursor: pointer; }
@@ -440,24 +436,32 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-tab-count { color: var(--color-warn); font-variant-numeric: tabular-nums; }
 /* Working's and Done's counts are quiet: only what waits on the editor is amber. */
 .simple-review-tab-tally { color: var(--color-muted); font-variant-numeric: tabular-nums; }
-/* Under For you's rows, the edits Scarlet didn't flag are one quiet line that opens them. */
-.simple-review-rest { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr); column-gap: 8px; align-items: center; width: 100%;
-  margin: 6px 0 2px; padding: 5px 0; border: 0; background: none; color: var(--color-muted); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
-.simple-review-rest.is-pass { padding-left: 12px; }
-.simple-review-rest:is(:hover, :focus-visible) { color: var(--color-fg); }
-.simple-review-rest:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
-.simple-review-rest-chev { display: inline-grid; place-items: center; width: 17px; color: var(--color-dim); }
-.simple-review-rest-chev svg { transition: transform .14s ease; }
-.simple-review-rest[aria-expanded="true"] .simple-review-rest-chev svg { transform: rotate(90deg); }
-/* The double check after "low risk edits": quiet, and says what those edits are on hover. */
-.simple-review-rest-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.simple-review-rest-checks { display: inline-grid; place-items: center; color: var(--color-dim); cursor: help; }
-.simple-review-rest-checks:hover { color: var(--color-fg); }
+/* Over For you's rows, one quiet line for the edits Scarlet didn't flag: a small switch and their count, which
+   includes them in For you's list. */
+.simple-low-risk { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 0 4px; color: var(--color-muted); font-size: 12.5px; }
+.simple-low-risk-toggle { display: inline-flex; align-items: center; gap: 9px; min-width: 0; padding: 4px 0; border: 0; background: none;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; transition: color .18s ease; }
+.simple-low-risk-toggle:is(:hover, :focus-visible, [aria-checked="true"]) { color: var(--color-fg); }
+.simple-low-risk-toggle:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 6px; }
+.simple-low-risk-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.simple-low-risk-switch { position: relative; flex: none; width: 24px; height: 14px; border-radius: 7px; background: var(--color-line);
+  transition: background-color .18s ease; }
+.simple-low-risk-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--color-muted); transition: transform .26s cubic-bezier(.3, 1.3, .5, 1), background-color .2s ease; }
+.simple-low-risk-toggle:hover .simple-low-risk-switch { background: #444; }
+.simple-low-risk-toggle[aria-checked="true"] .simple-low-risk-switch { background: var(--color-hi); }
+.simple-low-risk-toggle[aria-checked="true"] .simple-low-risk-switch::after { transform: translateX(10px); background: var(--color-bg); }
+/* While low risk rows open and close, the list keeps the editor's row still itself (`useLowRiskFold`), the same in
+   every webview: the browser's own scroll anchoring, where there is one, stays out of it. */
+.simple-pass-list, .simple-edits { overflow-anchor: none; }
+@media (prefers-reduced-motion: reduce) {
+  .simple-low-risk-toggle, .simple-low-risk-switch, .simple-low-risk-switch::after { transition: none; }
+}
 .simple-review-empty { margin: 0; padding: 8px 0; color: var(--color-muted); font-size: 12.5px; }
 /* A row the editor has just decided or sent back fades before it leaves For you. */
 .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { opacity: 0; transition: opacity .3s ease; }
 @media (prefers-reduced-motion: reduce) {
-  .simple-review-rest-chev svg, .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { transition: none; }
+  .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { transition: none; }
 }
 .simple-pass-ok { color: var(--color-ok); }
 /* Keep offscreen rows' absolute screen-reader labels in the list's scroll area. */
@@ -611,27 +615,19 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* A request's heading is a band from one edge of the chat to the other: the editor's words on up to two lines, after
    the tag of the cut or edit they were about, and at the right where it stands. The whole message is in its title. */
 .simple-chat, .simple-pin { --chat-gutter: 18px; }
-/* The editor's words are a soft grey bubble at the chat's right; what Scarlet says and makes is plain text at its left
-   (the editor chose this on 2026-11-24). Under the bubble, one small line at the right says where the request stands,
-   with its time and its controls. */
-.unit > .unit-msg { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 0; padding: 4px 0 0; }
-.unit-bubble, .simple-turn > .simple-msg.from-you, .req-say.is-yours { --bubble: #2a2a2a; }
-.unit-bubble { display: flex; max-width: 86%; min-width: 0; padding: 7px 12px; border-radius: 12px; background: var(--bubble); }
-.unit-msg .unit-bubble > p { color: var(--color-fg); }
-.unit-meta { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; max-width: 100%; }
-.unit-meta:not(:has(> :not(.unit-state:empty, .run-tokens.is-quiet))) { display: none; }
+.unit > .unit-msg { display: flex; align-items: baseline; gap: 10px; min-width: 0; margin: 0 calc(-1 * var(--chat-gutter, 18px)); padding: 8px var(--chat-gutter, 18px);
+  border-top: 1px solid var(--color-line); border-bottom: 1px solid var(--color-line); background: rgba(255, 255, 255, .04); }
 .unit > .req { padding-top: 6px; }
 /* A press on a request's band picks it: its edits are the ones on the timeline, and the band is deep violet, its words
    brighter, with a brighter violet rule at its left. Pressed again it lets go. */
 .unit > .unit-msg.is-markable { cursor: pointer; }
-.unit > .unit-msg.is-markable:hover .unit-bubble { background: #313131; }
-.unit > .unit-msg.is-marked .unit-bubble, .unit > .unit-msg.is-marked:hover .unit-bubble { background: #2a2236; box-shadow: inset 0 0 0 1px #4a3a64; }
+.unit > .unit-msg.is-markable:hover { background: rgba(255, 255, 255, .06); }
+.unit > .unit-msg.is-marked, .unit > .unit-msg.is-marked:hover { background: #2a2236; border-color: #3a3048; box-shadow: inset 3px 0 0 #b48ae6; }
+.unit > .unit-msg.is-marked p { color: var(--color-fg); }
 /* The arrow at the band's left folds the request to its heading, on one line, and opens it again. It points down while
    the request is open. What is under the band is only out of sight: Scarlet's work there goes on being read. */
-.unit-fold { position: absolute; top: 12px; left: -5px; display: inline-grid; place-items: center; width: 16px; height: 19px; padding: 0; border: 0;
-  background: none; color: var(--color-dim); cursor: pointer; opacity: 0; }
-/* The arrow shows while the pointer is on the request, or while it is folded. */
-.unit-msg:hover > .unit-fold, .unit-fold:focus-visible, .unit.is-collapsed .unit-fold { opacity: 1; }
+.unit-fold { flex: none; align-self: flex-start; display: inline-grid; place-items: center; width: 16px; height: 19px; margin: 0 -4px 0 -5px; padding: 0; border: 0;
+  background: none; color: var(--color-dim); cursor: pointer; }
 .unit-fold:is(:hover, :focus-visible) { color: var(--color-fg); }
 .unit-fold svg { transform: rotate(90deg); transition: transform .14s ease; }
 .unit.is-collapsed .unit-fold svg { transform: none; }
@@ -639,11 +635,13 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .unit.is-collapsed > .unit-msg p, .simple-pin .unit.is-collapsed > .unit-msg p { -webkit-line-clamp: 1; }
 /* A request's heading is one line, the rest on hover, so a few requests don't fill the chat. The one Scarlet is on
    and the one the editor picked keep two. */
-/* (The bubble keeps two lines, as every message of the editor's does.) */
+.unit > .unit-msg:not(.is-live, .is-marked) p, .simple-pin .unit > .unit-msg:not(.is-live, .is-marked) p { -webkit-line-clamp: 1; }
 /* Folded requests next to each other sit together as one list: no gap, one rule between them. An open request keeps
    its space. */
-.simple-chat > .simple-turn:has(> .unit.is-collapsed:last-child) + .simple-turn:has(> .unit.is-collapsed:first-child) { margin-top: -10px; }
-.simple-turn > .unit.is-collapsed + .unit.is-collapsed { margin-top: -6px; }
+.simple-chat > .simple-turn:has(> .unit.is-collapsed:last-child) + .simple-turn:has(> .unit.is-collapsed:first-child) { margin-top: -16px; }
+.simple-turn > .unit.is-collapsed + .unit.is-collapsed { margin-top: -12px; }
+.simple-chat > .simple-turn:has(> .unit.is-collapsed:last-child) + .simple-turn > .unit.is-collapsed:first-child > .unit-msg,
+.simple-turn > .unit.is-collapsed + .unit.is-collapsed > .unit-msg { border-top: 0; }
 @media (prefers-reduced-motion: reduce) { .unit-fold svg { transition: none; } }
 /* Where the request stands: a dot while Scarlet asks, a word once it stopped early or left a suggestion. */
 .unit-state { flex: none; align-self: center; display: inline-flex; align-items: center; font-size: 12.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; }
@@ -652,10 +650,8 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* What needs the editor, listed under the band, takes the dot's place. A word for how the run ended stays, before it: with calls or edits still waiting, the
    action under them ("Resume") would otherwise have nothing that says the run stopped. Folded, that list is out of
    sight (it is still there, so this would match it): the band keeps the dot for a question, beside its own count. */
-.unit:not(.is-collapsed):has(.simple-review-tab-count) > .unit-msg > .unit-meta > .unit-state:has(> .unit-dot) { display: none; }
+.unit:not(.is-collapsed):has(.simple-review-tab-count) > .unit-msg > .unit-state:has(> .unit-dot) { display: none; }
 /* A folded request says on its band what waits on the editor under it: For you, as its tab reads, and how many. */
-/* Answer after a question's dot, while the message box is aimed elsewhere: it puts the box back on the question. */
-.unit-answer { flex: none; align-self: center; line-height: 19px; white-space: nowrap; }
 .unit-need { flex: none; align-self: baseline; font-size: 12.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; }
 .unit-need-count { margin-left: 6px; color: var(--color-warn); font-variant-numeric: tabular-nums; }
 /* The active request's action follows its metrics. */
@@ -677,7 +673,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
    on the heading. The count stays where it was, unseen, for the note to hang from and for the keyboard to reach. */
 .unit-msg, .subunit-msg { position: relative; }
 .run-tokens.is-quiet { position: absolute; top: 0; right: 0; opacity: 0; pointer-events: none; }
-.unit > .unit-msg .run-tokens.is-quiet { top: auto; bottom: 0; right: 0; }
+.unit > .unit-msg > .run-tokens.is-quiet { top: 8px; right: var(--chat-gutter, 18px); }
 .run-tokens.is-quiet:focus-visible { opacity: 1; }
 /* A request's tokens open every part of the count on hover, in a note above the count at its right edge. It's fixed
    to the window (its place set when it opens) so the pinned request's scrolling box doesn't clip it. The empty title
@@ -708,15 +704,15 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* Stop, or the word for where it stands, sits on the first line of the editor's words, on their baseline, however
    many lines they take. A dot has no baseline of its own, so it sits in the middle of that
    line, beside the Stop after it. */
-.unit-meta > .unit-state:has(> .unit-dot) { height: 19px; }
+.unit > .unit-msg > .unit-stop, .unit > .unit-msg > .unit-state:not(:has(> .unit-dot)) { align-self: baseline; }
+.unit > .unit-msg > .unit-state:has(> .unit-dot) { align-self: flex-start; height: 19px; }
 /* A request about one cut or edit, inside the block that lists it and directly under that cut's or edit's row: a rule
    at its left, its name and the editor's words, then its work. It leaves when it's done. */
 .subunit { min-width: 0; margin: 4px 0 8px 31px; padding: 1px 0 1px 10px; border-left: 2px solid var(--color-line); font-size: 12.5px; text-align: left; }
 .simple-pass > .subunit { margin-left: 3px; }
 /* Under its row the rule hangs from the middle of the row's number, or sits before the row's words where the row
    leads with a time, and the request's own words start where the row's do. */
-.simple-pass-list.is-short > li > .subunit { margin-left: 16px; padding-left: 16px; }
-.simple-pass-list:not(.is-short) > li > .subunit { margin-left: 44px; padding-left: 8px; }
+.simple-pass-list > li > .subunit { margin-left: 44px; padding-left: 8px; }
 .simple-pass-list.has-hours > li > .subunit { margin-left: 58px; }
 .simple-edits > li > .subunit { margin-left: 8px; padding-left: 16px; }
 /* The last row's request ends the list, so the line under the list isn't pushed off by both their margins. */
@@ -751,11 +747,11 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .unit-msg .simple-revising { margin: 0 7px 0 0; }
 /* Something the editor said that belongs to no request of its own, such as a note left on a change: their words, set
    off by a rule at the left like an answer, not a bubble. */
-.simple-turn > .simple-msg.from-you { align-self: flex-end; max-width: 86%; padding: 7px 12px; border: 0; border-radius: 12px; background: var(--bubble); }
+.simple-turn > .simple-msg.from-you { align-self: stretch; max-width: none; padding: 0 0 0 10px; border-left: 2px solid var(--color-line); border-radius: 0; background: none; }
 /* A long one keeps to two lines, as a request's words do, and its title has the rest. */
-.simple-turn > .simple-msg.from-you p { color: var(--color-fg); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.simple-turn > .simple-msg.from-you p { color: var(--color-muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 /* It gives way before the message box does: a tall draft or an open queue shrinks it and it scrolls inside. */
-.simple-pin { flex: 0 1 auto; min-height: 0; max-height: 62vh; overflow-y: auto; padding: 0 18px; }
+.simple-pin { flex: 0 1 auto; min-height: 0; max-height: 62vh; overflow-y: auto; padding: 0 18px; border-top: 1px solid var(--color-line); }
 /* Give the rows the space left below the request's heading and summary, including while a revision runs in a row. */
 .simple-pin:has(.simple-pass-list, .simple-edits),
 .simple-pin :is(.unit, .req, .simple-pass):has(.simple-pass-list, .simple-edits) { display: flex; flex-direction: column; min-height: 0; }
@@ -766,14 +762,14 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* A row's fill reaches 8px past the list either side; a list that scrolls keeps that room inside itself, so no row is cut off or scrolls sideways. */
 .simple-pin .simple-edits { margin-inline: -8px; padding-inline: 8px; }
 /* Fixed above the message box, the band's own top rule would double the spot's. */
-.simple-pin > .unit > .unit-msg { padding-top: 8px; }
+.simple-pin > .unit > .unit-msg { border-top: 0; }
 /* Scarlet's closing words come up here with their request's block, with the room the conversation gives them. */
 .simple-pin > .simple-msg { padding: 2px 0 10px; }
 /* Why Stop, Resume or Retry failed, as the last line of the request it was pressed on. */
 .unit-error { margin: 0; padding: 2px 0 8px; }
 /* With nothing under way and no pass waiting on the editor, nothing is fixed here. */
 .simple-pin:not(:has(> .unit:not([hidden]))) { display: none; }
-.simple-pin:has(> .unit:not([hidden])) + .composer-dock { padding-top: 9px; }
+.simple-pin:has(> .unit:not([hidden])) + .composer-dock { border-top: 0; padding-top: 9px; }
 /* Fixed here, a long message keeps to two lines so the spot holds its place. Its title carries the rest. */
 .simple-pin .unit-msg p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 
@@ -844,7 +840,7 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .req-say.is-note { font-size: 12.5px; color: var(--color-dim); }
 .req-say.is-bad { color: var(--color-bad); }
 /* The editor's answer is their message: it keeps to two lines, as their request does, and opens on a click. */
-.req-say.is-yours { width: fit-content; max-width: 86%; margin-left: auto; padding: 7px 12px; border-radius: 12px; background: var(--bubble); color: var(--color-fg);
+.req-say.is-yours { padding-left: 10px; border-left: 2px solid var(--color-line); color: var(--color-muted);
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 /* The editor's own words fold and open the same way, wherever they are clamped. */
 .said.is-open, .unit-msg p.said.is-open, .simple-pin .unit-msg p.said.is-open, .simple-turn > .simple-msg.from-you p.said.is-open, .req-say.is-yours.said.is-open { display: block; }
@@ -909,21 +905,10 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-pass-list > li > button.is-rejected :is(.simple-pass-label, .simple-pass-time, .simple-pass-value),
 .simple-edit.is-rejected :is(.simple-edit-title, .simple-edit-value) { color: var(--color-dim); }
 .edit-badge.is-rejected { border-color: var(--color-line); color: var(--color-dim); }
-/* "Need you" is the short list: a call's number, Scarlet's note, and a word once it's settled or sent back. One number
-   column for the whole list, as every other request's list has, so a kept call's wider badge moves every row's words
-   together and they start on one edge. A request under a row spans the row, and its own width counts for nothing. */
-.simple-pass-list.is-short { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; column-gap: 8px; align-content: start; }
-.simple-pass-list.is-short > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
-.simple-pass-list.is-short > li > * { grid-column: 1 / -1; }
-.simple-pass-list.is-short > li > button { grid-template-columns: subgrid; align-items: center; }
-.simple-pass-list.is-short > li > .subunit { justify-self: stretch; contain: inline-size; }
-.simple-pass-list.is-short :is(.simple-pass-value, .simple-pass-check) { justify-self: end; }
 .simple-pass-list > li > button:is(.is-decided, .is-rejected, :disabled) .edit-badge,
 .simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
 .simple-pass-list > li > button.is-decided .edit-badge.is-kept,
 .simple-edit.is-decided .edit-badge.is-kept { background: rgba(255, 255, 255, .06); border-color: var(--color-line); color: var(--color-dim); }
-.simple-pass-list > li > button.is-decided .edit-badge.is-kept svg,
-.simple-edit.is-decided .edit-badge.is-kept svg { background: var(--color-muted); }
 /* A cut or edit sent back whose request stopped to ask the editor something waits on them again: its row is as bright
    as one that waits, its number amber, and its word says so in amber and holds still. A call's row can't be pressed
    while it is sent back, and isn't dimmed for that here. */
@@ -933,35 +918,53 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .req .simple-edits { margin: 0 0 6px; padding-top: 0; border-top: 0; }
 .simple-action.is-menu { margin: 0; gap: 6px; font-size: 12px; color: var(--color-dim); }
 
-/* The requests waiting their turn are the editor's messages too: bubbles at the chat's right, in running order, after
-   the request Scarlet is on and just above the message box. Under each, one small line: Up next, Queued, or in amber
-   what the next waits for. A long queue scrolls in its own space so the box stays in the window. */
-.queue-chat { flex: 0 1 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; min-height: 0; max-height: 34vh; overflow-y: auto;
-  padding: 8px 18px 10px; font-size: 12.5px; color: var(--color-muted); }
-.queue-row { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; max-width: 86%; min-width: 0; }
-.queue-bubble { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0; padding: 7px 12px; border-radius: 12px;
-  background: #2a2a2a; font-size: 13px; line-height: 1.45; color: var(--color-fg); overflow-wrap: anywhere; }
-.queue-target { margin-right: 7px; padding: 0 6px; border: 1px solid var(--color-line); border-radius: 4px; font-size: 12px; color: var(--color-muted); }
-.queue-foot { display: flex; align-items: center; gap: 2px; min-height: 20px; }
-.queue-next { margin-left: 4px; color: var(--color-dim); white-space: nowrap; }
-.queue-next.is-waiting, .queue-paused { color: var(--color-warn); }
-.queue-footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-.queue-editing-action { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; font: inherit; color: var(--color-muted); cursor: pointer; }
+/* The requests waiting their turn: a tray on top of the message box, in running order. It opens upward. */
+.queue-tray { min-width: 0; margin-bottom: calc(-1 * var(--model-row-gap, 9px)); padding: 2px 4px; border: 1px solid var(--color-line); border-bottom: 0;
+  border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); font-size: 12.5px; color: var(--color-muted); }
+.queue-tray + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
+.queue-head, .queue-row, .queue-editing-status { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 30px; padding: 0 4px 0 6px; border: 0; border-radius: 6px;
+  background: none; color: inherit; font: inherit; text-align: left; }
+button.queue-head { cursor: pointer; }
+button.queue-head:hover { color: var(--color-fg); }
+/* The heading fills the tray from edge to edge, so the keyboard's ring sits inside it, as on a list's row. */
+.queue-head:focus-visible { outline-offset: -2px; }
+.queue-tray.is-open .queue-head, .queue-footer .queue-head[aria-expanded] { justify-content: space-between; }
+.queue-footer { display: flex; align-items: center; gap: 4px; padding-right: 4px; }
+.queue-footer :is(.queue-head, .queue-row) { gap: 4px; }
+.queue-editing-action { flex: none; display: inline-flex; align-items: center; justify-content: end; gap: 7px; min-width: 82px; min-height: 30px;
+  padding: 0 4px; border: 0; background: none; color: var(--color-muted); font: inherit; font-weight: 500; white-space: nowrap; cursor: pointer; }
 .queue-editing-action:is(:hover, :focus-visible) { color: var(--color-fg); }
 .queue-editing-action[aria-disabled="true"] { opacity: .55; cursor: default; }
-.queue-remove, .queue-reword, .queue-start { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: none;
+.queue-next { flex: none; width: 30px; color: var(--color-dim); }
+.queue-next.is-waiting { width: auto; white-space: nowrap; }
+.queue-next.is-waiting, .queue-waits, .queue-paused { color: var(--color-warn); }
+/* On a line too tight for all of it, the tag and the words give way together, each cut short with an ellipsis, so the
+   words keep a share beside a long tag. Next, or what the request waits for, stays whole, and nothing pushes the count,
+   the chevron, the pencil or the × out of the tray. */
+.queue-target { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 6px; border: 1px solid var(--color-line); border-radius: 4px;
+  font-size: 11.5px; line-height: 17px; white-space: nowrap; }
+.queue-text { flex: 1 1 6em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-count { flex: none; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.queue-chevron { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; color: var(--color-dim); transform: rotate(90deg); }
+.queue-tray.is-open .queue-chevron { transform: rotate(-90deg); }
+/* A long queue scrolls inside the tray, so it never pushes the message box out of the window. */
+.queue-list { max-height: min(40vh, 248px); overflow-y: auto; margin: 0 -4px 2px; padding: 2px 4px 3px; border-bottom: 1px solid var(--color-line); }
+.queue-row:hover, .queue-row:focus-within { background: var(--color-raised); color: var(--color-fg); }
+.queue-remove, .queue-reword, .queue-start { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: none;
   color: var(--color-dim); cursor: pointer; }
-:is(.queue-remove, .queue-reword, .queue-start):hover { background: var(--color-line); color: var(--color-fg); }
-/* The pencil and the × show while the pointer or the keyboard is on the request, and while its words are being
-   changed; always where there is no pointer to rest. The mark that starts a held request stays: it says it is held. */
+.queue-row:hover :is(.queue-remove, .queue-reword, .queue-start), :is(.queue-remove, .queue-reword, .queue-start):focus-visible { color: var(--color-muted); }
+/* The pencil and the × show on the row the pointer or the keyboard is on, and while its words are being changed, as
+   the × on the message box's tag does: always where there is no pointer to rest. The mark that starts a held request
+   stays, since it says the request is held. */
 @media (hover: hover) {
   .queue-row:not(:hover, :focus-within, .is-rewording) :is(.queue-remove, .queue-reword) { opacity: 0; }
 }
-/* A queued request's pencil, or a click on its words, puts them in the message box to change. Its bubble stays lit
+:is(.queue-remove, .queue-reword, .queue-start):hover { background: var(--color-line); color: var(--color-fg); }
+/* A queued request's pencil, or a click on its words, puts them in the message box to change. Its row stays lit
    meanwhile, and so does its pencil, which puts them back. */
 .queue-text.is-rewordable { cursor: text; }
-.queue-row.is-rewording .queue-bubble { box-shadow: inset 0 0 0 1px var(--color-muted); }
-.queue-reword[aria-pressed="true"] { background: var(--color-line); color: var(--color-fg); }
+.queue-row.is-rewording { background: var(--color-raised); color: var(--color-fg); }
+.queue-reword[aria-pressed="true"], .queue-row:hover .queue-reword[aria-pressed="true"] { background: var(--color-line); color: var(--color-fg); }
 /* The box's send saves a queued request's words then: a tick, upright, where the arrow points up. */
 .composer-send.is-save svg { transform: none; }
 /* A pass's list sits under its line without a rule, its rows in line with the text above. */
@@ -1016,113 +1019,3 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .transcript-words .reading-passage [data-current] { background: var(--color-fg) !important; color: var(--color-bg) !important; font-weight: 500; }
 
 .simple-pass-list.is-moment > li > .subunit { margin-left: 8px; }
-
-/* The column of edits between the chat and the video, for the whole video (2026-11-24). What waits on the editor
-   fills it, as one list. Working (the edits Scarlet is revising) and Done are at its foot, one counted line each. */
-.review-rail { display: flex; flex-direction: column; flex: none; width: clamp(260px, 22vw, 320px); min-height: 0; border-right: 1px solid var(--color-line); background: var(--color-bg); }
-.review-rail[hidden] { display: none; }
-.review-rail-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 54px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--color-line); }
-.review-rail-head h2 { display: flex; align-items: baseline; gap: 7px; margin: 0; font-size: 13px; font-weight: 600; color: var(--color-fg); }
-.review-rail-count { font-weight: 500; color: var(--color-warn); font-variant-numeric: tabular-nums; }
-.review-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-.review-rail-list { padding: 8px 12px 12px; }
-.review-slot { display: contents; }
-/* Low risk: the edits Scarlet didn't flag, under For you's rows and quieter, with no amber (2026-11-24). */
-.review-low { padding: 4px 12px 12px; }
-.review-low[hidden] { display: none; }
-.review-low-head { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 6px; border: 0; background: none; color: var(--color-dim);
-  font: inherit; font-size: 11.5px; font-weight: 500; text-align: left; cursor: pointer; }
-.review-low-head:is(:hover, :focus-visible) { color: var(--color-muted); }
-.review-low-head b { font-weight: 500; color: var(--color-dim); font-variant-numeric: tabular-nums; }
-.review-low-row { position: relative; }
-/* Mark all done, on the heading's line just before its chevron: dim as the heading is, white on hover or focus. */
-.review-low-done { position: absolute; top: 3px; right: 20px; display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0;
-  border-radius: 5px; background: none; color: var(--color-dim); cursor: pointer; }
-.review-low-done:is(:hover, :focus-visible) { color: var(--color-fg); }
-.review-low-done:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 1px; }
-.review-low-head svg { margin-left: auto; color: var(--color-dim); transition: transform .14s ease; }
-.review-low-head[aria-expanded="true"] svg { transform: rotate(90deg); }
-@media (prefers-reduced-motion: reduce) { .review-low-head svg { transition: none; } }
-.review-low-body .simple-pass-list > li > button, .review-low-body .simple-edit { color: var(--color-muted); }
-.review-low-body :is(.simple-pass-value, .simple-edit-value, .simple-pass-time, .simple-pass-check, .simple-edit-check, .edit-version) { color: var(--color-dim); }
-.review-low-body .edit-badge { border-color: var(--color-dim); color: var(--color-muted); }
-.review-low-body :is(.simple-pass-time.is-need, .edit-badge.is-check, .simple-pass-value.is-need) { border-color: var(--color-dim); background: none; color: var(--color-dim); }
-.review-rail .simple-review-empty { padding: 8px 6px; }
-.review-rail .simple-review-rest { padding-left: 6px; }
-/* A request's rows have the column's width: no line over them, no height of their own, each on up to two lines. */
-.review-rail :is(.simple-pass-list, .simple-edits) { max-height: none; overflow: visible; margin: 0; border-top: 0; }
-.review-rail .simple-edit { width: 100%; margin: 0; align-items: start; }
-.review-rail :is(.simple-edit-title, .simple-pass-label) { white-space: normal; }
-.review-rail :is(.simple-edit-words, .simple-pass-words) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; }
-.review-rail .subunit { margin-left: 8px; }
-/* An edit or cut Scarlet is revising uses one quiet in-line style everywhere — while it lingers in For you or Low Risk
-   Edits, in Working, and in the chat's own list (the editor chose this on 2026-11-24). While Scarlet is actively on it,
-   the edit is one row: the ring round its number turns (or a turning ring takes the time column on time-led rows), the
-   row drops its trailing word, the editor's note isn't shown again, what Scarlet is doing this moment is left to screen
-   readers, and Stop sits at the row's right while the pointer or the keyboard is on the edit. One waiting its turn or
-   paused keeps one quiet line under its row (no rule, no repeated note, Stop on hover/focus). A question, a stopped
-   run, and a recheck Scarlet began itself (Auto) keep their own lines as before. */
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit { position: relative; margin-top: 0; margin-bottom: 6px; border-left-color: transparent; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg > p {
-  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-status):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { position: absolute; top: 1px; right: 0; z-index: 1; padding: 0; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-status):not(:has(> .subunit .is-auto)) > .subunit > .req { padding-right: 26px; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]:not(:has(> .req-row))):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { align-items: center; min-height: 24px; padding: 0; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]:not(:has(> .req-row))):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg > .unit-actions { margin-left: auto; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit .req-now-text { color: var(--color-muted); }
-/* Queued or paused under a row in the column of edits: start the status line under the row's words. */
-.review-rail :is(.simple-edits, .simple-pass-list.is-short) > li:has(> .subunit > .req[data-state="working"]:not(:has(> .req-now))):not(:has(> .subunit .is-auto)) > .subunit { padding-left: 22px; }
-.review-rail .simple-pass-list:not(.is-short, .is-moment) > li:has(> .subunit > .req[data-state="working"]:not(:has(> .req-now))):not(:has(> .subunit .is-auto)) > .subunit { padding-left: 44px; }
-.review-rail .simple-pass-list.has-hours > li:has(> .subunit > .req[data-state="working"]:not(:has(> .req-now))):not(:has(> .subunit .is-auto)) > .subunit { padding-left: 58px; }
-@media (hover: hover) {
-  :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)):not(:hover, :focus-within) > .subunit .unit-actions { opacity: 0; }
-}
-/* Actively revising: one row, turning ring around the number (or in the time column), Stop on hover/focus. */
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) { position: relative; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button { color: var(--color-fg); }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)):hover > button:not(:disabled, .is-on) { background: rgba(255, 255, 255, .04); }
-:is(.simple-edits, .simple-pass-list:not(.is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button > :is(.simple-edit-title, .simple-pass-label) {
-  grid-column: 2 / -1; justify-self: stretch; padding-right: 22px; contain: inline-size; }
-.simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button { grid-template-columns: 15px minmax(0, 1fr); align-items: center; padding-right: 30px; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit { position: static; margin: 0; padding: 0; border: 0; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .req {
-  position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { position: absolute; top: 5px; right: 6px; z-index: 1; padding: 0; }
-.req .simple-edits > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { right: -2px; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge {
-  position: relative; border-color: transparent; background: var(--color-raised); color: var(--color-fg); }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge.is-kept svg { display: none; }
-:is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge::after { content: ""; position: absolute; inset: -1.2px;
-  border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-.simple-pass-list:not(.is-short, .is-moment) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .simple-pass-time {
-  position: relative; margin: 0; padding: 0; background: none; color: transparent; }
-.simple-pass-list:not(.is-short, .is-moment) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .simple-pass-time::after { content: ""; position: absolute; left: 0; top: 50%;
-  width: 15px; height: 15px; margin-top: -7.5px; border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-.simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { content: ""; width: 15px; height: 15px;
-  border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-@media (prefers-reduced-motion: no-preference) {
-  :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.edit-badge, .simple-pass-time)::after,
-  .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { animation: req-mark-turn 1s linear infinite; }
-}
-@media (prefers-reduced-motion: reduce) {
-  :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.edit-badge, .simple-pass-time)::after,
-  .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
-}
-.review-rail-foot { flex: none; max-height: 55%; overflow-y: auto; padding: 0 12px 8px; border-top: 1px solid var(--color-line); }
-.review-sec { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 6px; border: 0; background: none; color: var(--color-muted);
-  font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; cursor: pointer; }
-.review-sec:is(:hover, :focus-visible), .review-sec[aria-expanded="true"] { color: var(--color-fg); }
-.review-sec.is-none, .review-sec.is-none b { color: var(--color-dim); }
-.review-sec:disabled { cursor: default; }
-.review-sec b { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; }
-.review-sec svg { color: var(--color-dim); transition: transform .14s ease; }
-.review-sec[aria-expanded="true"] svg { transform: rotate(90deg); }
-.review-sec-body { padding: 0 0 6px; }
-@media (prefers-reduced-motion: reduce) { .review-sec svg { transition: none; } }
-/* In a narrow window the column gives its width back to the chat and the video. */
-@media (max-width: 1100px) { .review-rail { width: 232px; } }
-@media (max-width: 767px) { .review-rail { display: none; } }
-/* In the chat, what waits on the editor is one link after what a request made. Its rows are in the column of edits. */
-.simple-need-link { align-self: flex-start; display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 0; border: 0; background: none; color: var(--color-fg);
-  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
