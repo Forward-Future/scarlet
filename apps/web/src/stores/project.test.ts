@@ -40,6 +40,30 @@ it("keeps a committed approval when the updated timeline cannot be loaded", asyn
   expect(useProjectStore.getState().current).not.toHaveProperty("reviewStatus");
 });
 
+it.each(["an undo", "a rejected edit"] as const)("keeps %s that went through when the updated timeline cannot be read at once, and reads it again", async action => {
+  vi.useFakeTimers();
+  const db = buildDb();
+  const project = db.projects.find(p => p.id === PRJ)!;
+  const prior = db.changes.find(c => c.state === "ready")!;
+  useProjectStore.setState({ current: { id: PRJ, project, timeline: db.timelines[project.head!]!,
+    media: project.media, changes: [prior], notes: [], tasks: [], renders: [], taskEvents: {} } });
+  const moved = { ...project, head: "new-head" };
+  const change = { ...prior, state: "approved" as const, toVersion: "new-head" };
+  vi.spyOn(api, "historyEdit").mockResolvedValue({ project: moved, change });
+  vi.spyOn(api, "rejectEdits").mockResolvedValue({ project: moved, change });
+  const timeline = { ...db.timelines[project.head!]!, version: "new-head" };
+  const read = vi.spyOn(api, "workspace").mockRejectedValueOnce(new Error("Unable to read workspace"))
+    .mockResolvedValue({ project: moved, timeline } as never);
+  if (action === "an undo") await expect(initial.historyEdit("v_old", "revert")).resolves.toBeUndefined();
+  else await expect(initial.rejectEdits("thread_a", project.head!, [])).resolves.toBe("new-head");
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+  expect(useProjectStore.getState().current).toMatchObject({ project: { head: "new-head" }, timeline: db.timelines[project.head!]! });
+  // A second later the store reads the new timeline again by itself, and shows it.
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(useProjectStore.getState().current?.timeline?.version).toBe("new-head");
+});
+
 it("skips unchanged library refreshes and immediately publishes changed review counts", async () => {
   const summary = buildDb().summaries[PRJ]!;
   const apiList = vi.spyOn(api, "projects").mockResolvedValue({projects: [summary]});

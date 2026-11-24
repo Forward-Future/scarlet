@@ -18,6 +18,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A cut's row in a request's list now quotes the words beside it as the transcript has them, even when the row was first shown while Scarlet was still placing the transcript's words.
 - With OpenAI transcription, a voice message or note that the recorder saved without its length is now transcribed in full, not just its first second.
 - With note cleanup on, a spoken note whose tidied-up version got cut off partway now keeps your own words, instead of sending Scarlet half a request.
+- An undo or a rejected edit that went through no longer says it failed, or leaves the old cut on screen, when the new timeline takes a moment to load: Scarlet loads it again by itself.
 - ⌘Z on a revision whose version you've applied since no longer stops Scarlet's work on it while saying it couldn't undo it.
 - A project's card in the library now flips through its footage on hover after its video finishes importing, and after Scarlet's engine restarts, instead of staying on its poster until Scarlet is reopened.
 
