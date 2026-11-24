@@ -30,6 +30,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Loudness checks on a recording no longer keep failing after Scarlet was closed while saving one: Scarlet measures it again.
 - A file Scarlet can't read now says so by its own name, without the full path of Scarlet's library folder.
 - A WebM screen or voice recording saved without its length now imports with its real length, so reading its text, faces and sound, and choosing voices in it, work instead of saying it's still being prepared.
+- With a damaged copy of the Whisper model saved, an open Settings no longer keeps your computer busy checking it again every few seconds: it is checked once.
 
 ## November 23, 2026
 
