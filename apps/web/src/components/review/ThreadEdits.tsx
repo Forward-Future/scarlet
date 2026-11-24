@@ -5,7 +5,7 @@ import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE,
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
 import { asksEditor, editGroups, listPlaces, noEdits, revisionWord, useAdding, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
-import { editRemovedLabel } from "../../lib/format";
+import { clock as clockLabel, editRemovedLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
 import { editKey, keepEdits } from "../../lib/keptEdits";
 import { isWorkingTask } from "../../lib/taskRun";
@@ -170,7 +170,7 @@ export function RejectedMark() {
  * `label` names such a list, and `leaving` picks the rows that are on their way out of it: decided or sent back a
  * moment ago, they fade before they go.
  */
-export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low }: {
+export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low, hideGenericKind, numberFor, askingKey }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
   /** Edits the editor rejected, which are out of the video: each keeps a row where it was, with a × and "Rejected". */
   rejected?: ListedEdit[];
@@ -182,6 +182,12 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   label?: string; leaving?(edit: ListedEdit): boolean;
   /** The rows that are in For you's list only while low risk edits are included: they open into it and close out of it. */
   low?(edit: ListedEdit): boolean;
+  /** Omit the generic fallback word "Edit" at the right of a row, keeping meaningful words like "−1.0 s", "B-roll", "Kept". */
+  hideGenericKind?: boolean;
+  /** Override the number shown on each row; returning undefined shows the edit's timestamp instead of a number badge. */
+  numberFor?(edit: ListedEdit): number | undefined;
+  /** The row key of the edit whose question is currently shown over the message box, so it lights up. */
+  askingKey?: string;
 }) {
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
@@ -201,7 +207,8 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
     const shown = members.find(m => m.i === open) ?? members.find(asking) ?? members.find(waiting) ?? relevant[0] ?? members[0]!;
     // An edit made in several places keeps its first number, so the list reads 1, 2, 5 and doesn't renumber as places are kept.
     // Nor as an edit is rejected: every edit keeps the number it had, and the rejected row shows none.
-    return { ...shown, first: members[0]!.i, n: order.number(members[0]!.edit)!, places: members.length, needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
+    const num = numberFor ? numberFor(members[0]!.edit) : order.number(members[0]!.edit)!;
+    return { ...shown, first: members[0]!.i, n: num, places: members.length, needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
       nested: under ? members.flatMap(m => under(m.edit)) : [], took: spent ? members.flatMap(m => spent(m.edit) ?? [])[0] : undefined };
   });
   // A rejected edit keeps its place in the video's order, in the list of every edit and in Done.
@@ -263,24 +270,31 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const decided = isKept && !isRevising;
       // In For you, a handled edit says how it was decided (Kept, or Done for a marker).
       // Otherwise a cut says how much came out, and any other edit says what it did.
+      const rawKind = editRowWord(edit);
+      const kindWord = hideGenericKind && rawKind === "Edit" ? undefined : rawKind;
       const value = only && decided ? (edit.marker ? "Done" : "Kept")
-        : editRemovedLabel(edit) ?? editRowWord(edit);
+        : editRemovedLabel(edit) ?? kindWord;
       const check = asks || (places > 1 ? needs > 0 : !!edit.check && !isRevising);
       const title = (edit.reason && edit.summary) || edit.label;
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
       // sentence for that.
       const revised = edit.check === REVISED_CHECK && !reviewed(edit) && !isRevising;
+      const rowTime = clockLabel((edit as ThreadEdit).at ?? edit.range.start);
+      const isAskingCurrent = !!askingKey && askingKey === editKey(edit);
+      const lead = n !== undefined
+        ? <EditBadge n={n} kept={isKept} check={check} />
+        : <span className="edit-row-time">{rowTime}</span>;
       return <Fragment key={editKey(edit)}><li className={leaving?.(edit) ? "is-leaving" : undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
-        className={["simple-edit", on && "is-on", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
+        className={["simple-edit", on && "is-on", asks && "is-asking", isAskingCurrent && "is-asking-current", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
         onPointerEnter={() => onHover?.(edit)} onPointerLeave={() => onHover?.()}
         // Why an edit asks for a look is on its card, in Scarlet's sentence. Its row keeps to the amber number and says
         // the reason on hover, as a pass's row does.
         title={revised || edit.reason ? undefined : edit.check}
-        aria-label={`Edit ${n}: ${title}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
-        <EditBadge n={n} kept={isKept} check={check} />
-        <span className="simple-edit-title"><span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
+        aria-label={`${n !== undefined ? `Edit ${n}` : rowTime}: ${title}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
+        {lead}
+        <span className="simple-edit-title">{n === undefined && decided && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
         {/* Sent back or come back revised, the row ends on that (Revising…, Up next, Revised) in place of what it was:
             one word a row, on the row's own line. One whose request stopped to ask the editor ends on Needs your
@@ -289,7 +303,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         {statusWord ? <span className={asks ? "simple-edit-check" : busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>
           : revised && <span className="simple-edit-check" title={took}>{edit.check}</span>}
       </button>
-        <AimRow on={on}><EditBadge n={n} kept={isKept} check={check} /><span className="composer-aim-words">{title}</span></AimRow>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
+        <AimRow on={on}>{lead}<span className="composer-aim-words">{title}</span></AimRow>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
     })}
   </ol>;
 }

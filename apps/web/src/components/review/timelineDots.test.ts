@@ -120,6 +120,20 @@ describe("layoutMarks", () => {
   it("draws circles before the track is measured", () => {
     expect(shapes(layoutMarks(marks.slice(0, 2), 0, 100, 0))).toEqual(["1", "2"]);
   });
+
+  it("keeps edits at 0:00 clear of the playhead stem and separates markers from different groups", () => {
+    const atStart = layoutMarks([dot(0, 1), dot(0, 2)], 0, 16, 650);
+    expect(shapes(atStart)).toEqual(["1–2"]);
+    expect(atStart[0]!.at / 100 * 650 - atStart[0]!.width / 2).toBeGreaterThanOrEqual(4 - 1e-6);
+
+    const crossGroup = layoutMarks([
+      { ...dot(2, 1), group: "call" },
+      { ...dot(2, 4), group: "other" },
+    ], 0, 100, 1000);
+    expect(shapes(crossGroup)).toEqual(["1", "4"]);
+    const [a, b] = crossGroup;
+    expect((b!.at - a!.at) / 100 * 1000).toBeGreaterThanOrEqual(a!.width / 2 + b!.width / 2 + 3 - 1e-6);
+  });
 });
 
 describe("nearestMark", () => {

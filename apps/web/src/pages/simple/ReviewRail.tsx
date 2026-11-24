@@ -13,8 +13,8 @@ import { letGo } from "./types";
  * open until the editor folds it, and Done counts what the editor has decided and opens on a press. A request about the
  * whole video is not here: it runs in the chat.
  */
-/** What Mark all done says it does, on hover and to screen readers. */
-const doneLabel = (count: number) => count === 1 ? "Mark the low-risk edit done" : `Mark all ${count} low-risk edits done`;
+/** What Keep all says it does, on hover and to screen readers. */
+const doneLabel = (count: number) => count === 1 ? "Keep the low-risk edit" : `Keep all ${count} low-risk edits`;
 
 export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow }: {
   store: RailStore;
@@ -23,26 +23,27 @@ export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow }
   open: { working: boolean; done: boolean; low: boolean }; onOpen(section: "working" | "done" | "low", open: boolean): void;
   /** What is open on the card, so its row is kept in view. */
   selected?: string;
-  /** Mark all done: Keep on every low-risk edit at once. */
+  /** Keep all: Keep on every low-risk edit at once. */
   onDoneLow?(): void;
 }) {
   useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
   const host = useRef<HTMLElement>(null);
   const need = store.total("you"), optional = store.total("optional");
   const working = store.total("working"), done = store.total("done");
-  // The row of the cut or edit that's open stays in view as Keep and ↑ ↓ move on.
+  // The row of the cut or edit that's open stays in view as Keep, ↑ ↓, or unfolding reveals it.
   useEffect(() => {
     if (selected) host.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" });
-  }, [selected]);
+  }, [selected, open.low, open.working, open.done]);
   const slots = (section: "you" | "working" | "done") => threads.map(thread =>
     <div key={thread.id} className="review-slot" data-thread={thread.id} ref={store.ref(section, thread.id)} />);
   // One list of every request's low-risk rows, with nothing naming the request (the editor's choice, 2026-11-24).
   const lowSlots = threads.map(thread => <div key={thread.id} className="review-slot" data-thread={thread.id} ref={store.ref("low", thread.id)} />);
   const nothing = need + optional + working + done === 0;
   const section = (name: "Working" | "Done", key: "working" | "done", count: number) => {
-    const shown = open[key] && count > 0;
+    if (count === 0) return null;
+    const shown = open[key];
     return <>
-      <button type="button" className={count ? "review-sec" : "review-sec is-none"} aria-expanded={shown} disabled={!count}
+      <button type="button" className="review-sec" aria-expanded={shown}
         onClick={letGo(() => onOpen(key, !open[key]))}>
         <span>{name}</span><b>{count}</b><Icon name="chevron" size={10} /></button>
       <div className="review-sec-body" role="group" aria-label={name} hidden={!shown}>{slots(key)}</div>
@@ -61,18 +62,18 @@ export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow }
       <div className="review-low" hidden={optional === 0}>
         <div className="review-low-row">
           <button type="button" className="review-low-head" aria-expanded={open.low} onClick={letGo(() => onOpen("low", !open.low))}>
-            <span>Low Risk Edits</span><b>({optional})</b><Icon name="chevron" size={10} /></button>
-          {/* Mark all done keeps every low-risk edit at once, as Keep does one (2026-11-24). It is a press of its own, on the
-              heading's line just before its chevron, and doesn't fold the list. */}
+            <span>Low risk</span><b>{optional}</b><Icon name="chevron" size={10} /></button>
+          {/* Keep all keeps every low-risk edit at once, as Keep does one. It sits on the heading's line just before its
+              chevron, and doesn't fold the list. */}
           {onDoneLow && optional > 0 && <button type="button" className="review-low-done" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-            onClick={letGo(onDoneLow)}><Icon name="checks" size={12} /></button>}
+            onClick={letGo(onDoneLow)}>Keep all</button>}
         </div>
-        <div className="review-low-body" role="group" aria-label="Low Risk Edits" hidden={!open.low}>{lowSlots}</div>
+        <div className="review-low-body" role="group" aria-label="Low risk" hidden={!open.low}>{lowSlots}</div>
       </div>
     </div>
-    <div className="review-rail-foot">
+    {(working > 0 || done > 0) && <div className="review-rail-foot">
       {section("Working", "working", working)}
       {section("Done", "done", done)}
-    </div>
+    </div>}
   </aside>;
 }
