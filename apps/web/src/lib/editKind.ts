@@ -3,7 +3,7 @@ import { focusAround, type ProgressFocus } from "../components/player/SimpleProg
 import { lengthLabel } from "./format";
 
 const WORDS: Partial<Record<EditKind, string>> = {
-  cut: "Cut", restore: "Added", audio: "Audio", dip: "Music dip", voice: "Voice cleanup", zoom: "Zoom", reframe: "Reframe", text: "Text", broll: "B-roll", overlay: "Overlay", graphic: "Graphic", speed: "Speed", transition: "Transition", split: "Split edit",
+  cut: "Cut", restore: "Put back", audio: "Audio", dip: "Music dip", voice: "Voice cleanup", zoom: "Zoom", reframe: "Reframe", text: "Text", broll: "B-roll", overlay: "Overlay", graphic: "Graphic", speed: "Speed", transition: "Transition", split: "Split edit",
 };
 
 /** One word for what an edit did, the same in the list, on the timeline and on the card. None for an assembly or a mix. */
@@ -67,6 +67,6 @@ export function editFocus(edit: ThreadEdit, duration: number, name?: string): Pr
     edit.marker ? { tone: "kept" } : undefined);
   const restored = edit.kind === "restore";
   // A moment is named as its card is ("2 edits"), and an assembly or a mix as its row is ("Edit"): a band is never blank.
-  return focusAround(edit.range, duration, restored ? `Added · ${lengthLabel(edit.range.end - edit.range.start)}` : name ?? editRowWord(edit),
+  return focusAround(edit.range, duration, restored ? `Put back · ${lengthLabel(edit.range.end - edit.range.start)}` : name ?? editRowWord(edit),
     { tone: restored ? "added" : "kept" });
 }

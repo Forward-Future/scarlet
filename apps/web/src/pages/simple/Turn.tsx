@@ -5,7 +5,7 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
-import { editGroups, useReviewed, useRevising, useThreadEdits } from "../../components/review/threadEditState";
+import { editGroups, listPlaces, useReviewed, useRevising, useThreadEdits, waitingPassRows, waitingRows } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { TipButton } from "../../components/ui/TipButton";
 import { errorMessage } from "../../lib/client";
@@ -13,7 +13,7 @@ import { clock as clockLabel, parseTimestamp } from "../../lib/format";
 import { editKey } from "../../lib/keptEdits";
 import { markedFrameUrl } from "../../lib/markedFramePictures";
 import { usePauseOn, type PauseOffer } from "../../lib/pauseControl";
-import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
+import { decidedPassCalls, isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
 import { runAim, runIsActive, spentLabel } from "../../lib/taskRun";
 import { firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
@@ -22,7 +22,7 @@ import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useUiStore } from "../../stores/ui";
 import { PassSummary, ThreadResult } from "./PassSummary";
-import { callRowKey, isWorking, letGo, listedBefore, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
+import { callRowKey, isWorking, letGo, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
 
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
 const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|Scarlet couldn’t finish this edit\.)$/;
@@ -158,12 +158,14 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const waits = (edit: ThreadEdit) => !!edit.check && !reviewed(edit) && !revising(edit);
     const reported = reportEvery ? located : located.filter(waits);
     if (!reported.length) return;
-    const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, members[0]!.i + 1] as const)));
-    const markers = reported.map(edit => ({ edit, number: numbers.get(edit)!, total: located.length,
+    // Each dot has the number its row has in the chat, which an edit keeps when another is rejected.
+    const order = listPlaces(thread, located, rejected);
+    const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, order.number(members[0]!.edit)!] as const)));
+    const markers = reported.map(edit => ({ edit, number: numbers.get(edit)!, total: order.total,
       state: reviewed(edit) ? "kept" as const : waits(edit) ? "check" as const : undefined }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
-  }, [thread.id, head, located, reviewed, revising, reportReviewMarkers, reportEvery]);
+  }, [thread.id, head, located, rejected, reviewed, revising, reportReviewMarkers, reportEvery]);
   // A thread with a dialogue pass sums it up on one line instead of listing every cut.
   const waitingPass = openPass(thread, allTasks);
   const pendingPass = !!waitingPass;
@@ -217,8 +219,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const owner = runs.find(run => run.attempts.some(t => passTasks.has(t.id)))
     ?? (pendingPass ? runs.find(run => !aboutOne(run) && run.attempts.some(t => t.id === waitingPass?.taskId)) ?? runs.find(run => !aboutOne(run)) : undefined)
     ?? runs[0];
-  const hasForYouRejected = rejected.some(e => !!e.wasCheck || listedBefore(passListed.current, e));
-  const hasRows = summed ? listed.length > 0 || hasForYouRejected || actions.pass?.threadId === thread.id || hasDecidedCalls : listed.length > 0 || hasForYouRejected;
+  // A rejected edit keeps its row, also when it was the request's only edit: nothing else says it was rejected (2026-11-23).
+  const hasRows = listed.length > 0 || rejected.length > 0 || (summed && (actions.pass?.threadId === thread.id || hasDecidedCalls));
   // With no line for the pass (it was thrown away), its list is closed: a pass staged again starts folded. A pass that
   // went in leaves the thread's edits, and the list of those still waiting on the editor stays open: their place in
   // the chat must not go with the calls (2026-11-16).
@@ -350,14 +352,14 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const pauseOffer: PauseOffer = { bands: [], rows: [] };
   const pauseOn = usePauseOn(thread.id, section, pauseOffer);
   // How many of the request's calls and flagged edits still wait on the editor: the number its For you tab shows,
-  // counted as the tab counts it (`PassSummary`, `ThreadResult`). A pass counts its open calls and each flagged edit;
-  // any other request counts a flagged edit made in several places once, as its list has one row for it. Only a
-  // folded request's band says it, so it is counted only then.
+  // counted as the tab counts it (`waitingPassRows`, `waitingRows`). Only a folded request's band says it, so it is
+  // counted only then.
   const forYou = () => {
     if (!hasRows) return 0;
-    const flagged = listed.filter(e => !!e.check && !reviewed(e) && !revising(e));
-    if (!summed) return editGroups(listed).filter(group => group.members.some(m => flagged.includes(m.edit))).length;
-    return flagged.length + (actions.pass?.threadId === thread.id ? actions.pass.calls.filter(c => c.state === "open").length : 0);
+    if (!summed) return waitingRows(listed, { reviewed, revising });
+    const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
+    const fromCalls = decidedPassCalls(pass ? undefined : thread, listed, rejected).decidedCallEditKeys;
+    return waitingPassRows(pass?.calls, listed, e => !!e.check || fromCalls.has(editKey(e)), { reviewed, revising });
   };
 
   const unit = (run: Run, inside = false, hidden = false): ReactElement => {

@@ -19,12 +19,16 @@ describe("drawing an applied edit on the timeline", () => {
     expect(editFocus(edit({ kind: "other" }), 3000, "2 edits")).toMatchObject({ bandLabel: "2 edits" });
   });
 
+  it("says Put back for footage put back, on its row and its card as in the sentence, never Added", () => {
+    expect([editKindWord(edit({ kind: "restore" })), editRowWord(edit({ kind: "restore" }))]).toEqual(["Put back", "Put back"]);
+  });
+
   it("marks footage put back as added, with how much", () => {
     expect(editFocus(edit({ kind: "restore", range: { start: 555.4, end: 556.6 } }), 3000))
-      .toMatchObject({ bandLabel: "Added · 1.2 s", tone: "added" });
+      .toMatchObject({ bandLabel: "Put back · 1.2 s", tone: "added" });
     // A hair under ten seconds reads as ten, not "10.0".
-    expect(editFocus(edit({ kind: "restore", range: { start: 100, end: 109.97 } }), 3000)).toMatchObject({ bandLabel: "Added · 10 s" });
-    expect(editFocus(edit({ kind: "restore", range: { start: 100, end: 112.4 } }), 3000)).toMatchObject({ bandLabel: "Added · 12 s" });
+    expect(editFocus(edit({ kind: "restore", range: { start: 100, end: 109.97 } }), 3000)).toMatchObject({ bandLabel: "Put back · 10 s" });
+    expect(editFocus(edit({ kind: "restore", range: { start: 100, end: 112.4 } }), 3000)).toMatchObject({ bandLabel: "Put back · 12 s" });
   });
 
   it("marks a removal with a line at its join", () => {

@@ -27,7 +27,7 @@ export function appliedEditSummary(change: Change): string {
     const { joins } = change.appliedReview;
     if (!joins.length) return "Kept all the reviewed footage.";
     const seconds = joins.reduce((sum, { removed }) => sum + removed.end - removed.start, 0);
-    return `Removed ${lengthLabel(seconds)} of footage in ${plural(joins.length, "cut")}.`;
+    return `Took out ${lengthLabel(seconds)} of footage in ${plural(joins.length, "cut")}.`;
   }
   const summary = cutSummary(change.description);
   if (change.approvedSpots) {
