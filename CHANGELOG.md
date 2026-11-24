@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- The talking-head example skill no longer includes Matt’s own camera setup or editor name, so any editor can adapt it.
 - Scarlet now knows what was said earlier in the chat, so a message like “tell me the timestamps” or “the two clips you just found” is read as being about the request before it, links and times Scarlet showed you while it worked included.
 - What Scarlet finds for you at a place in the video, such as a clip to play there, is now listed under your request and opens on the timeline like any edit, and a web address in Scarlet's reply or on an edit's card is a link that opens in your browser.
 - An export that starts partway through now shows that part striped on its bar, with how much of the video it reused from an earlier export, so a head start no longer looks like the export skipped ahead.
@@ -115,6 +116,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Once your edits are decided and nothing is waiting on you, Export at the top turns white until you export the video, and the export for another editing app is now called “For Resolve, Final Cut or Premiere…”.
 - Scarlet now tells you when Claude Code, Codex or Gemini has a newer version, with a small dot on the model button, and updates it for you with one press from the model menu or Settings › General, the same way you installed it.
 - Project settings now opens with the cursor in the Name field, so you can type a new name straight away instead of a space or Enter closing it.
+- A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
+- Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
 - An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
 
 ## November 22, 2026
