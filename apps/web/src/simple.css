@@ -1053,6 +1053,22 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .review-rail :is(.simple-edit-title, .simple-pass-label) { white-space: normal; }
 .review-rail :is(.simple-edit-words, .simple-pass-words) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; }
 .review-rail .subunit { margin-left: 8px; }
+/* Working is one row per edit and one dim line under it for what Scarlet is doing now (the editor asked for it simpler
+   on 2026-11-24: the row's word, a rule, their note, Stop and the live line read as five things). The live line says
+   it is being revised, so the row drops its word; the editor's note isn't shown again, since they just wrote it; no
+   rule; Stop is at that line's right while the pointer or the keyboard is on the edit. A recheck Scarlet began itself
+   keeps its Auto line, so it never reads as something the editor asked for. */
+.review-sec-body[aria-label="Working"] li:has(> .subunit) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }
+.review-sec-body[aria-label="Working"] .subunit { position: relative; margin-top: 0; margin-bottom: 6px; border-left-color: transparent; }
+.review-sec-body[aria-label="Working"] .subunit-msg:not(:has(.is-auto)) { position: absolute; top: 1px; right: 0; z-index: 1; padding: 0; }
+.review-sec-body[aria-label="Working"] .subunit-msg:not(:has(.is-auto)) > p { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.review-sec-body[aria-label="Working"] .subunit:not(:has(.is-auto)) > .req { padding-right: 26px; }
+.review-sec-body[aria-label="Working"] .subunit .req-now-text { color: var(--color-muted); }
+/* The line starts where the row's words do. */
+.review-sec-body[aria-label="Working"] .simple-edits > li > .subunit { padding-left: 22px; }
+@media (hover: hover) {
+  .review-sec-body[aria-label="Working"] li:not(:hover, :focus-within) > .subunit .unit-actions { opacity: 0; }
+}
 .review-rail-foot { flex: none; max-height: 55%; overflow-y: auto; padding: 0 12px 8px; border-top: 1px solid var(--color-line); }
 .review-sec { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 6px; border: 0; background: none; color: var(--color-muted);
   font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; cursor: pointer; }

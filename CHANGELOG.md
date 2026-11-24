@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- An edit in Working is now just its name and one line for what Scarlet is doing; Stop shows when you point at it.
 - A double tick on the Low Risk Edits heading marks them all done at once; ⌘Z takes it back.
 - The edits Scarlet didn't flag are now listed right away under For you, in one quieter list headed "Low Risk Edits (5)", instead of behind an "optional" line you had to open. ↑ ↓ and Keep go on from what needs you into them.
 - When Scarlet asks you something, the question now sits on top of the message box instead of in the chat, and when it has a few clear answers you can pick one with a single click or type your own.
