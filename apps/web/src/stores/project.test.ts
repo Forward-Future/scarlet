@@ -64,6 +64,23 @@ it.each(["an undo", "a rejected edit"] as const)("keeps %s that went through whe
   expect(useProjectStore.getState().current?.timeline?.version).toBe("new-head");
 });
 
+it("reads the timeline again when a project update moved its head and the first read fails", async () => {
+  vi.useFakeTimers();
+  const { db, project } = open();
+  const moved = { ...project, head: "new-head" };
+  vi.spyOn(api, "updateProject").mockResolvedValue({ project: moved });
+  const timeline = { ...db.timelines[project.head!]!, version: "new-head" };
+  const read = vi.spyOn(api, "workspace").mockRejectedValueOnce(new Error("Unable to read workspace"))
+    .mockResolvedValue({ project: moved, timeline } as never);
+  await initial.updateProject({ mediaPaused: true });
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+  expect(store()).toMatchObject({ project: { head: "new-head" }, timeline: db.timelines[project.head!]! });
+  // A second later the store reads the new timeline again by itself, and shows it.
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(store().timeline?.version).toBe("new-head");
+});
+
 it("skips unchanged library refreshes and immediately publishes changed review counts", async () => {
   const summary = buildDb().summaries[PRJ]!;
   const apiList = vi.spyOn(api, "projects").mockResolvedValue({projects: [summary]});

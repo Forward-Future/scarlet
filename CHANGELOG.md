@@ -28,6 +28,13 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Moving the end of a marked range with → near the end of the video no longer pushes it past the end, where its handle disappeared and the arrows stopped working.
 - M, or a marking tool, pressed while the video plays now pauses it and starts marking that frame, instead of only pausing.
 - Saving a timeline or captions file while Scarlet's engine restarts is tried again, instead of failing at once with "Export destination expired".
+- Loudness checks on a recording no longer keep failing after Scarlet was closed while saving one: Scarlet measures it again.
+- A file Scarlet can't read now says so by its own name, without the full path of Scarlet's library folder.
+- A WebM screen or voice recording saved without its length now imports with its real length, so reading its text, faces and sound, and choosing voices in it, work instead of saying it's still being prepared.
+- With a damaged copy of the Whisper model saved, an open Settings no longer keeps your computer busy checking it again every few seconds: it is checked once.
+- Changing a project's settings while its video is being edited no longer leaves the old cut on screen when the new timeline takes a moment to load: Scarlet loads it again by itself.
+- An edit set to carry on once its transcripts are ready that can't start again now stops waiting after a few tries, so you can carry on yourself, instead of waiting forever.
+- A Scarlet agent whose agent.json was edited by hand to a time limit or task count that isn't a positive number now uses the usual limits, instead of taking no requests or stopping each run as soon as it starts.
 
 ## November 23, 2026
 

@@ -512,7 +512,9 @@ export function mediaRoutes(ctx: Ctx) {
   r.on("GET", ["/media/:mediaId/frame", "/projects/:projectId/media/:mediaId/frame"], async (c) => {
     const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
     if (media.kind === "audio") throw badRequest("no_video", "audio media has no frames");
-    const t = numberParam(c.req.query("t"), "t", 0);
+    // A time past the end shows the last frame, as one before the start shows the first, rather than finding none.
+    const requested = numberParam(c.req.query("t"), "t", 0);
+    const t = media.duration && media.duration > 0 ? Math.min(requested, media.duration) : requested;
     const w = Math.min(3840, Math.max(16, numberParam(c.req.query("w"), "w", 640)));
     const file = join(ctx.paths.media(media.projectId), media.path);
     // A recording moved or deleted outside Scarlet is asked for with every scrub.
