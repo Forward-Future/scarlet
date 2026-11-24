@@ -99,6 +99,8 @@ interface Kept { identity: string; stretches: Record<string, LipSyncStretch> }
 
 const keptFiles = new Map<string, Promise<Kept>>();
 const measuring = new Map<string, Promise<LipSyncStretch>>();
+/** The save of each file under way, the next waiting for it. */
+const saving = new Map<string, Promise<void>>();
 const MAX_KEPT = 32;
 const STILL_FINDING = "The faces in this stretch are still being found: ask again.";
 const STILL_MEASURING = "Still being measured: ask again.";
@@ -131,7 +133,15 @@ export async function lipSync(ctx: Ctx, media: VideoMedia, range: { from?: numbe
     } catch { /* Not measured yet. */ }
     return { identity: identity(media), stretches: {} };
   })(), MAX_KEPT);
-  const save = () => atomicWriteFile(path, JSON.stringify(kept), `${path}.${randomUUID()}.tmp`);
+  // Stretches finish together, so their saves go one after another, each with all that is kept by then: run side by
+  // side, an earlier save that landed last would leave the file without stretches measured after it.
+  const save = () => {
+    const next = (saving.get(path) ?? Promise.resolve()).catch(() => {})
+      .then(() => atomicWriteFile(path, JSON.stringify(kept), `${path}.${randomUUID()}.tmp`));
+    saving.set(path, next);
+    void next.catch(() => {}).finally(() => { if (saving.get(path) === next) saving.delete(path); });
+    return next;
+  };
 
   const measure = (stretch: { from: number; to: number }) => {
     const key = `${stretch.from}-${stretch.to}`;
