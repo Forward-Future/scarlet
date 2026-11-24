@@ -105,6 +105,19 @@ describe("OpenAI transcription", () => {
     expect(progress).toEqual([1]);
   });
 
+  it("sends all of a recording whose file doesn't say how long it is, as a voice note recorded in a WebM does", async () => {
+    // Written to a pipe, as a browser's recorder writes it, the WebM has no duration for a probe to read.
+    const file = join(dir, "voice.webm");
+    await writeFile(file, await ffmpeg.ffmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=5", "-c:a", "libopus", "-f", "webm", "pipe:1"]));
+    expect((await fallbackAdapter.probeMedia(file)).duration).toBe(0);
+    api({ language: "en", text: "Cut the intro.", words: [{ word: "Cut", start: 0.2, end: 0.5 }] });
+    await provider().transcribe({ path: file, tmpDir: dir });
+    expect(uploads).toHaveLength(1);
+    // Five seconds of 16 kHz mono 16-bit PCM, not the first second alone.
+    expect(uploads[0]!.bytes).toBeGreaterThan(4.9 * 32000);
+    expect(await readdir(dir)).toEqual(["voice.webm"]);
+  });
+
   it("skips a chunk that starts where the audio has already ended", async () => {
     // The video runs 20 s past its audio, which ends just short of the ten-minute mark.
     decodes(599.98);
