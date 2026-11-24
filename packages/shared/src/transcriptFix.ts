@@ -119,8 +119,12 @@ export function applyWordFix(transcript: Transcript, fix: TranscriptWordFix): Wo
     if (before === after) continue;
     places.push({ index: begin, start: first.start, end: last.end, before, after });
     wordsAdded += words.length - span.length;
-    replaced.set(key(span[0]!), words);
-    for (const e of span.slice(1)) removed.add(key(e));
+    // A word for each word stays in the line it was in, where a phrase runs from one line into the next.
+    if (words.length === span.length) span.forEach((e, k) => replaced.set(key(e), [words[k]!]));
+    else {
+      replaced.set(key(span[0]!), words);
+      for (const e of span.slice(1)) removed.add(key(e));
+    }
   }
   if (!places.length) return { transcript, places, wordsAdded: 0 };
   const segments = transcript.segments.map((segment, s): TranscriptSegment => {

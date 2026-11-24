@@ -75,3 +75,15 @@ describe("applyWordFix where the transcript already reads the fix", () => {
     expect(applyWordFix(out, { find: "code", replace: "Claude Code" }).places).toEqual([]);
   });
 });
+
+describe("applyWordFix across two lines", () => {
+  it("keeps each word of a same-length fix in its own line, with that line's speaker", () => {
+    const said: Transcript = { id: "t", mediaId: "m", segments: [
+      { id: "s0", start: 0, end: 1, speaker: "A", text: "is new", words: [{ text: "is", start: 0, end: .5 }, { text: "new", start: .5, end: 1 }] },
+      { id: "s1", start: 1, end: 2, speaker: "B", text: "ra today", words: [{ text: "ra", start: 1, end: 1.5 }, { text: "today", start: 1.5, end: 2 }] },
+    ] };
+    const out = applyWordFix(said, { find: "new ra", replace: "New Ra" }).transcript;
+    expect(out.segments.map(s => s.text)).toEqual(["is New", "Ra today"]);
+    expect(flattenWords(out).map(w => [w.text, w.speaker])).toEqual([["is", "A"], ["New", "A"], ["Ra", "B"], ["today", "B"]]);
+  });
+});
