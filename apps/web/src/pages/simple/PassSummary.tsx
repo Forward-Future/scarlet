@@ -470,6 +470,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   // no row at all still shows, under what the pass made.
   const placed = new Set((hasForYou ? entries : drawn.flatMap(list => list.rows)).flatMap(keysOf));
   const fold = (key: string) => setUnfolded(was => { const next = new Set(was); if (!next.delete(key)) next.add(key); return next; });
+  const pastHour = drawn.some(list => list.rows.some(({ row }) => clockLabel(row.displayAt).length > 5));
   const rowList = ({ id, label, rows: list }: Drawn) => {
     // A list is its rows' numbers while the pass waits and each has one: a call is its number, Scarlet's note and,
     // once it's settled, sent back or revised, a word for where it stands, and an edit that asks for a look is listed
@@ -477,8 +478,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     // leads with each row's time and keeps its version and amount: the time is bold amber on a tint while the row
     // needs the editor, and a decided row is ticked.
     const short = !!pass && id !== "all" && list.every(e => e.num !== undefined);
-    // A list that leads with times widens their column for all its rows once one of them is past an hour ("1:02:07").
-    const hours = !short && list.some(({ row }) => clockLabel(row.displayAt).length > 5);
+    // A list that leads with times widens their column for all its rows once one on screen is past an hour
+    // ("1:02:07"), in the other list too: For you's rows and the optional ones under them keep one edge.
+    const hours = !short && pastHour;
     return <ol key={id} className={short ? "simple-pass-list is-short" : hours ? "simple-pass-list has-hours" : "simple-pass-list"} aria-label={label}>
       {list.map(entry => {
         const { row, members, more, moment, unfolded: open } = entry;
