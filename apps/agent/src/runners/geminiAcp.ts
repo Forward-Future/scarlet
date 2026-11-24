@@ -2,7 +2,7 @@
  * Pure ACP message parsing, permission allowlisting and command construction for Gemini via Antigravity CLI
  * (`agy acp`). `gemini.ts` drives the session.
  */
-import { resolve as resolvePath } from "node:path";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import {
   briefInput,
   isQuestionTool,
@@ -137,14 +137,18 @@ export function isScarletMcpPermission(params: unknown): boolean {
   return (names.length ? names : [tc.title]).some(namesScarletTool);
 }
 
-/** Every path a permission request names: its locations, and any absolute path among its input's values. */
+/**
+ * Every path a permission request names: its locations, and any absolute path among its input's values, or any that
+ * climbs out of the folder it is read from (`../`).
+ */
 function namedPaths(params: unknown): string[] {
   const tc = asRecord(asRecord(params)?.toolCall);
   const out: string[] = [];
   const absolute = (v: string) => /^(?:\/|[a-zA-Z]:[\\/]|~\/)/.test(v.trim());
+  const climbs = (v: string) => /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(v.trim());
   const visit = (value: unknown, depth: number) => {
     if (depth > 4) return;
-    if (typeof value === "string") { if (absolute(value) && value.length < 4096) out.push(value.trim()); return; }
+    if (typeof value === "string") { if ((absolute(value) || climbs(value)) && value.length < 4096) out.push(value.trim()); return; }
     if (Array.isArray(value)) { for (const v of value) visit(v, depth + 1); return; }
     const rec = asRecord(value);
     if (rec) for (const v of Object.values(rec)) visit(v, depth + 1);
@@ -157,15 +161,19 @@ function namedPaths(params: unknown): string[] {
 /**
  * Whether a request's agent may use one of agy's own tools: yes unless it names a path outside the folders it works in
  * (its task folder, and those its programs live in). agy's sandbox restricts its terminal; its file tools reach as far
- * as the user's files do, the library that holds Scarlet's token among them.
+ * as the user's files do, the library that holds Scarlet's token among them. A relative path is read from the task
+ * folder, the first of them, as agy reads it.
  */
 export function workspacePermission(params: unknown, roots: string[]): boolean {
   if (isScarletMcpPermission(params)) return true;
-  const norm = (p: string) => resolvePath(p).replace(/\\/g, "/").replace(/\/+$/, "");
-  const within = roots.filter((r) => r.trim()).map(norm);
+  const norm = (p: string, from?: string) => (from === undefined ? resolvePath(p) : resolvePath(from, p)).replace(/\\/g, "/").replace(/\/+$/, "");
+  const within = roots.filter((r) => r.trim()).map((r) => norm(r));
+  const taskFolder = within[0];
   return namedPaths(params).every((path) => {
     if (path.startsWith("~")) return false;
-    const p = norm(path);
+    const relative = !isAbsolute(path) && !/^[a-zA-Z]:[\\/]/.test(path);
+    if (relative && taskFolder === undefined) return false;
+    const p = relative ? norm(path, taskFolder) : norm(path);
     return within.some((root) => p === root || p.startsWith(`${root}/`));
   });
 }

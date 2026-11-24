@@ -84,4 +84,8 @@ describe("sync across the whole recording", () => {
   it("says so when nothing matches", () => {
     expect(fitSync(syncPoints(reference, envelope(7, 30_000))).kind).toBe("unclear");
   });
+  it("says when only one passage matched, rather than that none did", () => {
+    expect(fitSync([{ at: 0, offset: 1.5 }])).toEqual({ kind: "unclear", reason: "Only one passage matched." });
+    expect(fitSync([])).toEqual({ kind: "unclear", reason: "No passage matched." });
+  });
 });

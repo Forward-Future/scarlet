@@ -277,6 +277,17 @@ describe("telling an edit that only left a marker for the editor", () => {
     expect(classifyEdits(placed, [one], { before: base, after: base }).markers).toEqual([false]);
   });
 
+  it("keeps a to-do left inside another edit a to-do, when the zoom it sits in is that other edit's", () => {
+    // On Matt's "reimann 2" the punch-ins ran under the spots Scarlet marked for the sponsor and the closing video, and
+    // both cards said Zoom, with nothing to add (2026-11-23).
+    const zoomed = after(t => { t.tracks[0]!.clips[0] = { ...shot, transform: { scale: 1.1 } } as typeof shot; });
+    const punched = change([{ op: "updateClip", clipId: shot.id, patch: { transform: { scale: 1.1 } } }, todo(12, "Add the sponsor spot")]);
+    expect(classifyEdits(punched, [{ start: 0, end: 120 }, { start: 12, end: 12 }], { before: base, after: zoomed }))
+      .toMatchObject({ kinds: ["zoom", "other"], markers: [false, true], asks: [undefined, "Add the sponsor spot"] });
+    // Alone, the edit is what the zoom across it did.
+    expect(classifyEdits(punched, [{ start: 12, end: 12 }], { before: base, after: zoomed }).markers).toEqual([false]);
+  });
+
   it("keeps a marker's spot a marker when a step that can't be placed did something else", () => {
     const muted = change([todo(12), todo(60), { op: "updateTrack", trackId: "a1", patch: { muted: true } }]);
     expect(classifyEdits(muted, [one, { start: 59.5, end: 60.5 }, { start: 100, end: 101 }]))

@@ -70,6 +70,23 @@ it("draws a line, a box and a point on the frame, in fractions of the picture, a
   expect(Array.from(container.querySelectorAll(".picture-mark-number, .picture-mark-point"), n => n.textContent)).toEqual(["1", "2", "3"]);
 });
 
+it("starts marking from M pressed while the video plays, once the player hears it stopped, on the frame marked", async () => {
+  usePlayerStore.setState({ playing: true });
+  await show();
+  // The player says it stopped a moment after the press: the marking is on already.
+  await act(async () => start());
+  expect(player.pause).toHaveBeenCalled();
+  expect(usePictureMarksStore.getState().marking).toBe("prj");
+  // The video ran on past the frame meanwhile: it goes back to the frame marked.
+  expect(player.seek).toHaveBeenCalledWith(7, true);
+  await act(async () => usePlayerStore.setState({ playing: false }));
+  expect(usePictureMarksStore.getState().marking).toBe("prj");
+  expect(usePictureMarksStore.getState().byProject.prj?.time).toBe(7);
+  // Playing on from there still ends it.
+  await act(async () => usePlayerStore.setState({ playing: true }));
+  expect(usePictureMarksStore.getState().marking).toBeNull();
+});
+
 it("leaves marking on Esc or when the video plays on, and keeps the marks for the message", async () => {
   await show();
   await act(async () => toggleMarking("prj", { time: 7, version: "v1" }));

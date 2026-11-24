@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
-import { lipSyncStretches, mouthOf } from "./lipSync.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import type { Ctx } from "../context.js";
+import { lipSync, lipSyncStretches, mouthOf, type LipSyncStretch } from "./lipSync.js";
+
+const saved = vi.hoisted(() => [] as string[]);
+vi.mock("../util.js", async importOriginal => {
+  let saves = 0;
+  return { ...await importOriginal<typeof import("../util.js")>(),
+    // The first save lands last, as writes queued on a busy disk can.
+    atomicWriteFile: vi.fn(async (_path: string, data: string) => {
+      await new Promise(resolve => setTimeout(resolve, saves++ === 0 ? 50 : 0));
+      saved.push(data);
+    }) };
+});
+// No face in any stretch: each is answered, and kept, as soon as its faces are read.
+vi.mock("./faces.js", () => ({ faceSamples: vi.fn(async () => ({ done: true, samples: [] })) }));
 
 describe("lipSyncStretches", () => {
   it("spreads the stretches evenly across a long recording", () => {
@@ -34,4 +51,22 @@ describe("mouthOf", () => {
     expect(face.seconds).toBe(10);
     expect(mouthOf(frames(0, 30), 0, 30)).toBeUndefined();
   });
+});
+
+it("keeps every stretch it answered on disk, however its saves land", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "scarlet-lip-sync-"));
+  try {
+    writeFileSync(join(dir, "cam.mp4"), "");
+    const ctx = { paths: { media: () => dir, waveforms: () => dir }, track: <T>(p: T) => p,
+      projectSignal: () => new AbortController().signal } as unknown as Ctx;
+    const media = { id: "med_lipsave", projectId: "prj_1", kind: "video", path: "cam.mp4", duration: 90, width: 1920, height: 1080, fps: 30 } as Parameters<typeof lipSync>[1];
+    const result = await lipSync(ctx, media, { count: 3 });
+    expect(result.stretches.map(s => s.unmeasured)).toEqual(Array(3).fill("No face is in frame."));
+    await vi.waitFor(() => expect(saved.length).toBeGreaterThanOrEqual(3));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const onDisk = JSON.parse(saved.at(-1)!) as { stretches: Record<string, LipSyncStretch> };
+    expect(Object.keys(onDisk.stretches).sort()).toEqual(["0-30", "30-60", "60-90"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

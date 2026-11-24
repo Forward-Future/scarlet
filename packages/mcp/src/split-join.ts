@@ -1,4 +1,4 @@
-import { clipEnd, type MediaClip, type SplitJoinPlaced, type Timeline, type TranscriptWord } from "@scarlet/timeline";
+import { clipEnd, clock, type MediaClip, type SplitJoinPlaced, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 
 /** What one split join will sound like, measured from the transcript of each side's recording, for the model to judge. */
 export interface SplitJoinEvidence {
@@ -58,4 +58,9 @@ export function splitJoinEvidence(after: Timeline, joins: readonly SplitJoinPlac
     }
     return evidence;
   });
+}
+
+/** The row a split join gets in the request's list when the save names none: what it is and the second it is at. */
+export function splitJoinLabel(join: Pick<SplitJoinPlaced, "at" | "shift">): string {
+  return `${join.shift < 0 ? "J cut" : join.shift > 0 ? "L cut" : "Sound back on the cut"} at ${clock(join.at)}`;
 }
