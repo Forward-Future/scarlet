@@ -14,13 +14,20 @@ import { FINISHED_TASK, createTask } from "./tasks.js";
 /** How long since a host's last heartbeat it still counts as online (`ONLINE_WINDOW_MS` in routes/hosts.ts). */
 const HOST_ONLINE_MS = 90_000;
 
-type By = { agent: string; model?: string };
+type By = { agent: string; model?: string; label?: string };
+
+const onlineHosts = (ctx: Ctx) => ctx.repos.hosts.select().filter(h => h.lastSeenAt && Date.now() - Date.parse(h.lastSeenAt) < HOST_ONLINE_MS);
 
 /** Whether a host the editor has online has this model signed in. */
 function signedIn(ctx: Ctx, by: By): boolean {
-  const online = ctx.repos.hosts.select().filter(h => h.lastSeenAt && Date.now() - Date.parse(h.lastSeenAt) < HOST_ONLINE_MS);
-  return online.some(h => h.agents.some(a => a.id === by.agent && a.installed && a.loggedIn !== false
+  return onlineHosts(ctx).some(h => h.agents.some(a => a.id === by.agent && a.installed && a.loggedIn !== false
     && (!by.model || a.model === by.model || !!a.models?.includes(by.model))));
+}
+
+/** The model with the name its host gives it ("Gemini 3 Pro"), so the chat and the model running a request say it as the editor reads it. */
+function named(ctx: Ctx, by: By): By {
+  const label = onlineHosts(ctx).flatMap(h => h.agents).find(a => a.id === by.agent && a.modelLabels?.[by.model ?? ""])?.modelLabels?.[by.model ?? ""];
+  return label ? { ...by, label } : by;
 }
 
 const sameModel = (task: Pick<Task, "agent" | "model">, by: By) => task.agent === by.agent && (task.model ?? "") === (by.model ?? "");
@@ -33,7 +40,7 @@ export function handOffTypes(ctx: Ctx, task: Task): Array<TaskModelType & { by: 
   if (!isProjectEditTask(task)) return [];
   return ctx.settings().taskModels.flatMap(type => {
     const by = taskModelChoice(type);
-    return by && !sameModel(task, by) && signedIn(ctx, by) ? [{ ...type, by }] : [];
+    return by && !sameModel(task, by) && signedIn(ctx, by) ? [{ ...type, by: named(ctx, by) }] : [];
   });
 }
 
@@ -95,7 +102,7 @@ export async function handOff(ctx: Ctx, askerId: string, ask: HandOffAsk, waitMs
       ctx.log(`[hand-off] ${asker.id}: ${type.name} to ${by.agent}${by.model ? `/${by.model}` : ""} as ${run.id}`);
     }
   }
-  const by: By = { agent: run.agent, ...(run.model && { model: run.model }) };
+  const by = named(ctx, { agent: run.agent, ...(run.model && { model: run.model }) });
   const deadline = Date.now() + waitMs;
   for (;;) {
     const now = ctx.repos.tasks.get(run.id);

@@ -67,11 +67,11 @@ it("hands off only kinds of work given to another model that is signed in now", 
 
 it("runs the hand-off beside the request with the editor's model, and its edits join the request with who made them", async () => {
   ctx.repos.settings.update({ taskModels: graphics("gemini:gemini-3-pro") });
-  const host = hostWith([{ id: "claude", installed: true }, { id: "gemini", installed: true, models: ["gemini-3-pro"] }]);
+  const host = hostWith([{ id: "claude", installed: true }, { id: "gemini", installed: true, models: ["gemini-3-pro"], modelLabels: { "gemini-3-pro": "Gemini 3 Pro" } }]);
   const claude = request("claude");
   expect(claimTask(ctx, host, claude.id)?.state).toBe("claimed");
   const brief = "Add a lower third reading “Ana Ruiz, Producer” from 5 s to 9 s.";
-  expect(await handOff(ctx, claude.id, { type: "motion graphics", brief }, 0)).toMatchObject({ state: "working", by: { agent: "gemini", model: "gemini-3-pro" } });
+  expect(await handOff(ctx, claude.id, { type: "motion graphics", brief }, 0)).toMatchObject({ state: "working", by: { agent: "gemini", model: "gemini-3-pro", label: "Gemini 3 Pro" } });
   const [run] = ctx.repos.tasks.select("kind = 'hand_off'");
   expect(run).toMatchObject({ agent: "gemini", model: "gemini-3-pro", instruction: brief,
     context: { checksTaskId: claude.id, threadId: claude.context.threadId, time: 5, handOff: { typeId: "motion-graphics", name: "Motion graphics", brief } } });
@@ -98,7 +98,7 @@ it("runs the hand-off beside the request with the editor's model, and its edits 
   expect(ctx.repos.tasks.get(claude.id)?.changeIds).toEqual([change.id]);
   completeTask(ctx, ctx.repos.tasks.get(run!.id)!, { state: "done", summary: `Saved ${change.id}: the lower third from 5 s to 9 s.` });
   expect(await handOff(ctx, claude.id, { handoffId: run!.id }, 0)).toEqual({ state: "done", handoffId: run!.id, summary: `Saved ${change.id}: the lower third from 5 s to 9 s.`,
-    changeIds: [change.id], by: { agent: "gemini", model: "gemini-3-pro" } });
+    changeIds: [change.id], by: { agent: "gemini", model: "gemini-3-pro", label: "Gemini 3 Pro" } });
 });
 
 it("says plainly when the work is the request's own or its model isn't signed in, and stops a hand-off with its request", async () => {

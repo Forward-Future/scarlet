@@ -498,7 +498,7 @@ export class ScarletClient extends ClientTransport {
   }
   task(taskId: string, events: "all" | "conversation" | "none" = "all") {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener;
-      taskModels?: Array<{ id: string; name: string; description?: string; by: { agent: string; model?: string } }> }>(path + (events === "all" ? "" : "?events=" + events)));
+      taskModels?: Array<{ id: string; name: string; description?: string; by: { agent: string; model?: string; label?: string } }> }>(path + (events === "all" ? "" : "?events=" + events)));
   }
   waitForTranscription(taskId: string) {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; waited?: boolean }>(path + "?wait=transcript"));

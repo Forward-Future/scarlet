@@ -196,7 +196,7 @@ export interface ExportAndTaskToolsDeps {
 }
 
 /** A kind of work the editor gave another model, as the engine tells a request of it. */
-export interface TaskModelOffer { id: string; name: string; description?: string; by: { agent: string; model?: string } }
+export interface TaskModelOffer { id: string; name: string; description?: string; by: { agent: string; model?: string; label?: string } }
 
 /** Registers export_otio, task events, and skills/learnings (immediately after registerGraphics). */
 export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
@@ -262,7 +262,7 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
   // The kinds of work the editor gave other models in Settings (Task models). A request hands each such piece to its model.
   const offers = taskModels ?? [];
   if (offers.length && task && taskId && isProjectEditTask(task)) {
-    const nameOf = (by: { agent: string; model?: string }) => by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent;
+    const nameOf = (by: { agent: string; model?: string; label?: string }) => by.label ?? (by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent);
     const told = new Set<string>();
     tool(
       "hand_off",

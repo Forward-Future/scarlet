@@ -46,8 +46,11 @@ export function taskModelId(name: string, taken: readonly string[]): string {
 }
 
 /** What a request heard back from the model it handed a piece of work to (`POST /projects/:id/hand-off`). */
+/** The model a hand-off runs on, with the name its host gives it when it has one. */
+export type HandOffModel = { agent: string; model?: string; label?: string };
+
 export type HandOffResult =
-  | { state: "done"; handoffId: string; summary: string; changeIds: string[]; by: { agent: string; model?: string } }
-  | { state: "working"; handoffId: string; by: { agent: string; model?: string } }
-  | { state: "failed"; handoffId: string; error: string; by: { agent: string; model?: string } }
+  | { state: "done"; handoffId: string; summary: string; changeIds: string[]; by: HandOffModel }
+  | { state: "working"; handoffId: string; by: HandOffModel }
+  | { state: "failed"; handoffId: string; error: string; by: HandOffModel }
   | { state: "unavailable"; reason: string };

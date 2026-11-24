@@ -92,7 +92,7 @@ export interface PromptContext {
   /** The project's style guide: pasted text in full, or the file it is in. */
   styleGuide?: { name: string; text?: string; path?: string; mime?: string };
   /** The kinds of work the editor gave other models in Task models, signed in now: the request hands them off (`hand_off`). */
-  taskModels?: Array<{ name: string; description?: string; by: { agent: string; model?: string } }>;
+  taskModels?: Array<{ name: string; description?: string; by: { agent: string; model?: string; label?: string } }>;
   /** What a hand_off task does for the request that handed it the work: the editor's kind of work, and what they asked. */
   handOff?: { name: string; description?: string; request: string };
 }
@@ -118,7 +118,7 @@ function talkingToYouSection(words: string): string {
   return `# How the editor wants you to write to them\n\nThe editor wrote this in Scarlet's settings for everything you write to them: what you say you will do, your updates, the reason on each edit, your questions and your closing sentences. It is about how you say things; where Scarlet shows your words and how long they can be, above, still holds.\n\n${words.trim()}`;
 }
 
-const modelName = (by: { agent: string; model?: string }) => by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent;
+const modelName = (by: { agent: string; model?: string; label?: string }) => by.label ?? (by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent);
 
 /** The kinds of work the editor gave other models (Task models), for the request that hands them off. */
 function taskModelsSection(types: NonNullable<PromptContext["taskModels"]>): string {
