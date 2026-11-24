@@ -1381,8 +1381,8 @@ export function SimpleWorkspace() {
     return stopTarget(next, row => row.find(passWaitingEdit) ?? row[0]!);
   }
   // Keep goes to the next row that waits on the editor in For you, in its order, a call or a flagged edit, wrapping to
-  // the earlier ones, and the card closes once nothing is left. With For you's optional line open and on an edit
-  // Scarlet didn't flag, it goes to the next optional row instead, then to what waits. A request with one list of
+  // the earlier ones, and the card closes once nothing is left. With For you's low risk edits included and on an edit
+  // Scarlet didn't flag, it goes to the next low risk row instead, then to what waits. A request with one list of
   // every edit goes down that list to the next row that hasn't been kept.
   const unkeptEdit = (e: ThreadEdit) => !e.check && !reviewed(e) && !revisingEdit(e);
   const stillWaits = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.call ? waiting(stop.call) : !!stop.row?.some(waits);

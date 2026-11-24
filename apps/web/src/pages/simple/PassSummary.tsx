@@ -11,7 +11,7 @@ import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../.
 import { editKey } from "../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../lib/madeSentence";
 import { decidedPassCalls, rejectedCallRef } from "../../lib/passCalls";
-import { inListOrder, ReviewLinger, rowPlace, tabShown, type ListOrder, type RowPlace } from "../../lib/reviewTabs";
+import { inListOrder, ReviewLinger, rowPlace, tabShown, type ListOrder, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
 import { isRecheck, type Thread } from "../../lib/threads";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { callRowKey, isWorking, letGo, listedBefore, noNests, noRejected, noSpent, type ChatActions, type HoveredReviewRow, type Nest, type PassList, type Spent } from "./types";
@@ -79,33 +79,34 @@ function ReviewListTabs({ need, working, done, list: [open, setOpen], reveal, sh
 }
 
 /** What the double check beside "low risk edits" says on hover: what those edits are and that nothing waits on them. */
-export const LOW_RISK_TIP = "Edits Scarlet is confident about. They go into the video without your OK. Open the list to look them over.";
+export const LOW_RISK_TIP = "Edits Scarlet is confident about. They go into the video without your OK. Include them to look them over.";
 
 /**
- * The one quiet line under For you's rows: how many edits Scarlet didn't flag are still the editor's to keep or
- * ignore, as "low risk edits" with a double check after the words that says what they are on hover. Closed until
- * pressed; open, those rows are listed under it.
+ * The one quiet line under For you's tabs: a box that includes the edits Scarlet didn't flag and the editor hasn't
+ * decided in For you's list, in their place in the video among the rows that wait (the editor chose this on
+ * 2026-11-24, in place of a second list under For you's rows, which could crowd them out). It reads "Include 22 low
+ * risk edits", with a double check after the words that says what they are on hover. Off until pressed.
  */
-function OptionalLine({ count, open, onToggle, inPass }: { count: number; open: boolean; onToggle(): void;
-  /** Under a pass's rows, which start a little in from the block's edge. */
+function IncludeLowRisk({ count, on, onToggle, inPass }: { count: number; on: boolean; onToggle(): void;
+  /** Over a pass's rows, which start a little in from the block's edge. */
   inPass?: boolean }) {
   const mark = useRef<HTMLSpanElement>(null);
   const note = useRef<HTMLSpanElement>(null);
   const [tip, setTip] = useState(false);
   useFloatingPosition(tip, mark, note, { rightOffset: 6 });
   return <>
-    <button type="button" className={inPass ? "simple-review-rest is-pass" : "simple-review-rest"} aria-expanded={open}
+    <button type="button" role="checkbox" className={inPass ? "simple-review-include is-pass" : "simple-review-include"} aria-checked={on}
       aria-description={LOW_RISK_TIP} onClick={letGo(onToggle)}
       onFocus={e => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}>
-      <span className="simple-review-rest-chev" aria-hidden="true"><Icon name="chevron" size={11} /></span>
-      <span className="simple-review-rest-label">{count} low risk {count === 1 ? "edit" : "edits"}<span ref={mark} className="simple-review-rest-checks" aria-hidden="true"
+      <span className="simple-review-include-box" aria-hidden="true">{on && <Icon name="check" size={9} />}</span>
+      <span className="simple-review-include-label">Include {count} low risk {count === 1 ? "edit" : "edits"}<span ref={mark} className="simple-review-include-checks" aria-hidden="true"
         onPointerEnter={e => { if (e.pointerType !== "touch") setTip(true); }} onPointerLeave={() => setTip(false)}><Icon name="checks" size={13} /></span></span>
     </button>
     {tip && createPortal(<span ref={note} className="button-tip is-wrapping" aria-hidden>{LOW_RISK_TIP}</span>, document.body)}
   </>;
 }
 
-/** What an empty tab says. For you says it only when it has no optional line either, so the tab is never blank. */
+/** What an empty tab says. For you says it whenever its list has no row, low risk edits included or not. */
 const EMPTY_TAB = { you: "Nothing waits on you.", working: "Nothing in the works.", done: "Nothing decided yet." } as const;
 
 /** The rows a turn holds for its lists while its block moves: which were just acted on, and the edit last opened. */
@@ -200,8 +201,8 @@ interface Entry {
  * under three tabs and each is under exactly one. For you, shown until another is pressed, lists what waits on the
  * editor: open calls and flagged edits, each by its number while the pass waits, with Scarlet's note. Pressed, it opens
  * the first one still waiting. A row the editor has just decided or sent back stays there a moment with its new word,
- * then fades and leaves. Under those rows one line counts the edits Scarlet didn't flag ("112 low risk edits"); opened, it
- * lists them in timeline order, edits that play as one change on one row. Working has the rows Scarlet has, each with
+ * then fades and leaves. Over those rows one box includes the edits Scarlet didn't flag ("Include 112 low risk edits");
+ * ticked, they join For you's list in their place in the video, edits that play as one change on one row. Working has the rows Scarlet has, each with
  * the editor's request under it, and Done every decided row. A pass with nothing to review has one list of every edit,
  * behind See all. Once Scarlet is done, what the pass applied is one sentence above the list. A row is one line and
  * opens its edit or call in the card on the timeline, where Keep and Reject edit move on to the next that waits. A
@@ -410,11 +411,12 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const order: ListOrder = { numbers: !!pass?.calls.some(c => c.askOrder !== undefined) };
   const optional = inPlace("optional");
   // The lists on screen, top to bottom. With nothing to review there is the one list of every edit.
-  type Drawn = { id: "all" | RowPlace; label: string; rows: Entry[] };
+  type Drawn = { id: "all" | ReviewTab; label: string; rows: Entry[] };
   const drawn: Drawn[] = !hasForYou ? (listed ? [{ id: "all", label: "Every edit", rows: entries }] : [])
     : tab === "you" ? [
-      { id: "you", label: pass && calls.length ? "Calls that need you" : "Edits that need you", rows: inListOrder([...inPlace("you"), ...heldFrom("you")], order) },
-      ...(optionalOpen ? [{ id: "optional" as const, label: "Low risk edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
+      // With low risk edits included they are in the one list, in their place in the video among the rows that wait.
+      { id: "you", label: pass && calls.length ? "Calls that need you" : "Edits that need you",
+        rows: inListOrder([...inPlace("you"), ...heldFrom("you"), ...(optionalOpen ? [...optional, ...heldFrom("optional")] : [])], order) },
     ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided", rows: inListOrder(inPlace(tab), order) }];
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
   // For you opens the first waiting row on the timeline, or leaves it open if the editor is already on one.
@@ -549,11 +551,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     {!callsListed && outsideList}
     {seeTab}
     {tabs}
-    {drawn.map((list, i) => <Fragment key={list.id}>
-      {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
-      {list.id === "optional" && optional.length > 0 && <OptionalLine inPass count={optional.length} open onToggle={() => setOpen(undefined)} />}
-      {list.rows.length > 0 ? rowList(list) : (list.id === "working" || list.id === "done" || (list.id === "you" && optional.length === 0)) && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
-      {list.id === "you" && i === drawn.length - 1 && optional.length > 0 && <OptionalLine inPass count={optional.length} open={false} onToggle={() => { reveal(); setOpen("all"); }} />}
+    {/* Over For you's rows, the edits Scarlet didn't flag are one box that includes them, off until pressed. */}
+    {hasForYou && tab === "you" && optional.length > 0
+      && <IncludeLowRisk inPass count={optional.length} on={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
+    {drawn.map(list => <Fragment key={list.id}>
+      {list.rows.length > 0 ? rowList(list) : list.id !== "all" && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
     </Fragment>)}
     {callsListed && outsideList}
     {/* Only a failed apply offers Retry, after the reason, whichever list is on screen. */}
@@ -629,6 +631,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   const onScreen = (e: Omit<ThreadEdit, "at">) => tab === "you" ? inYou(e) || (optionalOpen && inOptional(e)) : place(e) === tab;
   const countOf = (at: RowPlace) => tracked.filter(row => row.place === at).length;
   const some = (only: (e: Omit<ThreadEdit, "at">) => boolean) => edits.some(only) || gone.some(only);
+  // For you's one list: what waits, and with low risk edits included those too, each in its place in the video.
+  const forYouList = (e: Omit<ThreadEdit, "at">) => inYou(e) || (optionalOpen && inOptional(e));
   // Every edit belongs to For you: For you already lists them all.
   const allForYou = hasForYou && forYouGroups.length === groups.length && forYouRejected.length === gone.length;
   const single = !working && groups.length === 1 ? shownEdit ?? edits[0] : undefined;
@@ -643,7 +647,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     wasShowing.current = showingInList;
   }, [showingInList]); // eslint-disable-line react-hooks/exhaustive-deps
   // Under the tabs, an edit opened from somewhere else (the timeline, ⌘Z) shows the tab that holds it: For you for one
-  // that waits, with its optional line open for one Scarlet didn't flag, Working for one sent back, Done for one
+  // that waits, with low risk edits included for one Scarlet didn't flag, Working for one sent back, Done for one
   // decided. One opened from the list, stepped to or moved on to is in the tab shown already.
   const openEdit = showing && (shownEdit ?? gone.find(e => matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing)));
   const openId = openEdit ? editKey(openEdit.previous[0] ?? openEdit) : undefined;
@@ -708,10 +712,9 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     {seeTab}
     {!hasForYou && showsList && rows(undefined)}
     {hasForYou && tab === "you" && <>
-      {some(inYou) ? rows("Edits that need you", inYou) : optional === 0 && <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
-      {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
-      {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
-      {optionalOpen && some(inOptional) && rows("Low risk edits", inOptional)}
+      {/* Over For you's rows, the edits Scarlet didn't flag are one box that includes them, off until pressed. */}
+      {optional > 0 && <IncludeLowRisk count={optional} on={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
+      {some(forYouList) ? rows("Edits that need you", forYouList) : <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
     </>}
     {hasForYou && tab !== "you" && (countOf(tab) > 0 ? rows(tab === "working" ? "With Scarlet" : "Decided", e => place(e) === tab)
       : <p className="simple-review-empty">{EMPTY_TAB[tab]}</p>)}

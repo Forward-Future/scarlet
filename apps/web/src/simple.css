@@ -436,24 +436,24 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-tab-count { color: var(--color-warn); font-variant-numeric: tabular-nums; }
 /* Working's and Done's counts are quiet: only what waits on the editor is amber. */
 .simple-review-tab-tally { color: var(--color-muted); font-variant-numeric: tabular-nums; }
-/* Under For you's rows, the edits Scarlet didn't flag are one quiet line that opens them. */
-.simple-review-rest { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr); column-gap: 8px; align-items: center; width: 100%;
-  margin: 6px 0 2px; padding: 5px 0; border: 0; background: none; color: var(--color-muted); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
-.simple-review-rest.is-pass { padding-left: 12px; }
-.simple-review-rest:is(:hover, :focus-visible) { color: var(--color-fg); }
-.simple-review-rest:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
-.simple-review-rest-chev { display: inline-grid; place-items: center; width: 17px; color: var(--color-dim); }
-.simple-review-rest-chev svg { transition: transform .14s ease; }
-.simple-review-rest[aria-expanded="true"] .simple-review-rest-chev svg { transform: rotate(90deg); }
+/* Over For you's rows, one quiet box includes the edits Scarlet didn't flag in For you's list. */
+.simple-review-include { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 4px; padding: 5px 0; border: 0; background: none;
+  color: var(--color-muted); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.simple-review-include.is-pass { padding-left: 12px; }
+.simple-review-include:is(:hover, :focus-visible) { color: var(--color-fg); }
+.simple-review-include:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
+.simple-review-include-box { display: inline-grid; place-items: center; flex: none; width: 13px; height: 13px; border: 1px solid var(--color-dim);
+  border-radius: 3px; color: var(--color-bg); }
+.simple-review-include[aria-checked="true"] .simple-review-include-box { border-color: var(--color-fg); background: var(--color-fg); }
 /* The double check after "low risk edits": quiet, and says what those edits are on hover. */
-.simple-review-rest-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.simple-review-rest-checks { display: inline-grid; place-items: center; color: var(--color-dim); cursor: help; }
-.simple-review-rest-checks:hover { color: var(--color-fg); }
+.simple-review-include-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.simple-review-include-checks { display: inline-grid; place-items: center; color: var(--color-dim); cursor: help; }
+.simple-review-include-checks:hover { color: var(--color-fg); }
 .simple-review-empty { margin: 0; padding: 8px 0; color: var(--color-muted); font-size: 12.5px; }
 /* A row the editor has just decided or sent back fades before it leaves For you. */
 .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { opacity: 0; transition: opacity .3s ease; }
 @media (prefers-reduced-motion: reduce) {
-  .simple-review-rest-chev svg, .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { transition: none; }
+  .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { transition: none; }
 }
 .simple-pass-ok { color: var(--color-ok); }
 /* Keep offscreen rows' absolute screen-reader labels in the list's scroll area. */
