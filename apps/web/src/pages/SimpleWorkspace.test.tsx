@@ -14251,7 +14251,7 @@ it("shows draft timestamps on the player timeline, with seeking reserved for the
   expect(marks()).toEqual([]);
 });
 
-it("keeps a to-do marked Done before the card lost Done in For you, marked Done across tab switches", async () => {
+it("keeps a to-do marked Done before the card lost Done in Done, marked Done across tab switches", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -14277,11 +14277,13 @@ it("keeps a to-do marked Done before the card lost Done in For you, marked Done 
   expect([need()?.getAttribute("title"), turn.querySelector(".simple-review-tab-count")]).toEqual([null, null]);
   expect([row().classList.contains("is-decided"), row().querySelector(".edit-badge")?.classList.contains("is-kept"), row().querySelector(".simple-edit-value")?.textContent])
     .toEqual([true, true, "Done"]);
-  // Switching to See all and back to For you preserves the handled row.
-  await click(seeAll(turn)!);
-  expect(reviewModes(turn)).toEqual([["For you", "false"], ["See all", "true"]]);
-  await click(need()!);
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
+  // It is Done's row, marked Done there, across a switch to For you and back.
+  await click(tabNamed(turn, "Done"));
+  expect(reviewModes(turn)).toEqual(tabs("Done"));
+  expect([row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Done"]);
+  await click(tabNamed(turn, "For you"));
+  expect(reviewModes(turn)).toEqual(tabs());
+  await click(tabNamed(turn, "Done"));
   expect([row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Done"]);
 });
 
@@ -14339,7 +14341,7 @@ it("keeps a rejected flagged edit in For you marked Rejected and opens its Rejec
   expect(rejectedCard()?.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
 });
 
-it("keeps kept and rejected flagged edits in For you while a dialogue pass waits on calls", async () => {
+it("puts kept and rejected flagged edits in Done while a dialogue pass waits on calls", async () => {
   runningPass();
   const thread = threadWith("chg_ready");
   const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: thread.id,
@@ -14354,12 +14356,16 @@ it("keeps kept and rejected flagged edits in For you while a dialogue pass waits
     ] }));
   await show();
   await act(async () => {});
-  // 3 calls + 1 waiting flagged edit = 4 need you; the already-rejected flagged edit stays visible marked Rejected.
+  // 3 calls + 1 waiting flagged edit = 4 need you. The already-rejected flagged edit is Done's row, marked Rejected.
   expect(needYou()).toBe("4 need you");
+  expect(passRows().some(r => r.textContent?.includes("intro music"))).toBe(false);
+  await click(tabNamed(passCard(), "Done"));
   const intro = passRows().find(r => r.textContent?.includes("intro music"))!;
   expect([intro.classList.contains("is-rejected"), intro.querySelector(".edit-badge")?.classList.contains("is-rejected"), intro.querySelector(".simple-pass-value")?.textContent])
     .toEqual([true, true, "Rejected"]);
-  // Keep wrap: it stays in the pass's For you list marked Kept, dimmed and ticked, while the 3 calls stay waiting.
+  await click(tabNamed(passCard(), "For you"));
+  // Keep wrap: it is Done's too, and stays in For you for its moment marked Kept, dimmed and ticked, while the 3 calls
+  // stay waiting.
   await click(passRows().find(r => r.textContent?.includes("wrap"))!);
   await act(async () => {});
   await press("k");
@@ -14401,7 +14407,7 @@ it("says v2 on a flagged edit that came back revised with Scarlet's own reason, 
 
 const openPassRowIn = (scope: Element) => scope.querySelector<HTMLElement>('.simple-pass-list > li > button[aria-current="true"] .simple-pass-words')?.textContent;
 
-it("keeps a dialogue pass's decided calls in For you after the pass applies, and opens a rejected one as a rejected edit opens", async () => {
+it("keeps a dialogue pass's decided calls in Done after the pass applies, and opens a rejected one as a rejected edit opens", async () => {
   finishedPass();
   const ready = data.changes.find(c => c.id === "chg_ready")!;
   const approved = {
@@ -14435,14 +14441,17 @@ it("keeps a dialogue pass's decided calls in For you after the pass applies, and
   await showFolded();
   await act(async () => {});
   const pass = passCard();
-  // Both decided calls stay in For you (no count badge since nothing waits): approved cut as Kept (clickable), skipped cut as Rejected.
-  expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
+  // Both decided calls are Done's rows (For you has no count, since nothing waits): the approved cut as Kept, the
+  // skipped cut as Rejected, in timeline order with the cut Scarlet was sure of, and each opens.
+  expect(reviewModes(pass)).toEqual(tabs());
   expect(needYou()).toBeNull();
+  await click(tabNamed(pass, "Done"));
   const rows = passRows();
   expect(rows.map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided"), r.classList.contains("is-rejected"), r.querySelector(".simple-pass-value")?.textContent, r.disabled]))
     .toEqual([
       [STAGED[0]!.reason, true, false, "Kept", false],
       [STAGED[1]!.reason, false, true, "Rejected", false],
+      [STAGED[2]!.reason, true, false, "Kept", false],
     ]);
   // A press on the rejected call opens it as a rejected edit's row opens: the row lit, the timeline on where its
   // footage plays now (6 s on the video before the pass, a second earlier by the cut ahead of it), its card with
@@ -14455,7 +14464,7 @@ it("keeps a dialogue pass's decided calls in For you after the pass applies, and
   expect(container.querySelector(".simple-timeline-band, .simple-timeline-cut")?.textContent).toBe("Rejected");
   expect(boxTag()).toBe("Cut at 0:05");
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_ready", cutIndex: 1, time: 5, end: 6, label: STAGED[1]!.reason });
-  // ↑ steps to the For you row before where it was, and Esc closes it.
+  // ↑ steps to Done's row before where it was, and Esc closes it.
   await press("ArrowUp");
   await act(async () => {});
   expect([rejectedCard(), editPanel() !== null, openPassRowIn(pass)]).toEqual([null, true, STAGED[0]!.reason]);
@@ -14468,9 +14477,8 @@ it("keeps a dialogue pass's decided calls in For you after the pass applies, and
   await click(passRows()[0]!);
   await act(async () => {});
   expect(editPanel()).not.toBeNull();
-  // See all lists only the actual applied edits, not the skipped call.
-  await click(seeAll(pass)!);
-  expect(passRows().map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual([STAGED[0]!.reason, STAGED[2]!.reason]);
+  // Every row is decided, so there is no optional line under For you.
+  expect(optionalLine(pass)).toBeNull();
 });
 
 it("ticks in See all the cuts that went in with a pass through its calls, Scarlet's own picks too, and not an edit that still waits, a doubt raised since or a cut sent back", async () => {
