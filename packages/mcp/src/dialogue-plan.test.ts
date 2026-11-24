@@ -908,6 +908,22 @@ describe("dialogue plan", () => {
     }
   });
 
+  it("says how near the removed sound comes to a cut in timeline seconds on a clip at double speed", async () => {
+    // As above: “recognized that”, a pause, “that likely”, with the first “that” run straight on from “recognized”.
+    const said = [{ start: 1, end: 1.4, text: "recognized" }, { start: 1.4, end: 1.7, text: "that" }, { start: 2.5, end: 2.8, text: "that" }, { start: 2.8, end: 3.2, text: "likely" }];
+    const talk = [{ start: .98, end: 1.72 }, { start: 2.5, end: 3.22 }];
+    const rms = Array.from({ length: 250 }, (_, i) => i === 70 ? .001 : talk.some(v => v.start <= i/50 && i/50 < v.end) ? .12 : .001);
+    const scan: JoinPage = { mediaId: "mic", start: 0, end: 5, edges: joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: talk }) };
+    const { tl, sources } = fixture();
+    tl.tracks[1]!.clips = [makeMediaClip("mic", 0, 5, 0, { speed: 2 })];
+    const planned = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ mediaId: "mic", fromWord: 1, toWord: 1 })] },
+      { ...sources, pages: () => [scan], words: async () => said });
+    expect(planned.outcome).toBe("ready");
+    if (planned.outcome !== "ready") return;
+    // 0.02 s of the recording after the cut plays in 0.01 s.
+    expect(dialogueGate(planned, []).decisions[0]!.evidence).toContain("the removed sound starts 0.01 s after the cut");
+  });
+
   it("names a word too short to remove from running speech, so the rest of its batch can be planned without it", async () => {
     // “click it it kind”, said straight through: the recording has no sound of its own for the second “it”. Then a pause and “first”.
     const said = [{ start: 1, end: 1.22, text: "click" }, { start: 1.22, end: 1.32, text: "it" }, { start: 1.32, end: 1.32, text: "it" },
