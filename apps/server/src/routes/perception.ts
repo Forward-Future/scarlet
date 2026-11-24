@@ -33,6 +33,10 @@ export function perceptionRoutes(ctx: Ctx) {
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "This media has no audio to measure.");
     const from = optionalNumberParam(c.req.query("from"), "from"), to = optionalNumberParam(c.req.query("to"), "to");
     requireSourceRange(from, to);
+    // Past the end there is no sound, and FFmpeg's summary of nothing reads as -70 LUFS peaking at full scale.
+    if (!(Math.min(to ?? Infinity, media.duration || Infinity) > (from ?? 0))) {
+      throw badRequest("bad_range", media.duration ? `Choose a range inside 0–${media.duration.toFixed(2)} s.` : "Choose a positive source range in seconds.");
+    }
     const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
     const info = await stat(file);

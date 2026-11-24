@@ -5,6 +5,11 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+const hashing = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@scarlet/render", async actual => {
+  const render = await actual<typeof import("@scarlet/render")>();
+  return { ...render, hashFile: (...args: Parameters<typeof render.hashFile>) => { hashing.count++; return render.hashFile(...args); } };
+});
 import { BUNDLED_WHISPER_CPP, LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, supportsWhisperAvx2 } from "./localModel.js";
 
 const bytes = Buffer.from("test model");
@@ -119,6 +124,22 @@ it("rejects corrupt downloads, cleans up partial files and repairs a damaged cac
     "[model] test.bin: downloading 1 MB", "[model] test.bin: download failed after <time>: model checksum mismatch",
     "[model] test.bin: the saved copy is damaged, downloading 1 MB", "[model] test.bin: downloaded in <time>",
   ]);
+});
+
+it("checks a damaged saved model once, not on every look at Settings, until the file changes", async () => {
+  const file = join(dir, model.name);
+  await writeFile(file, Buffer.alloc(bytes.length));
+  const cache = new LocalWhisperModel(dir, model, log);
+  hashing.count = 0;
+  expect(await cache.status()).toEqual({ state: "invalid" });
+  expect(await cache.status()).toEqual({ state: "invalid" });
+  expect(await cache.status()).toEqual({ state: "invalid" });
+  expect(hashing.count).toBe(1);
+  // A file put back in its place is read again.
+  await rm(file);
+  await writeFile(file, bytes);
+  expect(await cache.status()).toEqual({ state: "ready" });
+  expect(hashing.count).toBe(2);
 });
 
 it("logs why a download failed: the server's status, a file of the wrong size, or what the network said", async () => {

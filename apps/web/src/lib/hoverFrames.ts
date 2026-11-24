@@ -19,19 +19,29 @@ export function hoverTimes(duration: number, count = FRAMES) {
 }
 
 const sources = new Map<string, Promise<string[]>>();
+/** The engine the frame URLs were read from. One back at another address has other URLs. */
+let owner = api;
 
 /** The frame URLs for a project's card: from the video its poster comes from, else its first video. */
 function framesFor(projectId: string, posterMedia?: string) {
+  if (owner !== api) {
+    owner = api;
+    sources.clear();
+  }
   const key = `${projectId}/${posterMedia ?? ""}`;
   let urls = sources.get(key);
   if (!urls) {
-    urls = api.media(projectId).then(({ media }) => {
+    const read: Promise<string[]> = api.media(projectId).then(({ media }) => {
       const video = media.find(m => m.kind === "video" && m.id === posterMedia) ?? media.find(m => m.kind === "video");
-      return video?.duration ? hoverTimes(video.duration).map(time => interactiveFrameUrl(api.frameUrl(video.id, time, WIDTH))!) : [];
+      const found = video?.duration ? hoverTimes(video.duration).map(time => interactiveFrameUrl(api.frameUrl(video.id, time, WIDTH))!) : [];
+      // A video still importing has no length yet: the next rest asks again, once it may have one.
+      if (!found.length && sources.get(key) === read) sources.delete(key);
+      return found;
     }).catch(() => {
-      sources.delete(key);
+      if (sources.get(key) === read) sources.delete(key);
       return [];
     });
+    urls = read;
     sources.set(key, urls);
   }
   return urls;

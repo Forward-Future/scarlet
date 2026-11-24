@@ -19,6 +19,23 @@ fn quotes_cmd_exe_arguments_and_wraps_shims() {
     }
 }
 
+#[test]
+fn passes_over_a_copy_it_cannot_launch_for_the_next_one_on_path() {
+    // A Scoop or Volta shim Scarlet can't see through, ahead of a native install further down PATH.
+    let launchable = |file: &str| -> Result<()> {
+        if file.ends_with(".cmd") { anyhow::bail!("{file} runs no copy of @anthropic-ai/claude-code Scarlet can find") }
+        Ok(())
+    };
+    let shim = "C:\\scoop\\shims\\claude.cmd".to_string();
+    let native = "C:\\Users\\ed\\.local\\bin\\claude.exe".to_string();
+    assert_eq!(first_runnable("claude", [shim.clone(), native.clone()], launchable).unwrap(), native);
+    // Only the shim: the run and the assistant check both get the reason, not a bare "not found".
+    let refused = first_runnable("claude", [shim], launchable).unwrap_err();
+    assert!(format!("{refused:#}").contains("runs no copy of"), "{refused:#}");
+    let missing = first_runnable("claude", Vec::<String>::new(), launchable).unwrap_err();
+    assert_eq!(missing.to_string(), "claude CLI not found on PATH");
+}
+
 #[cfg(windows)]
 #[test]
 fn runs_npm_for_an_install_without_the_batch_interpreter() {

@@ -4,8 +4,43 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 24, 2026
+
+- When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.
+- A transcript fix on words that run from one speaker's line into the next keeps each word with the speaker who said it.
+- A transcript fix that adds a word, such as Claude to Claude Code, no longer doubles the word where the transcript already said it right (“Claude Code Code”), and making the fix again changes nothing.
+- When Scarlet moves a clip's voice to the dialogue track, for a crossfade, a J or L cut or to line up its picture, the voice keeps the audio track you chose and its volume changes, such as music dipping under speech, instead of going back to the first track at a flat level.
+- A picture or logo held on the timeline now shows its frame at any point of its clip, in hover previews and marked frames, instead of failing after its first two seconds.
+- A HEIC photo from an iPhone, or an AVIF picture, now plays and exports in the video instead of stopping the render.
+- An EQ on a clip with a frequency below zero or far above hearing no longer stops the video from rendering.
+- A voice cleaned up with voice cleanup now plays to the very end of each cut, instead of going silent for its last moment.
+- A J or L cut Scarlet makes now shows the right time in the list: one at 3 seconds could read 0:02, and one past an hour read 62:05 instead of 1:02:05.
+- A cut whose clean edge would reach outside the part of the video you selected, or into footage you marked to keep, now always waits for you, even when Scarlet was told to apply joins it isn't sure of.
+- A cut's row in a request's list now quotes the words beside it as the transcript has them, even when the row was first shown while Scarlet was still placing the transcript's words.
+- With OpenAI transcription, a voice message or note that the recorder saved without its length is now transcribed in full, not just its first second.
+- With note cleanup on, a spoken note whose tidied-up version got cut off partway now keeps your own words, instead of sending Scarlet half a request.
+- Media and its link in the header now show each video's playback cache again after you leave a project and come straight back, instead of showing nothing until a file changed.
+- An undo or a rejected edit that went through no longer says it failed, or leaves the old cut on screen, when the new timeline takes a moment to load: Scarlet loads it again by itself.
+- ⌘Z on a revision whose version you've applied since no longer stops Scarlet's work on it while saying it couldn't undo it.
+- A project's card in the library now flips through its footage on hover after its video finishes importing, and after Scarlet's engine restarts, instead of staying on its poster until Scarlet is reopened.
+- Rewording a rule in Learnings with a Japanese, Chinese or Korean keyboard no longer throws away what you wrote when you press Esc or Enter to finish a word.
+- Typing a note in Media with a Japanese, Chinese or Korean keyboard no longer saves it, or closes it, when you press Enter or Esc to finish a word.
+- Moving the end of a marked range with → near the end of the video no longer pushes it past the end, where its handle disappeared and the arrows stopped working.
+- M, or a marking tool, pressed while the video plays now pauses it and starts marking that frame, instead of only pausing.
+- Saving a timeline or captions file while Scarlet's engine restarts is tried again, instead of failing at once with "Export destination expired".
+- Loudness checks on a recording no longer keep failing after Scarlet was closed while saving one: Scarlet measures it again.
+- A file Scarlet can't read now says so by its own name, without the full path of Scarlet's library folder.
+- A WebM screen or voice recording saved without its length now imports with its real length, so reading its text, faces and sound, and choosing voices in it, work instead of saying it's still being prepared.
+- With a damaged copy of the Whisper model saved, an open Settings no longer keeps your computer busy checking it again every few seconds: it is checked once.
+- Changing a project's settings while its video is being edited no longer leaves the old cut on screen when the new timeline takes a moment to load: Scarlet loads it again by itself.
+- An edit set to carry on once its transcripts are ready that can't start again now stops waiting after a few tries, so you can carry on yourself, instead of waiting forever.
+- A Scarlet agent whose agent.json was edited by hand to a time limit or task count that isn't a positive number now uses the usual limits, instead of taking no requests or stopping each run as soon as it starts.
+
 ## November 23, 2026
 
+- A request's list no longer shows Scarlet's small finishing touches as edits of their own: a two-frame fade on a join or a voice moved to the dialogue track goes with the edit it finishes, and anything Scarlet wants you to check about it shows on that edit.
+- Two cuts at the same spot in the video are now one cut, which plays and shows all the footage that came out there.
+- A to-do Scarlet leaves inside a zoom or a crop now says To do, with Add, instead of Zoom.
 - A clip Scarlet takes from another recording, such as one you played on screen, and puts into the video now says Insert instead of Put back.
 - A request that punched in at several spots under the same name now says how many zooms it made, instead of naming the same edit over and over.
 - In Media, “Tell Scarlet what this is” and its Cancel button no longer show an underline.
@@ -130,6 +165,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
 - Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
 - An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
+- Searching the Transcript now finds a word with an apostrophe in it whether it was written with a straight or a curly one, so “Wendy’s” finds “Wendy's” and “don't” finds “don’t”.
 - With motion reduced, the Transcript now follows the playhead without gliding as the video plays.
 
 ## November 22, 2026

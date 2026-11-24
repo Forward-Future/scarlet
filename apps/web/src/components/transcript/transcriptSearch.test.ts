@@ -14,3 +14,14 @@ it("finds a run of words, the last matched from its start, and one word anywhere
   expect(findWords(said, ["went", "to"])).toEqual([2]);
   expect(findWords(said, "...")).toEqual([]);
 });
+
+it("finds a word with either apostrophe, whichever one the search was typed with", () => {
+  expect(findWords(words("we", "went", "to", "Wendy's."), "Wendy’s")).toEqual([3]);
+  expect(findWords(words("I", "don’t", "know"), "don't know")).toEqual([1]);
+  expect(findWords(words("I", "don’t", "know"), "dont")).toEqual([]);
+  expect(findWords(words("she", "said", "‘hello’", "twice"), "said hello twice")).toEqual([1]);
+  expect(findWords(words("the", "80’s", "sound"), "80's")).toEqual([1]);
+  expect(findWords(words("她说‘你好’。"), "她说你好")).toEqual([0]);
+  expect(findWords(words("她说‘你好’然后走了"), "你好然后")).toEqual([0]);
+  expect(findWords(words("她说‘Wendy’吗"), "她说wendy吗")).toEqual([0]);
+});

@@ -170,6 +170,16 @@ it("keeps the range through a scrub and a click on the timeline away from it, so
   expect(marked).not.toHaveBeenCalled();
 });
 
+it("keeps an end moved from the keyboard inside a video whose length falls between frames", async () => {
+  await act(async () => root.render(
+    <TimelineScrubber start={0} duration={10.02} playhead={9} frameAt={() => undefined} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)}
+      range={{ start: 9, end: 10 }} onRange={marked} fps={30} marks={[]} />));
+  const end = () => container.querySelector<HTMLButtonElement>(".timeline-range-handle.is-end");
+  await act(async () => { end()!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+  expect(marked.mock.lastCall![0]!.end).toBeLessThanOrEqual(10.02);
+  expect(seeks.at(-1)).toBeLessThanOrEqual(10.02);
+});
+
 it("moves an end a frame at a time from the keyboard, and Esc takes the range off", async () => {
   await show({ start: 300, end: 450 });
   const end = container.querySelector<HTMLButtonElement>(".timeline-range-handle.is-end")!;
