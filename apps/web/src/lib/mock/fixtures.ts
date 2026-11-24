@@ -702,6 +702,7 @@ export function buildDb(chatLayouts = false): MockDb {
     render: { handleSeconds: 1.5, previewHeight: DEFAULT_PREVIEW_HEIGHT, concurrency: 2, hwaccel: "auto" },
     defaultAgent: "claude",
     checkIn: "balanced",
+    talkingToYou: "",
     listening: "auto",
   };
 

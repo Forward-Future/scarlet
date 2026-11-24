@@ -3,6 +3,7 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
 /**
  * What an applied edit did to the cut, so the timeline can draw it for what it is:
  * - `cut` took footage out, `restore` put footage back in.
+ * - `insert` put footage from another file into the video, on the main picture: a clip the editor played on screen, say.
  * - `audio` changed only sound (levels, room tone, a swapped dialogue track).
  * - `dip` moved a clip's level over time, as music dipping under speech does.
  * - `voice` cleaned a voice of the noise and the room around it.
@@ -16,14 +17,14 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
  * - `split` moved where a join's sound cuts against its picture: a J cut or an L cut.
  * - `other` did several of these at once, or something else (an assembly, a sync).
  */
-export type EditKind = "cut" | "restore" | "audio" | "dip" | "voice" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "split" | "other";
+export type EditKind = "cut" | "restore" | "insert" | "audio" | "dip" | "voice" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "split" | "other";
 
 type Op = Record<string, unknown>;
 /**
  * `picture`: footage placed on the main picture track, which builds the cut rather than laying anything over it.
  * `marker`: a marker left on the timeline, which changes nothing the editor sees or hears.
  */
-type Facet = EditKind | "framing" | "picture" | "marker" | "neutral";
+type Facet = EditKind | "picture" | "marker" | "neutral";
 /**
  * `ask`: what a to-do marker asks of the editor, in its own words. `restated`: this step wrote those words, as against
  * a move of a marker that only still says them.
@@ -37,12 +38,30 @@ const AUDIO_EFFECTS = new Set(["denoise", "expander", "eq", "compressor", "limit
 type EffectFields = { type?: unknown; enabled?: unknown; params?: unknown };
 const cleansVoice = (effects: unknown) => Array.isArray(effects) && (effects as EffectFields[]).some(e => e?.type === "voiceCleanup" && e.enabled !== false);
 const FRAMING_KEYS = new Set(["transform", "keyframes"]);
+const scaledUp = (scale: unknown) => typeof scale === "number" && scale > 1.001;
+/** Scaling the picture up is a zoom; moving, cropping or shrinking it (an inset) is a reframe. */
+function framingFacet(patch: Record<string, unknown>, key: string): "zoom" | "reframe" {
+  if (key === "transform") return scaledUp((patch.transform as { scale?: unknown } | undefined)?.scale) ? "zoom" : "reframe";
+  const keyframes = Array.isArray(patch.keyframes) ? patch.keyframes as { transform?: { scale?: unknown } }[] : [];
+  return keyframes.some(k => scaledUp(k.transform?.scale)) ? "zoom" : "reframe";
+}
 const TEXT_KEYS = new Set(["text", "words", "style"]);
 const OVERLAY_KEYS = new Set(["opacity", "videoFadeIn", "videoFadeOut", "color"]);
 /** Trims and moves that follow a cut or a restore, and the label, say nothing on their own. */
 const NEUTRAL_KEYS = new Set(["sourceIn", "sourceOut", "timelineIn", "timelineOut", "label", "enabled"]);
 /** A change this close to the old length kept it. */
 const SAME_LENGTH = 0.02;
+/** A keyed level that goes this far under the clip's own and never over it ducks the clip: a dip. */
+const DIP_DEPTH_DB = -6;
+/**
+ * Whether volume keyframes dip a clip under something, as music is under speech, or only even its level out. A sponsor
+ * read keyed 1.5 dB down at its start and 0.9 dB up at its end to match the video round it was named a music dip on its
+ * card (2026-11-23).
+ */
+const dips = (keys: unknown) => {
+  const dbs = Array.isArray(keys) ? (keys as { db?: unknown }[]).map(k => k?.db).filter((db): db is number => typeof db === "number") : [];
+  return dbs.length > 0 && Math.max(...dbs) <= 0 && Math.min(...dbs) <= DIP_DEPTH_DB;
+};
 /** Two stretches that share less than this only touch: an agent's times and a clip's edge differ by rounding. */
 const TOUCH = 0.05;
 
@@ -115,6 +134,40 @@ function splitAt(clip: Extract<Clip, { kind: "media" }>, split: SplitRecord, pat
   return [{ start: at, end: at }];
 }
 
+/**
+ * The gaps a change opened on the main picture to put another file's footage in, by their step's index. A gap filled
+ * with the same file as the picture beside it puts that file's footage back. One filled with a file that isn't beside
+ * it there is new footage in the video: on Matt's "reimann 2", two clips taken from his screen recording and played
+ * after he introduced them read as "put back 2 passages" (2026-11-23).
+ */
+function insertedGaps(ops: Op[], baseVideo: string | undefined, before: Timeline | undefined, after: Timeline | undefined) {
+  const found = new Set<number>();
+  if (!baseVideo || (!before && !after)) return found;
+  const addedIds = new Set(ops.flatMap(op => op.op === "addClip" && typeof (op.clip as Clip | undefined)?.id === "string" ? [(op.clip as Clip).id] : []));
+  const mediaOf = (clip: Clip | undefined) => clip?.kind === "media" ? clip.mediaId : undefined;
+  ops.forEach((op, index) => {
+    if (op.op !== "rippleInsertGap" || typeof op.at !== "number" || op.trackIds !== undefined) return;
+    const at = op.at;
+    const fill = ops.slice(index + 1).find(next => next.op === "addClip" && next.trackId === baseVideo &&
+      typeof (next.clip as Clip | undefined)?.timelineIn === "number" && Math.abs((next.clip as Clip).timelineIn - at) <= TOUCH)?.clip as Clip | undefined;
+    const media = mediaOf(fill);
+    if (!fill || !media) return;
+    // Beside it on the finished picture, leaving out what this change placed too.
+    const clips = after?.tracks.find(t => t.id === baseVideo)?.clips;
+    const placed = clips && [...clips].sort((x, y) => x.timelineIn - y.timelineIn);
+    const spot = placed?.findIndex(c => c.id === fill.id) ?? -1;
+    if (placed && spot >= 0) {
+      const sides = [placed.slice(0, spot).reverse(), placed.slice(spot + 1)]
+        .map(side => side.find(c => !addedIds.has(c.id)));
+      if (sides.every(c => mediaOf(c) !== media)) found.add(index);
+      return;
+    }
+    // Without the finished picture, a file the main picture didn't play at all is new to it.
+    if (before && !before.tracks.find(t => t.id === baseVideo)?.clips.some(c => mediaOf(c) === media)) found.add(index);
+  });
+  return found;
+}
+
 /** Each op's facet, and where it lands on the finished cut when that can be told. */
 function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
   const laid = laidFiles(media);
@@ -145,6 +198,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
   };
   const markerNow = (id: unknown) => typeof id !== "string" ? undefined
     : after?.markers?.find(m => m.id === id) ?? before?.markers?.find(m => m.id === id);
+  const inserts = insertedGaps(ops, baseVideo, before, after);
   return ops.flatMap((op, index): Placed[] => {
     const now = (time: number) => settled(time, ops.slice(index + 1));
     switch (op.op) {
@@ -153,7 +207,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         return [{ facet: "cut", range: at !== undefined ? { start: at, end: at } : undefined }];
       }
       case "rippleInsertGap":
-        return [{ facet: "restore", range: typeof op.at === "number" && typeof op.duration === "number"
+        return [{ facet: inserts.has(index) ? "insert" : "restore", range: typeof op.at === "number" && typeof op.duration === "number"
           ? { start: now(op.at), end: now(op.at + op.duration) } : undefined }];
       case "addClip": {
         const clip = op.clip as Clip | undefined;
@@ -178,8 +232,8 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
           if (key === "splitEdit") return found?.clip.kind === "media"
             ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range })) : [{ facet: "split" as const, range: at }];
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
-          if (key === "volumeKeyframes") return { facet: "dip" as const, range: at };
-          if (FRAMING_KEYS.has(key)) return { facet: "framing" as const, range: at };
+          if (key === "volumeKeyframes") return { facet: dips(patch.volumeKeyframes) ? "dip" as const : "audio" as const, range: at };
+          if (FRAMING_KEYS.has(key)) return { facet: framingFacet(patch, key), range: at };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
           if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at };
           if (key === "speed") return { facet: "speed" as const, range: at };
@@ -190,7 +244,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
             const was = beforeClip(op.clipId)?.clip, had = was?.kind === "media" ? was.effects : [];
             const now = Array.isArray(patch.effects) ? patch.effects as EffectFields[] : [];
             const differs = [...now.filter(e => !had.some(h => JSON.stringify(h) === JSON.stringify(e))),
-              ...had.filter(h => !now.some(e => JSON.stringify(h) === JSON.stringify(e)))];
+              ...had.filter(h => !now.some(e => JSON.stringify(e) === JSON.stringify(h)))];
             if (cleansVoice(now) && !cleansVoice(had)) return { facet: "voice" as const, range: at };
             const sound = differs.length > 0 && differs.every(e => typeof e?.type === "string" && AUDIO_EFFECTS.has(e.type));
             return { facet: sound || found?.track.kind === "audio" ? "audio" as const : "overlay" as const, range: at };
@@ -229,7 +283,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
 type Verdict = EditKind | "marker";
 
 /** `whole`: the facets are all the change's, so how much longer or shorter it left the cut is this edit's doing. */
-function decide(facets: Facet[], framing: "zoom" | "reframe", { before, after }: Clocks, whole = false): Verdict {
+function decide(facets: Facet[], { before, after }: Clocks, whole = false): Verdict {
   const set = new Set(facets.filter(f => f !== "neutral"));
   const lengths = () => before && after ? timelineDuration(after) - timelineDuration(before) : 0;
   // A marker beside anything that changed the video is a note on that edit, which is what the edit is.
@@ -244,8 +298,12 @@ function decide(facets: Facet[], framing: "zoom" | "reframe", { before, after }:
   // A cut can carry the trims and room tone that smooth its join; it is still a cut.
   if (set.has("cut") && !set.has("restore")) return "cut";
   if (set.has("restore") && !set.has("cut")) return "restore";
+  // An insert places its footage on the main picture, with its sound under it.
+  if (set.has("insert") && [...set].every(f => f === "insert" || f === "picture" || f === "audio")) return "insert";
   // A dip or a voice cleanup is what it is beside other sound edits: a music bed added and dipped is a dip.
   for (const sound of ["dip", "voice"] as const) if (set.has(sound) && [...set].every(f => f === sound || f === "audio")) return sound;
+  // Scaling up alongside a crop or pan on the same edit is still a zoom.
+  if (set.has("zoom") && [...set].every(f => f === "zoom" || f === "reframe")) return "zoom";
   // A graphic laid over the picture is a graphic, and B-roll is B-roll, with or without sound. Laid together, or with
   // another overlay, they are overlays.
   if (set.has("graphic") && [...set].every(f => f === "graphic" || f === "audio")) return "graphic";
@@ -261,19 +319,7 @@ function decide(facets: Facet[], framing: "zoom" | "reframe", { before, after }:
   }
   if (set.size > 1) return "other";
   const only = [...set][0]!;
-  return only === "framing" ? framing : only === "picture" ? "other" : only;
-}
-
-/** Scaling the picture up is a zoom; moving, cropping or shrinking it (an inset) is a reframe. */
-function zooms(change: Change): boolean {
-  return ((change.ops ?? []) as Op[]).some(op => {
-    const patch = op.op === "updateClip" && op.patch && typeof op.patch === "object" ? op.patch as Record<string, unknown> : undefined;
-    if (!patch) return false;
-    const transform = patch.transform as { scale?: unknown } | undefined;
-    const keyframes = Array.isArray(patch.keyframes) ? patch.keyframes as { transform?: { scale?: unknown } }[] : [];
-    const scaledUp = (scale: unknown) => typeof scale === "number" && scale > 1.001;
-    return scaledUp(transform?.scale) || keyframes.some(k => scaledUp(k.transform?.scale));
-  });
+  return only === "picture" ? "other" : only;
 }
 
 /**
@@ -305,8 +351,7 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
   const steps = !rippleJoins || marks ? opFacets(change, clocks).filter(f => f.facet !== "neutral") : [];
   const facets: Placed[] = rippleJoins ? [...rippleJoins.map(({ range, facet }) => ({ facet: facet ?? "cut" as const, range })),
     ...steps.filter(f => f.facet === "marker")] : steps;
-  const framing = facets.some(f => f.facet === "framing") && zooms(change) ? "zoom" : "reframe";
-  const verdict = (here: Placed[], all = false) => ({ verdict: decide(here.map(f => f.facet), framing, clocks, all), here });
+  const verdict = (here: Placed[], all = false) => ({ verdict: decide(here.map(f => f.facet), clocks, all), here });
   let found: { verdict: Verdict; here: Placed[]; nothing?: true }[];
   if (ranges.length <= 1 || !facets.length) {
     const whole = verdict(facets, true);

@@ -206,7 +206,7 @@ it("shows a video's cache and its transcription the same way, at the right of it
     ]);
     // The file is at the left: its name, and under it its length. Nothing sits alone at the row's far right, and no time left is given.
     expect([...first!.children].map(part => part.className)).toEqual(["media-thumb-button", "media-file", "media-jobs"]);
-    expect([...first!.querySelector(".media-file")!.children].map(part => part.textContent)).toEqual(["first.mov", "0:20"]);
+    expect([...first!.querySelector(".media-file")!.children].map(part => part.textContent)).toEqual(["first.mov", "0:20", "Tell Scarlet what this is"]);
     expect(first!.textContent).not.toMatch(/left|about/);
     expect(container.querySelector(".animate-spin")).toBeNull();
 
@@ -549,7 +549,7 @@ it("shows a file being read as the first job at its row's right, a step, a bar a
     const rows = () => [...container.querySelectorAll(".media-row")];
     const [cam, mic] = rows();
     // Under its name a file has its length, read as a time on the player: 1:02:07, not 1h 2m.
-    expect(rows().map(row => [...row.querySelector(".media-file")!.children].map(part => part.textContent))).toEqual([["cam.mov", "1:02:07"], ["mic.mov", "0:59"]]);
+    expect(rows().map(row => [...row.querySelector(".media-file")!.children].map(part => part.textContent))).toEqual([["cam.mov", "1:02:07", "Tell Scarlet what this is"], ["mic.mov", "0:59", "Tell Scarlet what this is"]]);
     // Reading is a job like the cache and the transcript: its step, then its bar, then its percent, in the same element.
     const line = (row: Element) => { const first = row.querySelector(".media-jobs .media-status")!; const bar = first.querySelector("progress");
       return [first.className, [...first.children].map(part => part.textContent), bar && [bar.className, bar.getAttribute("aria-label"), bar.value]]; };
@@ -698,4 +698,68 @@ it("says why imports won't be transcribed and offers the one fix", async () => {
     expect(notice.querySelector("a")?.textContent).toBe("Set up transcription");
     expect(notice.querySelector("a")?.getAttribute("href")).toBe("/settings");
   });
+});
+
+it("lets the editor tell Scarlet what a file is, under its length, and change or leave the note", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const db = buildDb();
+  const project = db.projects.find(p => p.id === PRJ)!;
+  const video = { ...db.media[PRJ]!.find(m => m.kind === "video")!, name: "Integration.mp4", status: "ready" as const };
+  useProjectStore.setState({ current: { id: PRJ, project, timeline: null, media: [video], changes: [], notes: [], renders: [], tasks: [], taskEvents: {}, versions: [] } });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+  vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+  const save = vi.spyOn(api, "setMediaNote").mockImplementation(async (_id, note) => ({ media: { ...video, ...(note.trim() && { editorNote: note.trim() }) } }));
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text);
+  const field = () => container.querySelector<HTMLTextAreaElement>("textarea.media-note-field");
+  const type = (value: string) => {
+    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    set.call(field()!, value);
+    field()!.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const key = (k: string) => field()!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+  const { readFileSync } = await import("node:fs");
+  const sheet = document.createElement("style");
+  sheet.textContent = `${readFileSync(`${import.meta.dirname}/../studio.css`, "utf8")}\n${readFileSync(`${import.meta.dirname}/../simple.css`, "utf8")}`;
+  document.head.append(sheet);
+  try {
+    await act(async () => root.render(<MemoryRouter><MediaPage uploads={{ items: [], start: vi.fn(), dismiss: vi.fn(), localImport: null, startPaths: vi.fn() }} onPlay={vi.fn()} /></MemoryRouter>));
+    // A file with no note says what the line is for; nothing about it waits on a note.
+    expect(getComputedStyle(button("Tell Scarlet what this is")!).textDecoration).toBe("none");
+    await act(() => button("Tell Scarlet what this is")!.click());
+    expect(getComputedStyle(button("Cancel")!).textDecoration).toBe("none");
+    expect(field()?.getAttribute("aria-label")).toBe("Tell Scarlet what Integration.mp4 is and how to use it");
+    expect(container.textContent).toContain("Tell Scarlet what this is and how to use it");
+    await act(() => { type("Finished sponsor read."); });
+    await act(() => { key("Escape"); });
+    expect(field()).toBeNull();
+    expect(save).not.toHaveBeenCalled();
+
+    await act(() => button("Tell Scarlet what this is")!.click());
+    await act(() => { type("  Finished sponsor read. Insert it whole after the intro. "); });
+    await act(async () => { key("Enter"); });
+    expect(save).toHaveBeenCalledExactlyOnceWith(video.id, "  Finished sponsor read. Insert it whole after the intro. ");
+    expect(field()).toBeNull();
+    const note = container.querySelector<HTMLButtonElement>(".media-note.is-set")!;
+    expect(note.textContent).toBe("For Scarlet: Finished sponsor read. Insert it whole after the intro.");
+    expect(note.title).toBe("Change what Scarlet is told about this file");
+
+    // Opened again, the note is there to change; emptied and saved, the line asks again.
+    await act(() => note.click());
+    expect(field()!.value).toBe("Finished sponsor read. Insert it whole after the intro.");
+    await act(() => { type(""); });
+    await act(async () => button("Save")!.click());
+    expect(save).toHaveBeenLastCalledWith(video.id, "");
+    expect(button("Tell Scarlet what this is")).toBeTruthy();
+  } finally {
+    sheet.remove();
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
 });

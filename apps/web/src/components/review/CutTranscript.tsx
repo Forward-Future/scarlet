@@ -89,7 +89,7 @@ function KeptRun({ items, others }: { items: MappedWord[]; others: TimeRange[] }
   return <>{runs.map((run, i) => {
     const words = <Words items={run.items} />;
     return <Fragment key={run.items[0]!.index}>{i > 0 && " "}{run.other
-      ? <del className="review-removed is-other" title="Another edit removes these words">{words}</del>
+      ? <del className="review-removed is-other" title="Another edit takes out these words">{words}</del>
       : <span className="review-kept">{words}</span>}</Fragment>;
   })}</>;
 }
@@ -116,7 +116,7 @@ export function EditPassage({ timeline, media, range, length, others = [], curre
       title={open ? "Hide the cut words" : `Show the ${removed.length} cut words`}><Icon name="scissors" size={12} />{length}</button>
     : removed.length ? <span className="edit-passage-cut is-words" title={length}><Icon name="scissors" size={12} />{struck}</span>
     : <CutMark length={length} />;
-  return <div className="edit-passage" role="group" aria-label={current ? "Words in the current passage" : "Words this cut removes"}>
+  return <div className="edit-passage" role="group" aria-label={current ? "Words in the current passage" : "Words this cut takes out"}>
     <p className="review-spoken">
       {lead.items.length > 0 && <>{lead.clipped && "… "}<KeptRun others={others} items={lead.items} />{" "}</>}
       {mark}

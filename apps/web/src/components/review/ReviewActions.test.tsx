@@ -81,7 +81,7 @@ it("shows Revise alone for a revision with nothing to approve", async () => {
   expect(buttons().map(b => b.textContent)).toEqual(["Revise"]);
 });
 
-it("shows Later (L) and Done (D) for a waiting to-do, and Done (D) alone when revise is omitted", async () => {
+it("takes a custom label and key for each decision, and shows the approval alone when revise is omitted", async () => {
   await act(async () => root.render(<ReviewActions revise={revise} reviseLabel="Later" reviseKey="L" approve={approve} approveLabel="Done" approveKey="D" />));
   expect(buttons().map(b => [b.textContent, b.getAttribute("aria-keyshortcuts"), b.title])).toEqual([
     ["Later", "L", "Later (L)"],

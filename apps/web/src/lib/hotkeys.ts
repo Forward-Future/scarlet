@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { usePlayerStore } from "../stores/player";
+import { markedRangeOf, useUiStore } from "../stores/ui";
 
 export function isEditableTarget(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;
@@ -43,6 +44,8 @@ export function ignorePageShortcut(e: KeyboardEvent, owner?: Element | null): bo
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)) return true;
   // A small popover that is open closes on Esc before anything behind it does, wherever its own listener sits.
   if (e.key === "Escape" && document.querySelector("[data-escape-owner]")) return true;
+  // A stretch marked on the timeline goes on Esc before an edit's card or anything else the page closes.
+  if (e.key === "Escape" && markedRangeOf(useUiStore.getState().agentContext)) return true;
   // A focused handle of the marked range takes its own Esc, and leaves Space to the player: it has no click of its own.
   const handle = e.target instanceof Element && !!e.target.closest("[data-range-handle]");
   if (e.key === "Escape" && handle) return true;

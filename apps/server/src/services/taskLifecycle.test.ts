@@ -36,6 +36,19 @@ async function api<T = unknown>(method: string, path: string, body?: unknown, he
   return { status: res.status, body: await res.json().catch(() => null) as T };
 }
 
+it("tells the editor in plain words when their answer has nothing to go to", async () => {
+  const task = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Tighten the intro", createdBy: editor });
+  const answer = async () => (await api<{ error: { code: string; message: string } }>("POST", `/tasks/${task.id}/answer`, { text: "The first." })).body.error;
+  // In line, and asking nothing.
+  expect(await answer()).toEqual({ code: "no_question", message: "Scarlet isn’t waiting for an answer any more." });
+  await api("POST", `/tasks/${task.id}/cancel`);
+  expect(await answer()).toEqual({ code: "task_finished", message: "This request has already stopped." });
+  saveTask(app.ctx, { ...app.ctx.repos.tasks.get(task.id)!, state: "done" });
+  expect(await answer()).toEqual({ code: "task_finished", message: "This request has already finished." });
+  // An event from a host for the same request keeps the engine's own wording: it isn't the editor's to read.
+  expect(() => appendTaskEvent(app.ctx, app.ctx.repos.tasks.get(task.id)!, { type: "log", text: "late" })).toThrow("task is already done");
+});
+
 /** The host's claim of one queued task, or null when it can't be claimed now. */
 const claim = async (id: string) => (await api<{ task: Task | null }>("POST", `/hosts/${hostId}/claim`, { taskId: id })).body.task ?? null;
 const prompt = async (id: string, fresh = false) => (await api<TaskPrompt>("GET", `/tasks/${id}/prompt${fresh ? "?fresh=1" : ""}`)).body;
@@ -316,13 +329,14 @@ it("carries a paused run on in its CLI session on the same model, and a run the 
   expect(opus.session).toBeUndefined();
   expect(get(quitAgain.id).sessionCarriesOn).toBeUndefined();
 
-  // A harness Scarlet doesn't resume carries no session on, paused or not.
+  // A Gemini run carries on in its agy session too.
   await api("POST", `/tasks/${opus.id}/cancel`);
   const gemini = await request("Add captions", "gemini");
   saveTask(app.ctx, { ...get(gemini.id), session: { agent: "gemini", id: "session-4" } });
-  await api("POST", `/projects/${project.id}/stop-editing`);
-  expect(get(gemini.id).sessionCarriesOn).toBeUndefined();
-  expect(get(get(gemini.id).retryTaskId!).session).toBeUndefined();
+  await quit(gemini);
+  expect(get(gemini.id).sessionCarriesOn).toBe(true);
+  expect(get(get(gemini.id).retryTaskId!).session).toEqual({ agent: "gemini", id: "session-4" });
+  expect((await prompt(get(gemini.id).retryTaskId!)).resumeSession).toBe("session-4");
 });
 
 it("tells a look at a frame nothing of the video's timeline or skills, and a request about one staged cut no whole diff", async () => {

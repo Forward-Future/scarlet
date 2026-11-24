@@ -2,8 +2,6 @@ import { parseMultipartRequest } from "@remix-run/multipart-parser/future";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
-import { lookup } from "node:dns/promises";
-import { BlockList, isIP } from "node:net";
 import { capturePage, findChrome } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
@@ -15,6 +13,8 @@ import { serveOriginal } from "../files.js";
 import { requestAttempt, requireProjectEditAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { assetPath, findAttachment, mimeFor, graphicSource, MAX_ATTACHMENT_BYTES, MAX_DOCUMENT_PAGES, readDocument, removeStyleGuide, renderProjectGraphic,
   saveAttachment, saveStyleGuide } from "../services/graphics.js";
+import { publicWebAddress } from "../services/publicWeb.js";
+import { aboutWebVideo, readWebVideoPart, saveWebVideoPart, webVideoCaptions } from "../services/webVideo.js";
 import { jsonBody, multipartError, requireProject, requireProjectHeader } from "./util.js";
 
 const WebCaptureRequest = z.object({
@@ -24,33 +24,13 @@ const WebCaptureRequest = z.object({
   fullPage: z.boolean().optional(),
 });
 
-/** The machine itself, its local network and link-local addresses. */
-const PRIVATE = new BlockList();
-for (const [net, bits] of [["127.0.0.0", 8], ["10.0.0.0", 8], ["0.0.0.0", 8], ["172.16.0.0", 12], ["192.168.0.0", 16], ["169.254.0.0", 16], ["100.64.0.0", 10]] as const) PRIVATE.addSubnet(net, bits, "ipv4");
-for (const [net, bits] of [["::1", 128], ["::", 128], ["fe80::", 10], ["fc00::", 7]] as const) PRIVATE.addSubnet(net, bits, "ipv6");
-
-/**
- * Whether an address is the machine itself, its local network or a link-local one, as text or as a resolved IP. An
- * IPv4 address written as IPv6 is read as the IPv4 one, in either spelling: a URL turns `::ffff:127.0.0.1` into
- * `::ffff:7f00:1`.
- */
-function privateAddress(ip: string): boolean {
-  return PRIVATE.check(ip, isIP(ip) === 6 ? "ipv6" : "ipv4");
-}
-
-/** The address as Chrome should open it: http or https, on a host that resolves only to public addresses. */
-async function publicWebAddress(raw: string): Promise<string> {
-  let url: URL;
-  try { url = new URL(raw); } catch { throw badRequest("bad_url", "Give the page's full web address, starting with https://."); }
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw badRequest("bad_url", "Only pages on the web (http or https) can be captured.");
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) throw badRequest("bad_url", "Only public pages on the web can be captured.");
-  const addresses = isIP(host) ? [host] : await lookup(host, { all: true }).then(all => all.map(a => a.address), () => {
-    throw badRequest("bad_url", `${host} doesn't resolve to an address.`);
-  });
-  if (addresses.some(privateAddress)) throw badRequest("bad_url", "Only public pages on the web can be captured.");
-  return url.href;
-}
+const WebVideoRequest = z.object({
+  url: z.string().trim().max(4096),
+  from: z.number().min(0).optional(),
+  to: z.number().min(0).optional(),
+  height: z.number().int().min(144).max(4320).optional(),
+  captionsFrom: z.number().min(0).optional(),
+});
 
 export function graphicRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -166,6 +146,30 @@ export function graphicRoutes(ctx: Ctx) {
     // A redirect to the machine's own network leaves nothing behind.
     await publicWebAddress(shot.url);
     return c.json({ png: shot.png.toString("base64"), title: shot.title, url: shot.url, text: shot.text, width: shot.width, height: shot.height, headings: shot.headings });
+  });
+
+  // -- videos from the web ----------------------------------------------------
+
+  // A video on the web, read and downloaded by the engine as a page is captured: what it is and what is said in it,
+  // or, with `from` and `to`, that part as a file the caller then fetches once.
+  r.post("/projects/:id/web-videos", async (c) => {
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    const body = await jsonBody(c, WebVideoRequest);
+    const signal = AbortSignal.any([ctx.projectSignal(project.id), c.req.raw.signal]);
+    if (body.from === undefined && body.to === undefined) {
+      const video = await ctx.track(aboutWebVideo(ctx, body.url, signal), project.id);
+      const captions = await ctx.track(webVideoCaptions(ctx, body.url, body.captionsFrom ?? 0, signal), project.id);
+      return c.json({ video, ...(captions && { captions }) });
+    }
+    if (body.from === undefined || body.to === undefined) throw badRequest("bad_range", "Give both `from` and `to`, in seconds of the video.");
+    const saved = await ctx.track(saveWebVideoPart(ctx, project.id, body.url, { from: body.from, to: body.to, height: body.height ?? 1080 }, signal), project.id);
+    return c.json({ video: saved.about, part: saved.part }, 201);
+  });
+
+  r.get("/projects/:id/web-videos/:partId", async (c) => {
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    const data = await readWebVideoPart(project.id, c.req.param("partId"));
+    return new Response(new Uint8Array(data), { headers: { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" } });
   });
 
   r.get("/projects/:id/graphics/:mediaId", async (c) => {

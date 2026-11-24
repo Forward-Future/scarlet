@@ -34,6 +34,33 @@ it("draws Before and After on one scale, so a level change shows as a change in 
   expect(waveformScale(new Float32Array([.01]))).toBe(46 / .25);
 });
 
+it("draws a clip's keyed level as the render plays it, so a level edit shows on the lane and in Before/After", () => {
+  const wave = { mediaId: "take", from: 0, to: 4, peaks: [.5, .5, .5, .5], rms: [.1, .1, .1, .1] };
+  const span = { id: "take", start: 10, end: 14, sourceIn: 0, speed: 1, gain: .5, fadeIn: 0, fadeOut: 0 };
+  // -6 dB held over the first two seconds, then a ramp to 0 dB at 3 s.
+  const levels = [{ time: 0, db: -6.0206, ease: "linear" as const }, { time: 2, db: -6.0206, ease: "linear" as const }, { time: 3, db: 0, ease: "linear" as const }];
+  const { peaks } = waveformBars([{ ...span, levels }], new Map([["take", wave]]), 10, 4, 4);
+  expect(peaks[0]).toBeCloseTo(.125);
+  expect(peaks[1]).toBeCloseTo(.125);
+  expect(peaks[2]).toBeCloseTo(.25 * Math.pow(10, -3.0103 / 20));
+  expect(peaks[3]).toBeCloseTo(.25);
+});
+
+it("draws two sounds that play as loud as tall, whatever their peaks", () => {
+  // A raw voice peaks high over its RMS; a mastered read at the same RMS peaks lower.
+  const raw = { mediaId: "raw", from: 0, to: 1, peaks: [.12], rms: [.02] };
+  const mastered = { mediaId: "mastered", from: 0, to: 1, peaks: [.08], rms: [.02] };
+  const span = { start: 0, end: 1, sourceIn: 0, speed: 1, gain: 1, fadeIn: 0, fadeOut: 0 };
+  const waves = new Map([["raw", raw], ["mastered", mastered]]);
+  const a = waveformBars([{ ...span, id: "raw" }], waves, 0, 1, 1), b = waveformBars([{ ...span, id: "mastered" }], waves, 0, 1, 1);
+  expect(a.peaks[0]).toBeGreaterThan(b.peaks[0]!);
+  expect(a.body[0]).toBeCloseTo(b.body[0]!);
+  expect(a.body[0]).toBeCloseTo(.02 * Math.pow(10, 10 / 20));
+  // The body never stands over the peak.
+  const loud = waveformBars([{ ...span, id: "x" }], new Map([["x", { mediaId: "x", from: 0, to: 1, peaks: [.05], rms: [.04] }]]), 0, 1, 1);
+  expect(loud.body[0]).toBeCloseTo(.05);
+});
+
 it("answers a window from one read already that holds it as finely, and reads again only when it can't", async () => {
   // The engine's answer: one bucket per hundredth of a second, each the time it starts at.
   const read = vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to, points = 1000) => ({

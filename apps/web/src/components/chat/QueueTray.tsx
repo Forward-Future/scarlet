@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ScarletApiError } from "@scarlet/shared";
+import { blurOnPointerClick } from "../../lib/hotkeys";
 import { Icon } from "../ui/primitives";
 
 export interface QueuedRequest {
@@ -81,7 +82,7 @@ export function QueueTray({ items, hint, waits, rewording, onRemove, onReword, o
   const first = items[0];
   const heading = !first ? <div className="queue-editing-status">{paused}</div>
     : (listed && rewording) || (isPaused && !many) ? <div className="queue-head">{count}</div>
-    : many ? <button type="button" className="queue-head" aria-expanded={listed} onClick={() => setOpen(!listed)}>
+    : many ? <button type="button" className="queue-head" aria-expanded={listed} onClick={e => { blurOnPointerClick(e); setOpen(!listed); }}>
       {listed || isPaused ? count : <>
         {marker(true, false)}
         {first.target && <span className="queue-target">{first.target}</span>}

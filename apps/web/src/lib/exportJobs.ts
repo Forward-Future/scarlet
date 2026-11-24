@@ -16,6 +16,8 @@ export interface ExportJob {
   progress: number;
   /** The engine hasn't started the render: it was just asked for, or it waits behind others. There is no progress to show. */
   waiting?: boolean;
+  /** Of the progress, the part sections an earlier render already encoded account for, and their length in seconds. */
+  reused?: Render["reused"];
   cancel(): void;
 }
 
@@ -104,7 +106,7 @@ async function run(projectId: string, file: ExportFile, context: string, version
   const owner = resumed?.export?.owner ?? crypto.randomUUID();
   let ownedId = resumed?.id;
   let job: ExportJob = { file, context, version, projectSettings: resumed?.projectSettings ?? project?.project.settings,
-    phase: resumed ? "rendering" : "choosing", progress: resumed?.progress ?? 0, cancel };
+    phase: resumed ? "rendering" : "choosing", progress: resumed?.progress ?? 0, reused: resumed?.reused, cancel };
 
   function update(change: Partial<ExportJob>) {
     job = { ...job, ...change };
@@ -193,7 +195,7 @@ async function run(projectId: string, file: ExportFile, context: string, version
         }
         if (render.state === "done") break;
         if (render.state === "failed" || render.state === "cancelled") throw new Error(render.error || "The render stopped.");
-        update({ progress: render.progress, waiting: render.state === "queued" });
+        update({ progress: render.progress, reused: render.reused, waiting: render.state === "queued" });
         const completed = await renderCompletion(projectId, id, 750, wait.signal);
         if (cancelled) return;
         // Keep waiting while the engine restarts. It resumes this render under the same id.

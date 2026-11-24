@@ -114,7 +114,8 @@ export class ModelPrices implements PriceLookup {
     try {
       const list = JSON.parse(await readFile(file, "utf8")) as PriceList;
       if (list && typeof list.fetchedAt === "string" && list.models && typeof list.models === "object") {
-        this.fetched = list;
+        // A list kept from before this build would hide the newer prices it shipped with.
+        if (Date.parse(list.fetchedAt) > Date.parse(this.snapshot.fetchedAt)) this.fetched = list;
         this.lastTry = Date.parse(list.fetchedAt) || 0;
       }
     } catch {

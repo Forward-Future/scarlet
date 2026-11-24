@@ -20,8 +20,7 @@ export const LANDING_SETTLES = 3000;
 export const LANDING_SHOWS = 4000;
 /** How many versions' timelines the window keeps beyond the ones a waiting pass needs. */
 export const KEPT_TIMELINES = 6;
-/** What a request paused with the project's editing waits for. */
-export const PAUSED_HINT = "Editing is paused. Resume picks this up where it left off.";
+export { PAUSED_HINT } from "../../lib/taskRun";
 
 /** ↑ ↓ step between the cuts or edits that are open one at a time. ← → are always the player's: they skip. */
 export const stepOf = (key: string): 1 | -1 | undefined => key === "ArrowUp" ? -1 : key === "ArrowDown" ? 1 : undefined;
@@ -86,7 +85,8 @@ export interface OpenPass {
 }
 
 export type HoveredReviewRow = { threadId: string; editKey?: string; call?: number };
-type ReviewMarker = { edit: ThreadEdit; number: number; total: number };
+/** `state`: amber while it asks for a look, filled once kept, as its row in the chat says. */
+type ReviewMarker = { edit: ThreadEdit; number: number; total: number; state?: "check" | "kept" };
 export type LocatedReview = { head: string | null; markers: ReviewMarker[] };
 export type ReportReviewMarkers = (threadId: string, review?: LocatedReview) => void;
 
@@ -95,13 +95,22 @@ export interface ChatActions {
   atOnce?: number;
   /** The queued request Scarlet will take up next, matching the tray's Next line. */
   nextQueuedId?: string;
+  /**
+   * What a request in line waits for when that is the editor, as the tray says it ("Waits for your calls"), with the
+   * way to start it before the calls when they are what holds it.
+   */
+  waitsOn?(task: Task): { words: string; startNow?(): void } | undefined;
   showing?: ThreadEdit;
   /** The request whose own row opened the edit that's showing. Opened from a list or the timeline, there is none. */
   showingFrom?: string;
-  /** The request whose edits the timeline marks. Its band is a shade lighter. */
+  /** The request whose edits the timeline marks. Its band is deep violet. */
   marked?: string;
-  /** Put a request's edits on the timeline, from a press on its band. */
+  /** Pick a request, from a press on its band: its edits are the ones on the timeline. Pressed again, it lets go. */
   mark?(threadId: string): void;
+  /** The requests folded to their headings, by their run. */
+  collapsed?: ReadonlySet<string>;
+  /** Fold a request to its heading, or open it again, from the arrow at its heading's left. */
+  collapse?(run: string): void;
   /** Show the whole timeline, from a press on any request's band. */
   fitTimeline?(): void;
   pass?: OpenPass;
@@ -130,6 +139,8 @@ export interface ChatActions {
   /** Light the timeline's marker at this time, or none: the pointer is over that edit's row in the chat. */
   lightMark(time?: number, target?: HoveredReviewRow): void;
   reply(thread: Thread): void;
+  /** The question the message box is answering now, by its task: its Answer link in the chat would only say so again. */
+  answering?: string;
   revise(thread: Thread, change: Change): void;
   /**
    * What a request about one cut is called while that cut is a call of the pass waiting now, or an edit of its request
@@ -144,14 +155,20 @@ export interface ChatActions {
 }
 
 /**
- * Which of a request's lists is open: every edit, or just the ones that need the editor. A pass's calls are listed
- * without a click for as long as they wait.
+ * Which of a request's lists is open. A request with nothing for the editor to review has one list, every edit
+ * ("all"). One with review rows has three tabs: For you ("need", or none: it is the one shown until another is
+ * pressed), Working and Done. There "all" is For you with its optional line open, the edits Scarlet didn't flag listed
+ * under the ones that wait: the timeline shows them as it does for a list of every edit.
  */
-export type OpenList = "all" | "need" | undefined;
+export type OpenList = "all" | "need" | "working" | "done" | undefined;
 export type PassList = [open: OpenList, setOpen: Dispatch<SetStateAction<OpenList>>];
 
-/** A request about one cut or edit that is still in the chat, drawn directly under the row it is about. `key` is that row's. */
-export interface Nest { key: string; node: ReactNode }
+/**
+ * A request about one cut or edit that is still in the chat, drawn directly under the row it is about. `key` is that
+ * row's. `needs`: the request itself waits on the editor (it asks a question, or stopped early and offers Resume or
+ * Retry), so its row stays in For you with it.
+ */
+export interface Nest { key: string; node: ReactNode; needs?: boolean }
 export const noNests: readonly Nest[] = [];
 /** What the requests about each row's cut or edit took, by the row's key, for the hover of the word the row ends on. */
 export type Spent = ReadonlyMap<string, string>;
