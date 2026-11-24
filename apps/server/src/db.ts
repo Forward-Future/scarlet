@@ -90,7 +90,9 @@ export class Db {
         result = fn(...args);
         this.raw.exec("COMMIT");
       } catch (e) {
-        this.raw.exec("ROLLBACK");
+        // SQLite ends the transaction itself on some errors (a full disk, RAISE(ROLLBACK)); keep that error.
+        // Node before 22.16 has no isTransaction: roll back as before.
+        if (this.raw.isTransaction !== false) this.raw.exec("ROLLBACK");
         throw e;
       } finally {
         this.commitEffects = undefined;
@@ -120,8 +122,10 @@ export class Db {
       this.raw.exec("RELEASE part");
       return result;
     } catch (e) {
-      this.raw.exec("ROLLBACK TO part");
-      this.raw.exec("RELEASE part");
+      if (this.raw.isTransaction !== false) {
+        this.raw.exec("ROLLBACK TO part");
+        this.raw.exec("RELEASE part");
+      }
       effects.length = announced;
       throw e;
     }
