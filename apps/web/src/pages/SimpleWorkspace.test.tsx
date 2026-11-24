@@ -992,8 +992,8 @@ it("steps ↑ and ↓ among the flagged edits from one that still waits, and thr
   expect(openTitle()).toBe("captions");
 });
 
-it("counts and steps through a flagged edit made in several places as one edit, as its list does, and keeps it in all of them", async () => {
-  // The captions went on in two places, and Scarlet flagged both. The wrap asks for a look too.
+it("keeps a flagged edit made in separate places as separate rows, steps through each, and keeps only the open one", async () => {
+  // The captions went on in two separate places, and Scarlet flagged both. The wrap asks for a look too.
   appliedEdits().mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
       { changeId: "chg_approved_2", spot: 0, label: "captions", range: { start: 0.2, end: 2.4 }, previous: [], check: "The first line runs long" },
@@ -1004,23 +1004,26 @@ it("counts and steps through a flagged edit made in several places as one edit, 
   await showFolded();
   const turn = turnFor("chg_approved_2");
   const need = () => turn.querySelector(".simple-pass-need")?.getAttribute("title");
-  // Two edits need the editor, on two rows: the captions, in both places, and the wrap.
-  expect(need()).toBe("2 need you");
+  // Three separate edits need the editor, on three rows: both caption spots and the wrap.
+  expect(need()).toBe("3 need you");
   await click(turn.querySelector(".simple-pass-need")!);
   await act(async () => {});
-  expect([...turn.querySelectorAll(".simple-edits .simple-edit-title")].map(t => t.textContent)).toEqual(["captions", "wrap"]);
-  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 2"]);
-  // ↓ goes to the next edit, not to the captions' other place, and ↑ comes back.
+  expect([...turn.querySelectorAll(".simple-edits .simple-edit-title")].map(t => t.textContent)).toEqual(["captions", "captions", "wrap"]);
+  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 3"]);
+  // ↓ steps to the second caption spot, then to the wrap, and ↑ comes back.
   await press("ArrowDown");
-  expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
+  expect([openTitle(), cardCount()]).toEqual(["captions", "2 of 3"]);
+  await press("ArrowDown");
+  expect([openTitle(), cardCount()]).toEqual(["wrap", "3 of 3"]);
   await press("ArrowUp");
-  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 2"]);
-  // Keep keeps the captions in both places and moves on to the wrap, the one edit still waiting.
+  await press("ArrowUp");
+  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 3"]);
+  // Keep keeps only the first caption spot and moves on to the second.
   expect(api.recordEditReview).not.toHaveBeenCalled();
   await press("k");
   expect(vi.mocked(api.recordEditReview).mock.calls).toEqual([[PRJ, { changeId: "chg_approved_2", spot: 0, decision: "keep" }]]);
   await act(async () => {});
-  expect([openTitle(), cardCount(), need()]).toEqual(["wrap", "1 of 1", "1 needs you"]);
+  expect([openTitle(), cardCount(), need()]).toEqual(["captions", "1 of 2", "2 need you"]);
 });
 
 it("takes back the last Keep with ⌘Z, then the one before, with no undo display in the timeline's bottom row", async () => {
@@ -3196,11 +3199,9 @@ it("numbers an applied pass's cuts on the timeline while it has the timeline, as
   expect(drawn()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
 });
 
-it("lists an edit a pass made in many places as one row with its count, and counts it once", async () => {
-  // A fade on every dialogue join of Matt's talking head was 101 rows that all read "Softened every dialogue join",
-  // and the sentence said "102 sound fixes" (2026-11-23). One name, one row: a cut and a flagged edit stay one each.
-  const fades = Array.from({ length: 5 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
-    range: { start: 2 + i * 2, end: 4 + i * 2 }, kind: "audio" as const, previous: [] }));
+it("keeps a pass's non-overlapping edits as separate rows even when they share a name, and counts each", async () => {
+  const fades = Array.from({ length: 3 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 4, end: 4 + i * 4 }, kind: "audio" as const, previous: [] }));
   const cuts = [3, 9].map((at, i) => ({ changeId: "chg_approved_2", spot: 20 + i, label: "Cut", kind: "cut" as const, at, range: { start: at, end: at },
     beforeCut: { version: "v_before", removed: { start: at, end: at + 30 } }, previous: [] }));
   const flagged = { changeId: "chg_approved_2", spot: 30, label: "Softened every dialogue join", range: { start: 13, end: 14 }, kind: "audio" as const,
@@ -3213,21 +3214,22 @@ it("lists an edit a pass made in many places as one row with its count, and coun
   await show();
   await act(async () => {});
   const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
-  expect(pass.querySelector(".simple-made")?.textContent).toBe("Took out 1:00 in 2 cuts, and made 2 sound fixes.");
+  expect(pass.querySelector(".simple-made")?.textContent).toBe("Took out 1:00 in 2 cuts, and made 4 sound fixes.");
   await click(seeAll(pass)!);
   await act(async () => {});
   const rows = () => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
   expect(rows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.querySelector(".simple-pass-value")?.textContent])).toEqual([
-    ["Softened every dialogue join", "5 places"], ["Cut", "−30 s"], ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"]]);
-  // Its row opens its first place, and is lit while any of its places is open.
+    ["Softened every dialogue join", "Audio"], ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"],
+    ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"], ["Softened every dialogue join", "Audio"]]);
+  // Opening one fade lights only its own row, not other non-overlapping places with the same name.
   await click(rows()[0]!);
   await act(async () => {});
-  expect(rows().map(r => r.getAttribute("aria-current"))).toEqual(["true", null, null, null]);
+  expect(rows().map(r => r.getAttribute("aria-current"))).toEqual(["true", null, null, null, null, null]);
 });
 
-it("treats an edit a pass made in many places as its one row does: ↑ ↓ step past it, Keep keeps every place, and a cut beside a place opens alone", async () => {
-  const fades = Array.from({ length: 5 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
-    range: { start: 2 + i * 2, end: 4 + i * 2 }, kind: "audio" as const, previous: [] }));
+it("keeps a cut and a partially overlapping ranged edit separate, and keeps only the open place on Keep", async () => {
+  const fades = Array.from({ length: 2 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 6, end: 4 + i * 6 }, kind: "audio" as const, previous: [] }));
   const cuts = [3, 9].map((at, i) => ({ changeId: "chg_approved_2", spot: 20 + i, label: "Cut", kind: "cut" as const, at, range: { start: at, end: at },
     beforeCut: { version: "v_before", removed: { start: at, end: at + 30 } }, previous: [] }));
   data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
@@ -3243,42 +3245,34 @@ it("treats an edit a pass made in many places as its one row does: ↑ ↓ step 
   await act(async () => {});
   const rows = () => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
   const lit = () => rows().map(r => r.getAttribute("aria-current") ? r.querySelector(".simple-pass-value")?.textContent : null);
-  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["5 places", "−30 s", "−30 s"]);
-  // The first cut is a row of its own in the list, so its card is the cut's alone: the fade that starts beside it isn't part of it.
+  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["Audio", "−30 s", "Audio", "−30 s"]);
+  // The cut at 3 s inside the 2–4 s fade does not overlap it exactly, so it opens alone.
   await click(rows()[1]!);
   await act(async () => {});
-  expect(lit()).toEqual([null, "−30 s", null]);
+  expect(lit()).toEqual([null, "−30 s", null, null]);
   expect(editPanel()?.querySelector(".edit-card-length")?.textContent ?? "").not.toMatch(/edits$/);
-  // ↑ goes to the fades' row, at their first place. ↓ from there goes down the list: the cut, then the next cut, never
-  // the fades' other places.
+  // ↑ goes to the first fade, and Keep keeps only that fade — never the second place at 8–10 s.
   await press("ArrowUp");
   await act(async () => {});
-  expect(lit()).toEqual(["5 places", null, null]);
-  await press("ArrowDown");
-  await press("ArrowDown");
-  await act(async () => {});
-  expect(lit()).toEqual([null, null, "−30 s"]);
-  await click(rows()[0]!);
-  await act(async () => {});
-  expect(lit()).toEqual(["5 places", null, null]);
-  // Keep keeps the fades in every place, and their row is ticked.
+  expect(lit()).toEqual(["Audio", null, null, null]);
   await press("k");
   await act(async () => {});
-  expect(keep.mock.calls.flatMap(([, body]) => body.edits.map(e => e.spot)).sort()).toEqual([10, 11, 12, 13, 14]);
+  expect(keep.mock.calls.flatMap(([, body]) => body.edits.map(e => e.spot))).toEqual([10]);
   expect(rows()[0]!.className).toBe("is-decided");
+  expect(rows()[2]!.className).toBe("");
 });
 
-it("puts a request about any place of an edit a pass made in many places under its one row, which says Revising…", async () => {
-  const fades = Array.from({ length: 5 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
-    range: { start: 2 + i * 2, end: 4 + i * 2 }, kind: "audio" as const, previous: [] }));
+it("puts a request about one place of a repeated pass edit under that place's own row, leaving the others alone", async () => {
+  const fades = Array.from({ length: 3 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 4, end: 4 + i * 4 }, kind: "audio" as const, previous: [] }));
   const thread = threadWith("chg_approved_2");
   const base = data.tasks.find(t => t.id === "task_done")!;
   const now = new Date().toISOString();
-  // The editor opened the fades' third place from its dot on the timeline and sent it back.
+  // The editor sent the second fade (spot 11) back.
   data = { ...data, tasks: [...data.tasks,
     { ...base, id: "task_pass", kind: "edit" as const, instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] },
     { ...base, id: "task_revise_fade", state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined, summary: null, changeIds: [],
-      context: { changeId: "chg_approved_2", editIndex: 12, threadId: thread.id, message: "Make this one shorter" } }] };
+      context: { changeId: "chg_approved_2", editIndex: 11, threadId: thread.id, message: "Make this one shorter" } }] };
   useProjectStore.setState({ current: data });
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== thread.id ? [] : [...fades, { changeId: "chg_approved_2", spot: 20, label: "Cut", kind: "cut" as const, at: 13, range: { start: 13, end: 13 },
@@ -3288,10 +3282,10 @@ it("puts a request about any place of an edit a pass made in many places under i
   const pass = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
   await click(seeAll(pass())!);
   await act(async () => {});
-  const row = pass().querySelector<HTMLElement>(".simple-pass-list > li")!;
-  // Sent back, the row ends on where that stands, in place of its count: one word a row.
-  expect([row.querySelector(".simple-pass-value")?.textContent, row.querySelector(".simple-pass-check")?.textContent]).toEqual([undefined, "Revising…"]);
-  expect(wordsOf(row.querySelector(".subunit .subunit-msg > p"))).toBe("Make this one shorter");
+  const items = [...pass().querySelectorAll<HTMLElement>(".simple-pass-list > li")];
+  expect(items.map(li => [li.querySelector(".simple-pass-value")?.textContent, li.querySelector(".simple-pass-check")?.textContent])).toEqual([
+    ["Audio", undefined], [undefined, "Revising…"], ["Audio", undefined], ["−30 s", undefined]]);
+  expect(wordsOf(items[1]!.querySelector(".subunit .subunit-msg > p"))).toBe("Make this one shorter");
   expect(pass().querySelectorAll(".subunit")).toHaveLength(1);
 });
 
@@ -6141,13 +6135,13 @@ it("draws a pass's rows and any other request's rows as one row, and a revised e
   }
 });
 
-/** A pass whose list has a moment: three edits on the cube's reveal that play as one change, between two of their own. */
+/** A pass whose list has a moment: three edits on the cube's reveal that overlap on the timeline exactly, between two of their own. */
 const passWithMoment = (flagged: boolean) => {
   const later = appliedPass(flagged);
   (later.lists[later.earlier] as object[]).splice(0, 1,
-    { changeId: "chg_approved_2", spot: 3, label: "Cube reveal", range: { start: 4, end: 7 }, previous: [], kind: "zoom" },
+    { changeId: "chg_approved_2", spot: 3, label: "Cube reveal", range: { start: 4, end: 7.98 }, previous: [], kind: "zoom" },
     { changeId: "chg_approved_2", spot: 4, label: "Cube inset", range: { start: 4, end: 8 }, previous: [], kind: "reframe" },
-    { changeId: "chg_approved_2", spot: 5, label: "First cube turn", range: { start: 4.5, end: 6.5 }, previous: [], kind: "zoom" });
+    { changeId: "chg_approved_2", spot: 5, label: "First cube turn", range: { start: 4.02, end: 7.98 }, previous: [], kind: "zoom" });
   return later;
 };
 const listRows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-pass-list:not(.is-moment) > li > button")];
@@ -12271,9 +12265,9 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
   expect([list(), seeAll(owner())?.getAttribute("aria-expanded"), container.querySelector('[data-run="task_fix"]')]).toEqual([null, "false", null]);
 });
 
-it("draws a request about one place of an edit made in several once, under that edit's row, while only what needs the editor is listed", async () => {
+it("keeps a request about an unflagged place of a repeated edit apart from a flagged place's row, and places it under its own row in See all", async () => {
   const { base, thread } = madeRequest();
-  // The captions went on in two places. Scarlet flagged the second, and the editor sent the first back.
+  // The captions went on in two separate places. Scarlet flagged the second, and the editor sent the first back.
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== thread.id ? [] : [
       { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
@@ -12286,15 +12280,23 @@ it("draws a request about one place of an edit made in several once, under that 
   await act(async () => {});
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   expect(block().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
-  // "1 needs you" lists that edit as one row for both its places.
+  // "1 needs you" lists only the flagged place, not both places combined.
   await click(block().querySelector(".simple-pass-need")!);
   await act(async () => {});
   expect([...block().querySelectorAll(".simple-edits .simple-edit")].map(row => [row.querySelector(".simple-edit-title")?.textContent, row.querySelector(".simple-edit-value")?.textContent]))
-    .toEqual([["captions", "2 places"]]);
-  // The request about the place that wasn't flagged is directly under that row, and not a second time under the list.
-  const under = [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
-  expect(under.map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
-  expect(under[0]!.previousElementSibling?.classList.contains("simple-edit")).toBe(true);
+    .toEqual([["captions", "Edit"]]);
+  // The request about the unflagged place sits under the list while only For you is shown.
+  const underForYou = [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
+  expect(underForYou.map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
+  expect(underForYou[0]!.previousElementSibling?.classList.contains("simple-edits")).toBe(true);
+  // In See all, both places have their own row and the request sits directly under the first captions row.
+  await click(seeAll(block())!);
+  await act(async () => {});
+  expect([...block().querySelectorAll(".simple-edits .simple-edit .simple-edit-title")].map(el => el.textContent))
+    .toEqual(["music bed", "captions", "captions"]);
+  const underAll = [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
+  expect(underAll.map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
+  expect(underAll[0]!.previousElementSibling?.querySelector(".simple-edit-title")?.textContent).toBe("captions");
 });
 
 it("keeps a request about an edit that isn't among the ones that need the editor under their list", async () => {
