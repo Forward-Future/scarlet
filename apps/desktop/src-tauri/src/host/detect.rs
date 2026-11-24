@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::spawn::{exec_capture, find_on_path, ExecResult};
+use super::spawn::{exec_capture, resolve_cli, ExecResult};
 use super::types::AgentAvailability;
 use crate::util::env_get;
 
@@ -35,7 +35,8 @@ impl DetectIo for RealIo {
         exec_capture(file, &args, &self.env, Duration::from_secs(15)).await
     }
     async fn find(&self, name: &str) -> Option<String> {
-        find_on_path(name, &self.env)
+        // The copy a run would start, so an assistant shown as ready is one Scarlet can launch.
+        resolve_cli(name, &self.env).ok()
     }
 }
 

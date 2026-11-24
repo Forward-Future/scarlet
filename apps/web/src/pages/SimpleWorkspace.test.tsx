@@ -7954,6 +7954,10 @@ it("lets the editor reword a rule in place: Esc puts it back, Enter keeps it, an
     .toEqual(["Leave the breath before a punchline.", true, "true"]);
   // Esc puts it back as it was, and the list stays open.
   await write("Keep every breath.");
+  // While an input method composes, Esc puts its candidates away and Enter commits its words: the rewording goes on.
+  await act(async () => { field()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true })); });
+  await act(async () => { field()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true })); });
+  expect([field()?.value, document.activeElement === field(), panel() !== null]).toEqual(["Keep every breath.", true, true]);
   await press("Escape");
   expect([field(), rule(), panel() !== null, buttonIn(row(), "Revise")!.getAttribute("aria-pressed")]).toEqual([null, "Leave the breath before a punchline.", true, "false"]);
   expect(reviseLearning).not.toHaveBeenCalled();

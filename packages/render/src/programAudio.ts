@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { planSegments, sha256, snapToFrame, stableStringify, timelineDuration } from "@scarlet/timeline";
 import type { MediaAsset, Project, Timeline, TimeRange } from "@scarlet/timeline";
-import { effectKind } from "./effects.js";
+import { audioEffectDelay, effectKind } from "./effects.js";
 import { BEST_AUDIO_BITRATE, COMPRESSED_AUDIO_BITRATE, PROGRAM_AUDIO_BITRATE } from "./encoder.js";
 import { fnum, runFfmpeg, sampleCount } from "./exec.js";
 import { buildFilterGraph } from "./graph.js";
@@ -39,6 +39,8 @@ function audioMixPlan(project: Project, timeline: Timeline, range: TimeRange, ca
       fades: clip.audioFadeIn || clip.audioFadeOut ? [clip.audioFadeIn, clip.audioFadeOut, p.local0, p.clipDur] : undefined,
       // The level a keyframe gives is timed from the clip's start, so the section's place in the clip goes with it.
       levels: clip.volumeKeyframes?.length ? [clip.volumeKeyframes, fnum(p.local0)] : undefined,
+      // A sound an effect plays late used to end that much early: mixes made then aren't reused.
+      lateTail: audioEffectDelay(clip.effects) > 0 || undefined,
     }];
   }));
   const samples = sampleCount(range.start, range.end, sampleRate);

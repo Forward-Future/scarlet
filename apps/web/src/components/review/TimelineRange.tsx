@@ -259,7 +259,8 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     e.preventDefault();
     e.stopPropagation();
     const step = (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 10 : 1) / fps;
-    const moved = toFrame(clampTime((edge === "start" ? range.start : range.end) + step, start, end), fps);
+    // Snapped to a frame first, then kept inside the video: the frame nearest a length between frames lies past its end.
+    const moved = clampTime(toFrame((edge === "start" ? range.start : range.end) + step, fps), start, end);
     const next = edge === "start" ? { start: Math.min(moved, range.end - 1 / fps), end: range.end } : { start: range.start, end: Math.max(moved, range.start + 1 / fps) };
     onRange(next, true);
     onSeek(edge === "start" ? next.start : next.end);
