@@ -20,8 +20,7 @@ export const LANDING_SETTLES = 3000;
 export const LANDING_SHOWS = 4000;
 /** How many versions' timelines the window keeps beyond the ones a waiting pass needs. */
 export const KEPT_TIMELINES = 6;
-/** What a request paused with the project's editing waits for. */
-export const PAUSED_HINT = "Editing is paused. Resume picks this up where it left off.";
+export { PAUSED_HINT } from "../../lib/taskRun";
 
 /** ↑ ↓ step between the cuts or edits that are open one at a time. ← → are always the player's: they skip. */
 export const stepOf = (key: string): 1 | -1 | undefined => key === "ArrowUp" ? -1 : key === "ArrowDown" ? 1 : undefined;

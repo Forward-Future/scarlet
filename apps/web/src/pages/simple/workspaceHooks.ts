@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { isPublishedCall, type Change, type Timeline } from "@scarlet/timeline";
-import type { Task, ThreadEdit } from "@scarlet/shared";
+import { ScarletApiError, type Task, type ThreadEdit } from "@scarlet/shared";
 import { appLog } from "../../lib/appLog";
-import { api, errorMessage } from "../../lib/client";
+import { api, errorMessage, UNEXPLAINED } from "../../lib/client";
 import { editKindWord } from "../../lib/editKind";
 import type { Moment } from "../../lib/editMoments";
 import { parseTimestamp } from "../../lib/format";
@@ -112,6 +112,18 @@ export function useDraftTimeline(projectId: string, draftVersion?: string) {
 }
 
 /**
+ * A call's Keep or Reject edit that wasn't saved: why, when the engine said, and what to do about it. The call is back
+ * with the editor, undecided, so making the decision again is what saves it. A pass that has moved on since (the
+ * engine's conflict) says only that: pressing again wouldn't save it.
+ */
+export function callNotSaved(error: unknown) {
+  const reason = errorMessage(error).trim();
+  const why = !reason || reason === UNEXPLAINED ? "." : `: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`;
+  const movedOn = error instanceof ScarletApiError && error.status === 409;
+  return `Couldn’t save this call${why}${movedOn ? "" : " Press Keep or Reject edit again."}`;
+}
+
+/**
  * Optimistic cut-choice persistence for dialogue passes, keeping each save ordered and surfacing failures only while
  * their calls remain unsaved.
  */
@@ -154,7 +166,7 @@ export function usePassChoices(setDecideError: Dispatch<SetStateAction<string>>)
       // A later save that has landed carried every call this one did: nothing was lost, and nothing is said.
       if ((saves.current.landed[change.id] ?? 0) > order) return;
       saves.current.unsent[change.id] = new Set(Object.keys(calls).map(Number));
-      saves.current.failed = errorMessage(e);
+      saves.current.failed = callNotSaved(e);
       setDecideError(saves.current.failed);
     } finally {
       // Drop only this optimistic copy. A save sent since carries its own calls and may still land.

@@ -1,7 +1,7 @@
 import { closingCheckFailed, taskDialogueOperation, matchesEdit, noteThread, DialogueScanPage, requestText, taskRecoveryAction, taskWasStopped, type Task, type TaskEvent, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { clock, parseTimestamp } from "./format";
 import { cutSummary, dialogueReceipt, mergeRanges, rangesOverlap, reviewReasons, type TimeRange, type Author, type Change, type Note } from "@scarlet/timeline";
-import { appliedEditSummary } from "../components/review/cutReviewDetails";
+import { appliedEditSummary, passReceipt } from "../components/review/cutReviewDetails";
 import { editConfirmation, readsPlain, taskChatText } from "./taskActivity";
 import { runIsActive } from "./taskRun";
 
@@ -54,9 +54,9 @@ export const isRecheck = (task: Task) => task.kind === "revise" && task.createdB
  * revision, after an Auto tag, so the editor reads who started it and why before its work (2026-11-22).
  */
 export const RECHECK_WORDS = "The footage changed after you approved it.";
-/** What Scarlet says about a suggestion it is to make again: while the redo waits its turn, then once Scarlet is on it. */
-const REDO_WAITS = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
-const REDOING = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
+/** What the chat says about a suggestion Scarlet is to make again: while the redo waits its turn, then once Scarlet is on it. */
+const REDO_WAITS = "The video changed while this suggestion was waiting. Scarlet will redo it on the video as it is now.";
+const REDOING = "The video changed while this suggestion was waiting. Scarlet is redoing it on the video as it is now.";
 const legacyInterruption = "The agent was interrupted after saving its proposed changes. You can review them here.";
 
 function taskForChange(tasks: Task[], change: Change) {
@@ -176,6 +176,8 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
   return edit ? { note, edit } : { note, changeId: change.id, call: index };
 }
 
+/** A run that failed with nothing more to say about it. Its block's own row says so, so the chat doesn't repeat it. */
+export const COULDNT_FINISH = "Scarlet couldn’t finish this edit.";
 /**
  * Why a run or a render failed, when what its host or model reported reads as a sentence the editor can act on ("You've
  * hit your usage limit"). A CLI that ended by itself reports its name and code, then the end of what it wrote: its last
@@ -207,7 +209,7 @@ function failureText(t: Task, hasEdit: boolean) {
   }
   // The reason the host or the model gave is what the editor can act on before trying again. With none that reads, the
   // heading's "Couldn't finish" has said all there is.
-  return failureReason(t.error) ?? "I couldn’t finish this edit.";
+  return failureReason(t.error) ?? COULDNT_FINISH;
 }
 
 /** The run's agent, as the author of what it said. */
@@ -311,8 +313,8 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       const finalSummary = task && !dialogueTasks.has(task.id) ? editConfirmation(summary, request) : undefined;
       const description = editConfirmation(cutSummary(c.description), request);
       const text = c.state === "approved" ? appliedEditSummary(c)
-        : c.state === "failed" ? `I couldn’t prepare the preview for this edit.${failureReason(c.error) ? ` ${failureReason(c.error)}` : ""}`
-        : dialogueReceipt(c) ?? finalSummary ?? description ?? "I prepared a version for you to review.";
+        : c.state === "failed" ? `Scarlet couldn’t prepare the preview for this edit.${failureReason(c.error) ? ` ${failureReason(c.error)}` : ""}`
+        : passReceipt(c) ?? finalSummary ?? description ?? "Scarlet prepared a version for you to review.";
       const at = c.state === "approved" ? c.updatedAt ?? c.createdAt
         : finalReply && parseTimestamp(task.finishedAt) > parseTimestamp(c.createdAt) ? task.finishedAt : c.createdAt;
       out.push({ kind: "change", taskId: task?.id, at: at ?? "", change: c, text });

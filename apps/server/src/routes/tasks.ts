@@ -193,6 +193,9 @@ export function taskRoutes(ctx: Ctx) {
     // The answer, any model switch, the requeue and its activity entry land together, after the state check.
     const updated = ctx.db.transaction(() => {
       const task = requireTask(c.req.param("taskId"));
+      // Only the editor answers here, so these read as the chat does. Events from a host keep the engine's own wording.
+      if (FINISHED_TASK.has(task.state)) throw conflict("task_finished", task.state === "done" ? "This request has already finished." : "This request has already stopped.");
+      if (task.state !== "waiting_for_user") throw conflict("no_question", "Scarlet isn’t waiting for an answer any more.");
       const switched = body.agent !== undefined && (body.agent !== task.agent || body.model !== task.model);
       const tuned = body.agent !== undefined && (switched || body.effort !== task.effort || body.fast !== task.fast || body.serviceTier !== task.serviceTier);
       const prepared: Task = tuned ? {

@@ -24,7 +24,7 @@ import { PassSummary, ThreadResult } from "./PassSummary";
 import { callRowKey, isWorking, letGo, listedBefore, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
 
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
-const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|I couldn’t finish this edit\.)$/;
+const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|Scarlet couldn’t finish this edit\.)$/;
 
 /** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
 function learnedLead(learning: Learning, skill: string | undefined): string {

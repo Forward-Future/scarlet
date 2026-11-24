@@ -6,6 +6,15 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- When a pass can't go in, Retry now sits right after the reason, instead of above it.
+- The line under a working request says what Scarlet is doing in plainer words, such as "Looking over the change", "Asking you a question" and "Tidying up its notes", and no longer ends in a number that didn't match your list of edits.
+- The check Scarlet runs at the end of a pass has one name everywhere: the closing check for repeats.
+- When something goes wrong, the red line says what happened and what to do in plain words, such as "Make this pass's calls in For you first", instead of the engine's own wording or a code.
+- A call that couldn't be saved now says so, with why and to press Keep or Reject edit again.
+- A request that changed nothing now says "Nothing changed" instead of "Done".
+- Sending a message while the model button says "Connecting…" now says "Still connecting. Try again in a moment." instead of asking you to sign in.
+- A pass with no calls for you now says its cuts are "ready" instead of "proposed", and the cuts Scarlet is still checking are called flagged cuts everywhere.
+- Lines the app writes for Scarlet now all say "Scarlet", never "I", and waits read as "3m 41s" so they can't be mistaken for a place in the video.
 - Scrolling a long list of edits above the message box no longer scrolls the request's heading out of sight or leaves blank space under the list.
 - Scarlet now writes card notes and To dos in short, plain sentences instead of technical specs with timestamps, durations, or beat-by-beat breakdowns.
 - Scarlet can use a video from the web as B-roll: give it a link (YouTube and most video sites) or ask it to find one, and it takes just the part that fits. The edit’s card shows where the clip came from.
