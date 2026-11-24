@@ -31,7 +31,7 @@ export interface QueuedRequest {
  * says so ("Editing paused · 2 queued"), and holds Resume itself (`onContinue`) only when no band does: editing paused
  * with nothing under way, only requests waiting their turn.
  */
-export function QueueTray({ items, hint, waits, rewording, onRemove, onReword, onStart, paused: isPaused, onContinue, opened }: {
+export function QueueTray({ items, hint, waits, rewording, onRemove, onReword, onStart, paused: isPaused, onContinue, opened, rail }: {
   items: readonly QueuedRequest[]; hint?: string; waits?: string; rewording?: string; onRemove(id: string): void; onReword?(id: string): void;
   /** Start the next request without what it waits for. Given only while that is the editor's calls. */
   onStart?(id: string): void;
@@ -42,6 +42,8 @@ export function QueueTray({ items, hint, waits, rewording, onRemove, onReword, o
   /** Whether the tray is open, held by the page: the message box the tray sits on is built again each time it is aimed
    *  somewhere else, and a tray the editor opened must not shut by itself then. */
   opened?: [open: boolean, setOpen: (open: boolean) => void];
+  /** In the column of edits, under Working: every request is a row, the first marked Up next, and nothing folds. */
+  rail?: boolean;
 }) {
   const own = useState(false);
   const [open, setOpen] = opened ?? own;
@@ -57,6 +59,7 @@ export function QueueTray({ items, hint, waits, rewording, onRemove, onReword, o
   // The row whose words are in the box says which request the box is changing, so the list stays open around it.
   const listed = many && (open || !!rewording);
   const marker = (first: boolean, expanded: boolean) => {
+    if (rail) return <span className={first && waits ? "queue-next is-waiting" : "queue-next"}>{first ? waits ?? "Up next" : "Queued"}</span>;
     if (first && !expanded && waits) return <span className="queue-next is-waiting">{waits}</span>;
     return <span className="queue-next">{first ? "Next" : ""}</span>;
   };
@@ -91,6 +94,17 @@ export function QueueTray({ items, hint, waits, rewording, onRemove, onReword, o
       </>}
       <span className="queue-chevron"><Icon name="chevron" size={12} /></span>
     </button> : row(first, true);
+  if (rail) return <div className="queue-tray is-rail" ref={tray} role="group" aria-label={items.length ? "Queued requests" : "Project editing"} data-log-private>
+    <div className="queue-list">{items.map((item, i) => row(item, i === 0, true))}</div>
+    {(isPaused || action) && <div className="queue-footer">{paused}
+      {action && <button type="button" className="queue-editing-action" aria-disabled={pending || undefined}
+        title="Resume editing. Paused work picks up first, where it left off."
+        onClick={async () => {
+          if (pending) return;
+          setPending(true);
+          try { await action(); } finally { setPending(false); }
+        }}><Icon name="play" />Resume</button>}</div>}
+  </div>;
   return <div className={listed ? "queue-tray is-open" : "queue-tray"} ref={tray} role="group" aria-label={items.length ? "Queued requests" : "Project editing"} data-log-private title={!listed ? hint : undefined}>
     {(listed || (isPaused && first && !many)) && <div className="queue-list">{items.map((item, i) => row(item, i === 0, true))}</div>}
     {action ? <div className="queue-footer">

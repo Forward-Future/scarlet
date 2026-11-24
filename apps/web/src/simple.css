@@ -1009,3 +1009,61 @@ button.queue-head:hover { color: var(--color-fg); }
 .transcript-words .reading-passage [data-current] { background: var(--color-fg) !important; color: var(--color-bg) !important; font-weight: 500; }
 
 .simple-pass-list.is-moment > li > .subunit { margin-left: 8px; }
+
+/* The column of edits on the chat's left, for the whole video (2026-11-23). What waits on the editor fills it, as one
+   list. Working and Done are at its foot, each one line that opens on a press. */
+.review-rail { display: flex; flex-direction: column; flex: none; width: clamp(260px, 22vw, 320px); min-height: 0; border-right: 1px solid var(--color-line); background: var(--color-bg); }
+.review-rail[hidden] { display: none; }
+.review-rail-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 54px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--color-line); }
+.review-rail-head h2 { display: flex; align-items: baseline; gap: 7px; margin: 0; font-size: 13px; font-weight: 600; color: var(--color-fg); }
+.review-rail-count { font-weight: 500; color: var(--color-warn); font-variant-numeric: tabular-nums; }
+.review-new { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--color-line); border-radius: 7px;
+  background: none; color: var(--color-muted); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+.review-new:is(:hover, :focus-visible), .review-new[aria-pressed="true"] { color: var(--color-fg); }
+.review-new[aria-pressed="true"] { background: rgba(255, 255, 255, .06); }
+.review-rail-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 12px; }
+.review-slot { display: contents; }
+.review-rail .simple-review-empty { padding: 8px 6px; }
+.review-rail .simple-review-rest { padding-left: 6px; }
+/* A request's rows have the column's width: no line over them, no height of their own, each on up to two lines. */
+.review-rail :is(.simple-pass-list, .simple-edits) { max-height: none; overflow: visible; margin: 0; border-top: 0; }
+.review-rail .simple-edit { width: 100%; margin: 0; align-items: start; }
+.review-rail :is(.simple-edit-title, .simple-pass-label) { white-space: normal; }
+.review-rail :is(.simple-edit-words, .simple-pass-words) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; }
+.review-rail .subunit { margin-left: 8px; }
+.review-rail-foot { flex: none; max-height: 55%; overflow-y: auto; padding: 0 12px 8px; border-top: 1px solid var(--color-line); }
+.review-sec { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 6px; border: 0; background: none; color: var(--color-muted);
+  font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; cursor: pointer; }
+.review-sec:is(:hover, :focus-visible), .review-sec[aria-expanded="true"] { color: var(--color-fg); }
+.review-sec b { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; }
+.review-sec svg { color: var(--color-dim); transition: transform .14s ease; }
+.review-sec[aria-expanded="true"] svg { transform: rotate(90deg); }
+.review-sec-body { padding: 0 0 6px; }
+.review-work { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 8px; align-items: start; padding: 5px 6px; }
+.review-work > .req-mark { margin-top: 3px; }
+.review-work-text { min-width: 0; }
+.review-work-title { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--color-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.review-work-now { margin: 0; font-size: 12px; line-height: 1.4; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The requests waiting their turn are rows here, not a tray on the message box. */
+.queue-tray.is-rail { margin: 0; padding: 0; border: 0; border-radius: 0; background: none; }
+.queue-tray.is-rail .queue-next { width: auto; white-space: nowrap; }
+/* The cut or edit that's open has the middle column: its page takes the conversation's place, which stays mounted. */
+.simple-thread.has-page > :is(.simple-chat, .simple-pin) { display: none; }
+.edit-page { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 12px; }
+.edit-page-from { margin: 0; font-size: 12px; color: var(--color-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edit-page-title { margin: 4px 0 0; font-size: 15px; line-height: 1.4; font-weight: 600; color: var(--color-fg); overflow-wrap: anywhere; }
+.edit-page-kind { margin: 6px 0 0; font-size: 12.5px; color: var(--color-muted); }
+.edit-page h3 { margin: 0 0 6px; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 600; color: var(--color-dim); }
+.edit-page-versions { list-style: none; margin: 0; padding: 0; }
+.edit-page-versions > li { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline; padding: 7px 0;
+  border-top: 1px solid var(--color-line); font-size: 13px; line-height: 1.45; }
+.edit-page-versions > li:first-child { border-top: 0; }
+.edit-page-v { color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.edit-page-said { color: var(--color-muted); overflow-wrap: anywhere; }
+.edit-page-said.is-yours { color: var(--color-fg); }
+.edit-page-state { font-size: 12.5px; color: var(--color-muted); white-space: nowrap; }
+.edit-page-versions > li.is-now .edit-page-state { color: var(--color-warn); }
+@media (prefers-reduced-motion: reduce) { .review-sec svg { transition: none; } }
+/* In a narrow window the column gives its width back to the chat and the video. */
+@media (max-width: 1100px) { .review-rail { width: 232px; } }
+@media (max-width: 767px) { .review-rail { display: none; } }
