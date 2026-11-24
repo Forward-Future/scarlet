@@ -1256,6 +1256,23 @@ it("takes a marked range off on the first Esc in an empty box, and leaves a mess
   await esc();
   expect(useUiStore.getState().agentContext).toEqual(cut);
   expect(onClearTarget).not.toHaveBeenCalled();
+
+  // Delete and Option/Alt+X (including macOS `≈` with code KeyX) also take a range off an empty box, and ⌘Z restores it.
+  for (const init of [
+    { key: "Delete" },
+    { key: "x", altKey: true },
+    { key: "≈", code: "KeyX", altKey: true },
+  ]) {
+    await act(async () => useUiStore.getState().setAgentContext(marked));
+    await act(async () => aimField().focus());
+    const ev = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    await act(async () => { aimField().dispatchEvent(ev); });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(useUiStore.getState().agentContext).toEqual(cut);
+    const undo = new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true });
+    await act(async () => { aimField().dispatchEvent(undo); });
+    expect(useUiStore.getState().agentContext).toEqual(marked);
+  }
 });
 
 it("shows the Range tag for words chosen in the transcript (Ask about this), and lets ×, Backspace, Esc and ⌘Z manage it", async () => {
