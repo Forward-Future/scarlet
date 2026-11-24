@@ -6,6 +6,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A request's list no longer shows Scarlet's small finishing touches as edits of their own: a two-frame fade on a join or a voice moved to the dialogue track goes with the edit it finishes, and anything Scarlet wants you to check about it shows on that edit.
+- Two cuts at the same spot in the video are now one cut, which plays and shows all the footage that came out there.
+- A to-do Scarlet leaves inside a zoom or a crop now says To do, with Add, instead of Zoom.
 - A clip Scarlet takes from another recording, such as one you played on screen, and puts into the video now says Insert instead of Put back.
 - A request that punched in at several spots under the same name now says how many zooms it made, instead of naming the same edit over and over.
 - In Media, “Tell Scarlet what this is” and its Cancel button no longer show an underline.
