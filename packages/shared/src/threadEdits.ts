@@ -79,6 +79,13 @@ export const REJECT_MESSAGE = "Reject edit";
 export const isRejectRequest = (task: { instruction?: string; context: { message?: string } }) =>
   task.context.message === REJECT_MESSAGE && task.instruction !== REJECT_MESSAGE;
 
+/** The editor's words for a to-do Scarlet was asked to add, in the chat and in the queue. */
+export const ADD_MESSAGE = "Add it";
+
+/** A request Add on a to-do's card sent: the editor wrote nothing, and what Scarlet is told is its instruction. */
+export const isAddRequest = (task: { instruction?: string; context: { message?: string } }) =>
+  task.context.message === ADD_MESSAGE && task.instruction !== ADD_MESSAGE;
+
 /** Why a revision of a flagged edit asks for a look when Scarlet gave it no reason of its own. */
 export const REVISED_CHECK = "Revised";
 

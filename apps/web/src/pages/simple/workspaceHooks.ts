@@ -17,6 +17,7 @@ import { lastStep, useUndoStore } from "../../lib/undo";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
 import type { Thread } from "../../lib/threads";
+import { marksTakeEscape } from "../../components/player/PictureMarks";
 import { inFullScreen, KEPT_TIMELINES, LANDING_SETTLES, LANDING_SHOWS, stepOf, type Panel } from "./types";
 
 /**
@@ -266,7 +267,9 @@ export function useWatchedMomentAutoKeep(
       else if (now.seeks !== was.seeks || now.time < was.time - 0.05 || now.time - was.time > 1.5) from = now.time;
       else from ??= was.time;
       const start = from;
-      const seen = watchKeep.current.watchedMoments.filter(m => !done.has(m.key) && start <= m.start + 0.05 && now.time >= m.end - 0.05);
+      // Play has to begin clearly before a moment to count: a card closed without a decision leaves the playhead on its
+      // cut's join, and playing on from there isn't watching the cut. Only the very start of the video has nothing before it.
+      const seen = watchKeep.current.watchedMoments.filter(m => !done.has(m.key) && (start <= m.start - 0.2 || start <= 0.05) && now.time >= m.end - 0.05);
       if (!seen.length) return;
       for (const m of seen) done.add(m.key);
       appLog("review", "watched", { moments: seen.length, at: now.time });
@@ -279,18 +282,31 @@ export function useWatchedMomentAutoKeep(
 export function useUndoShortcut(workspaceActive: boolean, projectId: string, undoRef: RefObject<{ undo(): Promise<void> }>) {
   useEffect(() => {
     if (!workspaceActive) return;
+    // A message box the editor has just emptied still has those words to bring back, so its own ⌘Z goes first. A box a
+    // send emptied, one built again for another aim, or one its own ⌘Z ran back to empty has none.
+    const emptiedByHand = new WeakSet<EventTarget>();
+    const onInput = (e: Event) => {
+      const field = e.target;
+      if (!(field instanceof HTMLTextAreaElement) || !field.closest(".composer-box")) return;
+      if (!field.value && (e as InputEvent).inputType !== "historyUndo") emptiedByHand.add(field);
+      else emptiedByHand.delete(field);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "z" || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.defaultPrevented) return;
       // Words being written keep their own ⌘Z. The message box, once empty, leaves it here when it had no tag to put back.
-      const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value;
+      const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value && !emptiedByHand.has(e.target);
       if (isEditableTarget(e.target) && !box) return;
       if (document.querySelector('dialog[open], [role="dialog"], [role="menu"]')) return;
       if (!lastStep(useUndoStore.getState().steps, projectId)) return;
       e.preventDefault();
       if (!e.repeat) void undoRef.current.undo();
     };
+    window.addEventListener("input", onInput, true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("input", onInput, true);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [workspaceActive, projectId, undoRef]);
 }
 
@@ -308,8 +324,9 @@ export function useEditCardShortcuts(active: boolean, stepEdit: (delta: number) 
         e.preventDefault();
         if (!e.repeat) editKeys.current.stepEdit(step);
       } else if (e.key === "Escape") {
-        // Full screen takes the first Esc: it leaves full screen, and the edit stays open.
-        if (inFullScreen()) return;
+        // Full screen takes the first Esc: it leaves full screen, and the edit stays open. So does the marking of a
+        // frame, which ends on it.
+        if (inFullScreen() || marksTakeEscape(e)) return;
         e.preventDefault();
         editKeys.current.closeEdit();
       }
@@ -337,7 +354,7 @@ export function useCallCardShortcuts(reviewKeysOn: boolean, hasPass: boolean, st
       if (hasPass && !keys.suggestion && step && keys.calls) {
         e.preventDefault();
         if (!e.repeat) keys.stepCut(step);
-      } else if (e.key === "Escape" && (keys.listening || keys.suggestion) && !inFullScreen()) {
+      } else if (e.key === "Escape" && (keys.listening || keys.suggestion) && !inFullScreen() && !marksTakeEscape(e)) {
         e.preventDefault();
         // Esc is the card's Close: neither closes a suggestion while it is being applied.
         if (keys.listening) keys.stopListening(); else if (!keys.applying) keys.closeReview();
@@ -381,9 +398,9 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
       if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) clearRef.current();
     };
     const key = (e: KeyboardEvent) => {
-      // A popover that is open, full screen, or words being written take their own Esc first.
+      // A popover that is open, full screen, the marking of a frame, or words being written take their own Esc first.
       if (e.key !== "Escape" || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)
-        || document.querySelector("[data-escape-owner]") || inFullScreen()) return;
+        || document.querySelector("[data-escape-owner]") || inFullScreen() || marksTakeEscape(e)) return;
       e.preventDefault();
       clearRef.current();
     };

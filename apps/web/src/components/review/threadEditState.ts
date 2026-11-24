@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isRejectRequest, matchesEdit, threadEditList, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
+import { isAddRequest, isRejectRequest, matchesEdit, threadEditList, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { reviewKey, useDeferredEdits, useKeptEdits } from "../../lib/keptEdits";
 import { isActiveTask, isWorkingTask } from "../../lib/taskRun";
@@ -78,6 +78,14 @@ export function useRejecting(thread: Thread | undefined) {
   }, [thread]);
 }
 
+/** Whether the request on its way for a to-do is the editor's Add, so its row says Adding… and not Revising…. */
+export function useAdding(thread: Thread | undefined) {
+  return useMemo(() => {
+    const pending = editRequestsOnTheirWay(thread, isAddRequest);
+    return (edit: ListedEdit) => pending.some(ref => matchesEdit(edit, ref));
+  }, [thread]);
+}
+
 /** Whether the editor has reviewed an edit: kept here, or decided cut by cut when the pass was applied. */
 export function useReviewed(projectId: string, thread: Thread | undefined) {
   const kept = useKeptEdits(projectId, thread);
@@ -118,14 +126,14 @@ export function useRevising(thread: Thread | undefined) {
 }
 
 /**
- * The word on a row whose edit or cut has a request with Scarlet: "Revising…" or "Rejecting…" once Scarlet has
- * started on it ("Rechecking…" when Scarlet sent an approved cut back to itself), "Up next" while it is next in line in the queue, and "Queued" while it waits behind other work
+ * The word on a row whose edit or cut has a request with Scarlet: "Revising…", "Rejecting…" or, for a to-do Scarlet
+ * was asked to add, "Adding…" once Scarlet has started on it ("Rechecking…" when Scarlet sent an approved cut back to itself), "Up next" while it is next in line in the queue, and "Queued" while it waits behind other work
  * or while editing is paused.
  */
-export function revisionWord(run: { id: string; state: Task["state"] } | undefined, { rejecting = false, recheck = false, nextQueuedId }: { rejecting?: boolean; recheck?: boolean; nextQueuedId?: string } = {}) {
+export function revisionWord(run: { id: string; state: Task["state"] } | undefined, { rejecting = false, adding = false, recheck = false, nextQueuedId }: { rejecting?: boolean; adding?: boolean; recheck?: boolean; nextQueuedId?: string } = {}) {
   if (!run) return undefined;
   if (run.state === "queued") return nextQueuedId && run.id === nextQueuedId ? "Up next" : "Queued";
-  return rejecting ? "Rejecting…" : recheck ? "Rechecking…" : "Revising…";
+  return rejecting ? "Rejecting…" : adding ? "Adding…" : recheck ? "Rechecking…" : "Revising…";
 }
 
 /**

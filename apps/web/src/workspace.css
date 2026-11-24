@@ -64,6 +64,8 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+    /* The chat gives these words a colour of their own in rules that load later; the fill is what lets the sweep show through them. */
+    -webkit-text-fill-color: transparent;
     animation: working-text-sweep 2s linear infinite;
   }
   @keyframes working-text-sweep { to { background-position: 0% 0; } }
@@ -113,6 +115,8 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .timeline-range.is-lit { box-shadow: 0 0 0 2px rgba(244, 241, 233, .4); }
 .simple-timeline-band.is-lit { box-shadow: 0 0 0 2px rgba(255, 160, 156, .55); }
 .composer-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Which of several questions the answer is for: "1 of 2", quieter than the tag's word. */
+.composer-tag-note { flex: none; margin-left: 1px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .composer-tag-clear { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--color-dim); cursor: pointer; }
 .composer-tag-clear:hover:not(:disabled) { background: var(--color-raised); color: var(--color-fg); }
 .composer-tag-clear:disabled { opacity: .5; cursor: default; }

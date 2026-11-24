@@ -27,8 +27,8 @@ export function editNote(edit: Pick<ThreadEdit, "label" | "check" | "summary" | 
   const todo = edit.marker ? edit.todo ?? (edit.check !== REVISED_CHECK ? edit.check : undefined) : undefined;
   if (todo) {
     const why = edit.reason || edit.summary;
-    if (!why) return todo;
-    return said(why, todo) ? why : `${todo.replace(/[.!?]*$/, ".")} ${why.replace(/[.!?]*$/, ".")}`;
+    if (!why || said(todo, why)) return todo;
+    return said(why, todo) ? why : `${endSentence(todo)} ${endSentence(why)}`;
   }
   // A located review starts with what the editor should look for in the passage. The card says where that passage is
   // now, so times the words gave in an older clock are left out.

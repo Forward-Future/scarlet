@@ -19,7 +19,9 @@ function chatRowOf(taskId: string): { scroll: HTMLElement; flash: HTMLElement } 
  * is doing, in the chat's own words. A press brings that request into the middle of the chat and lights it for a
  * moment; with several at work, each press goes on to the next.
  */
-export function TimelineWorking({ tasks }: { tasks: readonly Task[] }) {
+export function TimelineWorking({ tasks, rootOf = task => task.resumeRootId ?? task.id }: { tasks: readonly Task[];
+  /** The request an attempt belongs to, by its first attempt (`requestRoots`): the chat names a request's block for it. */
+  rootOf?(task: Task): string }) {
   const lines = useWorkingLines();
   const next = useRef(0);
   if (!tasks.length) return null;
@@ -27,7 +29,8 @@ export function TimelineWorking({ tasks }: { tasks: readonly Task[] }) {
   const show = () => {
     const task = tasks[next.current % tasks.length]!;
     next.current += 1;
-    const row = chatRowOf(task.id);
+    // After a pause, a restart or a retry Scarlet works under a later attempt, and the block keeps its first one's name.
+    const row = chatRowOf(rootOf(task));
     if (!row) return;
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     row.scroll.scrollIntoView?.({ block: "center", behavior: still ? "auto" : "smooth" });

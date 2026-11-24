@@ -142,6 +142,40 @@ it("rejects unchanged content while accepting a rename on the same footage", asy
   expect((await renamed.json()).timeline.name).toBe("Interview");
 });
 
+it("lists each to-do of a save that named no edits as an edit of its own", async () => {
+  const { ctx } = workspace;
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "give me a list of b-roll and where", createdBy: { type: "human", name: "Editor" } });
+  const startedAt = new Date().toISOString();
+  ctx.repos.tasks.put({ ...task, state: "running", startedAt });
+  ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", path: "mic.wav", kind: "audio", duration: 20, hasAudio: true }, "ready");
+  proposeChange(ctx, localUser(ctx), project.id, { autoApprove: true, description: "Assemble",
+    ops: [{ op: "addClip", trackId: "a1", clip: { id: "raw", kind: "media", mediaId: "mic", timelineIn: 0, sourceIn: 0, sourceOut: 20 } }] });
+  const long = "B-roll on \"what happens when humans can't understand math anymore\": " + "the post that says no human understands it yet ".repeat(5);
+  const saved = await api("POST", `/projects/${project.id}/changes?summary=true`, { taskId: task.id, intent: "requested", description: "Left B-roll picks as To dos", skipRender: true,
+    ops: [{ op: "addMarker", marker: { id: "b1", time: 4, kind: "todo", text: "B-roll: the Clay Millennium Problems page." } },
+      { op: "addMarker", marker: { id: "b2", time: 12, kind: "todo", text: long } }] }, { [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: startedAt });
+  expect(saved.status, await saved.clone().text()).toBe(201);
+
+  const { edits } = await (await api("GET", `/projects/${project.id}/threads/${task.id}/edits`)).json() as
+    { edits: Array<{ label: string; marker?: boolean; check?: string; todo?: string; at?: number }> };
+  expect(edits.map(e => e.at)).toEqual([4, 12]);
+  expect(edits[0]).toMatchObject({ label: "B-roll: the Clay Millennium Problems page.", marker: true, todo: "B-roll: the Clay Millennium Problems page.", check: "B-roll: the Clay Millennium Problems page." });
+  expect(edits[1]!.label).toBe("B-roll on \"what happens when humans can't understand math anymore\"…");
+  expect(edits[1]!.label.endsWith("…")).toBe(true);
+  expect(edits[1]).toMatchObject({ marker: true, todo: long.trim() });
+
+  // One name for the lot is still a row a to-do: Scarlet's name stays only where it named one to-do alone.
+  const again = await api("POST", `/projects/${project.id}/changes?summary=true`, { taskId: task.id, intent: "requested", description: "Left more To dos", skipRender: true,
+    ops: [{ op: "addMarker", marker: { id: "b3", time: 6, kind: "todo", text: "Graphic: primes on a number line." } },
+      { op: "addMarker", marker: { id: "b4", time: 15, kind: "todo", text: "B-roll: the Move 37 clip." } },
+      { op: "addMarker", marker: { id: "b5", time: 18, kind: "todo", text: "B-roll: the Lean repo, scrolling." } }],
+    timelineEdits: [{ label: "B-roll plan", range: { start: 14, end: 19 } }, { label: "Primes graphic", range: { start: 6, end: 6 } }] }, { [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: startedAt });
+  expect(again.status, await again.clone().text()).toBe(201);
+  const all = (await (await api("GET", `/projects/${project.id}/threads/${task.id}/edits`)).json() as { edits: Array<{ label: string; at?: number }> }).edits;
+  expect(all.map(e => [e.at, e.label])).toEqual([[4, "B-roll: the Clay Millennium Problems page."], [6, "Primes graphic"], [12, edits[1]!.label],
+    [15, "B-roll: the Move 37 clip."], [18, "B-roll: the Lean repo, scrolling."]]);
+});
+
 it("records kept edits whose summary exceeds 180 characters or whose marker note exceeds 120", async () => {
   const { ctx } = workspace;
   const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "/dialogue-pass", createdBy: { type: "human", name: "Editor" } });

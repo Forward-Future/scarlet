@@ -77,7 +77,7 @@ export function timelineRoutes(ctx: Ctx) {
   r.post("/projects/:id/rejected-edits", async c => {
     const range = z.object({ start: z.number().nonnegative(), end: z.number().nonnegative() }).refine(r => r.end >= r.start);
     const body = await jsonBody(c, z.object({ expectedHead: z.string(), branch: z.string(), threadId: z.string(),
-      edits: z.array(z.object({ changeId: z.string(), spot: z.number().int().nonnegative(), label: z.string().trim().min(1), range, revised: z.boolean().optional(),
+      edits: z.array(z.object({ changeId: z.string(), spot: z.number().int().nonnegative(), label: z.string().trim().min(1), range, revised: z.boolean().optional(), marker: z.boolean().optional(),
         at: z.number().nonnegative().optional(), before: z.object({ version: z.string(), removed: range.refine(r => r.end > r.start) }).optional() })).min(1).max(32) }));
     const rejected = rejectEdits(ctx, c.var.user, c.req.param("id"), body.threadId, body.edits, body.expectedHead, body.branch);
     // The last Reject of what the request left the editor has its decisions read for a rule.

@@ -47,6 +47,8 @@ export const WebSource = z.object({
   capture: z.string().optional(),
   /** The part of the capture in the video. */
   region: FrameBox.optional(),
+  /** For a clip of a video on the web: the part of that video it is, in its own seconds. */
+  clip: z.object({ start: z.number().min(0), end: z.number().min(0) }).optional(),
 });
 export type WebSource = z.infer<typeof WebSource>;
 

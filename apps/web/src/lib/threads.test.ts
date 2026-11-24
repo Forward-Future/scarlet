@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task, ThreadEdit } from "@scarlet/shared";
 import type { Change, Note } from "@scarlet/timeline";
-import { appliedPassCuts, buildThreads, firstCutDeliveries, requestTarget, revisionTarget, threadConversation } from "./threads";
+import { appliedPassCuts, buildThreads, failureReason, firstCutDeliveries, requestTarget, revisionTarget, threadConversation } from "./threads";
 
 const t0 = Date.parse("2026-10-30T12:00:00Z");
 const at = (min: number) => new Date(t0 + min * 60_000).toISOString();
@@ -219,6 +219,23 @@ it("says why the host stopped a run and offers Resume, keeping what it saved", (
   expect(notice(legacy)).toMatchObject({ tone: "warn", text: "The edit ran out of time. What it saved is kept.", action: { taskId: legacy.id, label: "Resume agent" } });
 });
 
+it("says why a run failed when its host or model gave a reason that reads, and nothing more when it gave none", () => {
+  const said = (error: string | undefined) => {
+    const failed = task("broke", "failed", { error });
+    const [thread] = buildThreads({ tasks: [failed], changes: [], notes: [] });
+    return threadConversation(thread!, []).entries.find(e => e.kind === "system")?.text;
+  };
+  // What the model or its CLI said is the reason: its own sentence, or the last line it wrote before it ended.
+  expect(said("You’ve hit your usage limit · resets 3pm")).toBe("You’ve hit your usage limit · resets 3pm.");
+  expect(said("claude exited with code 1: Warning: no stdin\nError: Credit balance is too low")).toBe("Credit balance is too low.");
+  expect(failureReason("codex exited with code 1: not signed in to Codex")).toBe("Not signed in to Codex.");
+  // A code alone, a command, a path or a tool's output says nothing to the editor: the heading's word stands alone.
+  for (const error of [undefined, "claude exited with code 1", "render failed", "gemini exited with code 2: at run (/opt/agy/dist/cli.js:41:9)",
+    "codex exited with code 1: {\"type\":\"error\",\"status\":529}", "npm ERR! missing script"]) {
+    expect(said(error)).toBe("Scarlet couldn’t finish this edit.");
+  }
+});
+
 it("offers Resume for a run that failed after saving an edit", () => {
   const failed = task("broke", "failed", { error: "unexpected status 500", changeIds: ["saved"] });
   const saved = change("saved", "approved", { taskId: failed.id });
@@ -307,6 +324,29 @@ it("shows the saved first-cut reply and leaves a clean playback recheck out of t
   expect(said(finding)).toEqual([reply, finding]);
   const joinNote = allClear + " Review the clipped word at the join.";
   expect(said(joinNote)).toEqual([reply, joinNote]);
+});
+
+it("says a request's reply once after it was paused for a transcript and then finished", () => {
+  const said = (tasks: Task[]) => {
+    const [thread] = buildThreads({ tasks, changes: [], notes: [] });
+    return threadConversation(thread!, []).entries.flatMap(e => e.kind === "agent" ? [e.text] : []);
+  };
+  const context = { threadId: "pass", message: "/dialogue-pass" };
+  // The engine hands a pass's closing words on to the attempt that finishes it, so both attempts hold the same reply.
+  const reply = "First cut saved. Review the flagged demo holds.";
+  const paused = task("pass", "done", { context, reply, needsTranscripts: ["mic"], finishedAt: at(1) });
+  expect(said([paused])).toEqual([reply]);
+  const finished = task("finish", "done", { context, reply, resumeRootId: paused.id, createdAt: at(2), finishedAt: at(3) });
+  expect(said([{ ...paused, retryTaskId: finished.id }, finished])).toEqual([reply]);
+  // Any other request says what it came to in the end, not also what it said when it paused.
+  const waiting = task("ask", "done", { context: { threadId: "ask", message: "Caption the mic" }, summary: "The mic has no transcript yet.",
+    needsTranscripts: ["mic"], finishedAt: at(1), retryTaskId: "again" });
+  const again = task("again", "done", { context: waiting.context, summary: "Captioned the mic.", resumeRootId: waiting.id, createdAt: at(2), finishedAt: at(3) });
+  expect(said([waiting, again])).toEqual(["Captioned the mic."]);
+  // The same when each attempt applied an edit and closed with words about it.
+  const first = change("cam", "approved", { taskId: waiting.id }), second = change("mic", "approved", { taskId: again.id, createdAt: at(2), updatedAt: at(2) });
+  const [thread] = buildThreads({ tasks: [{ ...waiting, changeIds: [first.id] }, { ...again, changeIds: [second.id] }], changes: [first, second], notes: [] });
+  expect(threadConversation(thread!, []).entries.flatMap(e => e.kind === "agent" ? [e.text] : [])).toEqual(["Captioned the mic."]);
 });
 
 it("leaves out a dialogue part's review that the next part of the same pass took over", () => {

@@ -52,6 +52,7 @@ const toolActivity: Record<string, string> = {
   graphic_render: "Drawing a graphic",
   graphic_get: "Reading a graphic",
   web_capture: "Capturing a page from the web",
+  web_video: "Getting a video from the web",
   style_guide_save: "Saving the style guide",
   attachment_read: "Reading an attached file",
   export_otio: "Exporting the video for Resolve",
@@ -182,6 +183,9 @@ export function taskActivityLabel(event: TaskEvent, waits: ReadonlySet<string> =
 
 const technical = /[{}`\n\r\\]|<\/?[a-z!][^<>]*>|[-=]>|https?:\/\/|\b\w+_\w+|(?:^|\s)\/\S|\b(?:MCP|stdout|stderr|JSON|ffmpeg|ffprobe|stack trace|tool call|exit code|API endpoint)\b/i;
 const command = /(?:^|\s)(?:[$%] |(?:bash|zsh|git|npm|pnpm|npx|node|python3?|curl|cargo|sudo|exec_command|ls|cd|chmod|mkdir)\s+\S)|^(?:ran|running|executed) (?:the )?(?:terminal |shell )?commands?\b|&&|\|\|/i;
+
+/** Whether words read as a sentence for the editor, rather than a command, a path or what a tool printed. */
+export const readsPlain = (text: string) => !technical.test(text) && !command.test(text);
 
 const savedPlaybackAllClear = /^(?:the )?playback (?:audio|repeat) check found no (?:outstanding accidental )?repeats[.!]?(?: no edits were needed[.!]?)?$/i;
 

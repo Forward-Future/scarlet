@@ -105,6 +105,18 @@ export function callGoesTo<C>(rows: readonly (readonly ThreadEdit[])[], still: (
   ], from);
 }
 
+/**
+ * The full ("See all") list of a pass that waits, as ↑ and ↓ step through it: its edits' rows and its calls together,
+ * in time order as the chat lists them. An edit and a call at the same time list the edit first.
+ */
+export function seeAllOrder<C>(rows: readonly (readonly ThreadEdit[])[], calls: readonly { call: C; at: number }[]): ({ row: readonly ThreadEdit[] } | { call: C })[] {
+  const stops: { at: number; stop: { row: readonly ThreadEdit[] } | { call: C } }[] = [
+    ...rows.map(row => ({ at: rowAt(row), stop: { row } })),
+    ...calls.map(c => ({ at: c.at, stop: { call: c.call } })),
+  ];
+  return stops.sort((a, b) => a.at - b.at).map(s => s.stop);
+}
+
 export type PassForYouItem<C, E extends Omit<ThreadEdit, "at"> = ThreadEdit> =
   | { kind: "call"; call: C; at: number; num?: number; waiting: boolean }
   | { kind: "edit"; edit: E; at: number; num?: number; waiting: boolean };
@@ -182,9 +194,13 @@ export function decidedPassCalls(
         continue;
       }
       const cutReason = change.cutReasons?.[choice.index];
+      // Its time is on the video before the pass. The list is on the video as it is now, so the row moves earlier by
+      // the footage the pass took out ahead of it, as the pass's applied cuts did.
+      const before = assessment?.start ?? choice.start ?? cutReason?.start ?? 0;
+      const gone = (joins ?? []).reduce((sum, j) => j.removed.end <= before + 0.05 ? sum + (j.removed.end - j.removed.start) : sum, 0);
       decidedCallRows.push({
         key: `choice/${change.id}/${choice.index}`,
-        at: assessment?.start ?? choice.start ?? cutReason?.start ?? 0,
+        at: Math.max(0, before - gone),
         label: assessment?.summary || assessment?.reason || cutReason?.summary || cutReason?.reason || "Cut",
         approved,
       });
