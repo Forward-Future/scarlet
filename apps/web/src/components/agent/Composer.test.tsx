@@ -1415,7 +1415,7 @@ it("changes a queued request's words in the box, across its whole width, saving 
   expect(input.value).toBe("Keep the aside.");
   expect(document.activeElement).toBe(input);
   expect(input.selectionStart).toBe("Keep the aside.".length);
-  // Nothing sits before them: the tray's row says which request they are, and the box's own tag waits with its message.
+  // Nothing sits before them: the request's bubble in the chat says which it is, and the box's own tag waits with its message.
   expect(container.querySelector(".composer-tag")).toBeNull();
   expect(container.querySelector(".composer-row")?.firstElementChild?.classList.contains("composer-message")).toBe(true);
   expect(container.querySelector(".composer-destination")?.textContent).toBe("Changing the words of a queued request");

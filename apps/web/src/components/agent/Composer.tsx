@@ -46,8 +46,6 @@ interface Rewording { id: string; text: string; onChange(text: string): void; on
 export interface PausedAt { time: number; version?: string; mediaId?: string }
 
 interface ComposerProps {
-  /** What sits attached to the top of the message box: the requests queued behind the one Scarlet is on. */
-  tray?: ReactNode;
   /** What the message revises, as a tag inside the box before the text: "Cut at 2:05". Its × takes the target off. */
   targetTag?: string;
   /** Which of the questions that wait this answer is for, when Scarlet has asked several: "1 of 2". They are answered one at a time, in the order asked. */
@@ -61,7 +59,7 @@ interface ComposerProps {
   onRestoreTarget?(): boolean;
   /**
    * The box is changing the words of a request still in the queue instead of writing a message: it shows `text` alone,
-   * across its whole width, and sending saves them. The request's row in the tray says which it is, so the box has no
+   * across its whole width, and sending saves them. The request's bubble in the chat, lit, says which it is, so the box has no
    * tag then. Esc leaves them as they were. A message being written waits meanwhile in the store, and comes back once
    * the box is done with the queued one.
    */
@@ -81,7 +79,7 @@ interface ComposerProps {
   chipClock?: { duration: number; seek(time: number): void };
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, aimSlot, chipClock }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, aimSlot, chipClock }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -541,9 +539,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         </div>}
         {modelPicker && <div className="composer-model"><AgentChip threadInput={thread ? question ? "answer" : "reply" : undefined} /></div>}
       </div>
-      {tray}
       {/* Where the message goes (a cut, an edit, a moment, a stretch marked on the ruler) is a flush context header
-          on top of the box, under the queue's tray, so the box keeps its whole width for the words. */}
+          on top of the box, so the box keeps its whole width for the words. */}
       {aimItem && <div className="composer-aim-line">
         <ComposerAim item={aimItem} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
       </div>}
