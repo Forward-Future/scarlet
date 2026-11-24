@@ -73,6 +73,10 @@ describe("working row activity", () => {
     expect(editConfirmation([request, "$ ls -la", "Created `chg_123`.", "```sh\necho internal data\n```", result, "Done."].join("\n"), request)).toBe(result);
     expect(editConfirmation("From 0:00 to 29:39, the screen recording fills the frame with your face in the bottom right.")).toContain("your face in the bottom right.");
     expect(editConfirmation("git status\nffmpeg -i movie.mp4")).toBeUndefined();
+    // A web address is part of what Scarlet says; a command that fetches one is still left out.
+    const link = "The Kontorovich clip starts at 8:28: https://www.youtube.com/watch?v=zqzk43bSdDI&t=508s";
+    expect(editConfirmation(`Found both clips in your doc. ${link}`)).toBe(`Found both clips in your doc. ${link}.`);
+    expect(editConfirmation("curl https://example.com/export_html")).toBeUndefined();
     // "<1 s" and "> 3 s" are prose. A tag or an arrow is a transcript of the tools.
     expect(editConfirmation("I left both pauses. The one at 2:05 is <1 s, so cutting it would clip the breath. The one at 2:31 runs > 1 s."))
       .toBe("I left both pauses. The one at 2:05 is <1 s, so cutting it would clip the breath. The one at 2:31 runs > 1 s.");
