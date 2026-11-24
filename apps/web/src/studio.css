@@ -444,6 +444,27 @@
   .transcription-status { flex-direction: column; align-items: flex-start; }
   .transcription-status > [role="status"] { flex: none; }
 }
+/* Task models: one row per kind of work, its name over what counts as it, then its model and a quiet ×. */
+/* Its header has no control on the right, so the heading takes the card's width and says what it does on one line. */
+.task-models-preferences .transcription-header { grid-template-columns: minmax(0, 1fr); }
+.task-models-preferences .transcription-heading > div { min-width: 0; }
+.task-models-preferences .transcription-heading p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.task-models { margin: 0 20px; border-top: 1px solid var(--color-line); }
+.task-model { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 32%) auto; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid color-mix(in srgb, var(--color-line) 60%, transparent); }
+.task-model-text { display: grid; gap: 1px; min-width: 0; }
+.task-model-text input { width: 100%; min-width: 0; padding: 2px 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--color-fg); font: inherit; outline: none; text-overflow: ellipsis; }
+.task-model-text input:hover { border-color: var(--color-line); }
+.task-model-text input:focus { border-color: var(--color-line); background: var(--color-bg); }
+.task-model-text .task-model-name { font-size: 13px; font-weight: 500; }
+.task-model-text .task-model-description { font-size: 12px; color: var(--color-muted); }
+.task-model-description::placeholder { color: var(--color-dim); }
+.task-model-delete { width: 26px; height: 26px; color: var(--color-dim); }
+.task-models-add { margin: 8px 14px 14px; }
+@container (max-width: 570px) {
+  .task-model { grid-template-columns: minmax(0, 1fr) auto; }
+  .task-model-pick { grid-column: 1; grid-row: 2; }
+  .task-model-delete { grid-column: 2; grid-row: 1; }
+}
 .talking-to-you-field { display: block; box-sizing: border-box; width: calc(100% - 40px); margin: 0 20px 12px; padding: 10px 12px; border: 1px solid var(--color-line); font-size: 13px; line-height: 1.5; resize: vertical; min-height: 88px; }
 .about-settings { display: grid; gap: 20px; }
 .about-build {

@@ -6,7 +6,7 @@ import { api, errorMessage, UNEXPLAINED } from "../../lib/client";
 import { editKindWord } from "../../lib/editKind";
 import type { Moment } from "../../lib/editMoments";
 import { parseTimestamp } from "../../lib/format";
-import { ignorePageShortcut, isEditableTarget } from "../../lib/hotkeys";
+import { ignorePageShortcut, isAltClearRangeKey, isComposing, isEditableTarget } from "../../lib/hotkeys";
 import { editKey, keepEdits } from "../../lib/keptEdits";
 import { needNumbers } from "../../lib/needNumbers";
 import { savedChoices, type Call, type CutChoice } from "../../lib/passCalls";
@@ -381,16 +381,16 @@ export function useEscapeCloses(enabled: boolean, onClose: () => void) {
   }, [enabled]);
 }
 
-/** Clears a timeline marked range on Esc, ahead of anything else Esc would close, or on a short click outside the
- *  composer and the stage (the player, its card and the timeline), so the editor can play the range, pause and adjust
- *  it without losing it. */
+/** Clears a timeline marked range on Esc, Delete/Backspace, or Option/Alt+X (ahead of anything else Esc would close),
+ *  or on a short click outside the composer and the stage (the player, its card and the timeline), so the editor can
+ *  play the range, pause and adjust it without losing it. */
 export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () => void) {
   const clearRef = useRef(onClear);
   clearRef.current = onClear;
   useEffect(() => {
     if (!hasMarkedRange) return;
     let down: { x: number; y: number; id: number; away: boolean } | undefined;
-    const away = (target: EventTarget | null) => target instanceof Element && !target.closest(".composer-dock, .simple-stage, .timeline-range-loupe");
+    const away = (target: EventTarget | null) => target instanceof Element && !target.closest(".composer-dock, .simple-stage, .timeline-range-loupe, .timeline-range-menu");
     const press = (e: PointerEvent) => { down = e.isPrimary && e.button === 0 ? { x: e.clientX, y: e.clientY, id: e.pointerId, away: away(e.target) } : undefined; };
     const release = (e: PointerEvent) => {
       const was = down;
@@ -398,9 +398,15 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
       if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) clearRef.current();
     };
     const key = (e: KeyboardEvent) => {
-      // A popover that is open, full screen, the marking of a frame, or words being written take their own Esc first.
-      if (e.key !== "Escape" || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)
-        || document.querySelector("[data-escape-owner]") || inFullScreen() || marksTakeEscape(e)) return;
+      if (e.defaultPrevented || isEditableTarget(e.target) || isComposing(e)) return;
+      // An open dialog, menu, popover, full screen, or frame marking takes its own keys first.
+      if (document.querySelector('dialog[open], [role="dialog"], [role="menu"], [data-escape-owner], [data-shortcut-overlay]')) return;
+      const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
+      const escape = plain && e.key === "Escape";
+      const erase = plain && !e.shiftKey && (e.key === "Delete" || e.key === "Backspace");
+      const clearInOut = isAltClearRangeKey(e);
+      if (!escape && !erase && !clearInOut) return;
+      if ((escape && inFullScreen()) || marksTakeEscape(e)) return;
       e.preventDefault();
       clearRef.current();
     };

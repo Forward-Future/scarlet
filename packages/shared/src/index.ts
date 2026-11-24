@@ -1,6 +1,7 @@
 export * from "./api.js";
 export * from "./agents.js";
 export * from "./tasks.js";
+export * from "./taskModels.js";
 export * from "./changes.js";
 export * from "./learnings.js";
 export * from "./usage.js";

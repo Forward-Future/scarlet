@@ -13944,6 +13944,86 @@ it("takes a marked stretch off on a click in the chat, and keeps it through clic
   expect(marked()).toBeUndefined();
 });
 
+it("labels an edit a task model made with its kind of work and model, quietly in the card's row", async () => {
+  appliedEdits();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_approved_2"
+    ? { ...c, handedOff: { taskId: "motion-graphics", name: "Motion graphics", agent: "gemini", model: "gemini-3-pro" } } : c) };
+  useProjectStore.setState({ current: data });
+  const hosts = useHostsStore.getState();
+  const host = buildDb().hosts[0]!;
+  useHostsStore.setState({ hosts: [{ ...host, online: true, agents: [{ id: "gemini", installed: true, models: ["gemini-3-pro"], modelLabels: { "gemini-3-pro": "Gemini 3 Pro" } }] }] });
+  try {
+    await show();
+    await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
+    await act(async () => {});
+    const by = editPanel()!.querySelector(".edit-card-bar > .edit-card-by");
+    expect([by?.textContent, by?.getAttribute("title")]).toEqual(["Motion graphics · Gemini 3 Pro", "Done by Gemini 3 Pro, the model you chose for Motion graphics in Settings"]);
+    // An edit the chat's model made itself has no label.
+    data = { ...data, changes: data.changes.map(c => c.id === "chg_approved_2" ? { ...c, handedOff: undefined } : c) };
+    await act(async () => useProjectStore.setState({ current: data }));
+    expect(editPanel()!.querySelector(".edit-card-by")).toBeNull();
+  } finally {
+    await act(async () => useHostsStore.setState(hosts, true));
+  }
+});
+
+it("clears a marked stretch via its timeline × pill, ruler double-click, right-click menu, Delete, Backspace, and Option/Alt+X", async () => {
+  beforeClipReady();
+  await show();
+  const marked = () => (useUiStore.getState().agentContext as AgentContext | null)?.markedRange;
+
+  // Clicking × on the floating pill above the timeline range clears it while keeping an open edit intact.
+  await click(appliedRows()[1]!);
+  await act(async () => {});
+  const edit = useUiStore.getState().agentContext as AgentContext;
+  await markOnRuler(11, 16);
+  expect(marked()).toBeDefined();
+  expect(container.querySelector(".timeline-range-pill")).not.toBeNull();
+  await act(async () => { container.querySelector<HTMLButtonElement>(".timeline-range-clear")!.click(); });
+  expect(marked()).toBeUndefined();
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: edit.changeId });
+  expect(openTitle()).toBe("captions");
+
+  // Double-clicking the ruler clears the range.
+  await markOnRuler(11, 16);
+  expect(marked()).toBeDefined();
+  await act(async () => {
+    container.querySelector(".timeline-range-zone")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  });
+  expect(marked()).toBeUndefined();
+
+  // Right-clicking the range opens the menu; Esc closes only the menu, then Clear range clears the stretch.
+  await markOnRuler(11, 16);
+  expect(marked()).toBeDefined();
+  await act(async () => {
+    container.querySelector(".timeline-range-pill")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 10 }));
+  });
+  const menu = () => document.querySelector<HTMLElement>('[role="menu"][aria-label="Marked range"]');
+  expect(menu()).not.toBeNull();
+  await press("Escape");
+  expect(menu()).toBeNull();
+  expect(marked()).toBeDefined();
+  await act(async () => {
+    container.querySelector(".timeline-range-pill")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 10 }));
+  });
+  await act(async () => { menu()!.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click(); });
+  expect(marked()).toBeUndefined();
+
+  // Delete, Backspace, and Option/Alt+X (macOS reports `≈` with code KeyX) clear the stretch from outside the box.
+  for (const init of [
+    { key: "Delete" },
+    { key: "Backspace" },
+    { key: "x", altKey: true },
+    { key: "≈", code: "KeyX", altKey: true },
+  ]) {
+    await markOnRuler(11, 16);
+    expect(marked()).toBeDefined();
+    await act(async () => { (document.activeElement as HTMLElement | null)?.blur?.(); });
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+    expect(marked()).toBeUndefined();
+  }
+});
+
 it("puts a marked stretch on the message beside the edit that's open, which stays what the message revises", async () => {
   beforeClipReady();
   await show();

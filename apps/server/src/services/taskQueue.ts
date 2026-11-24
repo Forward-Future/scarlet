@@ -55,10 +55,10 @@ function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: stri
   const rows = ctx.db.prepare(`SELECT q.id, q.project_id, q.kind, q.json, q.created_at, p.editing_paused,
     coalesce(json_extract(q.json, '$.rewordingUntil') > ?, 0) AS rewording FROM tasks q JOIN projects p ON p.id = q.project_id
     LEFT JOIN tasks root ON root.id = json_extract(q.json, '$.resumeRootId')
-    LEFT JOIN tasks asker ON q.kind IN ('area_check', 'listen_check') AND asker.id = json_extract(q.json, '$.context.checksTaskId')
+    LEFT JOIN tasks asker ON q.kind IN ('area_check', 'listen_check', 'hand_off') AND asker.id = json_extract(q.json, '$.context.checksTaskId')
     WHERE p.deleted_at IS NULL AND q.state = 'queued' AND ${filter}
     AND (p.editing_paused = 0 OR q.kind NOT IN ${HELD_WHILE_PAUSED})
-    AND (q.kind NOT IN ('area_check', 'listen_check') OR asker.state IN ('claimed', 'running')) AND q.kind != 'broll_make'
+    AND (q.kind NOT IN ('area_check', 'listen_check', 'hand_off') OR asker.state IN ('claimed', 'running')) AND q.kind != 'broll_make'
     ORDER BY coalesce(asker.state IN ('claimed', 'running'), 0) DESC,
       coalesce(root.created_at, q.created_at), coalesce(root.rowid, q.rowid), q.rowid`)
     .iterate(checkedAt, ...filterArgs) as Iterable<{

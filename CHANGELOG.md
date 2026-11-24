@@ -12,6 +12,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - When Scarlet asks you something, the question now sits on top of the message box instead of in the chat, and when it has a few clear answers you can pick one with a single click or type your own.
 - Your messages are grey bubbles on the right of the chat, and Scarlet's replies are plain text on the left.
 - Requests waiting their turn show in the chat as bubbles above the message box, marked Up next or Queued.
+- Settings › Models has Task models: choose which model does each kind of work, such as Cutting or Motion graphics, or add your own. The chat's model hands that work to the model you chose, and each edit made that way says which model made it on its card.
 - When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.
 - A transcript fix on words that run from one speaker's line into the next keeps each word with the speaker who said it.
 - A transcript fix that adds a word, such as Claude to Claude Code, no longer doubles the word where the transcript already said it right (“Claude Code Code”), and making the fix again changes nothing.

@@ -118,8 +118,15 @@ export function useComparisonShortcut(enabled: boolean, toggle: () => void, owne
   }, undefined, owner);
 }
 
+/** True for Option+X / Alt+X (standard Clear In/Out). Checks `code` too because macOS reports `≈` for Option+X. */
+export function isAltClearRangeKey(e: { key: string; code?: string; altKey: boolean; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): boolean {
+  return e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.code === "KeyX" || e.key.toLowerCase() === "x");
+}
+
 /** Stands in the list for a shortcut's own key, which is ⌘ on a Mac and Ctrl on Windows. The list shows the one in use. */
 export const PLATFORM_KEY = "Mod";
+/** Stands in the list for Option on a Mac and Alt on Windows/Linux. */
+export const ALT_KEY = "Alt";
 
 export const SHORTCUTS: Array<{ keys: string[]; what: string; where: string }> = [
   { keys: [PLATFORM_KEY, ","], what: "Open Settings", where: "Everywhere" },
@@ -138,6 +145,7 @@ export const SHORTCUTS: Array<{ keys: string[]; what: string; where: string }> =
   { keys: ["←", "→"], what: "Back / forward 1 second (1 frame with Shift)", where: "Preview" },
   { keys: ["L"], what: "Faster playback, back to 0.5× after 2× (Shift for slower)", where: "Preview" },
   { keys: ["−", "+"], what: "Zoom the timeline out / in (0 to fit)", where: "Timeline" },
+  { keys: [ALT_KEY, "X"], what: "Clear the marked range (also Esc or Delete)", where: "Timeline" },
   { keys: ["N"], what: "Type a message at the playhead", where: "In a project" },
   { keys: ["Esc"], what: "Close what is on screen", where: "Edit, call or suggestion" },
   { keys: ["Esc"], what: "Close a popover or leave Settings", where: "Everywhere" },

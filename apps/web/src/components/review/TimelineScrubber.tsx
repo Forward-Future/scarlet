@@ -416,6 +416,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     <TimelineSlider ref={slider} className={hotGap ? "timeline-slider is-gap-aimed" : "timeline-slider"} playhead={playhead} start={start} end={end} from={from} span={span}
       width={width} zoomSpace={zoomSpace} drag={drag} skippedRanges={skippedRanges} loupe={!!lens} fps={fps} selectPosition={selectPosition} tabIndex={total ? 0 : -1} aria-disabled={!total}
       aria-label="Position in the video" aria-description="Drag up from the picture or waveform to scrub one frame at a time."
+      onContextMenu={onRange ? marking.onContextMenu : undefined}
       onPointerDown={e => {
         const directGap = pressedGap.current;
         pressedGap.current = undefined;
@@ -477,7 +478,13 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
       onPointerLeave={() => setHotGap(undefined)}
       onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}>
       <TimelineRuler start={from} duration={span} width={width} endInset={zoomSpace} />
-      {onRange && total > 0 && <div aria-hidden="true" className="timeline-range-zone" title="Drag to mark a range for your message (or Shift + drag anywhere)" />}
+      {onRange && total > 0 && <div aria-hidden="true" className="timeline-range-zone"
+        title={range ? "Drag to mark a new range · double-click to clear" : "Drag to mark a range for your message (or Shift + drag anywhere)"}
+        onDoubleClick={e => {
+          if (!range) return;
+          e.stopPropagation();
+          onRange(undefined);
+        }} />}
       <div className="timeline-lanes">
         {mediaWindows.map((sample, i) => {
           const projection = sample.span !== span || sample.from !== from

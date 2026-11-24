@@ -2,6 +2,7 @@ import { basename, join } from "node:path";
 import { z } from "zod/v3";
 import {
   apiPathId,
+  isProjectEditTask,
   QuestionChoices,
   skillEditTarget,
   skillTaskTarget,
@@ -189,11 +190,18 @@ export interface ExportAndTaskToolsDeps {
   getHeader(): Promise<{ project: { head?: string | null } }>;
   artifactDir(): Promise<string> | string;
   postEvent(ev: Omit<TaskEvent, "taskId">): Promise<{ posted: boolean; error?: string }>;
+  /** The kinds of work the editor gave other models, signed in now (Task models). A request with any has `hand_off`. */
+  taskModels?: TaskModelOffer[];
+  /** Seconds a wait inside the call under way may take (`waitLeft` in server.ts). */
+  waitLeft(margin: number, most?: number): number;
 }
+
+/** A kind of work the editor gave another model, as the engine tells a request of it. */
+export interface TaskModelOffer { id: string; name: string; description?: string; by: { agent: string; model?: string; label?: string } }
 
 /** Registers export_otio, task events, and skills/learnings (immediately after registerGraphics). */
 export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
-  const { tool, client, projectId, taskId, startedAt, task, agent, getHeader, artifactDir, postEvent } = deps;
+  const { tool, client, projectId, taskId, startedAt, task, agent, getHeader, artifactDir, postEvent, taskModels, waitLeft } = deps;
 
   tool(
     "export_otio",
@@ -250,6 +258,40 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
       );
     },
   );
+
+  // -- task models ------------------------------------------------------------
+
+  // The kinds of work the editor gave other models in Settings (Task models). A request hands each such piece to its model.
+  const offers = taskModels ?? [];
+  if (offers.length && task && taskId && isProjectEditTask(task)) {
+    const nameOf = (by: { agent: string; model?: string; label?: string }) => by.label ?? (by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent);
+    const told = new Set<string>();
+    tool(
+      "hand_off",
+      "Hand a piece of this request to the model the editor chose for that kind of work. The editor gave these kinds of work to other models in Settings, each with what counts as it:\n" +
+        offers.map(o => `- ${o.name} (${nameOf(o.by)})${o.description ? `: ${o.description}` : ""}`).join("\n") +
+        "\nWhen part of the request is one of these, don't do that part yourself: hand it off, by the kind's name, with a brief that says exactly what to make or change, where on the timeline (in seconds), and what it needs from the editor's words or from your own work so far. That model works on this project with Scarlet's tools and saves its edits into this request, and you hear back what it saved and said. It can't ask the editor anything. A hand-off takes minutes, and several can run at once: while one is still working, call again with its handoffId. Its edits change the timeline, so read it again before your next save. Do the rest of the request yourself, and say in your closing words what each model did.",
+      { type: z.string().trim().min(1).max(40).optional().describe("The kind of work, by its name above"),
+        brief: z.string().trim().min(1).max(8000).optional().describe("What the model should make or change, where, and what it needs to know"),
+        handoffId: z.string().min(1).optional().describe("A hand-off already under way, to wait for it") },
+      async ({ type, brief, handoffId }) => {
+        if (!handoffId && (!type || !brief)) return text("Give the kind of work and a brief, or the handoffId of a hand-off under way.");
+        const result = await client.handOff(projectId, { taskId, ...(type && { type }), ...(brief && { brief }), ...(handoffId && { handoffId }) }, waitLeft(10, 240));
+        if (result.state === "unavailable") return text(result.reason);
+        const by = nameOf(result.by);
+        const kind = offers.find(o => o.id === type || o.name.toLowerCase() === type?.toLowerCase())?.name ?? type ?? "the work";
+        // The chat says once that the work went to another model.
+        if (!told.has(result.handoffId) && result.state !== "failed") {
+          told.add(result.handoffId);
+          await postEvent({ type: "log", text: `Handed ${kind.toLowerCase()} to ${by}.`, data: { kind: "editor_progress", activity: "Handing off" } });
+        }
+        if (result.state === "done") return json({ handoffId: result.handoffId, by, saved: result.changeIds, said: result.summary,
+          next: result.changeIds.length ? "Read the timeline again before your next save: these edits changed it." : undefined });
+        if (result.state === "working") return text(`${by} is still working on it (handoffId ${result.handoffId}). Carry on with the rest of the request, then call hand_off again with this handoffId for what it saved.`);
+        return text(`${by} couldn't finish it (handoffId ${result.handoffId}): ${result.error} Do that part yourself.`);
+      },
+    );
+  }
 
   // -- skills ---------------------------------------------------------------
 

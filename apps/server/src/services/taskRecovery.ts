@@ -52,7 +52,7 @@ function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, 
   const again = quit || lost < LOST_WORKER_ATTEMPTS;
   let carriesOn = false;
   // A learning check cut short isn't run again: its request has moved on, and the next message is read anyway.
-  if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check" && saved.kind !== "area_check" && saved.kind !== "listen_check") {
+  if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check" && saved.kind !== "area_check" && saved.kind !== "listen_check" && saved.kind !== "hand_off") {
     try {
       // All of the next attempt or none of it: one left half made would run beside a run that still offers Resume.
       ctx.db.savepoint(() => resumeTask(ctx, saved, {}));
