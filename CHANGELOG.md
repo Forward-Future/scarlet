@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 24, 2026
 
 - Settings › Models has Task models: choose which model does each kind of work, such as Cutting or Motion graphics, or add your own. The chat's model hands that work to the model you chose, and each edit made that way says which model made it on its card.
+- A request's list of edits now has more room under its For you, Working and Done tabs, so the first row no longer sits right against them.
 - When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.
 - A transcript fix on words that run from one speaker's line into the next keeps each word with the speaker who said it.
 - A transcript fix that adds a word, such as Claude to Claude Code, no longer doubles the word where the transcript already said it right (“Claude Code Code”), and making the fix again changes nothing.
@@ -167,6 +168,17 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
 - An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
 - Searching the Transcript now finds a word with an apostrophe in it whether it was written with a straight or a curly one, so “Wendy’s” finds “Wendy's” and “don't” finds “don’t”.
+- With motion reduced, the Transcript now follows the playhead without gliding as the video plays.
+- A range typed with a plain hyphen, like “cut 1:20-1:45”, now marks its end time in the message box and on the timeline, not only its start.
+- With a call open, the Transcript shows the words around it as the player does, so pressing a word lands where it should and “Ask about this” on words in the call stays about that call.
+- Add another plan, from the empty library, stays open instead of flickering on and off.
+- When Scarlet reads a music track, its last section now ends where the track ends instead of up to a second past it.
+- Scarlet now counts what you ask to change on an edit it already made when it learns a rule from your decisions.
+- The sound picture Scarlet looks at around a cut now lines up with the words and the cut on recordings whose sound starts a moment after the picture, as phone and camera videos often do.
+- Opened from the Dock, Finder or the Start menu, Scarlet can now use the FFmpeg that Setup installed in the commands it runs while editing.
+- When Scarlet checks where a long screen recording's picture changes around one moment, it reads that moment first instead of working through the whole recording from the start, so the answer comes back in seconds.
+- When an update fails to download, Scarlet waits longer before downloading it again instead of starting over every few minutes, and Check for updates in Settings still tries again right away.
+- A first cut asked for while Scarlet is still reading a new recording ahead of time no longer reads the same minute of it twice, so it gets through the recording sooner.
 
 ## November 22, 2026
 

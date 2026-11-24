@@ -157,8 +157,8 @@ export interface ChatActions {
 /**
  * Which of a request's lists is open. A request with nothing for the editor to review has one list, every edit
  * ("all"). One with review rows has three tabs: For you ("need", or none: it is the one shown until another is
- * pressed), Working and Done. There "all" is For you with its optional line open, the edits Scarlet didn't flag listed
- * under the ones that wait: the timeline shows them as it does for a list of every edit.
+ * pressed), Working and Done. There "all" is For you with low risk edits included, the edits Scarlet didn't flag listed
+ * among the ones that wait, each in its place in the video: the timeline shows them as it does for a list of every edit.
  */
 export type OpenList = "all" | "need" | "working" | "done" | undefined;
 export type PassList = [open: OpenList, setOpen: Dispatch<SetStateAction<OpenList>>];

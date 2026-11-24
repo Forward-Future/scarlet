@@ -17,7 +17,7 @@ import { ffmpeg, ffmpegPosition } from "../render/ffmpeg.js";
 import { AnalysisCache } from "./analysisCache.js";
 
 /** Bump when what a reading says changes: readings are kept by it. */
-export const MUSIC_BEATS_VERSION = 1;
+export const MUSIC_BEATS_VERSION = 2;
 export const SAMPLE_RATE = 11025;
 const FRAME = 512;
 const HOP = 128;
@@ -212,7 +212,7 @@ function levelSteps(samples: Float32Array, step: number) {
  * spread, found exactly by dynamic programming. A stretch that holds is flat, a build rises, and where one line ends
  * and the next starts higher or lower is a step. Each boundary goes on the beat (or bar) nearest it within a step.
  */
-function energySections(power: number[], step: number, from: number, snap: number[], levelDb: (start: number, end: number) => number, bar = 2): MusicSection[] {
+function energySections(power: number[], step: number, from: number, to: number, snap: number[], levelDb: (start: number, end: number) => number, bar = 2): MusicSection[] {
   const n = power.length;
   if (!n) return [];
   // Music pulses within each bar; over a bar its level is what a listener hears as loud or quiet. A window at either
@@ -255,12 +255,11 @@ function energySections(power: number[], step: number, from: number, snap: numbe
     return snap.reduce<number | undefined>((best, s) => Math.abs(s - t) <= reach && (best === undefined || Math.abs(s - t) < Math.abs(best - t)) ? s : best, undefined) ?? t;
   };
   const fits = edges.slice(0, -1).map((a, k) => ({ a, b: edges[k + 1]!, ...line(a, edges[k + 1]!) }));
-  const end = from + n * step;
   const starts = fits.map(({ a }, k) => k ? at(a) : from);
   return fits.map(({ b, slope, a }, k) => {
-    const start = starts[k]!, stop = starts[k + 1] ?? end;
+    const start = starts[k]!, stop = starts[k + 1] ?? to;
     // The step at the start, on the level as it was: the bar after the boundary against the bar before it.
-    const jump = k ? levelDb(start, Math.min(end, start + bar)) - levelDb(Math.max(from, start - bar), start) : undefined;
+    const jump = k ? levelDb(start, Math.min(to, start + bar)) - levelDb(Math.max(from, start - bar), start) : undefined;
     return { start: round3(start), end: round3(stop), levelDb: round1(levelDb(start, stop)),
       changeDb: round1(slope * (b - a - 1)), ...(jump !== undefined && { jumpDb: round1(jump) }) };
   });
@@ -313,7 +312,7 @@ export function analyzeMusic(samples: Float32Array, from = 0): MusicReading {
   const time = (frame: number) => round3(from + placeOnAttack(envelope, frame));
   if (!found || found.confidence < 0.1) {
     return { from, to, tempo: { unclear: found ? "The onsets don't repeat at one period: the music has no steady beat here." : "Too short, or too quiet, to read a beat: give a stretch of at least 8 seconds of music." },
-      beats: [], sections: energySections(power, step, from, [], level), levels };
+      beats: [], sections: energySections(power, step, from, to, [], level), levels };
   }
   const frames = trackBeats(onsets, found.period);
   const beats = frames.map(time);
@@ -329,7 +328,7 @@ export function analyzeMusic(samples: Float32Array, from = 0): MusicReading {
   const downbeats = barsClear ? beats.filter((_, i) => (i - bar!.phase) % beatsPerBar === 0) : undefined;
   return { from, to, tempo: { bpm: round1(bpm), confidence: round3(found.confidence), alternatives: found.alternatives.map(round1) },
     beatSeconds: round3(span * HOP_SECONDS), beats, meter, ...(downbeats && { downbeats }),
-    sections: energySections(power, step, from, downbeats ?? beats, level,
+    sections: energySections(power, step, from, to, downbeats ?? beats, level,
       Math.min(4, Math.max(1, span * HOP_SECONDS * beatsPerBar))), levels };
 }
 
