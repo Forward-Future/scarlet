@@ -38,7 +38,7 @@ const mediaDuration = (el: HTMLVideoElement) => clock?.duration ?? stream?.durat
  * at its end, and from then on, or once the editor picks a point on the timeline, the video plays until they pause it.
  * Seeks go anywhere.
  */
-let passage: (TimeRange & { fps: number }) | undefined;
+let passage: (TimeRange & { fps: number; skips?: TimeRange[] }) | undefined;
 /** Playback ran to the passage's end and stopped there. The editor didn't pause it. */
 let ranOut = false;
 
@@ -141,6 +141,13 @@ function readClock(el: HTMLVideoElement) {
   if (passage && (!el.paused || el.ended) && !el.seeking) {
     const prev = lastClock;
     lastClock = t;
+    // Footage a waiting call takes out plays as Scarlet staged it: stepped over, as the video will run.
+    const skip = passage.skips?.find(s => t >= s.start - 0.5 / passage!.fps && t < s.end - 0.5 / passage!.fps);
+    if (skip) {
+      playbackLog("transport step-over", { t, from: skip.start, to: skip.end, staged: true });
+      player.seek(skip.end, true);
+      return;
+    }
     // Playing across the end stops there. Played on from it, or from a point picked past it, nothing stops it.
     if (!through && prev !== undefined && prev < passage.end && t >= passage.end) {
       playbackLog("transport passage-end", { t, end: passage.end });
@@ -307,14 +314,14 @@ export const player = {
    * A thread selection owns the bounded transport until its view releases it. `again` takes up the passage the
    * editor is already on, after something around it changed: it stays where it is, and plays only if it was playing.
    */
-  previewRange(range: TimeRange, fps: number, stillAt?: number, again = false, picked = false) {
+  previewRange(range: TimeRange, fps: number, stillAt?: number, again = false, picked = false, skips?: TimeRange[]) {
     const resume = again && (carry || isPlaying());
     const ended = again && (ranOut || endedPassage);
     endedPassage = false;
     playbackLog("transport passage", { start: range.start, end: range.end, stillAt, again, resume, picked: picked || undefined, at: usePlayerStore.getState().time, by: calledBy(2) });
     this.pause();
     audition = undefined;
-    const owned = { ...range, fps };
+    const owned = { start: range.start, end: range.end, fps, ...skips?.length && { skips } };
     passage = owned;
     ranOut = false;
     // The same passage set up again keeps what the editor did with it. A new one stops at its end, unless they

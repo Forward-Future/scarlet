@@ -64,7 +64,7 @@ import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError 
 import { TimelineWorking } from "../components/review/TimelineWorking";
 import { Turn } from "./simple/Turn";
 import { useCallListen } from "./simple/useCallListen";
-import { useAppliedCut, type AppliedCutSide } from "./simple/useAppliedCut";
+import { useAppliedCut, type AppliedCutSide, type StagedCall } from "./simple/useAppliedCut";
 import { useCallCardShortcuts, useCarryingFootage, useChatAutoFollow, useDraftTimeline, useEditCardShortcuts, useLandingTracker, useOutsideClearMarkedRange, usePassCallNumbers, usePassChoices, useProjectBookmark, useEscapeCloses, useUndoShortcut, useWatchedMomentAutoKeep } from "./simple/workspaceHooks";
 import "../simple.css";
 
@@ -976,12 +976,28 @@ export function SimpleWorkspace() {
   // Keep (K) records that the edit was reviewed and moves on to the next flagged edit that hasn't been; Revise (R) changes this one.
   const reviewingEdit = shownEdit && shownChange && focusThread ? shownEdit : undefined;
   const threadEdits = threadTimeline.edits;
+  // While another edit is open, the calls still waiting on the editor play as Scarlet staged them, their footage
+  // stepped over on After, and the timeline shows each as a gap with its number: the video round the edit is the one
+  // it will be, and a retake a call takes out doesn't look missed (the editor asked for it, 2026-11-23). A call Scarlet
+  // would leave in, one revised into an edit of its own, or one that can't be placed on the video now plays as it is.
+  const stagedKey = reviewingEdit && pass && !suggestion && !listening && !pinnedCallVersion && !placing
+    ? waitingCalls.flatMap(a => {
+      if (approves(a) !== "cut" || pass.cutEdits?.some(c => c.index === a.index)) return [];
+      const at = placeCut(a);
+      return at && at.end > at.start ? [`${a.index}:${callNo.get(a.index) ?? ""}:${at.start}:${at.end}`] : [];
+    }).join(",") : "";
+  const stagedCalls = useMemo<StagedCall[]>(() => !stagedKey || !pass ? [] : stagedKey.split(",").map(part => {
+    const [index, n, start, end] = part.split(":");
+    const call = allCalls.find(a => a.index === Number(index));
+    return { n: n ? Number(n) : undefined, removed: { start: Number(start), end: Number(end) },
+      open: () => { if (call) actions.listen(pass, call); } };
+  }), [stagedKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const {
     cutBase, madeBy, afterSource, appliedAfterVersion, preparedEdit, rebasedCut, beforeCut, cutBefore, beforeTimeline, beforeDuration,
     cutKey, appliedCut, shownSide, appliedSide, visiting, afterTimeline, otherEdits, otherCuts, afterListen, appliedListen, appliedJoined,
-    appliedCache, preparedAfter, joinPending, cutLoadError, heardPick, chooseCutSide,
+    appliedCache, preparedAfter, joinPending, cutLoadError, heardPick, chooseCutSide, stagedAround, playedListen,
   } = useAppliedCut({ current, reviewingEdit, focusThread, threadTimeline, threadEdits, head, timeline, fps, cutSide, setCutSide,
-    preparedCandidates, afterOf, editPlaybackKey, viewBaseOf, quietOpen });
+    preparedCandidates, afterOf, editPlaybackKey, viewBaseOf, quietOpen, stagedCalls });
   // The player for After: the version with the join in its media, once it's known how it plays.
   const joinedListen = appliedCut ? appliedJoined : callView ? viewJoined : listenJoined;
   const joinedFile = appliedCut ? appliedCache : listenCache;
@@ -998,6 +1014,13 @@ export function SimpleWorkspace() {
     title: `Cut at ${at} · ${lengthLabel(removed.end - removed.start)}`, summary: label, label: `Cut at ${at}`, shortLabel: at,
     skipped: appliedSide === "after",
     open: edit && focusThread ? () => actions.openEdit(focusThread, edit, undefined, true) : undefined }));
+  // A waiting call's cut round the open edit, played as staged: grey as a cut, edged in amber, named by its number.
+  // A press opens the call, on either side.
+  const stagedGap = (c: StagedCall, skipped: boolean): TimelineGap => ({ start: c.removed.start, end: c.removed.end,
+    title: `${c.n ? `Cut ${c.n}` : "Cut"} · ${lengthLabel(c.removed.end - c.removed.start)}`, summary: "Waits for your call",
+    label: c.n ? `Cut ${c.n}` : "Cut", shortLabel: c.n ? String(c.n) : undefined, skipped, call: true, open: c.open });
+  const stagedGaps = cutKey ? stagedAround.map(c => stagedGap(c, appliedSide === "after"))
+    : !callView ? stagedCalls.map(c => stagedGap(c, true)) : [];
   // A call shown where the cuts around it still have their footage marks them the same way, by their time on the
   // working cut and with Scarlet's words for the one that made each.
   const callGaps: TimelineGap[] | undefined = callView?.shown.map(({ at, removed }) => {
@@ -1009,6 +1032,7 @@ export function SimpleWorkspace() {
       open: made?.thread ? () => actions.openEdit(made.thread!, made.edit, undefined, true) : undefined };
   });
   const hearInBefore = (gap: TimelineGap, time: number) => {
+    if (gap.call) return gap.open?.();
     if (callGaps) return hearGapInCall(gap, time);
     const other = otherEdits.find(o => o.removed.start === gap.start && o.removed.end === gap.end);
     if (!cutKey || !other) return;
@@ -2342,7 +2366,12 @@ export function SimpleWorkspace() {
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}
           <CutPreview simple={{ seekFromMessage, typedTimes, marks: source || beforeCut ? [] : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? editCard ?? callCard ?? suggestCard, foot: <><TimelineWorking tasks={timelineWork} rootOf={rootOf} />{undoFoot}</>,
-            gaps: cutKey ? gaps : callGaps, skippedRanges: joinedPlayer?.clock.removed ?? stepsOver(appliedListen ?? playedAudition),
+            gaps: cutKey ? [...gaps, ...stagedGaps] : callGaps ?? (stagedGaps.length ? stagedGaps : undefined),
+            skippedRanges: cutKey || callView || !stagedCalls.length
+              ? joinedPlayer?.clock.removed && playedListen !== appliedListen ? [...joinedPlayer.clock.removed, ...stagedAround.map(c => c.removed)]
+                : joinedPlayer?.clock.removed ?? stepsOver(playedListen ?? playedAudition)
+              : stagedCalls.map(c => c.removed),
+            passageSkips: !cutKey && !callView && stagedCalls.length ? stagedCalls.map(c => c.removed) : undefined,
             nextCutPlayback, cutPlayback: appliedListen && beforeTimeline && cutKey && appliedCut
               ? { key: editPlaybackKey(reviewingEdit!, appliedAfterVersion, cutBase), start: appliedListen.start, side: appliedSide,
                 beforeWindow: preparedEdit?.before.window, afterWindow: preparedAfter?.window,

@@ -6889,7 +6889,7 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   await click(transcriptLink());
   expect(openHead()!.querySelector(".edit-passage")).toBeNull();
   expect(container.querySelector(".simple-timeline-bracket")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // After steps over the shaded passage, so a click inside it plays it in Before from that point, and the icon lights
   // by itself, with a flash. Without layout the click lands on the passage's first frame.
   const band = () => container.querySelector<HTMLElement>(".simple-timeline-band")!;
@@ -6907,7 +6907,7 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   await press("\\");
   expect(beforeIcon(bar)).toEqual(["BeforeAfter\\", "Before", "false", "Play Before (\\)"]);
   expect(bar.querySelector(".edit-card-before.is-flash")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // \\ switches to Before, which plays straight through the cut.
   await press("\\");
   expect(beforeIcon(bar)).toEqual(["BeforeAfter\\", "Before", "true", "Back to After (\\)"]);
@@ -12429,6 +12429,28 @@ const oneAppliedCut = () => {
       beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
   ] });
 };
+it("plays the calls still waiting round an open edit as Scarlet staged them, and shows each as a gap that opens it", async () => {
+  // Retakes a waiting call takes out looked missed while the editor reviewed a zoom over them (2026-11-23).
+  flagged();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: c.cutAssessments!.map(a =>
+    a.index === 1 ? { ...a, start: 9, end: 11 } : a) } : c) };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: data.project.head!, edits: [
+    { changeId: "chg_approved_2", spot: 0, label: "Zoom in on the price", range: { start: 8, end: 14 }, previous: [] },
+  ] });
+  const passage = vi.spyOn(player, "previewRange");
+  await show();
+  await click(buttonIn(turnFor("chg_approved_2"), "See edit")!);
+  await act(async () => {});
+  expect(passage.mock.lastCall?.[5]).toEqual([{ start: 9, end: 11 }, { start: 598, end: 602.5 }]);
+  const gap = container.querySelector<HTMLElement>(".simple-timeline-gap.is-call")!;
+  expect(gap.classList.contains("is-skipped")).toBe(true);
+  expect(gap.textContent).toBe("Cut 1");
+  // A press on it opens the call.
+  await act(async () => { gap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true })); });
+  await act(async () => {});
+  expect(container.querySelector(".edit-card")?.textContent).toContain("Cut 1");
+});
 it("says what each cut took out on one line, however many cuts the editor steps through", async () => {
   flagged();
   useProjectStore.setState({ current: data });
@@ -12451,6 +12473,9 @@ it("says what each cut took out on one line, however many cuts the editor steps 
     expect(editPanel()!.querySelectorAll(".edit-card-what")).toHaveLength(1);
   }
 });
+
+/** The waiting pass's two calls, which an open applied cut's After steps over as staged once the editor plays on. */
+const waitingCallCuts = [{ start: 230, end: 233 }, { start: 598, end: 602.5 }];
 
 const cutRow = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-edits .simple-edit")!;
 
@@ -12476,7 +12501,7 @@ it("opens a cut unlit with its words folded when it is opened again, after Befor
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing “Keep the image test” · After");
   expect(transcriptLink().getAttribute("aria-expanded")).toBe("false");
   expect(openHead()!.querySelector(".edit-passage")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // A click in the red leaves it on Before from that point. Its open row pressed again starts it over as the video
   // runs, unlit: the card stays up, with the timeline still on the cut.
   await act(async () => { container.querySelector<HTMLElement>(".simple-timeline-band")!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, bubbles: true })); });
@@ -12487,7 +12512,7 @@ it("opens a cut unlit with its words folded when it is opened again, after Befor
   expect(beforeIcon(editPanel()!)).toEqual(["BeforeAfter\\", "Before", "false", "Play Before (\\)"]);
   expect(audition.mock.calls.length).toBe(plays + 1);
   // After, from the top of the listen: it steps over the cut again.
-  expect(audition.mock.lastCall?.[0]).toEqual({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] });
+  expect(audition.mock.lastCall?.[0]).toEqual({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts });
   expect(container.querySelector(".simple-timeline-band")?.getAttribute("style")).toBe(band);
   // Closed with Esc and opened again: no flash and no clicked point.
   await press("Escape");
@@ -12633,7 +12658,7 @@ it("leaves the Before key alone until the version before a cut has arrived", asy
   await act(async () => arrive());
   await act(async () => {});
   expect(beforeIcon(editPanel()!)?.[2]).toBe("false");
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
 });
 
 it("keeps a cut's card open while the version before it loads: ← → and the timeline are the player's, and only Esc closes it", async () => {
@@ -12668,7 +12693,7 @@ it("keeps a cut's card open while the version before it loads: ← → and the t
   // Once the version arrives, the cut plays on it as it does when it opens.
   await act(async () => arrive());
   for (let i = 0; i < 4; i++) await act(async () => {});
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // Esc is what closes it.
   await press("Escape");
   expect(editPanel()).toBeNull();
@@ -12719,7 +12744,7 @@ it("says so in a cut's words when the version before it can't be loaded, offers 
   expect(buttonIn(passage(), "Retry transcript")).toBeUndefined();
   expect(buttonIn(monitor, "Retry")).toBeUndefined();
   expect(editPanel()!.querySelector<HTMLButtonElement>(".edit-card-before")!.disabled).toBe(false);
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
 });
 
 it("reads nothing of a cut's words on the video as it runs now while the version before it loads", async () => {
