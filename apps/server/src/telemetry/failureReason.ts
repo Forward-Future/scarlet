@@ -51,6 +51,12 @@ const AGENT: readonly Rule[] = [
     /(?:unknown|invalid|unsupported) model|no such model|model_not_found/,
   ].map(re => re.source).join("|"), "i")],
   ["agent_not_installed", /cli not found on path|not found on path|runs no copy of|command not found|not installed|^spawn (?!E(?:AGAIN|MFILE|NOMEM)\b)/i],
+  // The CLI started and refused the options or settings Scarlet starts it with, as an older (or much newer) release
+  // does. Without this it reads as a crash: the CLI's own complaint follows a bare exit code.
+  ["agent_incompatible", new RegExp([
+    /unknown (?:option|argument|flag|command|subcommand)\b|unrecognized (?:option|argument|subcommand)|unexpected argument|too many arguments/,
+    /unknown (?:configuration )?(?:field|key|variant)\b|error loading config|invalid configuration|failed to (?:parse|load) (?:config|configuration)/,
+  ].map(re => re.source).join("|"), "i")],
   ["tools_unavailable", /mcp server|no editing tools/i],
 ];
 
