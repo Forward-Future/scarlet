@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { historyLineage } from "@scarlet/timeline";
+import { AimRow } from "./AimRow";
 import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
@@ -240,7 +241,8 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
       <span className="simple-edit-title"><span className="simple-edit-words">{e.label}</span></span>
       <span className="simple-edit-value">Rejected</span>
-    </button></li>;
+    </button>
+      <AimRow on={on}><span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span><span className="composer-aim-words">{e.label}</span></AimRow></li>;
   });
   return <ol ref={list} className="simple-edits" aria-label={label ?? (only ? "Edits that need you" : "Edits in this thread")}>
     {goneAfter(-1, firstOf(0))}
@@ -284,7 +286,8 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         {value && !statusWord && !revised && <span className="simple-edit-value" title={took}>{value}</span>}
         {statusWord ? <span className={asks ? "simple-edit-check" : busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>
           : revised && <span className="simple-edit-check" title={took}>{edit.check}</span>}
-      </button>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
+      </button>
+        <AimRow on={on}><EditBadge n={n} kept={isKept} check={check} /><span className="composer-aim-words">{title}</span></AimRow>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
     })}
   </ol>;
 }

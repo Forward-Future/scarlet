@@ -108,6 +108,8 @@ interface RangeSelect {
   onScrubStart?(gesture: AbortSignal): ((release?: ScrubRelease) => void) | undefined;
   /** A press on the ruler that never became a range. It moves the playhead and keeps the range there was. */
   onPress(time: number): void;
+  /** The same press with Shift held: its time goes into the message being written. */
+  onShiftPress?(time: number): void;
   beforeGesture(): void;
 }
 
@@ -139,11 +141,11 @@ export function LoupePicture({ frame, last, fps, frameAt, sheet, foreground }: {
  * still on the ruler opens the same close-up, to draw a range by frames from there, and so does a drag that stops and
  * holds still: the end it was moving carries on by frames. A click on the ruler moves the playhead and keeps the range.
  */
-export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect = 16 / 9, range, onRange, onSeek, onScrubStart, onPress, beforeGesture }: RangeSelect) {
+export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect = 16 / 9, range, onRange, onSeek, onScrubStart, onPress, onShiftPress, beforeGesture }: RangeSelect) {
   const [live, setLive] = useState<{ range: TimeRange; moving: "start" | "end"; at: number; snapped: boolean; precise?: number }>();
   const gesture = useRef<Gesture>(undefined);
-  const now = useRef({ edges, fps, start, end, onRange, onSeek, onPress });
-  useLayoutEffect(() => { now.current = { edges, fps, start, end, onRange, onSeek, onPress }; });
+  const now = useRef({ edges, fps, start, end, onRange, onSeek, onPress, onShiftPress });
+  useLayoutEffect(() => { now.current = { edges, fps, start, end, onRange, onSeek, onPress, onShiftPress }; });
   useEffect(() => () => gesture.current?.stop(), []);
 
   const place = (g: Gesture) => {
@@ -182,7 +184,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     const pressed = from + (e.clientX - rect.left) * perPixel;
     const anchor = edge && range ? (edge === "start" ? range.end : range.start)
       : snapTime(pressed, edges, RANGE_SNAP_PX * perPixel) ?? toFrame(clampTime(pressed, start, end), fps);
-    const id = e.pointerId;
+    const id = e.pointerId, shift = e.shiftKey;
     const g: Gesture = { id, anchor, edge, from, span, left: rect.left, width: rect.width, x0: e.clientX, x: e.clientX, moved: false, stillX: e.clientX, stop: () => {} };
     // A drag that stops and holds still goes into the close-up at the end it was moving, without letting go.
     const holdStill = () => {
@@ -217,7 +219,8 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       setLive(undefined);
       if (drawn && g.last) now.current.onRange(g.last);
       else if (!cancelled && !edge) {
-        now.current.onPress(clampTime(pressed, now.current.start, now.current.end));
+        const at = clampTime(pressed, now.current.start, now.current.end);
+        if (shift && now.current.onShiftPress) now.current.onShiftPress(toFrame(at, now.current.fps)); else now.current.onPress(at);
       }
     };
     g.stop = () => {

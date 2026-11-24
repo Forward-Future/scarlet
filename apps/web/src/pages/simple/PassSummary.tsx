@@ -1,3 +1,4 @@
+import { AimRow } from "../../components/review/AimRow";
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
@@ -525,6 +526,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
               Scarlet is on it, amber once it is back and waits on the editor. One word a row, on the row's own line. */}
           {!short && row.word && <span className={`simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={spent.get(row.key)}>{row.word}</span>}
         </button>
+        <AimRow on={!!row.on}>{short && row.rejected && !row.n
+          ? <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
+          : short ? <EditBadge n={row.num!} kept={row.decided && !row.skipped && !row.rejected} check={row.needs || row.asks} />
+          : <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}</span>}
+          <span className="composer-aim-words">{row.label}</span></AimRow>
         {under(entry).map(nest => nest.node)}
         {open && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
           {members.map(m => <li key={m.key}><button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}

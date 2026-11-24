@@ -17,7 +17,7 @@ import { useSpeech } from "../../lib/speech";
 import type { Thread } from "../../lib/threads";
 import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
-import { editTargetAt, markedRangeOf, pointOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
+import { draftInserter, editTargetAt, markedRangeOf, pointOf, playheadPoints, spliceDraft, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, CONNECTING_REASON, runChoiceDiffers, useAgentAvailability, useModelsConnecting } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
@@ -75,9 +75,13 @@ interface ComposerProps {
   aimTime?: number;
   /** Exact time for a time-based target tag ("Cut at 2:05", "Edit at 0:11"), shown to the millisecond above the box. */
   targetTime?: number;
+  /** While the box talks to the cut or edit that's open, its row draws itself here, in place of the tag's words. */
+  aimSlot?(el: HTMLElement | null): void;
+  /** The video's clock for the times in a message that already has a destination: they read as times and seek there. */
+  chipClock?: { duration: number; seek(time: number): void };
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, aimSlot, chipClock }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -375,7 +379,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const aimsByText = !context || !!typedPoint;
   const inputClock = !replying && !rewording && (!displayAnchor || pointOf(displayAnchor)) ? messageClock : undefined;
   const sameClock = !typedPoint || (typedPoint.version === inputClock?.version && typedPoint.mediaId === inputClock?.mediaId);
-  const duration = inputClock?.duration ?? 0;
+  const duration = inputClock?.duration ?? (rewording ? 0 : chipClock?.duration) ?? 0;
   const times = useMemo(() => messageTimestamps(value, duration), [value, duration]);
   const firstTime = times[0]?.time;
   // A time alone says where but not what: there is nothing to send until words follow it.
@@ -402,7 +406,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const marked = rewording ? undefined : markedRangeOf(context);
   const chosenRange = !rewording && !marked && context && context !== "whole" && !context.changeId && context.end !== undefined
     ? { start: context.time, end: context.end } : undefined;
-  const shownRange = marked ?? chosenRange;
+  // A stretch marked on the timeline is in the words themselves, so the line over the box doesn't say it again.
+  const shownRange = chosenRange;
+  const markedWords = marked ? preciseRange(marked.start, marked.end) : "";
+  const rangeInWords = !!marked && value.includes(markedWords);
   const rangeWords = shownRange ? preciseRange(shownRange.start, shownRange.end) : "";
   const rangePrecise = shownRange ? `${playbackClock(shownRange.start)} – ${playbackClock(shownRange.end)}` : "";
   // "Answer" and "Reply" name who the message goes to. The target label shows the place it is about.
@@ -425,6 +432,12 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   useEffect(() => {
     if (rangeTakenOff.current && rangeTakenOff.current.left !== context) rangeTakenOff.current = undefined;
   }, [context]);
+  // Its times deleted from the words, the stretch is off the message too.
+  const hadRangeInWords = useRef(false);
+  useEffect(() => {
+    if (marked && hadRangeInWords.current && !rangeInWords && !rewording) takeOffRange();
+    hadRangeInWords.current = rangeInWords;
+  }, [rangeInWords, marked]); // eslint-disable-line react-hooks/exhaustive-deps
   const restoreRange = () => {
     const taken = rangeTakenOff.current;
     rangeTakenOff.current = undefined;
@@ -434,7 +447,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   };
   // Paused with a cut or an edit open, the header shows the one time the editor is looking at: where they stopped.
   // Its full name on hover still says which cut or edit the message goes to.
-  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? clock(pausedAt.time) : undefined;
+  const stopped = undefined as string | undefined;
   const exactTime = targetTime !== undefined ? targetTime
     : displayAnchor && placeTag && (placeTag.endsWith(` at ${clock(displayAnchor.time)}`) || placeTag === `At ${clock(displayAnchor.time)}`)
       ? displayAnchor.time : undefined;
@@ -474,7 +487,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   } : placeTag ? {
     key: `target:${placeTag}`,
     name: placeName!,
-    displayName: placeDisplay,
+    displayName: aimSlot ? <><span className="composer-aim-row" ref={aimSlot} /><span className="composer-aim-plain">{placeDisplay}</span></> : placeDisplay,
     title: `About ${placeName}`,
     clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : newEditInstead!,
     onClear: takeOffTarget,
@@ -491,6 +504,27 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     setRefused(false);
     setDraft(text);
   }
+  // A time picked on the timeline (Shift + click, Shift + drag, N) goes into the words where the cursor is.
+  const caretAfter = useRef<number>(undefined);
+  useEffect(() => {
+    if (rewording) return;
+    const insert = (text: string, replaces?: string) => {
+      const field = inputRef.current, words = useUiStore.getState().agentDraft;
+      const next = spliceDraft(words, field ? field.selectionStart ?? words.length : words.length, text, replaces);
+      if (next.text === words) return;
+      if (text) caretAfter.current = next.caret;
+      changeText(next.text);
+    };
+    draftInserter.insert = insert;
+    return () => { if (draftInserter.insert === insert) draftInserter.insert = undefined; };
+  });
+  useLayoutEffect(() => {
+    const caret = caretAfter.current, field = inputRef.current;
+    caretAfter.current = undefined;
+    if (caret === undefined || !field) return;
+    field.focus();
+    field.setSelectionRange(caret, caret);
+  }, [value]);
   const editor = (
     <div className="composer-input">
       <div className="composer-context-row">
@@ -527,7 +561,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
         // Esc in an empty box takes a range off at once, as Esc anywhere else on the page does. A popover that is
         // open takes its own Esc first.
-        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) takeOffRange();
+        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && (shownRange || marked) && !document.querySelector("[data-escape-owner]")) takeOffRange();
         if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag)) {
           e.preventDefault();
           // "Answer" and "Reply" come off as their own × takes them off.
@@ -560,7 +594,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
             placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? (stopped ? "What should change at this frame?" : placeTag ? "What should change here?" : "What should change?") : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
-            timestamps={sameClock ? times : undefined} onTimestamp={inputClock?.seek} onChange={changeText} onSubmit={() => void submitText()} />
+            timestamps={sameClock ? times : undefined} onTimestamp={inputClock?.seek ?? chipClock?.seek} onChange={changeText} onSubmit={() => void submitText()} />
           {/* The reason is only for a mic with no agent to talk to. While a message sends or is written down the spinner says why. */}
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {
             dismissFirstEditHint();

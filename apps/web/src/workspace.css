@@ -115,6 +115,15 @@ button.composer-aim-time { display: inline; margin: 0 -4px; padding: 1px 4px; bo
 button.composer-aim-time:hover { background: rgba(255, 255, 255, .08); }
 button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, .35); outline-offset: 0; }
 .composer-aim-sep { color: var(--color-dim); }
+/* The box talks to the cut or edit that's open: its row draws its number and words here, in place of the tag's words. */
+.composer-aim-row:empty { display: none; }
+.composer-aim-row { display: block; min-width: 0; }
+.composer-aim-row:not(:empty) + .composer-aim-plain { display: none; }
+.composer-aim-rowcopy { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.composer-aim-rowcopy ~ .composer-aim-rowcopy { display: none; }
+.composer-aim-rowcopy > :first-child { flex: none; }
+.composer-aim-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-fg); }
+.composer-aim-rowcopy .simple-pass-time { font-family: var(--font-mono, monospace); font-size: 11.5px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .composer-aim-clear { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0;
   border-radius: 5px; background: none; color: var(--color-dim); cursor: pointer; }
 .composer-aim:is(:hover, :focus-within) > .composer-aim-clear, .composer-aim-clear:focus-visible { color: var(--color-muted); }
@@ -163,9 +172,10 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .composer-timestamp-overlay { position: absolute; inset: 0; overflow: hidden; color: transparent; pointer-events: none; }
 .composer-message:has(.composer-timestamp-overlay) > * { scrollbar-gutter: stable; }
 .composer-message:has(.composer-timestamp-overlay) > span { overflow: hidden; }
-.composer-timestamp { display: inline; padding: 0; border: 0; border-radius: 0; background: var(--color-bg); font: inherit; color: var(--color-muted);
+/* A time in the words reads as a small chip: typed, or picked on the timeline with Shift + click. */
+.composer-timestamp { display: inline; padding: 0; border: 0; border-radius: 3px; background: #3a3835; box-shadow: 0 0 0 2px #3a3835; font: inherit; color: var(--color-fg);
   pointer-events: auto; cursor: pointer; }
-.composer-timestamp:hover, .composer-timestamp:focus-visible { color: var(--color-fg); }
+.composer-timestamp:hover, .composer-timestamp:focus-visible { background: #4a4743; box-shadow: 0 0 0 2px #4a4743; }
 .composer-send { width: 30px; padding: 0; border-radius: 50%; }
 .composer-send svg { transform: rotate(-90deg); }
 @media (max-width: 767px) {

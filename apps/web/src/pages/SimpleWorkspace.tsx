@@ -31,7 +31,7 @@ import { Loading } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
 import { readTimeline } from "../lib/timelineCache";
 import { appLog } from "../lib/appLog";
-import { clock as clockLabel, lengthLabel, parseTimestamp, plural, removedSeconds } from "../lib/format";
+import { clock as clockLabel, lengthLabel, parseTimestamp, plural, preciseRange, removedSeconds } from "../lib/format";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
 import { listMoments, momentRange } from "../lib/editMoments";
 import { reviewStops, rowAfter, rowBeside, rowPlace, rowsOfTab, stopsShown, tabShown, type ListOrder, type ReviewStop } from "../lib/reviewTabs";
@@ -51,7 +51,8 @@ import { canPreviewMedia } from "../lib/upload";
 import { showingWorkingCut, useShownCut } from "../stores/shownCut";
 import { useProjectStore } from "../stores/project";
 import { messageTimestamps, type MessageClock } from "../lib/messageTimestamps";
-import { markedRangeOf, playheadPoints, pointOf, useUiStore, withMarkedRange, type AgentContext, type MarkedRange } from "../stores/ui";
+import { insertInDraft, markedRangeOf, pointOf, useUiStore, withMarkedRange, type AgentContext, type MarkedRange } from "../stores/ui";
+import { AimHostContext } from "../components/review/AimRow";
 import { CutPreview } from "./WatchPage";
 import { EditHoverContext, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
 import { aimedAtChange, approves, belongsTo, firstKey, isWorking, noEdits, noop, shortTitle, stepsOver, tagOf,
@@ -61,10 +62,8 @@ import { SimpleHeader } from "./simple/SimpleHeader";
 import { TranscriptRail } from "./simple/TranscriptRail";
 import { savedRewording, saveRewording } from "./simple/rewordingStorage";
 import { savedCollapsed, savedOpenLists, saveCollapsed, saveOpenLists } from "./simple/openListsStorage";
-import { EditPage } from "./simple/EditPage";
-import { ReviewRail, type RailWork } from "./simple/ReviewRail";
+import { ReviewRail } from "./simple/ReviewRail";
 import { RailStore, ReviewRailContext } from "./simple/railStore";
-import { useWorkingLines } from "../lib/workingLines";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./simple/ReviewCards";
 import { TimelineWorking } from "../components/review/TimelineWorking";
 import { Turn } from "./simple/Turn";
@@ -2168,11 +2167,15 @@ export function SimpleWorkspace() {
   const messageClock: MessageClock | undefined = messageDuration > 0 && !replyTo && !rewordingItem
     ? { duration: messageDuration, timeline: messageTimeline, version: playerVersion, mediaId: source?.id, seek: time => seekFromMessage.current?.(time) }
     : undefined;
+  // The times in the message being written are marked on the timeline: a new edit's on the version they were
+  // written on, and a message to the cut or edit that's open on the video as it shows.
   const typedTimes = useUiStore(useShallow(s => {
     const point = messageClock && pointOf(s.agentContext);
-    return point?.fromMessage && point.version === playerVersion && point.mediaId === source?.id
+    return (replyTo && !rewordingItem && messageDuration > 0) || (point?.fromMessage && point.version === playerVersion && point.mediaId === source?.id)
       ? [...new Set(messageTimestamps(s.agentDraft, messageDuration).map(stamp => stamp.time))] : [];
   }));
+  const chipClock = useMemo(() => messageDuration > 0 ? { duration: messageDuration, seek: (time: number) => seekFromMessage.current?.(time) } : undefined, [messageDuration]);
+  const [aimHost, setAimHost] = useState<HTMLElement | null>(null);
 
 
   /**
@@ -2188,6 +2191,11 @@ export function SimpleWorkspace() {
     const next = withMarkedRange(box.agentContext, marked);
     if (was && was === wordsInCall.current && next) wordsInCall.current = next;
     box.setAgentContext(next, next && was?.changeId ? was : undefined);
+    // The stretch is in the words themselves, where the cursor is; an end that moves changes them in place, and a
+    // stretch taken off leaves them.
+    const words = marked ? preciseRange(marked.start, marked.end) : "";
+    const wasWords = was?.markedRange ? preciseRange(was.markedRange.start, was.markedRange.end) : undefined;
+    if (words !== wasWords) insertInDraft(words, wasWords);
     // A handle stepped a frame by ← or → keeps the keys, so the next press steps it again.
     if (marked && !byKey) box.focusComposer();
   };
@@ -2213,23 +2221,19 @@ export function SimpleWorkspace() {
   // it was. Words chosen in the transcript or a stretch marked on the ruler stay through a seek or pause; only N takes
   // their place. With a cut or an edit open, a pause or N into an empty box shows its time in the tag, and the next seek
   // moves it there: the message stays the cut's or the edit's, and Scarlet is told the frame the editor stopped on.
-  const pickPoint = (picked: AgentContext, how: "seek" | "n" | "pause") => {
+  // The editor's decision, 2026-11-24: a time is in the message's own words. A press, a scrub, a skip or a pause only
+  // moves the video. Shift + click on the timeline, or N, puts that moment's time into the words where the cursor is,
+  // and Shift + drag a stretch (`markRange`). The first time of a new edit is also where it is aimed, to the frame; a
+  // message to a cut or an edit stays theirs, and Scarlet is told the first frame picked besides.
+  const pickPoint = (picked: AgentContext, how: "seek" | "n" | "pause" | "add") => {
+    if (how !== "n" && how !== "add") return;
     const box = useUiStore.getState();
     if (rewordingItem || box.speaking) return;
-    const written = box.agentDraft.trim();
     const target = box.agentContext;
     if (replyTo) {
-      // N takes the frame as a pause does.
-      if (!aimedAtChange(target) || written || (how === "seek" && !pausedAtRef.current)) return;
-      setPausedAt({ time: picked.time, version: picked.version, ...picked.mediaId && { mediaId: picked.mediaId } });
-      return;
-    }
-    if (target && target !== "whole" && (target.changeId || written)) return;
-    // A message being written about the whole video, aimed or not yet, stays so through a seek: the line above the
-    // box offers to bring it along.
-    if (how !== "n" && (!target || target === "whole" ? written : !pointOf(target))) return;
-    playheadPoints.add(picked);
-    box.setAgentContext(picked);
+      if (aimedAtChange(target) && !pausedAtRef.current) setPausedAt({ time: picked.time, version: picked.version, ...picked.mediaId && { mediaId: picked.mediaId } });
+    } else if (!target && !messageTimestamps(box.agentDraft, messageDuration).length) box.setAgentContext({ ...picked, fromMessage: true });
+    insertInDraft(clockLabel(picked.time));
   };
   // It left the queue meanwhile, taken out or begun: the box goes back to the message being written. Not while the
   // project's requests are still loading: the queue then reads empty, and the words restored from before would be lost.
@@ -2293,7 +2297,6 @@ export function SimpleWorkspace() {
   };
   const { effective } = useAgentAvailability();
   const resumeRunWith = resumeRunChoice(tasks, effective);
-  // The requests waiting their turn are rows of Working, in the column of edits: there is no tray on the message box.
   const queueRows = queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id} opened={trayOpen}
       onRemove={id => void removeQueued(id)}
       paused={editingPaused}
@@ -2312,6 +2315,9 @@ export function SimpleWorkspace() {
     onCreated={() => { follow.current = true; }} onSent={sentUnder(aims.current)}
     // The box carries a tag naming the cut or edit it revises, or the point a new edit is about. Taking the tag off
     // makes the message a new edit about the whole video.
+    tray={queueRows} chipClock={chipClock}
+    // The box names the cut or edit it talks to as its row does: the row that's open draws itself on the box's line.
+    aimSlot={aimMatches && itemThread && aimedAt ? setAimHost : undefined}
     messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime} targetTime={targetTime}
     targetTag={boxTag} targetTagNote={answerNote} onClearTarget={clearTarget} onRestoreTarget={restoreTarget}
     // A queued request's words have the box to themselves: its row in the tray, lit, says which request they are.
@@ -2326,34 +2332,11 @@ export function SimpleWorkspace() {
     // paused while requests wait their turn, does the tray hold Resume.
     />;
 
-  // What Scarlet is on for the whole video: a row of Working each. A request about one cut or edit is under that row.
-  const workingLines = useWorkingLines();
-  const railWork: RailWork[] = [];
-  for (const task of timelineWork) {
-    const id = rootOf(task);
-    if (task.context.changeId === undefined && !railWork.some(row => row.id === id)) railWork.push({ id, text: requestText(task), line: workingLines[task.id] });
-  }
-  // The cut or edit that's open has the middle column: its page, in the conversation's place.
-  const openPassCall = !reviewingEdit && pass && listening && listening.changeId === pass.id ? actions.pass?.calls.find(c => c.index === listening.index) : undefined;
-  const page = reviewingEdit && focusThread && !suggestion
-    ? <EditPage thread={focusThread} edit={reviewingEdit} nextQueuedId={nextQueuedId}
-        standing={reviewingEdit.rejected ? "Rejected" : revisingEdit(reviewingEdit) ? "" : reviewed(reviewingEdit) ? (reviewingEdit.marker ? "Done" : "Kept") : reviewingEdit.check ? "Waits on you" : "In the video"} />
-    : openPassCall && passThread
-      ? <EditPage thread={passThread} nextQueuedId={nextQueuedId}
-          call={{ n: openPassCall.n, summary: openPassCall.summary, tag: openPassCall.tag, at: openPassCall.at, notes: openPassCall.earlier?.note ? [openPassCall.earlier.note] : [], run: openPassCall.run }}
-          standing={openPassCall.state === "open" ? "Waits on you" : openPassCall.state === "approved" ? "Kept" : openPassCall.state === "skipped" ? "Rejected" : ""} />
-      : undefined;
-  const newEdit = () => { stopShowing(); useUiStore.getState().focusComposer(); };
-  return <ReviewRailContext.Provider value={rail}><EditHoverContext.Provider value={hoveredEdit}>
+  return <ReviewRailContext.Provider value={rail}><AimHostContext.Provider value={aimHost}><EditHoverContext.Provider value={hoveredEdit}>
     <main className="min-h-0 flex flex-1 flex-col">
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
         onPaths={paths => { void uploads.startPaths(paths); setPanel("media"); }}
         onFiles={files => { uploads.start(files); setPanel("media"); }}>
-        <ReviewRail store={rail} threads={railThreads}
-          open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
-          work={railWork} queue={queueRows} queued={queuedItems.length}
-          fresh={!reviewingEdit && !listening && !suggestion} onNewEdit={newEdit}
-          selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined} />
         <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}>
           <SimpleHeader projectName={current.project.name} importing={importing} importFailed={importFailed}
             threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} menuSays={menuSays} toLearn={toLearn}
@@ -2365,8 +2348,7 @@ export function SimpleWorkspace() {
             <span>{menuError || "Some files need attention."}</span>
             {importFailed && !menuError && <button type="button" className="simple-link" onClick={() => setPanel("media")}>View media</button>}
           </div>}
-          <div className={page ? "simple-thread has-page" : "simple-thread"} onClick={letGoOnChatPress}>
-            {page}
+          <div className="simple-thread" onClick={letGoOnChatPress}>
             <div ref={chat} className="simple-chat" onScroll={e => {
               const pane = e.currentTarget;
               follow.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop < 48;
@@ -2392,6 +2374,9 @@ export function SimpleWorkspace() {
             {composer}
           </div>
         </ChatRail>
+        <ReviewRail store={rail} threads={railThreads}
+          open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
+          selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined} />
         <div className="workspace-stage simple-stage">
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}
@@ -2434,5 +2419,5 @@ export function SimpleWorkspace() {
     {panel === "media" && <MediaDrawer uploads={uploads} notice={local ? undefined : notice}
       onPlay={id => previewSource(id, true)} onClose={() => setPanel(null)} />}
     {panel === "export" && <ExportSheet hasCut={hasCut} onClose={() => setPanel(null)} />}
-  </EditHoverContext.Provider></ReviewRailContext.Provider>;
+  </EditHoverContext.Provider></AimHostContext.Provider></ReviewRailContext.Provider>;
 }
