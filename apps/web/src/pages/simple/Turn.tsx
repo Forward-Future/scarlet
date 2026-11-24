@@ -14,6 +14,7 @@ import { editKey } from "../../lib/keptEdits";
 import { markedFrameUrl } from "../../lib/markedFramePictures";
 import { usePauseOn, type PauseOffer } from "../../lib/pauseControl";
 import { decidedPassCalls, isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
+import { ReviewLinger } from "../../lib/reviewTabs";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
 import { runAim, runIsActive, spentLabel } from "../../lib/taskRun";
 import { firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
@@ -180,8 +181,12 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   // conversation and the place above the message box is mounted anew, and a list the editor opened must not close by
   // itself then. Which list is open is held by the workspace, for the same reason.
   const passListed = useRef(new Set<string>());
-  // Whether one of the request's edits was open when its line last drew.
+  // Whether one of the request's edits was open when its line last drew, and which.
   const wasShowing = useRef(false);
+  const lastOpen = useRef<string>(undefined);
+  // The rows the editor has just decided or sent back, which stay in For you a moment before they leave.
+  const [linger] = useState(() => new ReviewLinger());
+  useEffect(() => () => linger.dispose(), [linger]);
   // Edits saved along the way belong to their run. Only the run's last edit is a result to Play, Revise or Undo.
   const { finals, folded } = useMemo(() => {
     const finals = new Map<string, Change | undefined>();
@@ -228,7 +233,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   // Only when the line goes: a list kept open across a restart is drawn before its rows have loaded, and stays open.
   const hadPassLine = useRef(passLine);
   useEffect(() => {
-    if (hadPassLine.current && !passLine) passList[1](open => open === "need" && hasRows ? open : undefined);
+    if (hadPassLine.current && !passLine) passList[1](open => open !== "all" && hasRows ? open : undefined);
     hadPassLine.current = passLine;
   }, [passLine]); // eslint-disable-line react-hooks/exhaustive-deps
   // Each press starts clean: the last failure's line doesn't stay under a request once the same action works.
@@ -429,11 +434,12 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // band stays mounted, so Scarlet's work goes on being read while it is out of sight.
     const shut = !inside && !!request && !!actions.collapsed?.has(run.root);
     // The requests about one of this block's cuts or edits, each drawn under its row.
+    // One that asks a question, or stopped early and offers its one action, itself waits on the editor.
     const below = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, run: runs.find(r => r.root === root)! })) : [];
-    const nests: Nest[] = below.map(({ key, run: about }) => ({ key, node: unit(about, true) }));
+    const nests: Nest[] = below.map(({ key, run: about }) => ({ key, node: unit(about, true), needs: about.task.state === "waiting_for_user" || !runIsActive(about.task) }));
     const rows = run === owner && hasRows ? (aside: ReactNode) => summed
-      ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} />
-      : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} /> : undefined;
+      ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} />
+      : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} /> : undefined;
     // A request about one cut or edit says what it did there, and its row opens that cut or edit on the timeline.
     const target = targets.get(run.root);
     const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
@@ -597,8 +603,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   for (const run of runs) if (!placed.has(run.root) && !settled(run) && !nested.has(run.root)) nodes.push(unit(run));
   // Edits with no request behind them, such as an older change, still list in a card of their own.
   if (!owner && hasRows) nodes.push(<div key="edits" className="req">{summed
-    ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} />
-    : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} />}</div>);
+    ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} />
+    : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} />}</div>);
   return <section ref={section} className="simple-turn" data-log-label="Edit thread" aria-label={thread.title} data-thread={thread.id}>
     {nodes}
   </section>;

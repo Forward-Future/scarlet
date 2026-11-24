@@ -166,8 +166,10 @@ export function RejectedMark() {
  * plays its edit again. `under` is what sits directly under an edit's row: a request about that one edit that hasn't
  * left the chat. With `only`, the list is just the edits it picks, such as the ones that need the editor, each with
  * the number it has in the whole list. A number is an edit's for good: rejecting one leaves the others' as they were.
+ * `label` names such a list, and `leaving` picks the rows that are on their way out of it: decided or sent back a
+ * moment ago, they fade before they go.
  */
-export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId }: {
+export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
   /** Edits the editor rejected, which are out of the video: each keeps a row where it was, with a × and "Rejected". */
   rejected?: ListedEdit[];
@@ -176,6 +178,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   spent?(edit: ListedEdit): string | undefined;
   /** The queued request Scarlet will take up next, so its edit's row says "Up next" instead of "Queued". */
   nextQueuedId?: string;
+  label?: string; leaving?(edit: ListedEdit): boolean;
 }) {
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
@@ -198,13 +201,13 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
     return { ...shown, first: members[0]!.i, n: order.number(members[0]!.edit)!, places: members.length, needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
       nested: under ? members.flatMap(m => under(m.edit)) : [], took: spent ? members.flatMap(m => spent(m.edit) ?? [])[0] : undefined };
   });
-  // A rejected edit keeps its place in the video's order, in See all and (when it was flagged) in For you.
+  // A rejected edit keeps its place in the video's order, in the list of every edit and in Done.
   const gone = only ? order.gone.filter(only) : order.gone;
   /** The rejected rows between two rows of the list: the ones that stood after the edit at `from` and no later than the one at `to`. */
   const goneBetween = (from: number, to: number) => gone.filter(e => order.slot(e) > from && order.slot(e) <= to);
   const firstOf = (at: number) => rows[at]?.first ?? Infinity;
   // ↑ ↓, Keep, tab switches, and rows arriving above can move the selected edit: always keep it in view.
-  const mode = only ? "need" : "all";
+  const mode = label ?? (only ? "need" : "all");
   let selectedKey: string | undefined;
   let before = 0;
   const scanGone = (from: number, to: number) => {
@@ -231,7 +234,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   const goneAfter = (from: number, to: number) => goneBetween(from, to).map(e => {
     // Lit for the edit it was, too, while that one is still on its card, leaving.
     const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e, showing));
-    return <li key={editKey(e)}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
+    return <li key={editKey(e)} className={leaving?.(e) ? "is-leaving" : undefined}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
       data-log-control="open-edit" data-log-label="Rejected edit" aria-label={`${e.label}, rejected`}
       onClick={event => { blurOnPointerClick(event); onPlay(e); }}>
       <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
@@ -239,7 +242,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       <span className="simple-edit-value">Rejected</span>
     </button></li>;
   });
-  return <ol ref={list} className="simple-edits" aria-label={only ? "Edits that need you" : "Edits in this thread"}>
+  return <ol ref={list} className="simple-edits" aria-label={label ?? (only ? "Edits that need you" : "Edits in this thread")}>
     {goneAfter(-1, firstOf(0))}
     {rows.map(({ edit, i, n, places, needs, allKept, nested, took }, at) => {
       const on = i === open;
@@ -263,7 +266,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
       // sentence for that.
       const revised = edit.check === REVISED_CHECK && !reviewed(edit) && !isRevising;
-      return <Fragment key={editKey(edit)}><li><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
+      return <Fragment key={editKey(edit)}><li className={leaving?.(edit) ? "is-leaving" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
         className={["simple-edit", on && "is-on", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
