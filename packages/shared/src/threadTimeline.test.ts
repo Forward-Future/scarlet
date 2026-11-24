@@ -431,6 +431,9 @@ describe("reviewing one thread on the working interview timeline", () => {
     // The first cut's two joins lost the pieces either side of them, and the second save cut there too: they are one
     // join now, and one cut of all it skips, shown from the first cut's version, which plays that as one stretch.
     expect(two.filter(e => e.beforeCut && e.at === 9).map(e => [e.changeId, e.beforeCut!.removed])).toEqual([["first", { start: 19, end: 41 }]]);
+    // Its row reads as the cut that took the most out, here the first edit's, which the engine names by its words.
+    const merged = two.find(e => e.beforeCut && e.at === 9)!;
+    expect([merged.label, merged.summary]).toEqual(["Cut", undefined]);
     // The save that rolled the join took nothing out: it is no cut of its own, and its reason to look is on a cut there.
     expect(three.some(e => e.changeId === "third" && e.beforeCut)).toBe(false);
     expect(three.filter(e => e.check === "Listen to the end of the line")).toHaveLength(1);
