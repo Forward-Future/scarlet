@@ -1045,8 +1045,6 @@ button.queue-head:hover { color: var(--color-fg); }
 .review-work-title { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--color-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .review-work-now { margin: 0; font-size: 12px; line-height: 1.4; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* The requests waiting their turn are rows here, not a tray on the message box. */
-.queue-tray.is-rail { margin: 0; padding: 0; border: 0; border-radius: 0; background: none; }
-.queue-tray.is-rail .queue-next { width: auto; white-space: nowrap; }
 /* The cut or edit that's open has the middle column: its page takes the conversation's place, which stays mounted. */
 .simple-thread.has-page > :is(.simple-chat, .simple-pin) { display: none; }
 .edit-page { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 12px; }
@@ -1070,3 +1068,4 @@ button.queue-head:hover { color: var(--color-fg); }
 /* In the chat, what waits on the editor is one link after what a request made. Its rows are in the column of edits. */
 .simple-need-link { align-self: flex-start; display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 0; border: 0; background: none; color: var(--color-fg);
   font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.review-rail .queue-tray { margin: 4px 0 2px; border-bottom: 1px solid var(--color-line); border-radius: 8px; }

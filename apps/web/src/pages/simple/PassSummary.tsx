@@ -576,7 +576,14 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       {made && <Made parts={made} link={seeEvery} />}
       <NeedLink need={need} onOpen={showNeeded} />
       {outsideList}
-      {drawn.map(list => <Fragment key={list.id}>{into(list.id as RailSection, list.rows.length > 0 && rowList(list))}</Fragment>)}
+      {/* For you's place holds the rows that wait, then the one line that counts the edits Scarlet didn't flag, and those rows once it's open. */}
+      {into("you", (drawn[0]!.rows.length > 0 || optional.length > 0) && <>
+        {drawn[0]!.rows.length > 0 && rowList(drawn[0]!)}
+        {optional.length > 0 && <OptionalLine inPass count={optional.length} open={optionalOpen} onToggle={() => setOpen(optionalOpen ? undefined : "all")} />}
+        {drawn.filter(list => list.id === "optional" && list.rows.length > 0).map(rowList)}
+      </>)}
+      {drawn.filter(list => list.id === "working" || list.id === "done").map(list =>
+        <Fragment key={list.id}>{into(list.id as RailSection, list.rows.length > 0 && rowList(list))}</Fragment>)}
       {pass?.error && <p className="simple-error" role="alert">{pass.error}
         {waiting && !pass.deciding && <button type="button" className="simple-link req-recover" onClick={pass.apply}>Retry</button>}</p>}
     </div>;
@@ -751,8 +758,11 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
         <span className="req-right">{aside}
           <ThreadAction projectId={projectId} thread={thread} edits={edits} onPlay={ref => actions.openEdit(thread, ref)} menuOnly menu={false} /></span>
       </div>
-      {into("you", some(inYou) && rows("Edits that need you", inYou))}
-      {into("optional", optionalOpen && some(inOptional) && rows("Optional edits", inOptional))}
+      {into("you", (some(inYou) || optional > 0) && <>
+        {some(inYou) && rows("Edits that need you", inYou)}
+        {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => setOpen(optionalOpen ? undefined : "all")} />}
+        {optionalOpen && some(inOptional) && rows("Optional edits", inOptional)}
+      </>)}
       {into("working", countOf("working") > 0 && rows("With Scarlet", e => place(e) === "working"))}
       {into("done", countOf("done") > 0 && rows("Decided", e => place(e) === "done"))}
       {nests.filter(nest => !listed.has(nest.key)).map(nest => nest.node)}

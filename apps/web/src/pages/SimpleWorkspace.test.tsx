@@ -128,8 +128,7 @@ function whole<T extends Element>(scope: T): T {
   if (!threadId) return scope;
   return new Proxy(scope, { get(target, prop) {
     if (prop === WHOLE) return true;
-    if (prop === "querySelector") return (selector: string) => target.querySelector(selector) ?? railSlots(threadId).map(slot => slot.querySelector(selector)).find(Boolean)
-      ?? (selector.includes("simple-review-rest") ? container.querySelector(".review-rail .simple-review-rest") : null);
+    if (prop === "querySelector") return (selector: string) => target.querySelector(selector) ?? railSlots(threadId).map(slot => slot.querySelector(selector)).find(Boolean) ?? null;
     if (prop === "querySelectorAll") return (selector: string) => [...target.querySelectorAll(selector), ...railSlots(threadId).flatMap(slot => [...slot.querySelectorAll(selector)])];
     if (prop === "textContent") return (target.textContent ?? "") + railSlots(threadId).map(slot => slot.textContent).join("");
     if (prop === "contains") return (node: Node) => target.contains(node) || railSlots(threadId).some(slot => slot.contains(node));
@@ -163,7 +162,7 @@ const tabNamed = (scope: Element, name: "For you" | "Working" | "Done") => ({ cl
   if (line.getAttribute("aria-expanded") !== "true") line.click();
 } }) as unknown as HTMLButtonElement;
 /** The line under For you's rows that counts the edits Scarlet didn't flag and opens them: its words, and whether it is open. */
-const optionalLine = (_scope: Element) => { const line = container.querySelector(".review-rail .simple-review-rest"); return line ? [line.textContent, line.getAttribute("aria-expanded")] : null; };
+const optionalLine = (scope: Element) => { const line = whole(scope).querySelector(".simple-review-rest"); return line ? [line.textContent, line.getAttribute("aria-expanded")] : null; };
 /** Each list a request shows, top to bottom: its name and its rows' words. */
 const editLists = (scope: Element) => [...whole(scope).querySelectorAll(".simple-edits")].map(list => [list.getAttribute("aria-label"), [...list.querySelectorAll(":scope > li > .simple-edit .simple-edit-title")].map(t => t.textContent)]);
 /** The lists a request has rows under, with the one being looked at: none for a request with no rows at all. */
@@ -174,7 +173,7 @@ const reviewModes = (scope: Element) => {
 };
 /** Most tests work on the rows. Expand list disclosures without previewing a finished request's single edit. */
 const openEdits = async () => {
-  for (const toggle of container.querySelectorAll<HTMLElement>('[aria-label="Edits"] :is(.simple-pass-toggle[aria-expanded="false"], .simple-review-tab:only-child[aria-pressed="false"], .simple-review-rest[aria-expanded="false"])')) await click(toggle);
+  for (const toggle of container.querySelectorAll<HTMLElement>('[aria-label="Edits"] .simple-pass-toggle[aria-expanded="false"], .review-rail .simple-review-rest:not(.is-pass)[aria-expanded="false"]')) await click(toggle);
 };
 const showFolded = () => act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
 const show = async () => { await showFolded(); await openEdits(); };

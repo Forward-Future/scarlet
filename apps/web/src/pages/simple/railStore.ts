@@ -1,7 +1,7 @@
 import { createContext, useContext, useSyncExternalStore } from "react";
 
 /** The lists of the column on the chat's left: what waits on the editor, the edits Scarlet didn't flag, what is with Scarlet, what is decided. */
-export type RailSection = "you" | "optional" | "working" | "done";
+export type RailSection = "you" | "working" | "done";
 
 /** What one request has in each list, and how to open its first and last row that waits. */
 export interface RailInfo { you: number; optional: number; working: number; done: number; openFirst?(): void; openLast?(): void }
@@ -47,7 +47,7 @@ export class RailStore {
     if (!was || was.you !== info.you || was.optional !== info.optional || was.working !== info.working || was.done !== info.done) this.changed();
   }
   info(threadId: string) { return this.infos.get(threadId); }
-  total(section: RailSection) { let n = 0; for (const info of this.infos.values()) n += info[section]; return n; }
+  total(section: RailSection | "optional") { let n = 0; for (const info of this.infos.values()) n += info[section]; return n; }
 }
 
 export const ReviewRailContext = createContext<RailStore | undefined>(undefined);

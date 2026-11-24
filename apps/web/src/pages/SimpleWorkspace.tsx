@@ -60,7 +60,7 @@ import { WorkspaceComposer } from "./simple/WorkspaceComposer";
 import { SimpleHeader } from "./simple/SimpleHeader";
 import { TranscriptRail } from "./simple/TranscriptRail";
 import { savedRewording, saveRewording } from "./simple/rewordingStorage";
-import { savedCollapsed, saveCollapsed } from "./simple/openListsStorage";
+import { savedCollapsed, savedOpenLists, saveCollapsed, saveOpenLists } from "./simple/openListsStorage";
 import { EditPage } from "./simple/EditPage";
 import { ReviewRail, type RailWork } from "./simple/ReviewRail";
 import { RailStore, ReviewRailContext } from "./simple/railStore";
@@ -157,14 +157,19 @@ export function SimpleWorkspace() {
   const [aimAgain, setAimAgain] = useState(0);
   // The request the editor went to, and an edit of it waiting to play once its markers load.
   const [focus, setFocus] = useState<{ threadId: string; changeId?: string; spot?: number; single?: boolean }>();
-  // The column of edits beside the chat is one list for the whole video. Each request draws its rows into it (`rail`).
-  // Under For you's rows one line opens the edits Scarlet didn't flag, for every request at once. Working, at the
-  // column's foot, is open until the editor folds it, so what Scarlet has is in view; Done opens on a press. ↑ ↓ and
-  // Keep read whether the optional edits are listed.
+  // The list each request has open in the chat: every edit, or just the ones that need the editor. ↑ and ↓ read it.
+  // They are kept across a restart, so the chat comes back as the editor left it.
+  const [lists, setLists] = useState<Record<string, OpenList>>(() => savedOpenLists(current.id));
+  const listsOf = useRef(current.id);
+  useEffect(() => {
+    if (listsOf.current === current.id) return saveOpenLists(current.id, lists);
+    listsOf.current = current.id;
+    setLists(savedOpenLists(current.id));
+  }, [current.id, lists]);
+  // The column of edits beside the chat is one list for the whole video: each request draws its rows into it (`rail`).
+  // Working, at the column's foot, is open until the editor folds it, so what Scarlet has is in view; Done opens on a press.
   const [rail] = useState(() => new RailStore());
-  const [optionalOpen, setOptionalOpen] = useState(false);
   const [railOpen, setRailOpen] = useState({ working: true, done: false });
-  const listValue: OpenList = optionalOpen ? "all" : undefined;
   // The requests folded to their headings with the arrow at a heading's left, kept across a restart as the lists are.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => savedCollapsed(current.id));
   const collapsedOf = useRef(current.id);
@@ -185,11 +190,16 @@ export function SimpleWorkspace() {
   }), []);
   // One list of every edit is open at a time, so two "Hide" links never stand for one timeline: opening another
   // request's closes it. The list of what needs the editor is a review list, and leaves the others as they are.
-  const listOf = (_threadId: string): PassList => [listValue, next => {
-    const open = typeof next === "function" ? next(listValue) : next;
-    // A row that is with Scarlet or decided is under Working or Done: showing it opens that part of the column.
-    if (open === "working" || open === "done") setRailOpen(was => was[open] ? was : { ...was, [open]: true });
-    else setOptionalOpen(open === "all");
+  const listOf = (threadId: string): PassList => [lists[threadId], next => {
+    // A row that is with Scarlet or decided is under Working or Done: going to it opens that part of the column.
+    const to = typeof next === "function" ? next(lists[threadId]) : next;
+    if (to === "working" || to === "done") setRailOpen(was => was[to] ? was : { ...was, [to]: true });
+    setLists(all => {
+      const open = typeof next === "function" ? next(all[threadId]) : next;
+      if (open === all[threadId]) return all;
+      const others = open !== "all" ? all : Object.fromEntries(Object.entries(all).filter(([, list]) => list !== "all"));
+      return { ...others, [threadId]: open };
+    });
   }];
   // The pass whose full list is open in the chat, and the row the pointer is over there.
   const [openList, setOpenList] = useState<string>();
@@ -661,6 +671,7 @@ export function SimpleWorkspace() {
   // The picked request lets go: its band is plain again and the timeline marks every request's edits.
   function letGo(threadId: string) {
     // Its full list goes with it, since an open list keeps its request on the timeline.
+    setLists(all => all[threadId] === "all" ? Object.fromEntries(Object.entries(all).filter(([id]) => id !== threadId)) : all);
     if (openList === threadId) setOpenList(undefined);
     setPicked(null);
     setFocus(undefined);
@@ -680,6 +691,8 @@ export function SimpleWorkspace() {
     if (threadId === focusThread?.id && !showing && !listening && !suggestion) return letGo(threadId);
     // Whatever was open goes with the timeline it was on, and so does another request's list of every edit.
     stopShowing();
+    setLists(all => Object.entries(all).some(([id, list]) => id !== threadId && list === "all")
+      ? Object.fromEntries(Object.entries(all).filter(([id, list]) => id === threadId || list !== "all")) : all);
     if (openList !== threadId) setOpenList(undefined);
     setPicked(threadId === ordered.at(-1)?.id ? undefined : threadId);
     setFocus(undefined);
@@ -1244,8 +1257,8 @@ export function SimpleWorkspace() {
   const shownRow = reviewingEdit ? editsByRow.findIndex(row => row.includes(reviewingEdit)) : -1;
   const waitingEdit = (e: ThreadEdit) => !!e.check && !reviewed(e) && !revisingEdit(e);
   // Which of each request's lists the chat shows: ↑ ↓ and Keep go by the rows of that tab.
-  const focusList = focusThread ? listValue : undefined;
-  const passList = passThread ? listValue : undefined;
+  const focusList = focusThread ? lists[focusThread.id] : undefined;
+  const passList = passThread ? lists[passThread.id] : undefined;
   const passIsFocus = !!pass && !!passThread && passThread.id === focusThread?.id;
   const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
   const passByNumber = allCalls.some(c => c.askOrder !== undefined);
@@ -1570,11 +1583,11 @@ export function SimpleWorkspace() {
   // decision of the editor's are: one that asks for a look, or a spot marked for them, waits for their own Keep. While
   // a cut, an edit or a call is open the player is on its own passage, and nothing is kept this way.
   const watchedMoments = useMemo(() => {
-    if (!focusThread || listValue !== "all" || !threadTimeline.moments || !passFocused) return [];
+    if (!focusThread || lists[focusThread.id] !== "all" || !threadTimeline.moments || !passFocused) return [];
     // An edit made in many places is watched a place at a time: each place played through is kept, as it plays.
     return threadTimeline.moments.flatMap(m => m.places ? listMoments(m.edits) : [m])
       .filter(m => m.edits.every(e => !e.check && !e.marker) && m.edits.some(e => !reviewed(e) && !revisingEdit(e)));
-  }, [focusThread, listValue, threadTimeline.moments, passFocused, reviewed, revisingEdit]);
+  }, [focusThread, lists, threadTimeline.moments, passFocused, reviewed, revisingEdit]);
   const watching = watchedMoments.length > 0 && !reviewingEdit && !listening && !suggestion && !source;
   useWatchedMomentAutoKeep(watching, watchedMoments, current.id, focusThread?.id, head);
   useEditCardShortcuts(workspaceActive && !!reviewingEdit, stepEdit, closeEdit);
@@ -2258,7 +2271,7 @@ export function SimpleWorkspace() {
   const { effective } = useAgentAvailability();
   const resumeRunWith = resumeRunChoice(tasks, effective);
   // The requests waiting their turn are rows of Working, in the column of edits: there is no tray on the message box.
-  const queueRows = queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray rail items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id} opened={trayOpen}
+  const queueRows = queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id} opened={trayOpen}
       onRemove={id => void removeQueued(id)}
       paused={editingPaused}
       onContinue={editingPaused && !editing ? () => queueAction(resumeRunWith ? resumeEditing(current.id, resumeRunWith) : resumeEditing(current.id)).catch(() => {}) : undefined}
@@ -2313,7 +2326,7 @@ export function SimpleWorkspace() {
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
         onPaths={paths => { void uploads.startPaths(paths); setPanel("media"); }}
         onFiles={files => { uploads.start(files); setPanel("media"); }}>
-        <ReviewRail store={rail} threads={railThreads} optionalOpen={optionalOpen} onOptional={setOptionalOpen}
+        <ReviewRail store={rail} threads={railThreads}
           open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
           work={railWork} queue={queueRows} queued={queuedItems.length}
           fresh={!reviewingEdit && !listening && !suggestion} onNewEdit={newEdit}
