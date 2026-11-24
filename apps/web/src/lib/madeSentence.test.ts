@@ -106,3 +106,11 @@ it("leaves the edits' names to the rows while the open list has one for each of 
   // The one edit a request made is still said in Scarlet's words: its link opens it, and no list repeats it.
   expect(open([{ label: "wrap", summary: "Tightened the wrap" }])).toBe("Tightened the wrap.");
 });
+
+it("counts each zoom/punch-in separately even when they share a label", () => {
+  const punch = { label: "Punch in", kind: "zoom" as const };
+  expect(say([punch, punch])).toBe("Made 2 zooms.");
+  expect(say([cut(0, 60), punch, punch, punch])).toBe("Took out 1:00 in 1 cut, and made 3 zooms.");
+  expect(say([{ label: "Punch in on Matt", kind: "zoom" as const }, { label: "Punch in on the demo", kind: "zoom" as const }]))
+    .toBe("Made 2 edits: Punch in on Matt, Punch in on the demo.");
+});

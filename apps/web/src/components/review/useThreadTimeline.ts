@@ -9,7 +9,7 @@ import { editGroups } from "./threadEditState";
 import { originalReviewRef } from "../../lib/editReviews";
 import { editMoments } from "./EditReferences";
 import { appliedPassCuts, type FirstCutDelivery } from "../../lib/threads";
-import { passRows, type Moment } from "../../lib/editMoments";
+import { listMoments, type Moment } from "../../lib/editMoments";
 import { rejectedCallEdits, rejectedCallIndex } from "../../lib/passCalls";
 
 const empty: ThreadEdit[] = [];
@@ -87,11 +87,10 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
     return { beforeVersion: original.appliedOnto ?? original.fromVersion, cue };
   }
   const rows = useMemo(() => passFocused ? edits.map(edit => [edit]) : editGroups(edits).map(g => g.members.map(m => m.edit)), [edits, passFocused]);
-  // A pass's list shows its edits as moments: edits that overlap so much they play as one change are one row, named for
-  // its main edit, which is the one chosen when the moment is. One of its edits picked on its own is just that edit.
-  // An edit made in many places is one row too, as the chat lists it, but no moment: any place of it opens alone.
-  const moments = useMemo(() => passFocused ? passRows(edits) : undefined, [edits, passFocused]);
-  const momentOf = (edit: ThreadEdit) => moments?.find(m => !m.places && m.edits.includes(edit));
+  // A pass's list shows its edits as moments: edits that overlap on the timeline exactly are one row, named for its
+  // main edit, which is the one chosen when the moment is. One of its edits picked on its own is just that edit.
+  const moments = useMemo(() => passFocused ? listMoments(edits) : undefined, [edits, passFocused]);
+  const momentOf = (edit: ThreadEdit) => moments?.find(m => m.edits.includes(edit));
   const single = !!picked?.single;
   const shownMoment = selected && !single ? momentOf(selected) : undefined;
   const selectedMoment: Moment<ThreadEdit> | undefined = shownMoment && shownMoment.edits.length > 1 && shownMoment.main === selected ? shownMoment : undefined;

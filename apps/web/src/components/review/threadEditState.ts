@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isAddRequest, isRejectRequest, matchesEdit, threadEditList, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { reviewKey, useKeptEdits } from "../../lib/keptEdits";
+import { samePlace } from "../../lib/editMoments";
 import { isActiveTask, isWorkingTask } from "../../lib/taskRun";
 import { useProjectStore } from "../../stores/project";
 import { useShownCutStore } from "../../stores/shownCut";
@@ -188,17 +189,18 @@ export function waitingPassRows<T extends ListedEdit>(calls: readonly { state: s
 }
 
 /**
- * The distinct edits in a list. One request can make the same edit in many places ("Camera full screen" in twelve
- * stretches): those share a name and read as one edit with a count of places. Cuts stay one each, since each removes
- * its own words.
+ * The distinct edits in a list. Edits only combine into one row when they share a label and overlap on the timeline
+ * exactly. Cuts, flagged edits, and spots marked for the editor always stay one row each.
  */
 export function editGroups<T extends ListedEdit>(edits: readonly T[]): { label: string; members: { edit: T; i: number }[] }[] {
   const groups: { label: string; members: { edit: T; i: number }[] }[] = [];
-  const named = new Map<string, number>();
   edits.forEach((edit, i) => {
-    const at = edit.beforeCut ? undefined : named.get(edit.label);
-    if (at !== undefined) { groups[at]!.members.push({ edit, i }); return; }
-    if (!edit.beforeCut) named.set(edit.label, groups.length);
+    const alone = !!edit.beforeCut || !!edit.check || !!edit.marker;
+    const group = alone ? undefined : groups.findLast(g => {
+      const first = g.members[0]!.edit;
+      return !first.beforeCut && !first.check && !first.marker && first.label === edit.label && samePlace(first, edit);
+    });
+    if (group) { group.members.push({ edit, i }); return; }
     groups.push({ label: edit.label, members: [{ edit, i }] });
   });
   return groups;
