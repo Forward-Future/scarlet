@@ -431,7 +431,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     const was = lastOpen.current;
     lastOpen.current = openId;
     if (!onEntry || openId === was) return;
-    const shown = drawn.some(list => list.rows.includes(onEntry));
+    // A row still in For you only for the moment after it was decided is Working's or Done's.
+    const shown = tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalOpen) : onEntry.place === tab;
     if (!shown) setOpen(onEntry.place === "you" ? undefined : onEntry.place === "optional" ? "all" : onEntry.place);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
   // While the pass's calls are listed, what is outside the list comes after it.
@@ -649,7 +650,9 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     lastOpen.current = openId;
     if (!hasForYou || !openEdit || openId === was) return;
     const at = place(openEdit);
-    if (onScreen(openEdit)) { if (at === "you") setOpen(o => o ?? "need"); }
+    // A row still in For you only for the moment after it was decided is Working's or Done's.
+    const shown = tab === "you" ? at === "you" || (at === "optional" && optionalOpen) : at === tab;
+    if (shown) { if (at === "you") setOpen(o => o ?? "need"); }
     else if (at) setOpen(at === "you" ? "need" : at === "optional" ? "all" : at);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
   // The For you list closes only if there are no For you items at all.
