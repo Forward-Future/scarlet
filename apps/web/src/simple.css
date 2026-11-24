@@ -60,8 +60,9 @@
 
 /* The tag in the box shows where a message goes: the line that names it is there for screen readers only. */
 .simple-target { position: absolute; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.simple-target + .composer-dock { border-top: 1px solid var(--color-line); padding-top: 12px; }
-.simple-pin:has(> .unit:not([hidden])) + .simple-target + .composer-dock { border-top: 0; padding-top: 9px; }
+/* The chat has no lines across it: the bubbles set its parts apart. */
+.simple-workspace .composer-dock { border-top: 0; }
+.simple-pin:has(> .unit:not([hidden])) + .simple-target + .composer-dock { padding-top: 9px; }
 
 .simple-decide { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 clamp(16px, 2vw, 28px) 16px; padding: 9px 10px 9px 14px;
   border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); font-size: 12.5px; color: var(--color-muted); }
@@ -743,7 +744,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* A long one keeps to two lines, as a request's words do, and its title has the rest. */
 .simple-turn > .simple-msg.from-you p { color: var(--color-fg); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 /* It gives way before the message box does: a tall draft or an open queue shrinks it and it scrolls inside. */
-.simple-pin { flex: 0 1 auto; min-height: 0; max-height: 62vh; overflow-y: auto; padding: 0 18px; border-top: 1px solid var(--color-line); }
+.simple-pin { flex: 0 1 auto; min-height: 0; max-height: 62vh; overflow-y: auto; padding: 0 18px; }
 /* Give the rows the space left below the request's heading and summary, including while a revision runs in a row. */
 .simple-pin:has(.simple-pass-list, .simple-edits),
 .simple-pin :is(.unit, .req, .simple-pass):has(.simple-pass-list, .simple-edits) { display: flex; flex-direction: column; min-height: 0; }
@@ -761,7 +762,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .unit-error { margin: 0; padding: 2px 0 8px; }
 /* With nothing under way and no pass waiting on the editor, nothing is fixed here. */
 .simple-pin:not(:has(> .unit:not([hidden]))) { display: none; }
-.simple-pin:has(> .unit:not([hidden])) + .composer-dock { border-top: 0; padding-top: 9px; }
+.simple-pin:has(> .unit:not([hidden])) + .composer-dock { padding-top: 9px; }
 /* Fixed here, a long message keeps to two lines so the spot holds its place. Its title carries the rest. */
 .simple-pin .unit-msg p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 
