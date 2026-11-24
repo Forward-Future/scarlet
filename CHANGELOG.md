@@ -6,6 +6,15 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- When a pass can't go in, Retry now sits right after the reason, instead of above it.
+- The line under a working request says what Scarlet is doing in plainer words, such as "Looking over the change", "Asking you a question" and "Tidying up its notes", and no longer ends in a number that didn't match your list of edits.
+- The check Scarlet runs at the end of a pass has one name everywhere: the closing check for repeats.
+- When something goes wrong, the red line says what happened and what to do in plain words, such as "Make this pass's calls in For you first", instead of the engine's own wording or a code.
+- A call that couldn't be saved now says so, with why and to press Keep or Reject edit again.
+- A request that changed nothing now says "Nothing changed" instead of "Done".
+- Sending a message while the model button says "Connecting…" now says "Still connecting. Try again in a moment." instead of asking you to sign in.
+- A pass with no calls for you now says its cuts are "ready" instead of "proposed", and the cuts Scarlet is still checking are called flagged cuts everywhere.
+- Lines the app writes for Scarlet now all say "Scarlet", never "I", and waits read as "3m 41s" so they can't be mistaken for a place in the video.
 - A To do Scarlet left for you, such as a spot for B-roll, now has Add (A), Later (L) and a × that rejects it: Add has Scarlet make or find what the to-do asks for and put it in the video there, and the × takes the to-do away.
 - Choosing words in the Transcript and pressing “Ask about this” now shows the same `Range` tag above the message box as a stretch marked on the timeline, with its × to take it off before you send.
 - A request that couldn't finish says why under its heading when the model gave a reason, such as a usage limit or a sign-in that ran out, so you know before pressing Retry.

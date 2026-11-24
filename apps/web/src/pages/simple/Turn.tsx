@@ -15,7 +15,7 @@ import { markedFrameUrl } from "../../lib/markedFramePictures";
 import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
 import { runAim, runIsActive, spentLabel } from "../../lib/taskRun";
-import { firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
+import { COULDNT_FINISH, firstCutDeliveries, isRecheck, isRedo, RECHECK_WORDS, requestTarget, revisionTarget, threadConversation, type Thread, type ThreadEntry } from "../../lib/threads";
 import { useNearView } from "../../lib/useNearView";
 import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
@@ -24,10 +24,9 @@ import { PassSummary, ThreadResult } from "./PassSummary";
 import { callRowKey, isWorking, letGo, listedBefore, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
 
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
-const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|I couldn’t finish this edit\.)$/;
+const UNSAID = { test: (text: string) => text === "Edit stopped." || text === "Edit resumed." || text === COULDNT_FINISH };
 
-/** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
-// What the rule came from ("from 3 cuts you rejected") is said in Learnings, not on the chat's one line.
+/** "Learned for dialogue-pass: ". What the rule came from ("from 3 cuts you rejected") is said in Learnings, not on the chat's one line. */
 function learnedLead(skill: string | undefined): string {
   return skill ? `Learned for ${skill}: ` : "Learned: ";
 }

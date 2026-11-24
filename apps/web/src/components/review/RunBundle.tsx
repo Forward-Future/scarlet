@@ -7,7 +7,7 @@ import { blurOnPointerClick } from "../../lib/hotkeys";
 import { runProgress } from "../../lib/runProgress";
 import { runNow, STARTING } from "../../lib/runNow";
 import { runningTranscription, transcriptionProgressLabel, transcriptsProgress } from "../../lib/transcriptionProgress";
-import { isWorkingTask, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
+import { isWorkingTask, PAUSED_HINT, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
 import { toolName, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
 import { usePublishWorkingLine } from "../../lib/workingLines";
@@ -97,8 +97,8 @@ interface RunBundleProps {
   onWaitForTranscripts?(on: boolean): void;
 }
 
-/** What a pass sent back to check the finished cut is doing, whatever it said on its way in. */
-const FINAL_CHECK = "Final check of the finished cut";
+/** What a pass sent back to check the video for repeats is doing, whatever it said on its way in. */
+const FINAL_CHECK = "Closing check for repeats";
 /** The events of a pass's latest run, once the engine has sent it back to check for repeats; every event otherwise. */
 const sinceRerun = (task: Task, events: readonly TaskEvent[]) => {
   const from = task.repeatAudit?.returns ? task.startedAt : undefined;
@@ -183,7 +183,7 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, held, 
     return shownItems(runItems(task, events, changes).filter(item => !(item.kind === "note" && item.text === aim?.note)));
   }, [asking, banded, task, events, changes]);
   const lines = useMemo(() => open ? tidy(runLines(task, events, shown, Date.now())) : [], [open, task, events, shown]);
-  // A request in line again says Queued, the word its cut's card and the tray use, or Paused while it waits for Continue.
+  // A request in line again says Queued, the word its cut's card and the tray use, or Paused while it waits for Resume.
   // One the editor holds back says so, as the tray does of the request that's next: it won't start by itself.
   const waitsOnEditor = waiting && !paused ? held : undefined;
   const label = waiting ? paused ? "Paused" : waitsOnEditor?.words ?? "Queued" : "Needs your answer";
@@ -196,7 +196,7 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, held, 
       <button type="button" className="req-toggle" aria-expanded={opens ? open : undefined} disabled={!opens}
         title={opens ? open ? "Hide the details" : "Show the details" : undefined} onClick={() => setOpen(!open)}>
         {asking && <span className="req-dot" aria-hidden />}
-        <span role="status" title={waiting && paused ? "Editing is paused. Resume picks this up where it left off." : label}
+        <span role="status" title={waiting && paused ? PAUSED_HINT : label}
           className={asking || waitsOnEditor ? "req-ask" : undefined}>{label}</span>
       </button>
       <div className="req-right">

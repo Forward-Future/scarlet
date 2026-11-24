@@ -306,9 +306,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     if (!rows.some(row => row.on && row.needs)) (calls.length ? calls : rows).find(row => row.needs)?.open?.();
   };
   // What it came to, once Scarlet is done, while calls still wait too: what it applied so far, with the link that opens
-  // every edit after it. Until its cuts are applied, a pass that finished with no call to make says how many it proposes.
+  // every edit after it. Until its cuts are applied, a pass that finished with no call to make says how many it has ready.
   const made: SentencePart[] | undefined = edits.length ? working ? undefined : madeSentence(distinct, lengthLabel, true)
-    : calls.length || quiet || decidedCallRows.length || forYouRejected.length ? undefined : [{ strong: plural(count, "cut") }, " proposed."];
+    : calls.length || quiet || decidedCallRows.length || forYouRejected.length ? undefined : [{ strong: plural(count, "cut") }, " ready."];
   // The list of every edit goes by moments, at the time of the first of its edits. The moment's row stands for all of
   // them: ticked once they're all kept, Revising… while Scarlet is on one (or Up next / Queued while one waits its
   // turn), and lit while the moment is open. Its own edits show only once it is unfolded, or while one of them is open
@@ -419,9 +419,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     {nests.filter(nest => !placed.has(nest.key)).map(nest => nest.node)}
     <div className="simple-pass-line req-row">
       {!made && seeEvery}
-      {/* The pass goes in once its calls are decided and Scarlet finishes checking. Only a failed apply offers Retry. */}
+      {/* The pass goes in once its calls are decided and Scarlet finishes checking. */}
       {waiting && pass.deciding && <span className="simple-pass-ok">Applying…</span>}
-      {waiting && !pass.deciding && !!pass.error && <button type="button" className="simple-link" onClick={pass.apply}>Retry</button>}
       <span className="req-right">{aside}</span>
     </div>
   </>;
@@ -431,7 +430,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     {filter !== "calls" && seeTab}
     {filter && <>{tabs}{rowList}</>}
     {filter === "calls" && outsideList}
-    {pass?.error && <p className="simple-error" role="alert">{pass.error}</p>}
+    {/* Only a failed apply offers Retry, after the reason, whichever list is on screen. */}
+    {pass?.error && <p className="simple-error" role="alert">{pass.error}
+      {waiting && !pass.deciding && <button type="button" className="simple-link req-recover" onClick={pass.apply}>Retry</button>}</p>}
   </div>;
 }
 

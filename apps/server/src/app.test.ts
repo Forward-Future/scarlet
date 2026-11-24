@@ -872,6 +872,9 @@ describe("scarlet server", () => {
     await api("POST", `/projects/${project.id}/tasks`, { body: { agent: "claude", instruction: "/first-cut-dialogue" } });
     expect(checks()).toHaveLength(count);
     await api("POST", `/projects/${project.id}/learnings/${offered.json.learning.id}/decline`);
+    // Declined, the rule is settled: a second press says so as a sentence the editor reads after "Couldn't decline."
+    const again = await api<{ error: { code: string; message: string } }>("POST", `/projects/${project.id}/learnings/${offered.json.learning.id}/decline`);
+    expect([again.status, again.json.error]).toEqual([409, { code: "learning_settled", message: "This rule was already declined." }]);
     for (const open of scarlet.ctx.repos.tasks.select("project_id = ? AND state IN ('queued','claimed','running')", [project.id])) await api("POST", `/tasks/${open.id}/cancel`);
   });
 

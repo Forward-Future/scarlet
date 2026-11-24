@@ -93,7 +93,7 @@ const toolSteps: Record<string, StepSpec> = {
   project_get: project, timeline_get: project, timeline_summary: project, timeline_at: project, timeline_diff: project,
   skills_list: project, media_list: project, graphic_get: project,
   attachment_read: { group: "attachment", verb: "Read", doing: "Reading", detail: n => n > 1 ? `${n} attached files` : "an attached file", once: true }, change_list: project, change_get: project, notes_list: project,
-  timeline_transcript: { group: "edit-transcript", verb: "Read", doing: "Reading", detail: () => "the edit’s transcript", once: true },
+  timeline_transcript: { group: "edit-transcript", verb: "Read", doing: "Reading", detail: () => "the video’s words", once: true },
   timeline_join_audit: { group: "joins", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} joins` : "a join", once: true },
   transcript_get: transcript,
   transcript_search: { group: "search", verb: "Searched", doing: "Searching", once: true, detail: (n, _, first) => {
@@ -112,8 +112,8 @@ const toolSteps: Record<string, StepSpec> = {
   lip_sync: { group: "lip-sync", verb: "Checked", doing: "Checking", detail: () => "the lip sync", once: true },
   dialogue_check_repeats: sound,
   dialogue_check_join: { group: "joins", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} joins` : "a join", once: true },
-  dialogue_review_inspect: { group: "inspect", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} suggested cuts` : "a suggested cut", once: true },
-  dialogue_review_save: { group: "save", verb: "Saved", doing: "Saving", detail: () => "the cut recommendations" },
+  dialogue_review_inspect: { group: "inspect", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} flagged cuts` : "a flagged cut", once: true },
+  dialogue_review_save: { group: "save", verb: "Saved", doing: "Saving", detail: () => "the flagged cuts" },
   dialogue_revise_cut: { group: "revise", verb: "Moved", doing: "Moving", detail: () => "the cut" },
   render_request: { group: "render", verb: "Rendered", doing: "Rendering", detail: () => "a preview" },
 };
@@ -220,7 +220,7 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
       } else if (row) {
         waits.delete(key);
         const took = Math.max(0, Date.parse(at) - Date.parse(row.at));
-        Object.assign(row, failed ? { verb: "Couldn’t", detail: `prepare ${name}` } : { verb: "Waited", detail: `${lengthLabel(took / 1000)} for ${name}` });
+        Object.assign(row, failed ? { verb: "Couldn’t", detail: `prepare ${name}` } : { verb: "Waited", detail: `${workTimeLabel(took, false)} for ${name}` });
         // The next read of the same thing is the real one.
         for (const k of seen) if (k.includes(JSON.stringify(mediaId))) seen.delete(k);
       }
@@ -311,6 +311,12 @@ function firstWords(text: string, words = 7) {
   return kept.join(" ").replace(/[,;:]$/, "") + "…";
 }
 
+/** What a request that changed nothing and said nothing comes to. */
+export const NOTHING_CHANGED = "Nothing changed";
+
+/** What a request paused with the project's editing waits for. */
+export const PAUSED_HINT = "Editing is paused. Resume picks this up where it left off.";
+
 /** A few words for the folded run: what it did, not how. */
 export function runSummary(task: Task, change?: Change): string {
   if (task.state === "failed" && !change) return "Couldn’t finish";
@@ -331,7 +337,7 @@ export function runSummary(task: Task, change?: Change): string {
   // Only what the chat would show as Scarlet's words: a reply that was commands, or the request said back, says
   // nothing here either.
   const said = editConfirmation(taskChatText(task), requestText(task));
-  return said ? firstWords(said) : "Done";
+  return said ? firstWords(said) : NOTHING_CHANGED;
 }
 
 /**

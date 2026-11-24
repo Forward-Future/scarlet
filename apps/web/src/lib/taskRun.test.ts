@@ -63,7 +63,7 @@ it("takes what the request will come to from the agent's first words, only when 
 it("counts every cut a multi-cut inspection checks, and a whole-picture look as one", () => {
   const events = [tool(1, "dialogue_review_inspect", { index: 0, count: 4 }), tool(3, "dialogue_review_inspect", { index: 4, count: 3 }),
     tool(5, "dialogue_review_inspect", { index: 2, count: 4, wholePicture: true })];
-  expect(runItems({ ...task, state: "running" }, events, [])).toEqual([{ kind: "step", at: at(1), verb: "Checked", detail: "8 suggested cuts" }]);
+  expect(runItems({ ...task, state: "running" }, events, [])).toEqual([{ kind: "step", at: at(1), verb: "Checked", detail: "8 flagged cuts" }]);
 });
 
 it("keeps an unfinished scan pending so the live row can show it", () => {
@@ -108,7 +108,7 @@ it("shows a wait for the transcript as one row instead of every call that checks
     ]);
     const done = [...events, wait(370, true), tool(371, "transcript_get", read)];
     expect(runItems(running, done, []).map(i => i.kind === "step" && `${i.verb} ${i.detail}`)).toEqual([
-      "Waited 6:00 for the transcript", "Looked at the picture at 0:24 and 1:33", "Read the transcript from 0:00 to 57:47",
+      "Waited 6m 0s for the transcript", "Looked at the picture at 0:24 and 1:33", "Read the transcript from 0:00 to 57:47",
     ]);
     // The wait ran alongside the other steps, so it takes no time of its own in the list.
     expect(runLines(running, done, runItems(running, done, []), Date.parse(at(400))).map(l => l.took)).toEqual([undefined, 341_000, 29_000]);

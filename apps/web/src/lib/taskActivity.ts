@@ -14,20 +14,20 @@ const toolActivity: Record<string, string> = {
   transcript_fix: "Correcting the transcript",
   dialogue_scan: "Scanning dialogue",
   dialogue_check_join: "Checking how the cut sounds",
-  dialogue_review_inspect: "Checking a suggested cut",
-  dialogue_review_save: "Saving cut recommendations",
+  dialogue_review_inspect: "Checking a flagged cut",
+  dialogue_review_save: "Saving the flagged cuts",
   dialogue_revise_cut: "Moving the cut",
-  change_review_cut: "Reviewing edit",
+  change_review_cut: "Looking at an edit",
   dialogue_apply_cuts: "Applying edits and preparing review",
   waveform_get: "Checking the sound",
   sound_picture: "Checking the sound",
   timeline_get: "Reading timeline",
   timeline_summary: "Reviewing timeline",
   timeline_at: "Inspecting timeline",
-  timeline_diff: "Comparing versions",
+  timeline_diff: "Comparing before and after",
   timeline_transcript: "Reading the video’s words",
   timeline_join_audit: "Checking how the cuts sound",
-  dialogue_check_repeats: "Checking the finished dialogue for repeats",
+  dialogue_check_repeats: "Checking the video for repeats",
   media_profile: "Measuring the sound",
   music_beats: "Finding the beat of the music",
   screen_text: "Reading the text on screen",
@@ -38,14 +38,14 @@ const toolActivity: Record<string, string> = {
   timeline_crossfade_audio: "Smoothing dialogue",
   timeline_framing: "Framing the picture",
   screen_area: "Marking what viewers may see",
-  timeline_first_cut: "Building first edit",
+  timeline_first_cut: "Building the first version of the video",
   captions_generate: "Generating captions",
-  change_get: "Reviewing change",
+  change_get: "Looking over the change",
   change_list: "Looking through your edits",
   edit_flag: "Flagging an edit for you",
   notes_list: "Reading notes",
-  note_reply: "Replying to note",
-  note_resolve: "Resolving note",
+  note_reply: "Replying to your note",
+  note_resolve: "Closing your note",
   render_request: "Preparing your video",
   render_status: "Checking your video",
   asset_add: "Adding media",
@@ -54,13 +54,16 @@ const toolActivity: Record<string, string> = {
   web_capture: "Capturing a page from the web",
   style_guide_save: "Saving the style guide",
   attachment_read: "Reading an attached file",
-  export_otio: "Exporting timeline",
-  task_question: "Asking question",
-  skill_save_from_change: "Saving skill",
-  skill_save_edit: "Saving skill",
+  export_otio: "Exporting the video for Resolve",
+  task_question: "Asking you a question",
+  skill_save_from_change: "Saving the skill",
+  skill_save_edit: "Saving the skill",
   skills_list: "Reading skills",
   learning_suggest: "Noting a rule",
 };
+
+/** What the line says while the model makes room in what it remembers of the run. */
+export const TIDYING = "Tidying up its notes";
 
 // New progress messages start with a short action. Older hosts also send
 // free-form commentary and diagnostics, which shouldn't displace a useful label.
@@ -134,8 +137,9 @@ function toolLabel(name: string, event: TaskEvent): string | undefined {
   if (!input || typeof input !== "object") return label;
   if ("index" in input && typeof input.index === "number" && Number.isSafeInteger(input.index) && input.index >= 0) {
     const count = "count" in input && typeof input.count === "number" && Number.isSafeInteger(input.count) && !("wholePicture" in input && input.wholePicture) ? input.count : 1;
-    if (name === "dialogue_review_inspect" && count > 1) return `Checking suggested cuts · Cuts ${input.index + 1}–${input.index + count}`;
-    return `${label} · ${name === "dialogue_review_inspect" ? "Cut" : "Edit"} ${input.index + 1}`;
+    // The call's own count of where it is isn't a number the editor knows: "Edit 3" in the chat is the third edit of
+    // a request's list and "Cut 3" is a call's number, so neither is said from it.
+    return name === "dialogue_review_inspect" && count > 1 ? "Checking flagged cuts" : label;
   }
   const time = "from" in input ? input.from : "start" in input ? input.start : "t" in input ? input.t : undefined;
   if (typeof time !== "number" || !Number.isFinite(time) || time < 0) return label;
@@ -163,7 +167,7 @@ export function taskActivityLabel(event: TaskEvent, waits: ReadonlySet<string> =
       if (event.data?.kind === "init") return "Getting started";
       if (event.data?.kind === "reasoning") return "Planning next step";
       if (event.data?.kind === "connection") return "Reconnecting to the model";
-      if (event.data?.kind === "compaction") return event.data.active === true ? "Compacting context" : undefined;
+      if (event.data?.kind === "compaction") return event.data.active === true ? TIDYING : undefined;
       if (event.data?.kind === "media_wait") {
         const label = typeof event.data.wait === "string" ? waitLabels[event.data.wait] : undefined;
         return label && !event.data.done ? `Waiting for ${label}` : undefined;
