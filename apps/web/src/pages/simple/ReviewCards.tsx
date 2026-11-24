@@ -9,6 +9,8 @@ import { ReviewActions } from "../../components/review/ReviewActions";
 import { AddTodo, EditVersion, RejectEdit, type RejectedEdit } from "../../components/review/ThreadEdits";
 import { Linked, linkedText } from "../../components/ui/Linked";
 import { Icon } from "../../components/ui/primitives";
+import { taskModelName } from "../../components/shell/TaskModelsSettings";
+import { useHostsStore } from "../../stores/hosts";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
 import { useHotkeys } from "../../lib/hotkeys";
@@ -112,6 +114,16 @@ export function UndoError({ projectId }: { projectId: string }) {
   </span>;
 }
 
+/**
+ * Who made an edit the chat's model handed to the model the editor chose for its kind of work: a quiet label in the
+ * card's row, "Motion graphics · Gemini 3 Pro". An edit the chat's model made itself has none.
+ */
+function MadeBy({ by }: { by: NonNullable<Change["handedOff"]> }) {
+  const hosts = useHostsStore(s => s.hosts);
+  const model = taskModelName(hosts, by);
+  return <span className="edit-card-by" title={`Done by ${model}, the model you chose for ${by.name} in Settings`}>{by.name} · {model}</span>;
+}
+
 /** A rejected edit shows where it was and says so, just rejected or opened again from its row. */
 export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
   return <section className="edit-card is-rejected" role="region" aria-label="Rejected edit">
@@ -125,7 +137,7 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
 export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPassNo, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
-  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
+  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject, madeBy }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
@@ -170,6 +182,8 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   rejectedEdits?: RejectedEdit[];
   onEngineReject(asked: boolean): void;
   onSentReject(sent: { task?: Task; version?: string }): void;
+  /** The task model that made it, when the chat's model handed it off. */
+  madeBy?: Change["handedOff"];
 }) {
   return <section className="edit-card" role="region" aria-label="Applied edit">
     {/* Whose footage is playing, and nothing else: the lit icon in the row under it is the way back, and names its key. */}
@@ -191,6 +205,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
           edit's kind, in amber: a press plays just that part, and its times are on hover. */}
       {reviewRange && <button type="button" className="edit-card-length is-check" onClick={onPlayCheck}
         title={`Play the part to check, ${checkSpan(reviewRange)}`}>Check</button>}
+      {madeBy && <MadeBy by={madeBy} />}
     </div>
     {/* A cut reads from the version before it. Until that arrives the mark stands alone and says the words are on their
         way, as a call's does. When it couldn't be read the passage offers to ask again, with why on hover. */}
@@ -277,6 +292,7 @@ export function CallCard({ projectId, pass, openCall, listening, callNum, callAt
         <CutWordsLine key={`what ${callKey}`} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength} verb="Takes out" />
         <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} /></div>
         : <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} />}
+      {pass.handedOff && <MadeBy by={pass.handedOff} />}
     </div>
     {/* A call hasn't come out yet, so its words are marked in amber. When the pass's version couldn't be loaded there
         is nothing to read them on: the passage stops waiting and offers to ask again, as it does for the words. */}

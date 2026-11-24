@@ -166,6 +166,11 @@ export const Change = z.object({
     .default([]),
   /** Agent task that produced it, if any. */
   taskId: Id.optional(),
+  /**
+   * The model the request handed this work to, as a kind of work the editor gave it in Task models: the hand-off run
+   * that saved it, the kind of work by the editor's name for it, and the model. `taskId` stays the request's.
+   */
+  handedOff: z.object({ taskId: Id, name: z.string().max(40), agent: z.string(), model: z.string().optional() }).optional(),
   /** The thread (one request and everything that followed) this change belongs to. */
   threadId: Id.optional(),
   /**

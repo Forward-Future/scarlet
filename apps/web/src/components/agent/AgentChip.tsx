@@ -6,7 +6,7 @@ import { AGENT_LABEL, isConfiguredAgent, onlineAgents, useHostsStore } from "../
 import { modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
 import { ProviderIcon, type ModelScope } from "./ModelProviders";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "./ModelRefresh";
-import { FavoriteButton } from "./FavoriteButton";
+import { ModelRow, ModelScopeBar, ModelSearch, scopeModels } from "./ModelSelectorParts";
 import { QuotaDetails } from "./QuotaDetails";
 import { moveSelectorFocus, placeModelSelector } from "./modelSelectorLayout";
 import { BoltIcon, EffortDial, GaugeIcon, TuneDrawer } from "./ModelControls";
@@ -328,38 +328,11 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
       : undefined;
   const hasDock = Boolean((effective && hasOptions) || quotaProviders.length > 0);
 
-  const query = search.trim().toLowerCase();
-  const matches = choices.filter((m) => `${AGENT_LABEL[m.agent]} ${m.label} ${m.model ?? ""}`.toLowerCase().includes(query));
-  const scoped = query
-    ? matches
-    : active === "all"
-      ? matches
-      : active === "favorites"
-        ? matches.filter((m) => favorites.includes(m.key))
-        : matches.filter((m) => m.agent === active);
-  const favRows = scoped.filter((m) => favorites.includes(m.key));
-  const otherRows = scoped.filter((m) => !favorites.includes(m.key));
-  const multiProvider = Boolean(query) || active === "all" || active === "favorites";
+  const { query, scoped, favRows, otherRows, multiProvider } = scopeModels(choices, favorites, search, active);
   const selectedInView = Boolean(selected && scoped.some((m) => m.key === selected.key));
 
   const renderModelRow = (m: (typeof choices)[number]) => (
-    <div key={m.key} className="group flex items-center rounded-md pr-1 hover:bg-raised">
-      <button
-        type="button"
-        role="radio"
-        aria-checked={selected?.key === m.key}
-        aria-label={`${AGENT_LABEL[m.agent]} · ${m.label}`}
-        onClick={() => choose({ agent: m.agent, model: m.model })}
-        className={`flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-2.5 pr-1 text-left text-[13px] focus-visible:-outline-offset-2 ${selected?.key === m.key ? "font-medium text-fg" : "text-muted group-hover:text-fg"}`}
-      >
-        <span className="flex w-3 shrink-0 items-center justify-center">
-          {selected?.key === m.key && <Icon name="check" size={12} />}
-        </span>
-        {multiProvider && <span className="shrink-0 opacity-85"><ProviderIcon id={m.agent} size={13} /></span>}
-        <span className="truncate">{m.label}</span>
-      </button>
-      <FavoriteButton choice={m} revealOnHover />
-    </div>
+    <ModelRow key={m.key} choice={m} selected={selected?.key === m.key} multiProvider={multiProvider} onPick={() => choose({ agent: m.agent, model: m.model })} />
   );
 
   return (
@@ -462,107 +435,25 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
             <>
               <div className="flex h-[39px] items-center gap-1 border-b border-line/60 px-2">
                 {searchOpen ? (
-                  <label className="flex min-w-0 flex-1 items-center gap-2 pl-1 text-muted">
-                    <Icon name="search" size={13} />
-                    <input
-                      type="search"
-                      ref={searchField}
-                      aria-label="Search models"
-                      placeholder="Search models…"
-                      className="min-w-0 flex-1 border-b-0 bg-transparent text-[13px] text-fg outline-none placeholder:text-dim"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      aria-label="Close search"
-                      title="Close search"
-                      onClick={() => { setSearch(""); setSearchOpen(false); panel.current?.focus(); }}
-                      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-fg"
-                    >
-                      <Icon name="x" size={12} />
-                    </button>
-                  </label>
+                  <ModelSearch inputRef={searchField} value={search} onChange={setSearch}
+                    onClose={() => { setSearch(""); setSearchOpen(false); panel.current?.focus(); }} />
                 ) : (
-                  <>
-                    <div role="group" aria-label="Providers" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-                      <button
-                        type="button"
-                        aria-pressed={active === "all"}
-                        onClick={() => { setScope("all"); setGearOpen(false); }}
-                        className={`flex h-[26px] shrink-0 items-center rounded-md px-2 text-[11.5px] font-medium transition-colors ${active === "all" ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"}`}
-                      >
-                        All
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="Favorites"
-                        title="Favorites"
-                        aria-pressed={active === "favorites"}
-                        onClick={() => { setScope("favorites"); setGearOpen(false); }}
-                        className={`flex size-[26px] shrink-0 items-center justify-center rounded-md transition-colors ${active === "favorites" ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"}`}
-                      >
-                        <Icon name="star" size={12} />
-                      </button>
-                      {providers.map((id) => {
-                        const agentInfo = agents.find((a) => a.id === id);
-                        const minPct = agentInfo && isSubscriptionProvider(agentInfo) ? minRemainingPercent(agentInfo.quota) : undefined;
-                        const isLow = minPct !== undefined && minPct < LOW_QUOTA_THRESHOLD;
-                        const pillTitle = minPct !== undefined
-                          ? `${AGENT_LABEL[id]} · ${formatPercent(minPct)} remaining`
-                          : AGENT_LABEL[id];
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            aria-label={AGENT_LABEL[id]}
-                            title={pillTitle}
-                            aria-pressed={active === id}
-                            onClick={() => { setScope(id); setGearOpen(false); }}
-                            className={`relative flex size-[26px] shrink-0 items-center justify-center rounded-md transition-colors ${active === id ? "bg-raised text-fg" : "text-muted opacity-75 hover:bg-raised/60 hover:opacity-100"}`}
-                          >
-                            <ProviderIcon id={id} size={14} />
-                            {minPct !== undefined && (
-                              <span
-                                data-quota-bar={id}
-                                data-low={isLow ? "true" : "false"}
-                                className="pointer-events-none absolute bottom-[2px] left-[4px] right-[4px] h-[2px] overflow-hidden rounded-full bg-line/70"
-                                aria-hidden="true"
-                              >
-                                <span
-                                  className={`block h-full rounded-full ${isLow ? "bg-warn" : "bg-fg/55"}`}
-                                  style={{ width: `${Math.max(4, Math.min(100, minPct))}%` }}
-                                />
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-0.5 pl-1">
-                      <button
-                        type="button"
-                        aria-label="Search models"
-                        title="Search models"
-                        onClick={() => { setGearOpen(false); setSearchOpen(true); }}
-                        className="flex size-[26px] items-center justify-center rounded-md text-muted hover:bg-raised hover:text-fg"
-                      >
-                        <Icon name="search" size={13} />
-                      </button>
-                      <button
-                        ref={gearButton}
-                        type="button"
-                        aria-label="Model actions"
-                        aria-haspopup="menu"
-                        aria-expanded={gearOpen}
-                        title="Model settings"
-                        onClick={() => setGearOpen((v) => !v)}
-                        className={`flex size-[26px] items-center justify-center rounded-md transition-colors ${gearOpen ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
-                      >
-                        <Icon name="settings" size={13} />
-                      </button>
-                    </div>
-                  </>
+                  <ModelScopeBar providers={providers} agents={agents} active={active}
+                    onScope={(next) => { setScope(next); setGearOpen(false); }}
+                    onSearch={() => { setGearOpen(false); setSearchOpen(true); }}>
+                    <button
+                      ref={gearButton}
+                      type="button"
+                      aria-label="Model actions"
+                      aria-haspopup="menu"
+                      aria-expanded={gearOpen}
+                      title="Model settings"
+                      onClick={() => setGearOpen((v) => !v)}
+                      className={`flex size-[26px] items-center justify-center rounded-md transition-colors ${gearOpen ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
+                    >
+                      <Icon name="settings" size={13} />
+                    </button>
+                  </ModelScopeBar>
                 )}
               </div>
 

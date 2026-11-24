@@ -136,6 +136,7 @@
  */
 import { z } from "zod/v3";
 import { CheckIn } from "./checkIn.js";
+import { DEFAULT_TASK_MODELS, TASK_MODELS_MAX, TaskModelType } from "./taskModels.js";
 
 /** The longest "Talking to you" the editor can write: a few short lines of how they like to be spoken to. */
 export const TALKING_TO_YOU_MAX = 2000;
@@ -526,6 +527,11 @@ export const ServerSettings = z.object({
    * one model as "agent:model" (`chooseListener`).
    */
   listening: z.string().regex(/^(auto|off|[a-z]+:[^\s]+)$/).default("auto"),
+  /**
+   * Kinds of work the editor gives to a model of their choosing, each with what counts as it (Settings → Models → Task
+   * models). The model running a request hands such work to that model with `hand_off`. "same" leaves it with the chat's.
+   */
+  taskModels: z.array(TaskModelType).max(TASK_MODELS_MAX).default(DEFAULT_TASK_MODELS),
 });
 export type ServerSettings = z.infer<typeof ServerSettings>;
 
