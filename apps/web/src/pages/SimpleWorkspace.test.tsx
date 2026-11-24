@@ -4278,6 +4278,27 @@ it("keeps a call on the working cut, with no gaps, when the version that has the
   expect(rounded(listen.mock.lastCall![0].skips)).toEqual([[6, 7]]);
 });
 
+it("reads the Transcript from the version an open call is shown on, so its words, times and Ask about this are the call's", async () => {
+  appliedPart();
+  const seek = vi.spyOn(player, "seek");
+  await show();
+  await act(async () => {});
+  await openCall("Breath before the price.");
+  await act(async () => {});
+  expect(container.querySelector(".simple-timeline-gap")).not.toBeNull();
+  await openTranscript();
+  const word = (text: string) => [...container.querySelectorAll<HTMLElement>(".simple-transcript [data-w]")].find(w => w.textContent === text)!;
+  // The cut at 0:07 took "editing. Three" out of the working cut. The call is shown on the version that still has it,
+  // and so are its words, at the times the player is on.
+  expect(["for", "editing.", "Three", "things"].map(text => word(text)?.title)).toEqual(["0:06 · Host", "0:06 · Host", "0:07 · Host", "0:08 · Host"]);
+  await click(word("things"));
+  expect(seek.mock.lastCall?.[0]).toBeGreaterThan(8);
+  // Words chosen in the call's passage stay about that call, on the version it is shown on.
+  await askAboutWord(Number(word("useful").dataset.w));
+  expect(boxTag()).toBe("Cut 2");
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_ready", cutIndex: 1, version: "ver_base", label: "“useful”" });
+});
+
 it("plays a call's cut footage from a click inside its passage on the timeline", async () => {
   runningPass();
   const listen = vi.spyOn(player, "audition");

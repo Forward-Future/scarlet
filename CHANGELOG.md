@@ -130,6 +130,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
 - Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
 - An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
+- With a call open, the Transcript shows the words around it as the player does, so pressing a word lands where it should and “Ask about this” on words in the call stays about that call.
 
 ## November 22, 2026
 
