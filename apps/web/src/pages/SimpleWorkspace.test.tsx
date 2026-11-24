@@ -12320,6 +12320,8 @@ it("draws a revision of an edit under its row while the request that made it sti
   // One block, above the message box: the request at work, with the revision inside it rather than in the queue.
   expect(container.querySelector('.unit[data-run="task_fix"]')).toBeNull();
   expect(container.querySelector(".queue-tray")).toBeNull();
+  // The edit sent back is Working's row, and the revision is under it.
+  await click(tabNamed(owner(), "Working"));
   expect(sub().closest('.unit[data-run="task_made"]')).toBe(owner());
   expect(owner().closest(".simple-pin")).not.toBeNull();
   // Each has its own Stop: the request's in its band, the revision's on its own heading.
@@ -12329,8 +12331,7 @@ it("draws a revision of an edit under its row while the request that made it sti
   expect([...container.querySelectorAll(".unit-pause-edit")].map(b => b.closest(".unit-msg"))).toEqual([owner().querySelector(":scope > .unit-msg")]);
   expect([...sub().querySelectorAll(".subunit-msg > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit: Make the captions bigger."]);
   expect(sub().querySelector('[aria-label="Scarlet’s work"] .working-text')).not.toBeNull();
-  // Opened, the edit's row says it is being revised while the request goes on.
-  await click(seeAll(owner())!);
+  // The edit's row says it is being revised while the request goes on.
   const row = sub().previousElementSibling as HTMLElement;
   expect([row.querySelector(".simple-edit-title")?.textContent, row.querySelector(".simple-edit-check")?.textContent]).toEqual(["captions", "Revising…"]);
   // The revision lands and leaves; the request is still at work, above the message box.
@@ -12365,11 +12366,12 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
     context: { threadId: thread.id, changeId: "chg_approved_2", editIndex: 2, time: 11.5, end: 16, message: "Keep the last word." } }] }));
   await act(async () => {});
   expect(owner().closest(".simple-pin")).not.toBeNull();
-  // The list is still just that edit, now Revising…, with the request directly under its row. The count disappears
-  // while Scarlet works on it, and See all remains available.
+  // The edit is Working's now, and stays in For you for its moment: still the one row, now Revising…, with the request
+  // directly under it. The count disappears while Scarlet works on it.
   expect([list()?.getAttribute("aria-label"), rows()]).toEqual(["Edits that need you", [["wrap", "Revising…"]]]);
   expect(container.querySelector('.subunit[data-run="task_fix"]')!.previousElementSibling?.querySelector(".simple-edit-title")?.textContent).toBe("wrap");
-  expect(reviewModes(owner())).toEqual([["For you", "true"], ["See all", "false"]]);
+  DBG(owner(), "t21 a");
+  expect(reviewModes(owner())).toEqual(tabs());
   expect(owner().querySelector(".simple-review-tab-count")).toBeNull();
   // Scarlet stops to ask the editor something about it. It is their turn again: the row says so in the card's words,
   // in amber and still, its number amber, and For you counts it. Answered, it reads Revising… again.
@@ -12395,6 +12397,7 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
       timelineEdits: [{ label: "wrap", range: { start: 11.5, end: 16 } }] }] }));
   await act(async () => {});
   expect(container.querySelector(".simple-pin .unit")).toBeNull();
+  DBG(owner(), "t21 end");
   expect([list(), seeAll(owner())?.getAttribute("aria-expanded"), container.querySelector('[data-run="task_fix"]')]).toEqual([null, "false", null]);
 });
 
@@ -12424,7 +12427,7 @@ it("draws a request about one place of an edit made in several once, under that 
   expect(under[0]!.previousElementSibling?.classList.contains("simple-edit")).toBe(true);
 });
 
-it("keeps a request about an edit that isn't among the ones that need the editor under their list", async () => {
+it("keeps a request about an edit that isn't among the ones that need the editor under its row in Working", async () => {
   const { base, thread } = madeRequest();
   // Only the wrap asks for a look, and the editor sent the captions back.
   data = { ...data, tasks: [...data.tasks, captionFix(base, thread.id)] };
@@ -12434,11 +12437,15 @@ it("keeps a request about an edit that isn't among the ones that need the editor
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   await click(block().querySelector(".simple-pass-need")!);
   await act(async () => {});
-  expect([...block().querySelectorAll(".simple-edits .simple-edit-title")].map(title => title.textContent)).toEqual(["wrap"]);
-  // The captions have no row in that list, so the request about them follows it.
-  const under = [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
-  expect(under.map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
-  expect(under[0]!.previousElementSibling?.classList.contains("simple-edits")).toBe(true);
+  const titles = () => [...block().querySelectorAll(".simple-edits .simple-edit-title")].map(title => title.textContent);
+  const under = () => [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
+  expect(titles()).toEqual(["wrap"]);
+  // The captions have no row in For you, and neither has the request about them: both are Working's.
+  expect(under()).toEqual([]);
+  await click(tabNamed(block(), "Working"));
+  expect(titles()).toEqual(["captions"]);
+  expect(under().map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
+  expect(under()[0]!.previousElementSibling?.classList.contains("simple-edit")).toBe(true);
 });
 
 it("keeps Scarlet's reply to two lines however long it is, and opens it in full on a click", async () => {
@@ -12511,17 +12518,16 @@ it("leaves a flagged edit that's open where it is when need you is pressed, as a
   const turn = turnFor("chg_approved_2");
   const rows = () => [...editRowsIn(turn)];
   const need = () => turn.querySelector<HTMLElement>(".simple-pass-need")!;
-  // The editor opens the second of the flagged edits from the whole list, then asks for just the ones that need them.
+  // The editor opens the second of the flagged edits with the optional line open, then presses For you.
   await click(rows()[2]!);
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   await click(need());
   await act(async () => {});
-  // The list is those two, and the edit they had open is still the one open: it doesn't jump back to the first.
-  expect(rows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions", "wrap"]);
+  // The optional line stays open, and the edit they had open is still the one open: it doesn't jump back to the first.
+  expect(rows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["music bed", "captions", "wrap"]);
   expect(openTitle()).toBe("wrap");
   // With an edit open that asks for nothing, it opens the first that does.
-  await click(seeAll(turn)!);
   await click(rows()[0]!);
   await act(async () => {});
   expect(openTitle()).toBe("music bed");
@@ -12535,11 +12541,12 @@ it("opens the next edit when one Scarlet didn't flag is kept, with a flagged edi
   appliedEdits();
   await show();
   await act(async () => {});
-  await click(turnFor("chg_approved_2").querySelector(".simple-edit")!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
   expect(openTitle()).toBe("music bed");
-  // The editor is going through them one by one: captions is next, not the flagged wrap two rows down.
+  // The editor is going through the optional ones one by one: captions is next, not the flagged wrap over them.
   await press("k");
   expect(openTitle()).toBe("captions");
+  // After the last optional one, Keep goes to what waits.
   await press("k");
   expect(openTitle()).toBe("wrap");
   // Kept on the flagged one, with no other flagged edit waiting, the card closes.
