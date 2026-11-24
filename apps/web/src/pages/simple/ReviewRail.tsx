@@ -52,7 +52,7 @@ export function ReviewRail({ store, threads, open, onOpen, work, queue, queued, 
     <div className="review-rail-foot">
       <button type="button" className="review-sec" aria-expanded={open.working} onClick={letGo(() => onOpen("working", !open.working))}>
         <span>Working</span><b>{working || ""}</b><Icon name="chevron" size={10} /></button>
-      {open.working && <div className="review-sec-body" role="group" aria-label="Working">
+      {<div className="review-sec-body" role="group" aria-label="Working" hidden={!open.working}>
         {work.map(item => <div key={item.id} className="review-work" data-run={item.id}>
           <StepMark state="working" />
           <div className="review-work-text"><p className="review-work-title" title={item.text}>{item.text}</p>
@@ -64,7 +64,7 @@ export function ReviewRail({ store, threads, open, onOpen, work, queue, queued, 
       </div>}
       <button type="button" className="review-sec" aria-expanded={open.done} onClick={letGo(() => onOpen("done", !open.done))}>
         <span>Done</span><b>{done || ""}</b><Icon name="chevron" size={10} /></button>
-      {open.done && <div className="review-sec-body" role="group" aria-label="Done">
+      {<div className="review-sec-body" role="group" aria-label="Done" hidden={!open.done}>
         {slots("done")}
         {done === 0 && <p className="simple-review-empty">Nothing decided yet.</p>}
       </div>}
