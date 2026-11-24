@@ -152,6 +152,46 @@ it("labels queued revisions Up next when next in line, Queued otherwise, and Rev
   expect(revisionWord({ id: "t1", state: "queued" }, { adding: true })).toBe("Queued");
 });
 
+it("says Needs your answer, not Revising…, while the request about a cut or edit waits on the editor's answer", () => {
+  expect(revisionWord({ id: "t1", state: "waiting_for_user" })).toBe("Needs your answer");
+  // Whatever the request was, it is the editor's turn; answered, Scarlet is on it again.
+  expect(revisionWord({ id: "t1", state: "waiting_for_user" }, { rejecting: true, nextQueuedId: "t1" })).toBe("Needs your answer");
+  expect(revisionWord({ id: "t1", state: "running" })).toBe("Revising…");
+});
+
+it("ends an edit's row on Needs your answer in amber, its number amber and still, while its revision asks the editor something", async () => {
+  const base = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const edits = threadEditList(base) as ThreadEdit[];
+  const asked = (state: "running" | "waiting_for_user") => ({ ...base, tasks: [...base.tasks,
+    { ...data.tasks[0]!, id: "task_ask", state, context: { changeId: edits[1]!.changeId, editIndex: edits[1]!.spot, threadId: base.id } }] }) as Thread;
+  useProjectStore.setState({ current: data, status: "ready" });
+  const row = () => container.querySelectorAll<HTMLElement>(".simple-edit")[1]!;
+  const reads = () => [row().querySelector(".edit-badge")!.className, row().querySelector(".simple-edit-check")!.textContent, row().querySelector(".simple-edit-check")!.className, row().getAttribute("aria-label")];
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={asked("running")} edits={edits} onPlay={() => {}} />));
+  expect(reads()).toEqual(["edit-badge", "Revising…", "simple-edit-check is-kept working-text", expect.stringMatching(/, revising$/)]);
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={asked("waiting_for_user")} edits={edits} onPlay={() => {}} />));
+  expect(reads()).toEqual(["edit-badge is-check", "Needs your answer", "simple-edit-check", expect.stringMatching(/, needs your answer$/)]);
+});
+
+it("keeps every edit's number when one is rejected: 1, ×, 3, with the rejected row where it was", async () => {
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const [first, second, third] = threadEditList(thread) as ThreadEdit[];
+  useProjectStore.setState({ current: data, status: "ready" });
+  const reads = () => [...container.querySelectorAll(".simple-edit")].map(row => [row.querySelector(".edit-badge")!.textContent, row.querySelector(".simple-edit-title")!.textContent]);
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={[first!, second!, third!]} onPlay={() => {}} />));
+  expect(reads()).toEqual([["1", first!.label], ["2", second!.label], ["3", third!.label]]);
+  // The engine's put-back stands where the edit was: a new change's row, which replaced the edit it took out.
+  const gone = (edit: ThreadEdit): ThreadEdit => ({ ...edit, changeId: "chg_back", spot: 0, previous: [{ changeId: edit.changeId, spot: edit.spot }], rejected: true });
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={[first!, third!]} rejected={[gone(second!)]} onPlay={() => {}} />));
+  expect(reads()).toEqual([["1", first!.label], ["", second!.label], ["3", third!.label]]);
+  // The first one rejected, at the very time the second starts or not: the others are still 2 and 3.
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={[second!, third!]} rejected={[gone({ ...first!, range: second!.range })]} onPlay={() => {}} />));
+  expect(reads()).toEqual([["", first!.label], ["2", second!.label], ["3", third!.label]]);
+  // The last one rejected leaves the rest as they were, and its row at the end.
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={[first!, second!]} rejected={[gone(third!)]} onPlay={() => {}} />));
+  expect(reads()).toEqual([["1", first!.label], ["2", second!.label], ["", third!.label]]);
+});
+
 it("words the request to add a to-do with what it asks for", () => {
   expect(addInstruction("Add the other boat renders")).toBe("The editor asked you to add what this to-do asks for: “Add the other boat renders”. Make or find it, put it in the video at this spot, and mark the to-do resolved.");
   expect(addInstruction()).toMatch(/^The editor asked you to add what this to-do asks for\. /);

@@ -3,7 +3,7 @@ import { historyLineage } from "@scarlet/timeline";
 import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { editGroups, noEdits, revisionWord, useAdding, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
+import { asksEditor, editGroups, listPlaces, noEdits, revisionWord, useAdding, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
 import { editRemovedLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
 import { editKey, keepEdits } from "../../lib/keptEdits";
@@ -165,7 +165,7 @@ export function RejectedMark() {
  * A row plays its edit, whose details and decisions sit in its card on top of the timeline. Pressed again, the open row
  * plays its edit again. `under` is what sits directly under an edit's row: a request about that one edit that hasn't
  * left the chat. With `only`, the list is just the edits it picks, such as the ones that need the editor, each with
- * the number it has in the whole list.
+ * the number it has in the whole list. A number is an edit's for good: rejecting one leaves the others' as they were.
  */
 export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
@@ -186,23 +186,29 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   const open = showing?.rejected ? -1 : edits.findIndex(edit => !!showing && matchesEdit(showing, edit));
   // An edit made in several places is one row. It stands for the place that's open, else the first one asking for a
   // look, else the first.
+  const order = listPlaces(thread, edits, rejected);
   const rows = editGroups(edits).filter(({ members }) => !only || members.some(m => only(m.edit))).map(({ members }) => {
     const waiting = (m: { edit: ListedEdit }) => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit);
+    // Scarlet stopped work on it to ask the editor something: it is their turn, so it is the place the row stands for.
+    const asking = (m: { edit: ListedEdit }) => asksEditor(revising(m.edit));
     const relevant = only ? members.filter(m => only(m.edit)) : members;
-    const shown = members.find(m => m.i === open) ?? members.find(waiting) ?? relevant[0] ?? members[0]!;
+    const shown = members.find(m => m.i === open) ?? members.find(asking) ?? members.find(waiting) ?? relevant[0] ?? members[0]!;
     // An edit made in several places keeps its first number, so the list reads 1, 2, 5 and doesn't renumber as places are kept.
-    return { ...shown, n: members[0]!.i + 1, places: members.length, needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
+    // Nor as an edit is rejected: every edit keeps the number it had, and the rejected row shows none.
+    return { ...shown, first: members[0]!.i, n: order.number(members[0]!.edit)!, places: members.length, needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
       nested: under ? members.flatMap(m => under(m.edit)) : [], took: spent ? members.flatMap(m => spent(m.edit) ?? [])[0] : undefined };
   });
   // A rejected edit keeps its place in the video's order, in See all and (when it was flagged) in For you.
-  const gone = (only ? rejected.filter(only) : [...rejected]).sort((a, b) => a.range.start - b.range.start);
+  const gone = only ? order.gone.filter(only) : order.gone;
+  /** The rejected rows between two rows of the list: the ones that stood after the edit at `from` and no later than the one at `to`. */
+  const goneBetween = (from: number, to: number) => gone.filter(e => order.slot(e) > from && order.slot(e) <= to);
+  const firstOf = (at: number) => rows[at]?.first ?? Infinity;
   // ↑ ↓, Keep, tab switches, and rows arriving above can move the selected edit: always keep it in view.
   const mode = only ? "need" : "all";
   let selectedKey: string | undefined;
   let before = 0;
   const scanGone = (from: number, to: number) => {
-    for (const e of gone) {
-      if (e.range.start < from || e.range.start >= to) continue;
+    for (const e of goneBetween(from, to)) {
       if (showing && (matchesEdit(showing, e) || matchesEdit(e, showing))) {
         selectedKey = `${mode}:${before}:rejected:${editKey(e)}`;
         return true;
@@ -211,18 +217,18 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
     }
     return false;
   };
-  if (!scanGone(-Infinity, rows[0]?.edit.range.start ?? Infinity)) {
+  if (!scanGone(-1, firstOf(0))) {
     for (let at = 0; at < rows.length; at++) {
       const { edit, i, nested } = rows[at]!;
       if (i === open) { selectedKey = `${mode}:${before}:${editKey(edit)}`; break; }
       before += 1 + nested.length;
-      if (scanGone(edit.range.start, rows[at + 1]?.edit.range.start ?? Infinity)) break;
+      if (scanGone(firstOf(at), firstOf(at + 1))) break;
     }
   }
   useKeepSelectedInView(list, selectedKey);
   if (!edits.length && !rejected.length) return null;
   // A press shows it again: where it was on the timeline, with its note, over the video as it plays without it.
-  const goneAfter = (from: number, to: number) => gone.filter(e => e.range.start >= from && e.range.start < to).map(e => {
+  const goneAfter = (from: number, to: number) => goneBetween(from, to).map(e => {
     // Lit for the edit it was, too, while that one is still on its card, leaving.
     const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e, showing));
     return <li key={editKey(e)}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
@@ -234,7 +240,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
     </button></li>;
   });
   return <ol ref={list} className="simple-edits" aria-label={only ? "Edits that need you" : "Edits in this thread"}>
-    {goneAfter(-Infinity, rows[0]?.edit.range.start ?? Infinity)}
+    {goneAfter(-1, firstOf(0))}
     {rows.map(({ edit, i, n, places, needs, allKept, nested, took }, at) => {
       const on = i === open;
       const isKept = places > 1 ? allKept : reviewed(edit);
@@ -244,13 +250,15 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // Scarlet is on that revision now, so the row's word moves. One waiting its turn sits still.
       const busy = !!revisingNow && isWorkingTask(revisingNow.state);
       const statusWord = revisionWord(revisingNow, { rejecting: rejecting(edit), adding: adding(edit), nextQueuedId });
+      // Scarlet stopped to ask the editor something about it: the row waits on them again, amber, and doesn't shimmer.
+      const asks = asksEditor(revisingNow);
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       const decided = isKept && !isRevising;
       // In For you, a handled edit says how it was decided (Kept, or Done for a marker).
       // Otherwise a cut says how much came out, and any other edit says what it did, or in how many places.
       const value = only && decided ? (edit.marker ? "Done" : "Kept")
         : places > 1 ? `${places} places` : editRemovedLabel(edit) ?? editRowWord(edit);
-      const check = places > 1 ? needs > 0 : !!edit.check && !isRevising;
+      const check = asks || (places > 1 ? needs > 0 : !!edit.check && !isRevising);
       const title = (edit.reason && edit.summary) || edit.label;
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
       // sentence for that.
@@ -268,11 +276,12 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         <span className="simple-edit-title"><span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
         {/* Sent back or come back revised, the row ends on that (Revising…, Up next, Revised) in place of what it was:
-            one word a row, on the row's own line. */}
+            one word a row, on the row's own line. One whose request stopped to ask the editor ends on Needs your
+            answer, in amber and still: it is their turn. */}
         {value && !statusWord && !revised && <span className="simple-edit-value" title={took}>{value}</span>}
-        {statusWord ? <span className={busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>
+        {statusWord ? <span className={asks ? "simple-edit-check" : busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>
           : revised && <span className="simple-edit-check" title={took}>{edit.check}</span>}
-      </button>{nested}</li>{goneAfter(edit.range.start, rows[at + 1]?.edit.range.start ?? Infinity)}</Fragment>;
+      </button>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
     })}
   </ol>;
 }

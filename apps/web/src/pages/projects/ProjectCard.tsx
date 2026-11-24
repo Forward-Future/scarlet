@@ -92,15 +92,14 @@ function ProjectActions({ project }: { project: ProjectSummary }) {
 
   return <>
     <div className="project-actions">
-      <Dropdown label={`Actions for ${project.name}`} align="right" width={176}
+      <Dropdown label={`Actions for ${project.name}`} align="right" width={208}
         button={<span className="btn-icon" title="Project actions"><Icon name="more" size={18} /></span>}>
         {close => <>
           <MenuItem onClick={() => { close(); setName(project.name); setError(""); setDialog("rename"); }}>Rename</MenuItem>
           <MenuItem onClick={() => { close(); void save({ archived: !project.archived }); }}>{project.archived ? "Unarchive" : "Archive"}</MenuItem>
           {(project.mediaPaused || project.activity?.some(a => a.kind !== "editing")) && (
-            <MenuItem disabled={busy} title={project.mediaPaused ? "Resume media processing" : "Pause media processing"}
-              onClick={() => { close(); void save({ mediaPaused: !project.mediaPaused }); }}>
-              {project.mediaPaused ? "Resume" : "Pause"}
+            <MenuItem disabled={busy} onClick={() => { close(); void save({ mediaPaused: !project.mediaPaused }); }}>
+              {project.mediaPaused ? "Resume media processing" : "Pause media processing"}
             </MenuItem>
           )}
           <MenuItem danger onClick={() => { close(); setError(""); setDialog("trash"); }}>Move to Trash</MenuItem>

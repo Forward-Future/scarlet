@@ -318,7 +318,7 @@ it("says how far the transcripts it waits on are, and keeps file progress in Med
   view.unmount();
 });
 
-it("says a run that ended without its transcripts is paused, and offers to finish it once they're ready", () => {
+it("says a run that ended without its transcripts needs them, not that it is paused, and offers to finish it once they're ready", () => {
   const paused: Task = { ...task, needsTranscripts: ["cam"], finishedAt: "2026-11-05T11:04:00.000Z" };
   const transcribing: Task = { ...task, id: "tsk_cam", kind: "transcribe", agent: "api", instruction: "Transcribe cam", context: { mediaId: "cam" },
     state: "running", summary: null, finishedAt: undefined, progress: { stage: "aligning", fraction: 0.18, remainingSeconds: 13_689 } };
@@ -330,7 +330,7 @@ it("says a run that ended without its transcripts is paused, and offers to finis
   const view = render(<RunBundle task={paused} events={[]} changes={[]} onResume={onResume} onWaitForTranscripts={onWait} />);
   const line = () => [view.host.querySelector(".run-summary")?.textContent, view.host.querySelector(".run-wait")?.textContent];
   // How far along it is, as a percent: no guess at how long is left.
-  expect(line()).toEqual(["Paused · needs transcript", "Transcript 18%Finish when ready"]);
+  expect(line()).toEqual(["Needs transcript", "Transcript 18%Finish when ready"]);
   act(() => view.host.querySelector<HTMLButtonElement>(".run-wait button")!.click());
   expect(onWait).toHaveBeenCalledWith(true);
   view.unmount();
@@ -628,6 +628,8 @@ it("leaves the word for how a run ended to its heading when the block has one, w
   expect(view.host.querySelector(".req-act")).toBeNull();
   // A run that finished has no word, and one that failed says so.
   expect([runEnded(task), runEnded({ ...task, state: "failed" })]).toEqual([undefined, "Couldn’t finish"]);
+  // One that waits on a transcript says so. "Paused" is for editing the editor paused, which Resume picks up.
+  expect([runEnded({ ...task, needsTranscripts: ["cam"] }), runEnded({ ...task, needsTranscripts: ["cam", "mic"] })]).toEqual(["Needs transcript", "Needs transcripts"]);
   view.unmount();
 });
 

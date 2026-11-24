@@ -6,6 +6,21 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- For a request that made several edits, "See all" or "See both" now sits at the end of the sentence, as "See edit" does, until you open the list.
+- Footage a cut removes now reads "Took out" everywhere, or "Takes out" on a cut that hasn't gone in yet, and footage put back reads "Put back", instead of "Removed" and "Added".
+- A call you rejected before its pass went in now opens from its row in For you as a rejected edit does: the timeline goes to where its footage plays, and its card shows Scarlet's note and Rejected.
+- A request whose only edit you rejected keeps that edit's row, with its × and Rejected, and a press on it shows the edit again.
+- Rejecting an edit no longer renumbers the others: the list and the timeline's dots keep the numbers they had, such as 1, ×, 3.
+- When Scarlet stops revising a cut or an edit to ask you something, its row says "Needs your answer" in amber and For you counts it.
+- Pause now shows once in the whole chat, on the request above the message box, instead of once for every request Scarlet has; each request keeps its own Stop.
+- The ⋯ menu and a project's menu in the library now say "Pause media processing" and "Resume media processing", and a request that waits on a transcript says "Needs transcript" instead of "Paused".
+- A folded request's heading says what waits on you under it: "For you" with its count, and the amber dot when Scarlet has a question.
+- N on an open cut or edit aims your message at the frame you're on, as pausing there does.
+- Speaking while you change a queued request's words puts what you said in the message box, where it waits for the tick like words you typed.
+- Taking a request out of the queue with its × puts its words in the message box when the box is empty, so you can change them and send again.
+- While the mic records, its red button is named "Send (Esc to discard)", and Esc throws the recording away without sending anything.
+- Files and a marked frame attached to an answer to Scarlet's question now go with the answer.
+- A time typed in a message, such as "make it 1:30 long", shows the same "At 1:30" tag as a picked moment, with its × to take it off.
 - An edit Scarlet touched up afterwards, such as an inserted segment it then trimmed a black frame from, now stays in the chat with its See edit link instead of disappearing.
 - Collapsing the request above the message box now hides its list of edits too, instead of only turning the arrow.
 - A request's heading is one line, with the rest on hover; the request Scarlet is working on and the one you picked keep two.

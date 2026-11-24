@@ -266,9 +266,12 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
 const WORKING = "Working on your edit";
 const PICKING_UP = "Picking up where it left off";
 
-/** How a run that didn't finish ended, in the words its block says: paused for its transcripts, stopped, or failed. */
+/**
+ * How a run that didn't finish ended, in the words its block says: waiting for its transcripts, stopped, or failed.
+ * "Paused" is kept for editing the editor paused with Pause, which Resume picks up; this one waits on a transcript.
+ */
 export function runEnded(task: Task) {
-  return taskNeedsTranscripts(task) ? `Paused · needs ${task.needsTranscripts!.length > 1 ? "transcripts" : "transcript"}`
+  return taskNeedsTranscripts(task) ? `Needs ${task.needsTranscripts!.length > 1 ? "transcripts" : "transcript"}`
     : task.state === "cancelled" ? "Stopped" : task.state === "failed" ? "Couldn’t finish" : undefined;
 }
 

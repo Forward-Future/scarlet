@@ -1444,9 +1444,11 @@ it("changes a queued request's words in the box, across its whole width, saving 
   await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
   expect(rewording.onSave).toHaveBeenCalledWith("Keep the aside.", undefined);
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
-  // What was said takes their place.
+  // What was said takes their place in the box, and waits there as typed words do: nothing is saved by itself.
   await act(async () => { micProps.onStart?.(); micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
-  expect(rewording.onSave).toHaveBeenLastCalledWith("Keep the breath too", undefined);
+  expect(rewording.onChange).toHaveBeenLastCalledWith("Keep the breath too");
+  expect(rewording.onSave).toHaveBeenCalledTimes(1);
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
   expect(useUiStore.getState().agentContext).toBeNull();
   // Esc leaves them as they were.
   await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
@@ -1701,35 +1703,38 @@ it("drops dictation for a closed rewording when the same request is reopened", a
   await show();
   await show({ rewording: next });
   await act(async () => finish({ text: "Shorten the intro." }));
+  expect(first.onChange).not.toHaveBeenCalled();
   expect(first.onSave).not.toHaveBeenCalled();
   expect(next.onSave).not.toHaveBeenCalled();
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
 });
 
-it("resolves skill commands in a dictated reword and leaves it alone if closed during lookup", async () => {
+it("puts what was said for a queued request in the box, where the tick saves it and Esc leaves the request as it was", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
-  vi.spyOn(api, "speechToText").mockResolvedValue({ text: "/dialogue-pass Keep the intro." });
+  vi.spyOn(api, "speechToText").mockResolvedValue({ text: "/dialogue-pass Keep the aside, but trim the breath before it." });
   const skill = db.skills.find(isDialogueGuide)!;
-  let finish!: (result: { skills: typeof db.skills }) => void;
-  const load = vi.spyOn(api, "skills").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-  useSkillsStore.setState({ skills: [], status: "idle" });
-  const first = { id: "task_queued", text: "Trim the intro.", onChange: vi.fn(), onSave: vi.fn(), onCancel: vi.fn() };
-  const next = { ...first, onSave: vi.fn() };
-  const dictate = () => act(async () => {
-    micProps.onStart?.();
-    micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" });
-  });
-  await show({ rewording: first });
-  await dictate();
-  expect(load).toHaveBeenCalledTimes(1);
-  await show();
-  await show({ rewording: next });
-  await act(async () => finish({ skills: [skill] }));
-  expect(first.onSave).not.toHaveBeenCalled();
-  expect(next.onSave).not.toHaveBeenCalled();
-  await dictate();
-  expect(next.onSave).toHaveBeenCalledExactlyOnceWith("/dialogue-pass Keep the intro.", [skill.id]);
+  useSkillsStore.setState({ skills: [skill], status: "ready" });
+  let text = "Keep the aside.";
+  const rewording = { id: "task_queued", get text() { return text; }, onChange: vi.fn((t: string) => { text = t; }),
+    onSave: vi.fn().mockResolvedValue(undefined), onCancel: vi.fn() };
+  await show({ rewording });
+  await act(async () => { micProps.onStart?.(); micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
+  // What was said is the box's new words, with the cursor there. The request still reads as it did: nothing is saved.
+  expect(rewording.onChange).toHaveBeenCalledExactlyOnceWith("/dialogue-pass Keep the aside, but trim the breath before it.");
+  expect(rewording.onSave).not.toHaveBeenCalled();
+  await show({ rewording });
+  const input = container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  expect(input.value).toBe("/dialogue-pass Keep the aside, but trim the breath before it.");
+  expect(document.activeElement).toBe(input);
+  // Esc leaves the request as it was, as it does for typed words.
+  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(rewording.onCancel).toHaveBeenCalledTimes(1);
+  expect(rewording.onSave).not.toHaveBeenCalled();
+  // The tick saves them, with the skills they name, as it does for typed words.
+  expect(container.querySelector<HTMLButtonElement>(".composer-send")!.title).toBe("Save the new words");
+  await submit();
+  expect(rewording.onSave).toHaveBeenCalledExactlyOnceWith("/dialogue-pass Keep the aside, but trim the breath before it.", [skill.id]);
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
 });
 
@@ -1752,6 +1757,7 @@ it("sends a message being spoken as itself when a queued request's words take th
   await act(async () => { micProps.onStart?.(); micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
   await show({ thread });
   await act(async () => heard({ text: "Trim the breath" }));
+  expect(rewording.onChange).not.toHaveBeenCalled();
   expect(rewording.onSave).not.toHaveBeenCalled();
   expect(useProjectStore.getState().revise).toHaveBeenCalledTimes(1);
 });
@@ -1911,6 +1917,40 @@ it("carries the frame the editor drew on with the next message: its picture as a
     }),
   }));
   // Sent, the marks leave the box.
+  expect(usePictureMarksStore.getState().byProject[PRJ]).toBeUndefined();
+  expect(container.querySelector(".composer-files")).toBeNull();
+});
+
+it("sends the files and the marked frame attached to an answer with it, and takes their rows off the box", async () => {
+  vi.spyOn(markedFrame, "markedFramePicture").mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+  vi.spyOn(api, "uploadAttachment").mockImplementation(async (_project, file, name) => file instanceof File && file.name.startsWith("Marked frame")
+    ? { attachment: { id: "att_frame", name: file.name, size: 3, mime: "image/png" } }
+    : { attachment: { id: "att_logo", name: name ?? "logo-white.png", size: 10 } });
+  const asking = buildThreads(current).find(t => t.question)!;
+  await show({ thread: asking, targetTag: "Answer" });
+  await act(async () => useAttachmentsStore.getState().add(PRJ, [new File(["png"], "logo-white.png", { type: "image/png" })]));
+  const names = () => Array.from(container.querySelectorAll(".composer-files .composer-file-name"), n => n.textContent);
+  expect(names()).toEqual(["logo-white.png"]);
+  await type("By a third, and use this logo instead.");
+  await submit();
+  // The file goes with the answer, to the request that asked, and its row leaves the box.
+  // (The box is set to another model than the one that asked here, so the answer names it, as it does without a file.)
+  const model = expect.objectContaining({ agent: "claude" });
+  expect(useProjectStore.getState().answerTask).toHaveBeenCalledExactlyOnceWith(asking.question!.id, "By a third, and use this logo instead.", undefined, model,
+    { attachments: [{ id: "att_logo", name: "logo-white.png", size: 10 }] });
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+  expect(container.querySelector(".composer-files")).toBeNull();
+  expect(useAttachmentsStore.getState().byProject[PRJ] ?? []).toEqual([]);
+  // A frame marked for the answer goes the same way: its picture as a file, and the marks.
+  const box = { kind: "box" as const, box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } };
+  await act(async () => usePictureMarksStore.setState({ marking: null, byProject: { [PRJ]: { time: 7, version: project.head!, picture: "frame://7", marks: [box] } } }));
+  expect(names()).toEqual(["Marked frame 0:07"]);
+  await type("This one");
+  await submit();
+  expect(useProjectStore.getState().answerTask).toHaveBeenLastCalledWith(asking.question!.id, "This one", undefined, model, {
+    attachments: [expect.objectContaining({ id: "att_frame" })],
+    pictureMarks: { attachmentId: "att_frame", time: 7, version: project.head, marks: [box] },
+  });
   expect(usePictureMarksStore.getState().byProject[PRJ]).toBeUndefined();
   expect(container.querySelector(".composer-files")).toBeNull();
 });

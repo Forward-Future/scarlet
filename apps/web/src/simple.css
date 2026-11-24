@@ -612,8 +612,12 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .unit-state:empty { display: none; }
 .unit-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-warn); }
 /* What needs the editor, listed under the band, takes the dot's place. A word for how the run ended stays, before it: with calls or edits still waiting, the
-   action under them ("Resume") would otherwise have nothing that says the run stopped. */
-.unit:has(.simple-review-tab-count) > .unit-msg > .unit-state:has(> .unit-dot) { display: none; }
+   action under them ("Resume") would otherwise have nothing that says the run stopped. Folded, that list is out of
+   sight (it is still there, so this would match it): the band keeps the dot for a question, beside its own count. */
+.unit:not(.is-collapsed):has(.simple-review-tab-count) > .unit-msg > .unit-state:has(> .unit-dot) { display: none; }
+/* A folded request says on its band what waits on the editor under it: For you, as its tab reads, and how many. */
+.unit-need { flex: none; align-self: baseline; font-size: 12.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; }
+.unit-need-count { margin-left: 6px; color: var(--color-warn); font-variant-numeric: tabular-nums; }
 /* The active request's action follows its metrics. */
 .unit-stop { flex: none; align-self: center; font-size: 12.5px; line-height: 19px; }
 .unit-state:not(:empty) + .unit-stop { margin-left: -2px; }
@@ -875,6 +879,12 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
 .simple-pass-list > li > button.is-decided .edit-badge.is-kept,
 .simple-edit.is-decided .edit-badge.is-kept { background: rgba(255, 255, 255, .06); border-color: var(--color-line); color: var(--color-dim); }
+/* A cut or edit sent back whose request stopped to ask the editor something waits on them again: its row is as bright
+   as one that waits, its number amber, and its word says so in amber and holds still. A call's row can't be pressed
+   while it is sent back, and isn't dimmed for that here. */
+.simple-pass-list > li > button.is-asking:disabled { color: var(--color-fg); }
+.simple-pass-list > li > button.is-asking:disabled .edit-badge.is-check { border-color: var(--color-warn); color: var(--color-warn); }
+.simple-pass-value.is-need { color: var(--color-warn); }
 .req .simple-edits { margin: 0 0 6px; padding-top: 0; border-top: 0; }
 .simple-action.is-menu { margin: 0; gap: 6px; font-size: 12px; color: var(--color-dim); }
 
