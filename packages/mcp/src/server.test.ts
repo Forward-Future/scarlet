@@ -121,6 +121,53 @@ describe("MCP file tools", () => {
     }
   });
 
+  it("reads a video on the web, then saves the part asked for in the artifact directory with where it came from", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
+    const mp4 = Buffer.from("....ftypisom part of the video");
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from("frame")]);
+    const video = { url: "https://www.youtube.com/watch?v=agents", title: "Agents at work", channel: "The Ledger", duration: 90, license: "Creative Commons Attribution license (reuse allowed)" };
+    const extra = mock.state.extra;
+    mock.state.extra = async (rec, res) => {
+      if (!rec.path.includes("/web-videos")) return extra ? extra(rec, res) : false;
+      if (rec.method === "GET") {
+        res.writeHead(200, { "content-type": "application/octet-stream" });
+        res.end(mp4);
+      } else {
+        const asked = rec.body as { from?: number; to?: number };
+        res.writeHead(asked.from === undefined ? 200 : 201, { "content-type": "application/json" });
+        res.end(JSON.stringify(asked.from === undefined
+          ? { video, captions: { language: "en", automatic: true, text: "1.2 Here is the agent\n5 running a task", next: 640 } }
+          : { video, part: { id: "part 1", from: asked.from, to: asked.to, duration: 6.5, width: 1920, height: 1080, size: mp4.length, poster: jpeg.toString("base64") } }));
+      }
+      return true;
+    };
+    const run = Task.parse({ id: "tsk_edit_v", projectId: "prj_test", kind: "edit", agent: "claude", state: "running", instruction: "Show the demo from that video",
+      createdBy: { type: "human", name: "Editor" } });
+    const c = await connect(run.id, dir, run);
+    try {
+      const about = await c.callTool({ name: "web_video", arguments: { url: video.url } }) as CallToolResult;
+      expect(about.isError).toBeFalsy();
+      const texts = (about.content as Array<{ type: string; text: string }>).map(part => part.text);
+      expect(JSON.parse(texts[0]!)).toEqual({ ...video, captions: { language: "en", automatic: true, captionsNext: 640 } });
+      expect(texts[1]).toBe("1.2 Here is the agent\n5 running a task");
+
+      const part = await c.callTool({ name: "web_video", arguments: { url: video.url, from: 31, to: 37.5 } }) as CallToolResult;
+      expect(part.isError).toBeFalsy();
+      const said = JSON.parse(textOf(part));
+      expect(said.path).toMatch(/video-youtube\.com-\d+\.mp4$/);
+      expect(said).toEqual({ path: said.path, picture: said.path.replace(/\.mp4$/, ".jpg"), from: 31, to: 37.5, duration: 6.5, width: 1920, height: 1080,
+        title: "Agents at work", channel: "The Ledger", license: video.license,
+        source: { url: video.url, capture: said.path.replace(/\.mp4$/, ".jpg"), clip: { start: 31, end: 37.5 } } });
+      expect([await readFile(said.path), await readFile(said.picture)]).toEqual([mp4, jpeg]);
+      const sent = mock.requests.filter(r => r.path.includes("/web-videos")).map(r => [r.method, r.path.split("/web-videos")[1], r.body]);
+      expect(sent).toEqual([["POST", "", { url: video.url }], ["POST", "", { url: video.url, from: 31, to: 37.5 }], ["GET", "/part%201", undefined]]);
+    } finally {
+      mock.state.extra = extra;
+      await c.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("records where B-roll from the web came from, with the page as captured from the artifact directory", async () => {
     const dir = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
     const run = Task.parse({ id: "tsk_edit_b", projectId: "prj_test", kind: "edit", agent: "claude", state: "running", instruction: "Show the article",
@@ -226,14 +273,14 @@ describe("tools/list", () => {
       try {
         const tools = await reachableTools(c);
         const names = tools.map(t => t.name);
-        expect([names.includes("web_capture"), names.includes("asset_add"), names.includes("timeline_propose"), names.includes("broll_make")], agent).toEqual([true, true, true, false]);
+        expect([names.includes("web_capture"), names.includes("web_video"), names.includes("asset_add"), names.includes("timeline_propose"), names.includes("broll_make")], agent).toEqual([true, true, true, true, false]);
         expect(Object.keys(tools.find(t => t.name === "asset_add")!.inputSchema.properties ?? {}), agent).toEqual(["path", "kind", "provenance", "source"]);
       } finally { await c.close(); }
     }
     const check = await connect("tsk_check", undefined, Task.parse({ ...edit, id: "tsk_check", kind: "learning_check", context: { checksTaskId: edit.id } }));
     try {
       const names = (await check.listTools()).tools.map(t => t.name);
-      expect([names.includes("web_capture"), names.includes("asset_add")]).toEqual([false, false]);
+      expect([names.includes("web_capture"), names.includes("web_video"), names.includes("asset_add")]).toEqual([false, false, false]);
     } finally { await check.close(); }
   });
   it("registers every Scarlet tool with a description", async () => {
@@ -242,7 +289,7 @@ describe("tools/list", () => {
     // Claude's harness does not deliver audio, so nothing offers WAV. This session has no task, so it isn't launched with
     // file tools: nothing imports from the artifact directory or captures a page. Only the check that reads a request
     // offers a rule, and only a request with a model that can hear signed in has it listen.
-    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "listen", "learning_suggest", "asset_add", "web_capture"].includes(n)).sort());
+    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "listen", "learning_suggest", "asset_add", "web_capture", "web_video"].includes(n)).sort());
     for (const t of tools) expect(Object.keys(t.inputSchema.properties ?? {})).not.toContain("includeAudio");
     expect(JSON.stringify(tools)).not.toMatch(/\bWAV\b|can (hear|play)|accepts audio|consume audio/);
     for (const t of tools) expect(t.description?.length ?? 0).toBeGreaterThan(20);

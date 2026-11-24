@@ -961,13 +961,14 @@ describe("tool annotations", () => {
 
   it("marks exactly the tools that change something as writes, and nothing as destructive", () => {
     expect(every.filter(name => !toolAnnotations(name).readOnlyHint).sort()).toEqual([...writes].sort());
-    for (const name of every.filter(n => n !== "web_capture")) {
+    for (const name of every.filter(n => n !== "web_capture" && n !== "web_video")) {
       const a = toolAnnotations(name);
       // A read may be repeated; a write may not, and every edit stays reversible.
       expect(a).toMatchObject({ idempotentHint: a.readOnlyHint, destructiveHint: false, openWorldHint: false });
     }
     // A page from the web changes nothing in the project, and reads the open web, which may say something else next time.
     expect(toolAnnotations("web_capture")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+    expect(toolAnnotations("web_video")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
     // A name Scarlet doesn't know is never taken for a read.
     expect(toolAnnotations("timeline_delete_everything").readOnlyHint).toBe(false);
   });
