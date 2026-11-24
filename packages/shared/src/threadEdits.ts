@@ -400,7 +400,12 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
     const beforeVersion = change.appliedReview?.originalVersion ?? built?.version ?? change.fromVersion;
     const shown = new Map<Cut, SavedEdit>();
     for (const [spot, item] of entries.entries()) {
-      const joined = joins?.get(spot) ?? atJoin?.get(spot);
+      // A revision that only took footage out inside an edit that wasn't a cut is still that edit: trimming a black frame
+      // off the end of an inserted sponsor segment read as a one-frame cut at its end, and the segment left the list,
+      // with nothing in the chat to open it by (2026-11-23).
+      const trimmedOf = item.replaces ? edits.find(e => matchesEdit(e, item.replaces!)) : undefined;
+      const trimmed = !!trimmedOf && !trimmedOf.beforeCut && trimmedOf.kind !== "cut" && kinds[spot] === "cut" && item.range.end > item.range.start;
+      const joined = trimmed ? undefined : joins?.get(spot) ?? atJoin?.get(spot);
       const range = joined?.range ?? item.range;
       const edit: SavedEdit = { changeId: change.id, spot, label: item.label, range,
         version: named ? change.toVersion : appliedVersion, previous: [], ...(named && change.timelineEdits?.length && { named: true }) };
@@ -428,7 +433,7 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
       else if (found && cut && (joined || edit.beforeCut || range.start === range.end)) shown.set(cut, edit);
       const removed = change.appliedReview?.joins[spot]?.removed ?? cut?.removed;
       if (removed && range.start === range.end) edit.beforeCut = { version: beforeVersion, removed };
-      const kind = edit.beforeCut ? "cut" : kinds[spot];
+      const kind = edit.beforeCut ? "cut" : trimmed ? trimmedOf.kind : kinds[spot];
       if (kind) edit.kind = kind;
       if (marked[spot] && !edit.beforeCut) {
         edit.marker = true;
