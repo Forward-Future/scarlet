@@ -215,6 +215,10 @@
 /* One badge column for the whole list, so a kept edit's wider badge moves every title together. Each item passes the
    list's columns on to its row, which is the row of a pass's list with the edit's number where that one has a time. */
 .simple-edits { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; column-gap: 8px; margin-top: 2px; }
+/* Above the message box the list scrolls by itself. Positioned, it holds the absolute screen-reader names of the
+   requests under its rows ("You") in its own scroll area: otherwise they sit where their rows would be with the list
+   unscrolled, far below it, and the whole box scrolls into blank space past its end, taking the heading with it. */
+.simple-edits { position: relative; }
 .simple-edits > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; justify-items: start; }
 .simple-edits > li > * { grid-column: 1 / -1; }
 .simple-edit { display: grid; grid-template-columns: subgrid; align-items: center; justify-self: stretch; width: calc(100% + 16px); margin: 0 -8px; }
