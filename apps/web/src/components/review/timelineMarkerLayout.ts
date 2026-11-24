@@ -13,6 +13,8 @@ export interface TimelineGap {
   title: string;
   summary?: string;
   skipped: boolean;
+  /** A cut of a call still waiting on the editor, shown as staged: amber, as its dot is. */
+  call?: boolean;
   /** Opens the edit that made this cut. On Before, clicking a dotted cut opens it instead of scrubbing. */
   open?(): void;
 }

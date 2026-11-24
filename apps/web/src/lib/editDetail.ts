@@ -7,6 +7,8 @@ type Op = Record<string, unknown>;
 const DETAILED = new Set<EditKind>(["overlay", "graphic", "text", "zoom", "reframe", "audio", "dip", "voice", "speed", "transition", "split"]);
 /** A step this far either side of an edit still lands on it: Scarlet's times and a clip's edge differ by rounding. */
 const SLACK = 0.5;
+/** Two stretches that share less than this only touch. */
+const TOUCH = 0.05;
 /** A quote longer than this is cut short. */
 const QUOTE_MOST = 90;
 
@@ -87,7 +89,10 @@ export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind
     if (!clip) return;
     try { return clipRange(clip); } catch { return; }
   };
-  const near = (range: TimeRange | undefined) => !range || (range.start <= edit.range.end + SLACK && range.end >= edit.range.start - SLACK);
+  // A clip that only touches an edit of some length belongs to the edit beside it: a punch-in starting where an inset ends.
+  const near = (range: TimeRange | undefined) => !range || (range.start <= edit.range.end + SLACK && range.end >= edit.range.start - SLACK
+    && (edit.range.end - edit.range.start <= TOUCH || range.end - range.start <= TOUCH
+      || Math.min(range.end, edit.range.end) - Math.max(range.start, edit.range.start) > TOUCH));
 
   const said = (op: Op): (string | undefined)[] => {
     if (op.op === "addClip") {
@@ -111,8 +116,14 @@ export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind
       const transform = patch.transform as { scale?: unknown } | undefined;
       const keyframes = Array.isArray(patch.keyframes) ? (patch.keyframes as { transform?: { scale?: unknown } }[])
         .map(k => k.transform?.scale).filter((s): s is number => typeof s === "number") : [];
-      if (keyframes.length > 1 && keyframes[0] !== keyframes.at(-1)) lines.push(`${edit.kind === "zoom" ? "Zooms" : "Scales"} ${percent(keyframes[0]!)} → ${percent(keyframes.at(-1)!)}`);
-      else if (typeof transform?.scale === "number") lines.push(transform.scale > 1.001 ? `Zoom to ${percent(transform.scale)}` : transform.scale < 0.999 ? `Inset at ${percent(transform.scale)}` : undefined);
+      if (keyframes.length > 1 && keyframes[0] !== keyframes.at(-1)) {
+        if (edit.kind !== "reframe" || keyframes.every(s => s <= 1.001)) {
+          lines.push(`${edit.kind === "zoom" ? "Zooms" : "Scales"} ${percent(keyframes[0]!)} → ${percent(keyframes.at(-1)!)}`);
+        }
+      } else if (typeof transform?.scale === "number") {
+        if (transform.scale > 1.001 && edit.kind !== "reframe") lines.push(`Zoom to ${percent(transform.scale)}`);
+        else if (transform.scale < 0.999) lines.push(`Inset at ${percent(transform.scale)}`);
+      }
       if (typeof patch.volume === "number") lines.push(`${name ? `${name} ` : "Sound "}${gain(patch.volume)}`);
       if ("volumeKeyframes" in patch) {
         const volume = typeof patch.volume === "number" ? patch.volume : clip?.kind === "media" ? clip.volume ?? 1 : 1;

@@ -22,13 +22,13 @@ const LEAD = /^[^\p{L}\p{N}]*/u;
 const TRAIL = /[^\p{L}\p{N}]*$/u;
 const POSSESSIVE = /['’]s$/iu;
 
-/** A word's text in three parts: what comes before its letters, its letters, and what comes after (with a possessive 's). */
-function parts(text: string) {
+/** A word's text in three parts: what comes before its letters, its letters, and what comes after (with a possessive 's, unless told to keep it in). */
+function parts(text: string, splitPossessive = true) {
   const lead = LEAD.exec(text)![0];
   let rest = text.slice(lead.length);
   let trail = TRAIL.exec(rest)![0];
   rest = rest.slice(0, rest.length - trail.length);
-  const possessive = POSSESSIVE.exec(rest);
+  const possessive = splitPossessive && POSSESSIVE.exec(rest);
   if (possessive && rest.length > possessive[0].length) {
     trail = possessive[0] + trail;
     rest = rest.slice(0, -possessive[0].length);
@@ -67,7 +67,10 @@ export function applyWordFix(transcript: Transcript, fix: TranscriptWordFix): Wo
     }
   });
   entries.sort((a, b) => a.w.start - b.w.start);
-  const normalized = entries.map(e => e.word < 0 ? "" : normalizeTranscriptToken(parts(e.w.text).core));
+  // Words read as transcript search reads them; the last word of find also matches a word with a possessive 's after it.
+  const normalized = entries.map(e => e.word < 0 ? "" : normalizeTranscriptToken(e.w.text));
+  const stems = entries.map(e => e.word < 0 ? "" : normalizeTranscriptToken(parts(e.w.text).core));
+  const lastWord = find.length - 1;
   const places: WordFixPlace[] = [];
   let wordsAdded = 0;
   /** New words by segment and word position, and the words taken out. */
@@ -75,15 +78,16 @@ export function applyWordFix(transcript: Transcript, fix: TranscriptWordFix): Wo
   const removed = new Set<string>();
   const key = (e: Entry) => `${e.segment}/${e.word}`;
   for (let i = 0; i + find.length <= entries.length; i++) {
-    if (!find.every((t, j) => normalized[i + j] === t)) continue;
+    if (!find.every((t, j) => normalized[i + j] === t || (j === lastWord && stems[i + j] === t))) continue;
+    const possessive = normalized[i + lastWord] !== find[lastWord];
     const span = entries.slice(i, i + find.length) as Array<Extract<Entry, { word: number }> & { w: TranscriptWord }>;
     const first = span[0]!.w, last = span.at(-1)!.w;
     if ((fix.from !== undefined && last.end <= fix.from) || (fix.to !== undefined && first.start >= fix.to)) continue;
-    const head = parts(first.text), tail = parts(last.text);
+    const head = parts(first.text), tail = parts(last.text, possessive);
     let words: TranscriptWord[];
     if (replace.length === span.length) {
       words = span.map(({ w }, k) => {
-        const p = parts(w.text);
+        const p = parts(w.text, k === lastWord && possessive);
         return { ...w, text: p.lead + cased(p.core, replace[k]!) + p.trail };
       });
     } else {

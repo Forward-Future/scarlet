@@ -444,17 +444,27 @@ describe("dialogue plan", () => {
     expect([await resolveCutRange(f.tl, refs.word, "cut", f.sources), await resolveCutRange(f.tl, refs.range, "cut", f.sources)]).toEqual(alone);
   });
 
-  it("returns the fragment audible inside a real crossfade to the author of the cut, including an automatically staged retake", async () => {
+  it("returns the fragment audible inside a real crossfade to the author of a cut that applies, and reports it on one held for the editor", async () => {
     const { tl, sources, scan } = partialWordFixture();
     (await sources.project()).media[0]!.duration = 5;
     const rms = Array<number>(250).fill(.2);
     sources.pages = () => [{ ...page, edges: joinEvidence(scan, { from: 0, to: 5, rms, peaks: rms, speechActivity: [{ start: 0, end: 5 }] }) }];
-    const plan = (options: Partial<DialogueCutInput> = {}, others: DialogueCutInput[] = []) => planDialogueCuts({
-      tl, localPauses: false, cuts: [...others, cut({ start: 2, end: 3.2, ...options })] }, sources);
+    const plan = (options: Partial<DialogueCutInput> = {}, others: DialogueCutInput[] = [], unsureJoins?: "cut") => planDialogueCuts({
+      tl, localPauses: false, unsureJoins, cuts: [...others, cut({ start: 2, end: 3.2, ...options })] }, sources);
+    // Applied as placed, the join would play the fragment with no one hearing it first: back to the author.
     const conflict = { outcome: "needsRevision", disputedEdges: [{ partialWordRepeat: { side: "start", word: "it", heard: "i" } }] };
-    expect(await plan()).toMatchObject(conflict);
-    expect(await plan({ kind: "coaching" }, [cut({ start: .3, end: .7, kind: "coaching" })])).toMatchObject(conflict);
-    expect(await plan({ keepRepeat: "it" })).toMatchObject({ outcome: "ready", decisions: [{ review: true }] });
+    expect(await plan({}, [], "cut")).toMatchObject(conflict);
+    expect(await plan({ kind: "coaching" }, [cut({ start: .3, end: .7, kind: "coaching" })], "cut")).toMatchObject(conflict);
+    // Held for the editor, it plays only once they have heard it: evidence on the held cut, which still reaches them.
+    // Refused, a held retake left the line playing twice with no one asked (reimann 2, 2026-11-23).
+    const fragment = "As staged, the outgoing audio plays “i” from a cut-off “it” beside another “it”.";
+    const held = await plan();
+    expect(held).toMatchObject({ outcome: "ready", decisions: [{ review: true, held: expect.stringContaining(fragment) }] });
+    if (held.outcome !== "ready") throw new Error(held.outcome);
+    expect(dialogueGate(held).decisions).toContainEqual(expect.objectContaining({ cut: 0, outcome: "review", evidence: expect.stringContaining(fragment) }));
+    expect(await plan({ kind: "coaching" }, [cut({ start: .3, end: .7, kind: "coaching" })]))
+      .toMatchObject({ outcome: "ready", decisions: [{}, { review: true, held: expect.stringContaining(fragment) }] });
+    expect(await plan({ keepRepeat: "it" })).toMatchObject({ outcome: "ready", decisions: [{ review: true, held: expect.not.stringContaining(fragment) }] });
     expect(await plan({ decision: "review" })).toMatchObject({ outcome: "ready" });
     // A production aside with no quiet at its edges waits for audition like a retake, so beside a staged neighbor both
     // wait, and the edge at 2 s is no join.
