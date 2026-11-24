@@ -1,13 +1,18 @@
 import type { AgentId } from "@scarlet/shared";
 import claudeLogo from "../../assets/providers/claude.svg";
 import geminiLogo from "../../assets/providers/gemini.svg";
+import lmstudioLogo from "../../assets/providers/lmstudio.svg";
+import ollamaLogo from "../../assets/providers/ollama.svg";
 import openaiLogo from "../../assets/providers/openai.svg";
+import openrouterLogo from "../../assets/providers/openrouter.svg";
 import { AGENT_LABEL } from "../../stores/hosts";
 import { Icon } from "../ui/primitives";
 
 export type ModelScope = AgentId | "favorites" | "all";
 
-const logos = { claude: claudeLogo, codex: openaiLogo, gemini: geminiLogo };
+const logos: Record<Exclude<AgentId, "api">, string> = {
+  claude: claudeLogo, codex: openaiLogo, gemini: geminiLogo, ollama: ollamaLogo, lmstudio: lmstudioLogo, openrouter: openrouterLogo,
+};
 
 export function ModelProviders<T extends ModelScope>({ providers, active, onChange, compact = false }: {
   providers: T[]; active?: T; onChange: (value: T) => void; compact?: boolean;

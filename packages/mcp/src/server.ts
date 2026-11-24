@@ -423,6 +423,6 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     const parameters = toolParameters.get(name);
     if (parameters && !(await parameters.safeParseAsync(args ?? {})).success) await reportResult(name, "failed", began, 0, result);
   });
-  if (caps.briefTools) listToolsBriefly(server, caps.resultChars);
+  if (caps.briefTools) listToolsBriefly(server, caps.resultChars, caps.toolDescriptionChars);
   return server;
 }

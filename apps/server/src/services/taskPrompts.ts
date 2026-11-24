@@ -19,9 +19,10 @@ import { resolveTimeline } from "./timeline.js";
  * its thread in a private Codex home beside its task folder, out of the user's own Codex thread list. Started afresh, a
  * pass resumed after a quit spent 120 more turns and 13.7M tokens finding its place again (2026-11-18). agy keeps a
  * Gemini session across its process (`session/resume`): two revisions restarted afresh after a quit measured their
- * edges all over again, four more minutes each (2026-11-23).
+ * edges all over again, four more minutes each (2026-11-23). Ollama, LM Studio and OpenRouter run in Claude Code
+ * sessions, which resume the same way.
  */
-export const RESUMABLE = new Set<string>(["claude", "codex", "gemini"]);
+export const RESUMABLE = new Set<string>(["claude", "codex", "gemini", "ollama", "lmstudio", "openrouter"]);
 
 /** What a run hears when it carries on in its own CLI session after Scarlet closed on it. */
 const INTERRUPTED = "Scarlet closed while you were working on this request, and it is open again. Carry on from where you stopped. " +

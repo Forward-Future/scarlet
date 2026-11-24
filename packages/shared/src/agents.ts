@@ -11,8 +11,11 @@ export const ModelTuning = z.object({
   serviceTier: AgentOptionId.optional(),
 });
 
-/** Known agent runtimes. Hosts report which are installed and logged in. */
-export const AgentId = z.enum(["claude", "codex", "gemini", "api"]);
+/**
+ * Known agent runtimes. Hosts report which are installed and logged in. `ollama`, `lmstudio` and `openrouter` are
+ * model providers rather than harnesses: their runs go through Claude Code pointed at the provider (`EXTRA_PROVIDERS`).
+ */
+export const AgentId = z.enum(["claude", "codex", "gemini", "api", "ollama", "lmstudio", "openrouter"]);
 export type AgentId = z.infer<typeof AgentId>;
 
 /** What each agent is called, in the interface and in the sentences the engine keeps in a project's history. */
@@ -21,7 +24,42 @@ export const AGENT_LABEL: Record<AgentId, string> = {
   codex: "Codex",
   gemini: "Gemini",
   api: "API",
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  openrouter: "OpenRouter",
 };
+
+/**
+ * Providers beside the three plans: two that run models on this computer and one that routes to many hosted models.
+ * Each is offered only once it is set up (its server running, or its key saved), and Claude Code runs the agent loop
+ * against its Anthropic-compatible endpoint, so Scarlet's tools and prompt are the same as for any other model.
+ */
+export const EXTRA_PROVIDERS = ["ollama", "lmstudio", "openrouter"] as const satisfies readonly AgentId[];
+export type ExtraProvider = typeof EXTRA_PROVIDERS[number];
+
+export function isExtraProvider(agent: string | undefined): agent is ExtraProvider {
+  return (EXTRA_PROVIDERS as readonly string[]).includes(agent ?? "");
+}
+
+/** The harness that runs an agent's loop: its own, or Claude Code for an extra provider. */
+export function harnessOf(agent: AgentId): Exclude<AgentId, ExtraProvider> {
+  return isExtraProvider(agent) ? "claude" : agent;
+}
+
+/** Where each extra provider is reached by default, and the variable that moves it. */
+export const PROVIDER_DEFAULT_URL: Record<ExtraProvider, string> = {
+  ollama: "http://127.0.0.1:11434",
+  lmstudio: "http://127.0.0.1:1234",
+  openrouter: "https://openrouter.ai/api",
+};
+
+/** How an extra provider is set up on a host: a server address for a local one, an API key for OpenRouter. */
+export const ProviderSettings = z.object({
+  ollama: z.object({ url: z.string().url().optional() }).optional(),
+  lmstudio: z.object({ url: z.string().url().optional() }).optional(),
+  openrouter: z.object({ apiKey: z.string().optional() }).optional(),
+});
+export type ProviderSettings = z.infer<typeof ProviderSettings>;
 
 /** Note assignments accept an agent alone or an agent and an exact CLI model ID. */
 export function agentTarget(agent: AgentId, model?: string): string {

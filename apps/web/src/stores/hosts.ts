@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AGENT_LABEL, type AgentAvailability, type AgentHost, type AgentId, type ModelOptions, type SubscriptionQuota } from "@scarlet/shared";
+import { AGENT_LABEL, isExtraProvider, type AgentAvailability, type AgentHost, type AgentId, type ModelOptions, type SubscriptionQuota } from "@scarlet/shared";
 import { api, errorMessage, IS_MOCK } from "../lib/client";
 import { desktop, isDesktop } from "../lib/desktop";
 import { changedDuringLoad } from "./changedDuringLoad";
@@ -136,7 +136,8 @@ export interface OnlineAgent {
   quota?: SubscriptionQuota;
 }
 
-export const isConfiguredAgent = (agent: AgentAvailability) => agent.id !== "api" && agent.installed && agent.loggedIn !== false;
+export const isConfiguredAgent = (agent: AgentAvailability) =>
+  agent.id !== "api" && agent.installed && agent.loggedIn !== false && (!isExtraProvider(agent.id) || (agent.models?.length ?? 0) > 0);
 
 function isNewerQuota(next: SubscriptionQuota, prev?: SubscriptionQuota): boolean {
   if (!prev) return true;

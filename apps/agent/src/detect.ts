@@ -1,9 +1,12 @@
 /**
  * Detect installed AI CLIs (Claude Code, Codex, Gemini) and whether they look
  * logged in. Heuristics only: a CLI is reported as loggedIn=true when it is
- * installed and we cannot tell otherwise.
+ * installed and we cannot tell otherwise. The extra model providers (Ollama,
+ * LM Studio, OpenRouter) are asked over the network (`providers.ts`).
  */
+import type { ProvidersConfig } from "./config.js";
 import { discoverModels, ModelCatalogError, type CliAgent } from "./modelCatalog.js";
+import { detectProviders, resolveProviders, type FetchFn } from "./providers.js";
 import { stopCliTree } from "./processTree.js";
 import { errMsg } from "./runners/spawn.js";
 import { spawn } from "node:child_process";
@@ -11,9 +14,10 @@ import { constants } from "node:fs";
 import { access, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, extname, join, resolve } from "node:path";
-import type { AgentAvailability, AgentId } from "@scarlet/shared";
+import { isExtraProvider, type AgentAvailability, type AgentId, type ExtraProvider } from "@scarlet/shared";
 
-export const CLI_AGENTS: Array<Exclude<AgentId, "api">> = ["claude", "codex", "gemini"];
+/** The agent CLIs this host looks for. The extra providers run through `claude` and are detected apart. */
+export const CLI_AGENTS: Array<Exclude<AgentId, "api" | ExtraProvider>> = ["claude", "codex", "gemini"];
 
 interface ExecResult {
   code: number | null;
@@ -113,6 +117,10 @@ export interface DetectOptions {
   models?: Partial<Record<string, string>>;
   /** Where a failed probe is reported; defaults to stderr. */
   log?: (msg: string) => void;
+  /** The extra providers' setup from agent.json; their environment variables fill in what it leaves out. */
+  providers?: ProvidersConfig;
+  /** How the extra providers are asked; defaults to the global fetch. */
+  fetch?: FetchFn;
 }
 
 const SUBSCRIPTION = "subscription" as const;
@@ -274,7 +282,7 @@ export async function detectGemini(o: DetectCtx): Promise<AgentAvailability> {
   return { id: "gemini", installed: true, version, loggedIn: loggedIn ?? false, ...(auth ? { auth } : {}) };
 }
 
-/** Detect all three CLIs in parallel. Always returns one entry per agent, in order claude, codex, gemini. */
+/** Detect the three CLIs and the three extra providers in parallel. Always one entry each: claude, codex, gemini, ollama, lmstudio, openrouter. */
 export async function detect(opts: DetectOptions = {}): Promise<AgentAvailability[]> {
   const env = opts.env ?? process.env;
   // Probe the CLIs without API-key vars so their status reflects the subscription sign-in.
@@ -286,8 +294,11 @@ export async function detect(opts: DetectOptions = {}): Promise<AgentAvailabilit
     find: opts.find ?? ((name: string) => findOnPath(name, env)),
   };
   const log = opts.log ?? ((msg: string) => console.error(`[scarlet-agent] ${msg}`));
-  const results = await Promise.all([detectClaude(o), detectCodex(o), detectGemini(o)]);
-  return Promise.all(results.map(async (r) => {
+  const claude = detectClaude(o);
+  // The providers are asked over the network beside the CLI checks; they run through Claude Code, so need it installed.
+  const extras = detectProviders(resolveProviders(opts.providers, env), opts.fetch ?? globalThis.fetch, claude.then((c) => c.installed, () => false));
+  const results = await Promise.all([claude, detectCodex(o), detectGemini(o)]);
+  const clis = await Promise.all(results.map(async (r) => {
     const path = r.installed && r.loggedIn !== false ? await o.find(cliBinary(r.id)) : null;
     const catalog = path ? await (opts.catalog ?? discoverModels)(r.id as CliAgent, path, runnerEnv(r.id, results, env)).catch((err) => {
       if (err instanceof ModelCatalogError) log(`[host] model-catalog provider=${r.id} reason=${err.reason}`);
@@ -296,6 +307,8 @@ export async function detect(opts: DetectOptions = {}): Promise<AgentAvailabilit
     }) : undefined;
     return { ...r, ...catalog, ...(opts.models?.[r.id] ? { model: opts.models[r.id] } : {}) };
   }));
+  const providers = (await extras).map((p) => (p.installed && opts.models?.[p.id] ? { ...p, model: opts.models[p.id] } : p));
+  return [...clis, ...providers];
 }
 
 function loginLabel(a: AgentAvailability): string {
@@ -306,9 +319,20 @@ function loginLabel(a: AgentAvailability): string {
   return "logged in";
 }
 
+/** An extra provider's line: whether it can be used, and its models (or how many, for a long list). */
+function providerLine(a: AgentAvailability): string {
+  const name = a.id.padEnd(7);
+  if (!a.installed) return `${name} not available`;
+  const state = a.loggedIn === false ? "key refused" : a.id === "openrouter" ? "key saved" : "running";
+  const models = a.models ?? [];
+  const listed = !models.length ? "  (no models)" : models.length > 10 ? `  (${models.length} models)` : `  (models: ${models.join(", ")})`;
+  return `${name} ${a.version ? `${a.version}  ` : ""}${state}${a.model ? `  model ${a.model}` : ""}${listed}`;
+}
+
 export function formatAvailability(agents: AgentAvailability[]): string {
   return agents
     .map((a) => {
+      if (isExtraProvider(a.id)) return providerLine(a);
       if (!a.installed) return `${a.id.padEnd(7)} not installed`;
       const login = loginLabel(a);
       return `${a.id.padEnd(7)} ${a.version ?? "?"}  ${login}${a.model ? `  model ${a.model}` : ""}${a.models?.length ? `  (models: ${a.models.join(", ")})` : ""}`;

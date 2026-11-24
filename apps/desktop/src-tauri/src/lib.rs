@@ -156,6 +156,8 @@ pub fn run() {
             commands::host_status,
             commands::host_refresh_agents,
             commands::host_refresh_quota,
+            commands::provider_settings,
+            commands::save_provider_settings,
             commands::agent_install,
             commands::agent_update,
             commands::ffmpeg_status,

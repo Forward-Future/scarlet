@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { agentCapabilities, canHear, chooseListener, hearingModels, listenerAmong, modelHearsAudioFiles, toolWait, workspaceCapabilities } from "./capabilities.js";
+import { agentCapabilities, canHear, modelSeesImages, chooseListener, hearingModels, listenerAmong, modelHearsAudioFiles, toolWait, workspaceCapabilities } from "./capabilities.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -105,5 +105,26 @@ describe("a run launched with its harness's own tools", () => {
       expect([request.shell, request.web], agent).toEqual([undefined, undefined]);
       expect(workspaceCapabilities(request), agent).toEqual({ ...request, files: true, shell: true, web: true });
     }
+  });
+});
+
+describe("Ollama, LM Studio and OpenRouter", () => {
+  it("run on Claude Code's harness with tools listed briefly, and send pictures only to a model that reads them", () => {
+    for (const agent of ["ollama", "lmstudio", "openrouter"]) {
+      const caps = agentCapabilities(agent);
+      expect([caps.images, caps.audio, caps.briefTools, caps.toolDescriptionChars, caps.toolPrefix, caps.toolWaitSeconds], agent)
+        .toEqual([false, false, true, 4_000, "mcp__scarlet__", 240]);
+    }
+    // A local model's smaller context gets shorter pages.
+    expect(agentCapabilities("ollama").resultChars).toBe(16_000);
+    expect(agentCapabilities("openrouter").resultChars).toBe(40_000);
+    for (const model of ["anthropic/claude-sonnet-4.5", "google/gemini-3-pro", "openai/gpt-5.1", "openai/o4-mini"]) {
+      expect(agentCapabilities("openrouter", undefined, model).images, model).toBe(true);
+    }
+    for (const model of ["deepseek/deepseek-chat", "qwen/qwen3-coder", "openai/gpt-oss-120b", undefined]) {
+      expect(agentCapabilities("openrouter", undefined, model).images, String(model)).toBe(false);
+    }
+    // Only OpenRouter's names say what a model reads; a local model's never turn pictures on.
+    expect(modelSeesImages("ollama", "anthropic/claude")).toBe(false);
   });
 });

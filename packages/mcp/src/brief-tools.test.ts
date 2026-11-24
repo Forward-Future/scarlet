@@ -185,6 +185,23 @@ describe("brief tools", () => {
     }
   });
 
+  it("keeps every tool inside Claude Code's 4,096-character description cap on Ollama, LM Studio and OpenRouter", async () => {
+    for (const agent of ["ollama", "lmstudio", "openrouter"] as const) {
+      const [brief, full] = await Promise.all([listed(agent), listed("claude")]);
+      for (const tool of brief) {
+        expect(tool.description?.length ?? 0, `${agent}:${tool.name}`).toBeLessThanOrEqual(4_000);
+      }
+      const call = brief.find(t => t.name === "tool_call")!;
+      const indexedNames = call.description!.split("\nTools:\n")[1]!.split("\n").map(l => l.split(":")[0]);
+      // Text-only providers omit frame/audio-only tools; every remaining non-whole tool is present in the index.
+      const expected = full.filter(t => !ALWAYS_LOADED_TOOLS.has(t.name) && indexedNames.includes(t.name)).map(t => t.name);
+      expect(indexedNames).toContain("timeline_first_cut");
+      expect(indexedNames).toContain("skills_list");
+      expect(indexedNames).toContain("captions_generate");
+      expect(indexedNames.length).toBe(expected.length);
+    }
+  });
+
   it("keeps a description's first sentence on its line, cut to its most", () => {
     expect(indexLine("project_get", "Get the project: settings, e.g. fps. For clips use timeline_get.")).toBe("project_get: Get the project: settings, e.g. fps.");
     expect(indexLine("x", `${"a".repeat(400)}.`)).toBe(`x: ${"a".repeat(INDEX_LINE_MAX - 1)}…`);

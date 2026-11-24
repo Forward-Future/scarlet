@@ -232,6 +232,7 @@ mod tests {
         assert_eq!(redact("key sk-ant-api03-AbCdEfGh1234 used", None), "key [redacted] used");
         assert_eq!(redact("ghp_AbCdEfGh1234 and gho_AbCdEfGh1234", None), "[redacted] and [redacted]");
         assert_eq!(redact("OPENAI sk-AbCdEfGh1234", None), "OPENAI [redacted]");
+        assert_eq!(redact("OpenRouter sk-or-v1-0123456789abcdef", None), "OpenRouter [redacted]");
         // Words that only begin like a key, and ids of Scarlet's own, stay readable.
         for plain in ["ask-anything-you-like-here", "risk_assessment_done", "prj_01abcdefghijk host_ngrdk4g9fmfq", "sk-short"] {
             assert_eq!(redact(plain, None), plain);
