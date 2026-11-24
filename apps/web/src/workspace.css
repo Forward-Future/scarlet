@@ -531,13 +531,12 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
   opacity: .75;
 }
 
-/* The files the next message carries: a line attached to the top of the box, one row each, read as the queue's rows
-   are. Under the queue's tray it sits nearest the box. */
+/* The files the next message carries: a line attached to the top of the box, one row each. */
 .composer-dock[data-file-drop] { position: relative; }
 .composer-files { min-width: 0; margin-bottom: calc(-1 * var(--model-row-gap, 9px)); padding: 2px 4px; border: 1px solid var(--color-line); border-bottom: 0;
   border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); font-size: 12.5px; color: var(--color-muted); }
 .composer-files + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
-.queue-tray + :is(.composer-files, .composer-aim-line), .composer-aim-line + .composer-files { border-radius: 0; }
+.composer-aim-line + .composer-files { border-radius: 0; }
 /* Where the message goes is a flush context row on top of the box, read as attached-file rows are. */
 .composer-aim-line { position: relative; display: flex; align-items: center; min-width: 0; min-height: 30px; margin-bottom: calc(-1 * var(--model-row-gap, 9px));
   padding: 2px 4px; border: 1px solid var(--color-line); border-bottom: 0; border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); }

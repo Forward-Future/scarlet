@@ -6,7 +6,7 @@ import { ChatRail } from "../components/shell/ChatRail";
 import { appliedReviewChange, timelineDuration, type Change, type CutAssessment, type TimeRange } from "@scarlet/timeline";
 import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
 import { editGroups, listPlaces, useReviewed, useRevising } from "../components/review/threadEditState";
-import { QueueTray, useRewordingHold, type QueuedRequest } from "../components/chat/QueueTray";
+import { QueueInChat, useRewordingHold, type QueuedRequest } from "../components/chat/QueueInChat";
 import { recordEditReview } from "../lib/editReviews";
 import { forgetCalls, recordUndo, undoLast, type CallStep } from "../lib/undo";
 import { editKey, keepEdits, notYetKept } from "../lib/keptEdits";
@@ -2140,8 +2140,6 @@ export function SimpleWorkspace() {
   // words as they stood, and held again, instead of starting a minute later with the words it was first given.
   const [rewording, setRewording] = useState<{ id: string; text: string } | undefined>(() => savedRewording(current.id));
   useEffect(() => saveRewording(current.id, rewording), [current.id, rewording]);
-  // Whether the tray is open. Held here: the box it sits on is built again whenever it is aimed somewhere else.
-  const trayOpen = useState(false);
   const rewordingItem = rewording && queuedItems.find(item => item.id === rewording.id);
   // While those words are in the box it stays aimed as it was. Once they are done with, it follows what opened meanwhile.
   const rewordingOn = !!rewordingItem;
@@ -2297,7 +2295,8 @@ export function SimpleWorkspace() {
   };
   const { effective } = useAgentAvailability();
   const resumeRunWith = resumeRunChoice(tasks, effective);
-  const queueRows = queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id} opened={trayOpen}
+  // Requests waiting their turn are the editor's messages too: bubbles in the chat, just above the message box.
+  const queueRows = queuedItems.length > 0 || (editingPaused && !editing) ? <QueueInChat items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id}
       onRemove={id => void removeQueued(id)}
       paused={editingPaused}
       onContinue={editingPaused && !editing ? () => queueAction(resumeRunWith ? resumeEditing(current.id, resumeRunWith) : resumeEditing(current.id)).catch(() => {}) : undefined}
@@ -2315,7 +2314,7 @@ export function SimpleWorkspace() {
     onCreated={() => { follow.current = true; }} onSent={sentUnder(aims.current)}
     // The box carries a tag naming the cut or edit it revises, or the point a new edit is about. Taking the tag off
     // makes the message a new edit about the whole video.
-    tray={queueRows} chipClock={chipClock}
+    chipClock={chipClock}
     // The box names the cut or edit it talks to as its row does: the row that's open draws itself on the box's line.
     aimSlot={aimMatches && itemThread && aimedAt ? setAimHost : undefined}
     messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime} targetTime={targetTime}
@@ -2367,6 +2366,7 @@ export function SimpleWorkspace() {
                 <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>}
             </div>
             <div ref={setPinHost} className="simple-pin" aria-label="Working on now" />
+            {queueRows}
             {/* The tag in the box shows where a message goes. This line says it for screen readers only. */}
             {!rewordingItem && (replyThread || !aimMatches) && <div className="simple-target" role="status">
               <span>{aimLabel}</span>

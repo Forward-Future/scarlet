@@ -565,11 +565,16 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
         {actions.collapse && <TipButton className="unit-fold" tip={shut ? "Expand" : "Collapse"} aria-expanded={!shut}
           aria-label={`${shut ? "Expand" : "Collapse"} this edit: ${request.text}`} onClick={() => actions.collapse!(run.root)}><Icon name="chevron" size={11} /></TipButton>}
         <span className="simple-who">You</span>
-        <Said fixed lead={<>{(about ?? tag) && <span className="simple-revising">{about ?? tag}</span>}<MarkedFrameOnRequest projectId={projectId} task={task} /></>} text={request.text} />
-        <span className="unit-state">{standing}</span>
-        {asksUnder && <span className="unit-state"><span className="unit-dot" aria-hidden /></span>}
-        {need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>For you<span className="unit-need-count">{need}</span></span>}
-        {headingEnd}</div>}
+        {/* The editor's words are a bubble at the chat's right, so what they said never reads as Scarlet's. Where the
+            request stands, its controls and its time are one small line under the bubble. */}
+        <div className="unit-bubble">
+          <Said fixed lead={<>{(about ?? tag) && <span className="simple-revising">{about ?? tag}</span>}<MarkedFrameOnRequest projectId={projectId} task={task} /></>} text={request.text} />
+        </div>
+        <div className="unit-meta">
+          <span className="unit-state">{standing}</span>
+          {asksUnder && <span className="unit-state"><span className="unit-dot" aria-hidden /></span>}
+          {need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>For you<span className="unit-need-count">{need}</span></span>}
+          {headingEnd}</div></div>}
       {bundle}
       {learnedIn(run).map(l => <LearnedLine key={l.id} learning={l} onReview={actions.reviewLearning} />)}
       {wrong}

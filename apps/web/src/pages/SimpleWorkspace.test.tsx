@@ -29,7 +29,7 @@ import { cutAudition } from "../lib/cutAudition";
 import { lengthLabel } from "../lib/format";
 import * as watch from "./WatchPage";
 import { madeSentence, sentenceText } from "../lib/madeSentence";
-import { QueueTray } from "../components/chat/QueueTray";
+import { QueueInChat } from "../components/chat/QueueInChat";
 import { ChatRail } from "../components/shell/ChatRail";
 import { cutSource } from "../components/review/retakeLookup";
 import { enqueueImports } from "../components/media/UploadDropzone";
@@ -12061,9 +12061,9 @@ const sendsBack = (changeId: string, redo: ProjectData["tasks"][number]) => vi.s
   reason: "it overlaps with a change approved since (around 5.0 s)", task: redo, project: data.project,
   change: { ...useProjectStore.getState().current!.changes.find(c => c.id === changeId)!, state: "revising", revisionFrom: { state: "ready", taskId: redo.id },
     error: "Sent back: it overlaps with a change approved since (around 5.0 s)" } }) as never);
-/** The queue's lines, each as what it says before the request's words, its tag and the words. */
-const queueLines = () => [...container.querySelectorAll('[aria-label="Queued requests"] .queue-row, [aria-label="Queued requests"] .queue-head')]
-  .map(row => [...row.querySelectorAll(".queue-next, .queue-target, .queue-text")].map(part => part.textContent));
+/** The queue's requests in the chat, each as where it stands, its tag and the words. */
+const queueLines = () => [...container.querySelectorAll('[aria-label="Queued requests"] .queue-row')]
+  .map(row => [".queue-next", ".queue-target", ".queue-text"].flatMap(part => row.querySelector(part)?.textContent ?? []));
 
 it("says in a suggestion's request why the video moved on from it, queues the redo under the request's words, and runs it under the request's heading", async () => {
   vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
@@ -12296,7 +12296,7 @@ it("lets the tag and the words on the tray's line give way together, so beside w
   const items = [{ id: "a", text: "Make it shorter, and keep the laugh.", target: "Cut at 1:02:07" }, { id: "b", text: "Add a lower third." }, { id: "c", text: "Fade the outro." }];
   await withSimpleSheet(async () => {
     for (const queued of [items, items.slice(0, 1)]) {
-      await act(async () => root.render(<QueueTray items={queued} waits="Waits for your answer" onRemove={() => {}} onReword={() => {}} />));
+      await act(async () => root.render(<QueueInChat items={queued} waits="Waits for your answer" onRemove={() => {}} onReword={() => {}} />));
       const line = container.querySelector<HTMLElement>(".queue-head, .queue-row")!;
       // The tag and the words share what is left, each cut short with an ellipsis. What the request waits for and the
       // line's controls keep their size, so the line never runs out of the tray.
