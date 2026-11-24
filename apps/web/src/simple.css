@@ -426,7 +426,7 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-pass-toggle:is(:hover, :focus-visible) { text-decoration-thickness: 2px; }
 .simple-pass-toggle:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
 /* Keep the review choices together above the list, including when its rows scroll in a pinned request. */
-.simple-review-tabs { display: flex; flex: none; align-items: baseline; gap: 18px; margin: 12px 0 5px; border-bottom: 1px solid var(--color-line); }
+.simple-review-tabs { display: flex; flex: none; align-items: baseline; gap: 18px; margin: 12px 0 12px; border-bottom: 1px solid var(--color-line); }
 .simple-review-tab { display: inline-flex; align-items: baseline; gap: 6px; min-height: 28px; margin-bottom: -1px; padding: 4px 0; border: 0;
   border-bottom: 2px solid transparent; background: none; color: var(--color-muted); font: inherit; font-weight: 600;
   line-height: 19px; white-space: nowrap; cursor: pointer; }
