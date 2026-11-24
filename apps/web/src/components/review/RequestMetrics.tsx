@@ -95,7 +95,9 @@ function runModelName(id: string) {
 
 /**
  * Active time and reported tokens for the whole request, including any attempts that carried it on.
- * Only the running request needs a ticking clock.
+ * Only the running request needs a ticking clock, and only that one draws its figures all the time. A request that is
+ * finished, stopped, paused or waiting on the editor has them at rest (`.unit-rest`): out of sight until the pointer
+ * rests on its band or the band holds the focus, then drawn over the end of the band's words, which don't move.
  */
 export function RequestMetrics({ attempts, events }: { attempts: readonly Task[]; events: Record<string, readonly TaskEvent[]> }) {
   const show = useUiStore(s => s.showRunTokens);
@@ -132,8 +134,10 @@ export function RequestMetrics({ attempts, events }: { attempts: readonly Task[]
     for (const model of report.models?.length ? report.models : [task.model ?? "Unknown"]) models.add(runModelName(model));
     efforts.add(task.effort ? task.effort.charAt(0).toUpperCase() + task.effort.slice(1) : "Provider default");
   }
-  return <Tokens usage={usage} time={time} className="unit-tokens" details={[
+  if (!usage && !time) return null;
+  const figures = <Tokens usage={usage} time={time} className="unit-tokens" details={[
     [models.size > 1 ? "Models" : "Model", [...models].join(", ")],
     ["Thinking effort", [...efforts].join(", ")],
   ]} />;
+  return working ? figures : <span className="unit-rest">{figures}</span>;
 }

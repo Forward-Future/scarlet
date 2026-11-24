@@ -281,6 +281,31 @@ it("keeps saying a request is picking up where it left off until its first call,
   view.unmount();
 });
 
+it("marks the line that only says Scarlet works, for a request about one cut or edit, and not one that names something", () => {
+  openProject();
+  const running: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
+  // What the line says, and whether it is plain: under its cut's or edit's row, which says Revising…, a plain line isn't drawn.
+  const now = (host: HTMLElement) => [host.querySelector(".req-now [role=status]")?.textContent, host.querySelector(".req-now")?.classList.contains("is-plain")];
+  // Under a band the line is the only word that Scarlet works, generic or not.
+  const view = render(<RunBundle task={running} events={[]} changes={[]} banded />);
+  expect(now(view.host)).toEqual(["Working on your edit", false]);
+  // A request about one cut or edit: plain until Scarlet is on something to name.
+  view.rerender(<RunBundle task={running} events={[]} changes={[]} banded underRow />);
+  expect(now(view.host)).toEqual(["Working on your edit", true]);
+  view.rerender(<RunBundle task={{ ...running, state: "claimed" }} events={[]} changes={[]} banded underRow />);
+  expect(now(view.host)).toEqual(["Getting started", true]);
+  const called: TaskEvent[] = [{ type: "tool", at: "2026-11-05T10:00:05.000Z", text: "timeline_get", data: { tool: "scarlet.timeline_get", input: {} } }];
+  view.rerender(<RunBundle task={running} events={called} changes={[]} banded underRow />);
+  expect(now(view.host)).toEqual(["Looking at the timeline", false]);
+  // Picked up after a restart, it says so.
+  view.rerender(<RunBundle task={{ ...running, id: "tsk_again", resumeRootId: task.id }} events={[]} changes={[]} banded underRow />);
+  expect(now(view.host)).toEqual(["Picking up where it left off", false]);
+  // With no heading the line holds the run's Stop, so it is drawn whatever it says.
+  view.rerender(<RunBundle task={running} events={[]} changes={[]} underRow onStop={() => {}} />);
+  expect([...now(view.host), view.host.querySelector(".req-now .run-stop")?.textContent]).toEqual(["Working on your edit", false, "Stop"]);
+  view.unmount();
+});
+
 it("says how far the transcripts it waits on are, and keeps file progress in Media", () => {
   vi.useFakeTimers({ now: Date.parse("2026-11-05T10:00:10.000Z"), toFake: ["Date", "setInterval", "clearInterval"] });
   const running: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
@@ -318,7 +343,7 @@ it("says how far the transcripts it waits on are, and keeps file progress in Med
   view.unmount();
 });
 
-it("says a run that ended without its transcripts is paused, and offers to finish it once they're ready", () => {
+it("says a run that ended without its transcripts needs them, not that it is paused, and offers to finish it once they're ready", () => {
   const paused: Task = { ...task, needsTranscripts: ["cam"], finishedAt: "2026-11-05T11:04:00.000Z" };
   const transcribing: Task = { ...task, id: "tsk_cam", kind: "transcribe", agent: "api", instruction: "Transcribe cam", context: { mediaId: "cam" },
     state: "running", summary: null, finishedAt: undefined, progress: { stage: "aligning", fraction: 0.18, remainingSeconds: 13_689 } };
@@ -330,7 +355,7 @@ it("says a run that ended without its transcripts is paused, and offers to finis
   const view = render(<RunBundle task={paused} events={[]} changes={[]} onResume={onResume} onWaitForTranscripts={onWait} />);
   const line = () => [view.host.querySelector(".run-summary")?.textContent, view.host.querySelector(".run-wait")?.textContent];
   // How far along it is, as a percent: no guess at how long is left.
-  expect(line()).toEqual(["Paused · needs transcript", "Transcript 18%Finish when ready"]);
+  expect(line()).toEqual(["Needs transcript", "Transcript 18%Finish when ready"]);
   act(() => view.host.querySelector<HTMLButtonElement>(".run-wait button")!.click());
   expect(onWait).toHaveBeenCalledWith(true);
   view.unmount();
@@ -604,6 +629,32 @@ it("ticks active time, updates reported tokens, and carries both metrics across 
   view.unmount();
 });
 
+it("draws a request's time and tokens in line only while Scarlet works on it, and keeps them at rest once it doesn't", () => {
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime(Date.parse(task.startedAt!) + 4000);
+  useUiStore.getState().setShowRunTokens(true);
+  openProject({ [task.id]: totals() });
+  const working = { ...task, state: "running" as const, finishedAt: undefined, workedMs: 0 };
+  const view = render(<RequestMetrics attempts={[working]} events={{}} />);
+  const figures = () => view.host.querySelector<HTMLElement>(".unit-tokens");
+  // Working: the figures are the band's own item, as they always were.
+  expect([figures()?.textContent, figures()?.parentElement?.classList.contains("unit-rest")]).toEqual(["4s · 48.2K tokens", false]);
+  // Finished, stopped, waiting on an answer or paused in line: the same figures, at rest (shown on the band's hover).
+  for (const state of ["done", "cancelled", "failed", "waiting_for_user", "queued"] as const) {
+    view.rerender(<RequestMetrics attempts={[{ ...task, state, workedMs: 61_000 }]} events={{}} />);
+    expect([state, figures()?.textContent, figures()?.parentElement?.className]).toEqual([state, "1m 1s · 48.2K tokens", "unit-rest"]);
+  }
+  // The hover that lists every part of the count still opens from them.
+  act(() => { figures()!.focus(); });
+  expect(document.querySelector(".tokens-tip")?.textContent).toContain("Total48,200");
+  act(() => { figures()!.blur(); });
+  // A request with nothing to show takes no place in the band at all.
+  act(() => useUiStore.getState().setShowRunTokens(false));
+  view.rerender(<RequestMetrics attempts={[{ ...task, state: "queued", startedAt: undefined, finishedAt: undefined }]} events={{}} />);
+  expect(view.host.querySelector(".unit-rest, .unit-tokens")).toBeNull();
+  view.unmount();
+});
+
 it("leaves the word for how a run ended to its heading when the block has one, with the one action on the line that says what the run saved", () => {
   openProject();
   const resume = vi.fn();
@@ -628,6 +679,8 @@ it("leaves the word for how a run ended to its heading when the block has one, w
   expect(view.host.querySelector(".req-act")).toBeNull();
   // A run that finished has no word, and one that failed says so.
   expect([runEnded(task), runEnded({ ...task, state: "failed" })]).toEqual([undefined, "Couldn’t finish"]);
+  // One that waits on a transcript says so. "Paused" is for editing the editor paused, which Resume picks up.
+  expect([runEnded({ ...task, needsTranscripts: ["cam"] }), runEnded({ ...task, needsTranscripts: ["cam", "mic"] })]).toEqual(["Needs transcript", "Needs transcripts"]);
   view.unmount();
 });
 

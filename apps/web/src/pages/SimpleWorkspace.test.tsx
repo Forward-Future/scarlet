@@ -2031,18 +2031,20 @@ it("answers Scarlet's question with the next message when nothing is open, until
     summary: null, changeIds: [], question: "Smaller by how much?", context: { changeId: "chg_approved_2", message: "Carry on" } }] };
   useProjectStore.setState({ current: data });
   await show();
-  const answer = () => buttonIn(container, "Answer")!;
+  const answer = () => buttonIn(container, "Answer");
   const target = () => container.querySelector(".simple-target")?.textContent;
   // With no cut or edit open, the box is already on the question, and its tag says so.
   expect(target()).toBe("Answering “" + threadWith("chg_approved_2").title + "”");
   expect(boxTag()).toBe("Answer");
+  // So the question says Answer once, in the box: it has no Answer link of its own, and still has its amber dot.
+  const asked = () => [...container.querySelectorAll(".req-say")].find(el => el.textContent?.startsWith("Smaller by how much?"))!;
+  expect([asked().textContent, answer(), asked().closest(".unit")?.querySelector(".unit-msg .unit-dot") !== null]).toEqual(["Smaller by how much?", undefined, true]);
   // One question waits, so the tag has no count of them.
   expect(composer.props!.targetTagNote).toBeUndefined();
   expect(useUiStore.getState().draftOwner).toBe(JSON.stringify([PRJ, threadWith("chg_approved_2").id]));
   // The conversation is whole: nothing is hidden to show the question.
   expect(turns().some(t => t.hidden)).toBe(false);
-  // Answer on the question means the same, and the box stays there through a message landing while the question stands.
-  await click(answer());
+  // The box stays there through a message landing while the question stands.
   await act(async () => composer.props!.onSent!());
   expect(target()).toContain("Answering");
   // Taking the tag off makes the next message a new edit. The line for screen readers says so, and nothing shows above the box.
@@ -2055,6 +2057,31 @@ it("answers Scarlet's question with the next message when nothing is open, until
   // not A, S, R or K on whatever card is open.
   expect(useUiStore.getState().composerFocus).toBe(1);
   expect(container.querySelector(".simple-target button")).toBeNull();
+  // The box no longer answers, so the question has its Answer back. A press puts the box on it again, and the link goes.
+  expect(asked().textContent).toBe("Smaller by how much?Answer");
+  await click(answer()!);
+  expect([boxTag(), answer(), asked().textContent]).toEqual(["Answer", undefined, "Smaller by how much?"]);
+});
+
+it("keeps Answer under the only question while the message box is on a cut or an edit", async () => {
+  appliedEdits();
+  data = { ...data, tasks: data.tasks.filter(t => t.state !== "waiting_for_user") };
+  const base = data.tasks.find(t => t.kind !== "transcribe")!;
+  const now = new Date().toISOString();
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_asking", state: "waiting_for_user" as const, createdAt: now, startedAt: now, finishedAt: undefined,
+    summary: null, changeIds: [], question: "Smaller by how much?", context: { changeId: "chg_approved_2", message: "Carry on" } }] };
+  useProjectStore.setState({ current: data });
+  await show();
+  const answer = () => buttonIn(container, "Answer");
+  expect([boxTag(), answer()]).toEqual(["Answer", undefined]);
+  // An edit opens and the box is aimed at it: its tag names the edit, so the question's link says where an answer goes.
+  await click(turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-edits .simple-edit")!);
+  await act(async () => {});
+  expect(boxTag()).not.toBe("Answer");
+  expect(answer()).not.toBeUndefined();
+  // Esc closes the edit, the box is back on the question, and the link goes again.
+  await press("Escape");
+  expect([boxTag(), answer()]).toEqual(["Answer", undefined]);
 });
 
 it("answers Scarlet's questions one at a time, in the order asked, and says which of them the box is on", async () => {
@@ -2084,11 +2111,11 @@ it("answers Scarlet's questions one at a time, in the order asked, and says whic
   // Answer on the first means the same.
   await click(buttonIn(container.querySelector('.subunit[data-run="task_first"]')!, "Answer")!);
   expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", "1 of 2"]);
-  // The first is answered, and Scarlet works on. The second is the one the box answers now: it has the link, and
-  // with one question left the tag has no count.
+  // The first is answered, and Scarlet works on. The second is the one the box answers now. It is the only question
+  // left, so the tag has no count and the box's tag alone says Answer: the link is for telling questions apart.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_first" ? { ...t, state: "running" as const, question: null } : t),
     taskEvents: { ...d.taskEvents, task_first: [...d.taskEvents.task_first!, { type: "answer" as const, at: at(2000), text: "After it." }] } }));
-  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, undefined], [SECOND, "Answer"], 1]);
+  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, undefined], [SECOND, undefined], 0]);
   expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", undefined]);
 });
 
@@ -2132,6 +2159,55 @@ it("keeps the editor's answer and a note of theirs to two lines, with the whole 
   const note = [...container.querySelectorAll<HTMLElement>(".simple-turn > .simple-msg.from-you")].find(m => m.textContent?.includes(NOTE))!;
   expect([foldsAt(note.querySelector("p")!), note.querySelector("p")!.classList.contains("said")]).toEqual([2, true]);
   for (const words of container.querySelectorAll<HTMLElement>(".unit-msg > p, .subunit-msg > p")) expect(words.classList.contains("said")).toBe(true);
+});
+
+it("keeps a request's band to one line, and two on the request above the message box and on the one picked", async () => {
+  appliedEdits();
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_made", kind: "edit" as const, instruction: "Tighten the wrap, add music and captions.",
+    context: { message: "Tighten the wrap, add music and captions." }, changeIds: ["chg_approved_2"] }] };
+  useProjectStore.setState({ current: data });
+  // A test lays nothing out, so how many lines a band folds at is read from the simple view's stylesheet: of the rules
+  // that match its words, the most specific, and of two as specific, the later.
+  const { readFileSync } = await import("node:fs");
+  const css = readFileSync(`${import.meta.dirname}/../simple.css`, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const weigh = (selector: string) => 100 * (selector.match(/[.[]|:(?!:)/g) ?? []).length + (selector.match(/(^|[\s>+~])[a-z]/g) ?? []).length;
+  const foldsAt = (el: Element) => {
+    let best: { lines: number; weight: number } | undefined;
+    for (const [, selectors, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const lines = /-webkit-line-clamp:\s*(\d+)/.exec(body!)?.[1];
+      if (!lines) continue;
+      for (const selector of selectors!.split(",").map(part => part.trim())) {
+        let matches = false;
+        try { matches = el.matches(selector); } catch { /* A selector this page can't read is about something else. */ }
+        if (matches && (!best || weigh(selector) >= best.weight)) best = { lines: Number(lines), weight: weigh(selector) };
+      }
+    }
+    return best?.lines;
+  };
+  await showFolded();
+  await act(async () => {});
+  const band = (run: string) => container.querySelector<HTMLElement>(`.unit[data-run="${run}"] > .unit-msg`)!;
+  const lines = (run: string) => foldsAt(band(run).querySelector("p")!);
+  // The request Scarlet is on, above the message box, keeps two lines. Any other request in the chat is one line.
+  const pinned = container.querySelector<HTMLElement>(".simple-pin > .unit")!.dataset.run!;
+  const others = [...container.querySelectorAll<HTMLElement>(".simple-chat .unit")].map(unit => unit.dataset.run!);
+  expect(others).toContain("task_made");
+  expect([lines(pinned), ...others.map(lines)]).toEqual([2, ...others.map(() => 1)]);
+  // Picked, a request's band is violet and has two lines; let go, it is back to one.
+  await click(band("task_made"));
+  await act(async () => {});
+  expect([band("task_made").classList.contains("is-marked"), lines("task_made")]).toEqual([true, 2]);
+  // Folded it is one line, picked or above the message box too.
+  await click(band("task_made").querySelector(".unit-fold")!);
+  await click(band(pinned).querySelector(".unit-fold")!);
+  expect([band("task_made").classList.contains("is-marked"), lines("task_made"), lines(pinned)]).toEqual([true, 1, 1]);
+  await click(band("task_made").querySelector(".unit-fold")!);
+  await click(band("task_made"));
+  await act(async () => {});
+  expect([band("task_made").classList.contains("is-marked"), lines("task_made")]).toEqual([false, 1]);
+  // The whole of a band's words is still its own to read: they are the folded kind, with no button.
+  expect(band("task_made").querySelector("p")!.classList.contains("said")).toBe(true);
 });
 
 it("stops aiming the message box at a request that is no longer in the project", async () => {
@@ -5163,7 +5239,7 @@ it("keeps a second call Revising… when the first revised cut comes back, and d
   expect(approve).not.toHaveBeenCalled();
 });
 
-it("shows Scarlet on two calls at once: each row has its own actions, alongside project Stop", async () => {
+it("shows Scarlet on two calls at once: each row has its own Stop, and Pause is on a band, once", async () => {
   finishedPass();
   const cancelTask = vi.fn().mockResolvedValue(undefined);
   useProjectStore.setState({ cancelTask });
@@ -5179,9 +5255,12 @@ it("shows Scarlet on two calls at once: each row has its own actions, alongside 
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_aside", 2, { kind: "edit" as const, instruction: "Keep the aside.", ...started() })] }));
   await act(async () => {});
   expect(document.querySelector(".queue-row")).toBeNull();
-  // Pause sits with Stop at the right of each request Scarlet has. Nothing sits over the message box.
+  // Nothing sits over the message box. Pause holds all editing, so the chat draws it once: on a request's band, and
+  // under neither row. Each request under a row keeps its own Stop.
   expect(container.querySelector(".queue-tray")).toBeNull();
-  expect([...container.querySelectorAll(".subunit .unit-pause-edit")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing", "Pause editing"]);
+  expect(container.querySelector(".subunit .unit-pause-edit")).toBeNull();
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), !!b.closest(".unit-msg")])).toEqual([["Pause editing", true]]);
+  expect(container.querySelectorAll(".subunit .unit-stop-edit").length).toBe(2);
   // The pass's heading says how many Scarlet is on, beside what still needs the editor.
   const word = block().querySelector(".unit-msg .unit-word")!;
   expect(word.textContent).toBe("Working on 2 at once");
@@ -5204,6 +5283,8 @@ it("shows Scarlet on two calls at once: each row has its own actions, alongside 
   // An ordinary word, such as the stopped request's, isn't marked that way.
   const stopped = container.querySelector('.subunit[data-run="task_aside"] .subunit-msg .unit-word')!;
   expect([stopped.textContent, stopped.className]).toEqual(["Stopped", "unit-word"]);
+  // Stopped or at work, a request under a row has no time of its own: the word its row ends on says it on hover.
+  expect(container.querySelector(".subunit .unit-tokens, .subunit .unit-rest")).toBeNull();
 });
 
 it("keeps a call Revising… when it comes back revised while a second note on it still waits", async () => {
@@ -6908,13 +6989,13 @@ it("keeps the chat in view beside the Transcript, and closes the Transcript on E
   const pin = () => container.querySelector<HTMLElement>(".simple-pin")!;
   const transcript = () => container.querySelector(".simple-transcript");
   await openTranscript();
-  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop, its question
-  // and Answer, so the message box doesn't say Answer with no question on screen.
+  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop and its
+  // question, so the message box doesn't say Answer with no question on screen.
   expect(chat().hidden).toBe(false);
   expect(pin().hidden).toBe(false);
   expect(pin().querySelector(".unit-msg")?.textContent).toContain("Make the logo smaller.");
   expect(pin().querySelector('[aria-label^="Stop this edit"]')).not.toBeNull();
-  expect(pin().querySelector(".req-say")?.textContent).toBe("Smaller by how much?Answer");
+  expect(pin().querySelector(".req-say")?.textContent).toBe("Smaller by how much?");
   expect(boxTag()).toBe("Answer");
   // A message that was sent leaves it open: the chat, where it went, is already in view.
   await act(async () => composer.props!.onSent!());
@@ -7108,7 +7189,9 @@ it("shows cache progress on the Media button and offers Pause from More", async 
   expect(mediaButton().getAttribute("aria-description")).toBe("Caching 30%");
   expect(mediaButton().textContent).toBe("Media");
   await openMenu();
-  await click(menuItem("Pause"));
+  // The menu's row says what it pauses: the chat's own Pause, on a request's band, is for editing.
+  expect(menuItem("Pause")).toBeUndefined();
+  await click(menuItem("Pause media processing"));
   expect(updateProject).toHaveBeenCalledWith({ mediaPaused: true }, PRJ);
   expect(container.querySelector('[role="menu"]')).toBeNull();
 });
@@ -7192,7 +7275,8 @@ it("offers Resume from the Media hover card and More while media processing is p
   expect(mediaButton().getAttribute("aria-description")).toBe("Media processing is paused");
   expect(buttonIn(container.querySelector(".media-hover-card")!, "Resume")).toBeTruthy();
   await openMenu();
-  await click(menuItem("Resume"));
+  expect(menuItem("Resume")).toBeUndefined();
+  await click(menuItem("Resume media processing"));
   expect(updateProject).toHaveBeenCalledExactlyOnceWith({ mediaPaused: false }, PRJ);
 });
 
@@ -7922,7 +8006,8 @@ it("keeps a question answerable while project editing is paused", async () => {
   useProjectStore.setState({ current: data });
   await show();
   const unit = container.querySelector(`.unit[data-run="${base.id}"]`)!;
-  expect([...unit.querySelectorAll(".req-say")].map(el => el.textContent)).toEqual([`${question}Answer`]);
+  // The message box is on the question, tagged Answer, so the question has no Answer link of its own.
+  expect([[...unit.querySelectorAll(".req-say")].map(el => el.textContent), boxTag()]).toEqual([[question], "Answer"]);
   // Resume is on the band of the request that asks, beside Stop: the tray has nothing to say.
   expect(container.querySelector(".queue-tray")).toBeNull();
   expect(unit.querySelector(".unit-pause-edit")?.getAttribute("aria-label")).toBe("Resume editing");
@@ -7986,8 +8071,10 @@ it("leaves a finished request as its heading with active time and what it made",
   const run = runOf("task_done");
   const unit = run.closest<HTMLElement>(".unit")!;
   // The heading is the editor's words, with no name or number: "Edit 14" anywhere is an edit Scarlet made.
-  expect(unit.querySelector(".unit-msg > :not(.unit-fold, .simple-who, p, .unit-state, .unit-stop, .unit-tokens)")).toBeNull();
-  expect(unit.querySelector(".unit-msg > .unit-tokens > .run-work-time")?.textContent).toMatch(/^\d+m \d+s$/);
+  expect(unit.querySelector(".unit-msg > :not(.unit-fold, .simple-who, p, .unit-state, .unit-stop, .unit-rest)")).toBeNull();
+  // Its active time is the band's still, at rest: it shows when the pointer rests on the band, and takes no room.
+  expect(unit.querySelector(".unit-msg > .unit-tokens")).toBeNull();
+  expect(unit.querySelector(".unit-msg > .unit-rest > .unit-tokens > .run-work-time")?.textContent).toMatch(/^\d+m \d+s$/);
   const words = unit.querySelector(".unit-msg p")!;
   expect(words.lastChild?.textContent).toBe(requestTextFor("task_done"));
   // It was sent about a moment on the timeline. The box said which while it was written; the heading doesn't.
@@ -7998,6 +8085,61 @@ it("leaves a finished request as its heading with active time and what it made",
   expect(run.querySelector(".req-time, .run-list, .req-steps, .simple-pass-chevron, .run-chevron")).toBeNull();
   // Diagnostic lines with clip ids stay out of the editor's view.
   expect(run.textContent).not.toContain("clip_b");
+});
+
+it("shows a band's time only while Scarlet works on the request, and on the band's hover or focus after, without moving its words", async () => {
+  await show();
+  const band = (run: string) => container.querySelector<HTMLElement>(`.unit[data-run="${run}"] > .unit-msg`)!;
+  const figures = (run: string) => band(run).querySelector<HTMLElement>(".unit-tokens")!;
+  // Working: the time is the band's own item, drawn all the time.
+  expect(figures("task_running").parentElement).toBe(band("task_running"));
+  // Waiting on an answer, and finished: the time is at rest. Where the request stands is the band's own, in view.
+  expect([figures("task_waiting").parentElement?.className, figures("task_done").parentElement?.className]).toEqual(["unit-rest", "unit-rest"]);
+  expect(band("task_waiting").querySelector(":scope > .unit-state > .unit-dot")).not.toBeNull();
+  expect(band("task_done").querySelector(":scope > .unit-state")?.textContent).toBe("Suggestion");
+  // Stopped, its time goes to rest and its word stays.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
+  expect([figures("task_running").parentElement?.className, band("task_running").querySelector(":scope > .unit-state")?.textContent]).toEqual(["unit-rest", "Stopped"]);
+  // A test lays nothing out, so how the time rests is read from the simple view's stylesheet. Where there is a hover
+  // it takes no room (no width, and the band's gap taken back), is out of sight, and is drawn over the end of the
+  // words on the band's own fill once the pointer rests on the band or the band holds the focus. Where there is no
+  // hover none of that applies, and it is in line as while Scarlet works.
+  const { readFileSync } = await import("node:fs");
+  const css = readFileSync(`${import.meta.dirname}/../simple.css`, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const hover = /@media \(hover: hover\) \{([\s\S]*?)\n\}/.exec(css)![1]!;
+  const rule = (sheet: string, selector: string) => sheet.split("\n").map(line => line.trim()).find(line => line.startsWith(`${selector} {`)) ?? "";
+  expect(rule(css, ".unit-rest")).toBe(".unit-rest { display: contents; }");
+  expect(rule(hover, ".unit-msg > .unit-rest")).toMatch(/position: relative;.* width: 0;.* margin-left: calc\(-1 \* var\(--band-gap, 10px\)\);/);
+  expect(rule(hover, ".unit-msg > .unit-rest > .unit-tokens")).toMatch(/position: absolute;.* right: 0;.* opacity: 0;/);
+  expect(hover).toContain("background: linear-gradient(var(--band-tint, transparent), var(--band-tint, transparent)), var(--band-under, var(--color-panel));");
+  expect(rule(hover, ".unit-msg:is(:hover, :focus-within) > .unit-rest > .unit-tokens, .unit-msg > .unit-rest > .unit-tokens[aria-expanded=\"true\"]")).toMatch(/\{ opacity: 1; \}$/);
+  // Nothing fades or slides in.
+  expect(hover).not.toMatch(/transition|animation/);
+});
+
+it("draws a request under its cut's or edit's row as the editor's words and Stop, with no line that only says Scarlet works", async () => {
+  finishedPass();
+  await withSimpleSheet(async () => {
+    await show();
+    await act(async () => {});
+    const now = new Date().toISOString();
+    await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_revise", 0, { kind: "revise" as const, state: "running" as const, startedAt: now })] }));
+    await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "revising" as const } : c) }));
+    await act(async () => {});
+    const sub = () => container.querySelector<HTMLElement>('.subunit[data-run="task_revise"]')!;
+    const heading = () => sub().querySelector<HTMLElement>(":scope > .subunit-msg")!;
+    const line = () => { const row = sub().querySelector<HTMLElement>(".req-now"); return row ? [row.querySelector('[role="status"]')?.textContent, styled(row, "display")[0] !== "none"] : undefined; };
+    // Its row says Revising…, shimmering. Under it: the editor's words and Stop. No time, no Pause.
+    expect(sub().closest("li")?.querySelector(":scope > button .simple-pass-value")?.textContent).toBe("Revising…");
+    expect([...heading().children].map(el => el.className).filter(name => name !== "simple-who")).toEqual([expect.stringContaining("said"), "unit-state", "unit-actions"]);
+    expect([...heading().querySelectorAll("button")].map(b => b.getAttribute("aria-label"))).toEqual([expect.stringMatching(/^Stop this edit/)]);
+    // The line that only says Scarlet works isn't drawn there: the row above says it.
+    expect(line()).toEqual(["Working on your edit", false]);
+    // Once Scarlet is on something to name, the line says it.
+    await event(d => ({ ...d, taskEvents: { ...d.taskEvents, task_revise: [{ type: "tool" as const, at: now, text: "timeline_get", data: { tool: "timeline_get", input: {} } }] } }));
+    await act(async () => {});
+    expect(line()).toEqual(["Looking at the timeline", true]);
+  });
 });
 
 it("keeps edits saved mid-run inside the run until it finishes", async () => {
@@ -9215,7 +9357,7 @@ it("shows Scarlet's recheck of an approved cut under that call, with why and non
   expect(under!.textContent).not.toMatch(/keep|Kept the original delivery|The video changed|Recheck this cut/);
 });
 
-it("says where Scarlet's recheck stands once, at the right of its Auto heading, with Pause and Stop there while it runs", async () => {
+it("says where Scarlet's recheck stands once, at the right of its Auto heading, with Stop there while it runs", async () => {
   finishedPass();
   data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
   useProjectStore.setState({ current: data });
@@ -9230,12 +9372,13 @@ it("says where Scarlet's recheck stands once, at the right of its Auto heading, 
   const heading = () => under().querySelector<HTMLElement>(":scope > .subunit-msg")!;
   const said = (words: string) => under().textContent!.split(words).length - 1;
   expect(heading().querySelector(".simple-revising.is-auto")?.textContent).toBe("Auto");
-  // While it runs its heading ends as a request's does: its active time, then Pause and Stop. No row under it holds them.
-  expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing", "Stop this edit"]);
+  // While it runs its heading ends as any request's under a row does: with Stop, and nothing else. Pause is the
+  // project's and is on a band; the time is on the row's hover; and its row says Rechecking…, so no line says it works.
+  expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit"]);
   expect(heading().lastElementChild?.className).toBe("unit-actions");
-  expect(heading().querySelector(":scope > .unit-tokens > .run-work-time")).not.toBeNull();
+  expect(heading().querySelector(".unit-tokens, .unit-rest")).toBeNull();
   expect(under().querySelector(".req .req-right, .req .unit-actions, .req .run-stop")).toBeNull();
-  expect([...under().querySelectorAll(".req-row")].map(row => row.className)).toEqual(["req-row req-now"]);
+  expect([...under().querySelectorAll(".req-row")].map(row => row.className)).toEqual(["req-row req-now is-plain"]);
   // It asks: the heading's dot, the question and Answer say so. No row says "Needs your answer" over them.
   const question = "The join lands on a breath now. Cut after it?";
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "waiting_for_user" as const, question } : t),
@@ -9244,7 +9387,7 @@ it("says where Scarlet's recheck stands once, at the right of its Auto heading, 
   expect([...under().querySelectorAll(".req-say")].map(p => [p.textContent, p.querySelector("button")?.textContent])).toEqual([[`${question}Answer`, "Answer"]]);
   expect(under().querySelector(".req-status, .req-row")).toBeNull();
   expect(said("Needs your answer")).toBe(0);
-  expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing", "Stop this edit"]);
+  expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit"]);
   // It was stopped: the heading says so, once. No row says it again, and its one action is still there, after what it saved.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "cancelled" as const, question: null, finishedAt: at(2000) } : t) }));
   expect(heading().querySelector(":scope > .unit-state")?.textContent).toBe("Stopped");
@@ -9334,7 +9477,7 @@ it("takes out a request about one cut that was picked up again and then changed 
   }
 });
 
-it("keeps a request about one cut in the conversation while it's paused for a transcript, with or without its cut revised", async () => {
+it("keeps a request about one cut in the conversation while it waits for a transcript, with or without its cut revised", async () => {
   finishedPass();
   await show();
   await act(async () => {});
@@ -9342,17 +9485,18 @@ it("keeps a request about one cut in the conversation while it's paused for a tr
   const waited = data.media.find(m => m.kind === "audio" && !m.transcriptId)!;
   const now = new Date().toISOString();
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_about", 0, { kind: "revise" as const, state: "done" as const, startedAt: now, finishedAt: now, needsTranscripts: [waited.id] })] }));
-  // Paused is stopped early: it stays under its call, says so at the right of the editor's words, and has its one action.
+  // Waiting for a transcript is stopped early: it stays under its call, says what it needs at the right of the editor's
+  // words, and has its one action. It doesn't say Paused: that is editing the editor paused, which Resume picks up.
   // No transcript is being made for it, so that action is the one that starts it.
   const about = () => container.querySelector<HTMLElement>('.subunit[data-run="task_about"]');
   const stands = () => [about()?.closest("li")?.querySelector(":scope > button .simple-pass-label")?.textContent,
     about()?.querySelector(".subunit-msg > .unit-state")?.textContent, about()?.querySelector(".run-wait button")?.textContent];
-  expect(stands()).toEqual([STAGED[0]!.reason, "Paused", "Transcribe"]);
-  // Paused with the cut already revised: the pass comes back with it, and the request is still there to finish.
+  expect(stands()).toEqual([STAGED[0]!.reason, "Needs transcript", "Transcribe"]);
+  // Waiting with the cut already revised: the pass comes back with it, and the request is still there to finish.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_about" ? { ...t, changeIds: ["chg_revised"] } : t),
     changes: [...d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "rejected" as const, replacedBy: "chg_revised" } : c),
       { ...d.changes.find(c => c.id === "chg_ready")!, id: "chg_revised", taskId: "task_about", createdAt: new Date().toISOString() }] }));
-  expect(stands()).toEqual([STAGED[0]!.reason, "Paused", "Transcribe"]);
+  expect(stands()).toEqual([STAGED[0]!.reason, "Needs transcript", "Transcribe"]);
 });
 
 it("keeps the way to finish a request about one cut that is paused for a transcript, through later requests in the pass", async () => {
@@ -11354,15 +11498,16 @@ it("says in a suggestion's request why the video moved on from it, queues the re
   useUiStore.getState().setShowRunTokens(true);
   await act(async () => useProjectStore.setState(st => ({ current: { ...st.current!, taskUsage: { task_redo: { runs: 1, inputTokens: 2_000, outputTokens: 10_000,
     cacheReadTokens: 200_000, cacheWriteTokens: 0, reasoningTokens: 0, totalTokens: 212_000, firstAt: null, lastAt: null } } } })));
-  const headingEnd = () => [...unit().querySelectorAll(".unit-msg > .unit-tokens, .unit-msg > .unit-actions")].map(el => el.querySelector(".unit-stop-edit")?.getAttribute("aria-label") ?? el.textContent);
+  const headingEnd = () => [...unit().querySelectorAll(".unit-msg > .unit-tokens, .unit-msg > .unit-rest > .unit-tokens, .unit-msg > .unit-actions")].map(el => el.querySelector(".unit-stop-edit")?.getAttribute("aria-label") ?? el.textContent);
   expect(headingEnd()).toEqual([expect.stringMatching(/s · 212K tokens$/), `Stop this edit: ${requestTextFor("task_done")}`]);
   // The suggestion comes back made again: the line gives way to it, and it plays from the same block.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_redo" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString(), changeIds: ["chg_redone"],
       summary: "Trimmed the pause where it sits now." } : t),
     changes: [...d.changes, { ...ready, id: "chg_redone", taskId: "task_redo", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] }));
   expect(unit().closest(".simple-chat")).not.toBeNull();
-  // Done, its tokens stay in its heading, and none of its rows repeat them.
+  // Done, its tokens stay in its heading, at rest now that Scarlet isn't on it, and none of its rows repeat them.
   expect(headingEnd()).toEqual([expect.stringMatching(/s · 212K tokens$/)]);
+  expect(unit().querySelector(".unit-msg > .unit-rest > .unit-tokens")).not.toBeNull();
   expect(unit().querySelectorAll(".run-tokens").length).toBe(1);
   useUiStore.getState().setShowRunTokens(false);
   expect(unit().querySelector(".unit-state")?.textContent).toBe("Suggestion");
@@ -11651,10 +11796,11 @@ it("shows edit actions while working or asking, and a status once the request st
   const state = (id: string) => container.querySelector<HTMLElement>(`.unit[data-run="${id}"] > .unit-msg > .unit-state`)!;
   expect([state("task_running").innerHTML, editActionsOf("task_running").getAttribute("aria-label")]).toEqual(["", `Stop this edit: ${requestTextFor("task_running")}`]);
   expect([state("task_waiting").querySelector(".unit-dot")?.getAttribute("aria-hidden"), state("task_waiting").textContent, editActionsOf("task_waiting").getAttribute("aria-label")]).toEqual(["true", "", `Stop this edit: ${requestTextFor("task_waiting")}`]);
-  // A question is that dot, the question and Answer: no row under the heading says "Needs your answer" over it.
+  // A question is that dot and the question: no row under the heading says "Needs your answer" over it. It is the
+  // only one waiting and the message box is already on it, tagged Answer, so no Answer link says so a second time.
   const asking = container.querySelector<HTMLElement>('.unit[data-run="task_waiting"] .req')!;
   expect(asking.querySelector(".req-status")).toBeNull();
-  expect([...asking.querySelectorAll(".req-say")].map(p => p.textContent)).toEqual([`${data.tasks.find(t => t.id === "task_waiting")!.question}Answer`]);
+  expect([[...asking.querySelectorAll(".req-say")].map(p => p.textContent), boxTag()]).toEqual([[data.tasks.find(t => t.id === "task_waiting")!.question], "Answer"]);
   // A suggestion waiting to be played says so, and its line under the band plays it.
   expect(state("task_done").textContent).toBe("Suggestion");
   expect(container.querySelector('.unit[data-run="task_done"] .simple-suggest')).not.toBeNull();
@@ -11668,6 +11814,35 @@ it("shows edit actions while working or asking, and a status once the request st
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "approved" as const } : c) }));
   expect(state("task_done").innerHTML).toBe("");
   expect(container.querySelector('.unit[data-run="task_done"] .simple-action-more')).toBeNull();
+});
+
+it("draws Pause once in the chat, on the request above the message box or else the lowest band, and Stop on every request", async () => {
+  const stopEditing = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ stopEditing });
+  await show();
+  const pauses = () => [...container.querySelectorAll<HTMLElement>(".unit-pause-edit")];
+  const held = () => [...container.querySelectorAll<HTMLElement>(".unit > .unit-msg")].filter(band => band.querySelector(".unit-stop-edit"));
+  const runsOf = (bands: HTMLElement[]) => bands.map(band => band.closest<HTMLElement>(".unit")!.dataset.run).sort();
+  // Scarlet works on one request and asks about another. Each has its own Stop.
+  expect(runsOf(held())).toEqual(["task_running", "task_waiting"]);
+  // Pause holds all editing in the project, so the chat has one: on the request fixed above the message box.
+  const pinned = container.querySelector<HTMLElement>(".simple-pin > .unit > .unit-msg")!;
+  expect(held()).toContain(pinned);
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Pause editing", pinned]]);
+  await click(pauses()[0]!);
+  expect(stopEditing).toHaveBeenCalledExactlyOnceWith(PRJ);
+  // Paused, both wait for Resume and neither is above the message box: Resume is on the lowest of their bands, once.
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: true },
+    tasks: d.tasks.map(t => t.id === "task_running" || t.id === "task_waiting" ? { ...t, state: "queued" as const, question: null } : t) }));
+  await act(async () => {});
+  const inChat = [...container.querySelectorAll<HTMLElement>(".simple-chat .unit > .unit-msg")].filter(band => band.querySelector(".unit-stop-edit"));
+  expect([runsOf(held()), inChat.length]).toEqual([["task_running", "task_waiting"], 2]);
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Resume editing", inChat.at(-1)]]);
+  // The one that had it stopped: the other takes it, so there is always one while any request could hold it.
+  const last = inChat.at(-1)!.closest<HTMLElement>(".unit")!.dataset.run!;
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === last ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
+  await act(async () => {});
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Resume editing", inChat[0]]]);
 });
 
 it("keeps where a request stands on the first line of its band's words, level with \"N need you\", however many lines they take", async () => {
@@ -11717,6 +11892,8 @@ it("underlines the chat actions, makes edit result links stand out, and keeps am
     await click(every);
     expect(styled(every, "color", "border-bottom-color")).toEqual(["white", "white"]);
     expect(styled(needed, "color", "border-bottom-color")).toEqual(["silver", "transparent"]);
+    // Answer is under the question whenever the message box isn't already answering it: here, with its tag taken off.
+    await act(async () => composer.props!.onClearTarget!());
     expect(look("Answer")).toBe("orange underline orange");
     // The one action of a request that stopped early is a link like the rest, not white.
     await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
@@ -11758,6 +11935,10 @@ it("draws a revision of one applied edit under that edit's row, at work, and und
   // Its Stop is its own heading's last word, and the request that holds it has none: Scarlet isn't on that one.
   expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
   expect(owner().querySelector(":scope > .unit-msg > .unit-stop")).toBeNull();
+  // No band in the chat can hold Pause, so the request under the row does: there is still one, and only one.
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".subunit")])).toEqual([["Pause editing", sub()]]);
+  // It has no time of its own: the word its row ends on says that on hover.
+  expect(sub().querySelector(".unit-tokens, .unit-rest")).toBeNull();
   // Opened, the list has it directly under the row it revises, and that row's word moves while Scarlet works.
   await click(seeAll(owner())!);
   const row = sub().previousElementSibling as HTMLElement;
@@ -11799,6 +11980,9 @@ it("draws a revision of an edit under its row while the request that made it sti
   // Each has its own Stop: the request's in its band, the revision's on its own heading.
   expect(owner().querySelector(':scope > .unit-msg [aria-label^="Stop this edit"]')).not.toBeNull();
   expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
+  // Pause is the project's: one, on the band, and none under the row.
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => b.closest(".unit-msg"))).toEqual([owner().querySelector(":scope > .unit-msg")]);
+  expect([...sub().querySelectorAll(".subunit-msg > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit: Make the captions bigger."]);
   expect(sub().querySelector('[aria-label="Scarlet’s work"] .working-text')).not.toBeNull();
   // Opened, the edit's row says it is being revised while the request goes on.
   await click(seeAll(owner())!);
@@ -13426,6 +13610,73 @@ it("folds a request to its heading with the arrow at the heading's left, and ope
   expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(true);
   await click(arrow("chg_approved_2"));
   expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(false);
+});
+
+it("says on a folded request's band what waits on the editor under it: For you with its count, and the dot for a question", async () => {
+  appliedEdits();
+  idle();
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_made", kind: "edit" as const, instruction: "Tighten the wrap, add music and captions.",
+    context: { message: "Tighten the wrap, add music and captions." }, changeIds: ["chg_approved_2"] }] };
+  const thread = threadWith("chg_approved_2");
+  useProjectStore.setState({ current: data });
+  await withSimpleSheet(async () => {
+    await showFolded();
+    await act(async () => {});
+    const unit = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
+    const band = () => unit().querySelector<HTMLElement>(":scope > .unit-msg")!;
+    const fold = () => click(band().querySelector(".unit-fold")!);
+    /** The number on the request's For you tab, under the band. Folded, the tab is out of sight and still there. */
+    const tab = () => unit().querySelector(".simple-review-tab-count")?.textContent;
+    const need = () => band().querySelector(".unit-need");
+    const dotShows = () => [...band().querySelectorAll(".unit-state")].some(el => el.querySelector(".unit-dot") && styled(el, "display")[0] !== "none");
+    // Open, For you and its count are under the band, and the band says nothing of them.
+    expect(Number(tab())).toBeGreaterThan(0);
+    expect([need(), dotShows()]).toEqual([null, false]);
+    // Folded, everything under the band is out of sight, so the band says it: For you and the same count.
+    await fold();
+    expect(unit().classList.contains("is-collapsed")).toBe(true);
+    expect([need()?.textContent, need()?.querySelector(".unit-need-count")?.textContent, need()?.getAttribute("title")])
+      .toEqual([`For you${tab()}`, tab(), `${tab()} ${tab() === "1" ? "needs" : "need"} you`]);
+    expect(styled(need()!.querySelector(".unit-need-count")!, "color")).toEqual(styled(unit().querySelector(".simple-review-tab-count")!, "color"));
+    expect(band().querySelector(".unit-need button, .unit-need a")).toBeNull();
+    expect(dotShows()).toBe(false);
+    // Scarlet asks about one of its edits, under that edit's row: the folded band has the amber dot too, beside the count.
+    const now = new Date().toISOString();
+    await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_fix", kind: "edit" as const, state: "waiting_for_user" as const, summary: null, changeIds: [],
+      instruction: "Make the captions bigger.", question: "Bigger by how much?", createdAt: now, startedAt: now, finishedAt: undefined, expectedSeconds: undefined,
+      context: { threadId: thread.id, changeId: "chg_approved_2", editIndex: 1, time: 0.2, end: 2.4, message: "Make the captions bigger." } }],
+      taskEvents: { ...d.taskEvents, task_fix: [{ type: "question" as const, at: now, text: "Bigger by how much?" }] } }));
+    await act(async () => {});
+    expect(unit().querySelector('.subunit[data-run="task_fix"]')).not.toBeNull();
+    expect([unit().classList.contains("is-collapsed"), dotShows(), need()?.querySelector(".unit-need-count")?.textContent]).toEqual([true, true, tab()]);
+    // Opened again the band is as it was: the question and For you are under it.
+    await fold();
+    expect([unit().classList.contains("is-collapsed"), need(), dotShows()]).toEqual([false, null, false]);
+  });
+});
+
+it("says on a folded pass's band how many of its calls still wait, and keeps the dot for its own question beside the count", async () => {
+  finishedPass();
+  await withSimpleSheet(async () => {
+    await show();
+    await act(async () => {});
+    const unit = () => passCard().closest<HTMLElement>(".unit")!;
+    const band = () => unit().querySelector<HTMLElement>(":scope > .unit-msg")!;
+    const tab = () => unit().querySelector(".simple-review-tab-count")?.textContent;
+    const dot = () => { const el = band().querySelector<HTMLElement>(".unit-state:has(> .unit-dot)"); return el ? styled(el, "display")[0] !== "none" : false; };
+    expect(Number(tab())).toBeGreaterThan(0);
+    expect(band().querySelector(".unit-need")).toBeNull();
+    await click(band().querySelector(".unit-fold")!);
+    expect(band().querySelector(".unit-need")?.textContent).toBe(`For you${tab()}`);
+    // The pass's own request asks: open, the count under the band takes the dot's place; folded, the band has both.
+    const root = unit().dataset.run!;
+    await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === root ? { ...t, state: "waiting_for_user" as const, question: "Keep the cold open?", finishedAt: undefined } : t) }));
+    await act(async () => {});
+    expect([unit().classList.contains("is-collapsed"), dot(), band().querySelector(".unit-need-count")?.textContent]).toEqual([true, true, tab()]);
+    await click(band().querySelector(".unit-fold")!);
+    expect([unit().classList.contains("is-collapsed"), dot(), band().querySelector(".unit-need")]).toEqual([false, false, null]);
+  });
 });
 
 it("shows the whole timeline on any press on a request's band", async () => {

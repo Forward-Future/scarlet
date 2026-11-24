@@ -2125,6 +2125,13 @@ export function SimpleWorkspace() {
   const rewordingItem = rewording && queuedItems.find(item => item.id === rewording.id);
   // While those words are in the box it stays aimed as it was. Once they are done with, it follows what opened meanwhile.
   const rewordingOn = !!rewordingItem;
+  // The one question that waits has no Answer link under it while the message box is already answering it: the box's
+  // tag says Answer. Aimed at a cut or an edit, with its tag taken off or holding a queued request's words, the box
+  // answers nothing, and the link is there. A question about a cut that isn't open keeps it too: there Answer also
+  // opens that cut and plays what changed (`replyToThread`), which the tag doesn't.
+  const answersOnly = !pass || !replyThread?.question?.cutConflict?.range || answeringCut;
+  const answering = boxTag === "Answer" && questions.length === 1 && !rewordingOn && answersOnly ? replyThread?.question?.id : undefined;
+  const turnActions: ChatActions = answering ? { ...chatActions, answering } : chatActions;
   heldForWords.current = rewordingOn;
   const wasRewording = useRef(rewordingOn);
   useLayoutEffect(() => {
@@ -2309,7 +2316,7 @@ export function SimpleWorkspace() {
               {current.reviewStatus === "loading" ? <Loading label="Loading edits…" />
                 : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}{" "}
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
-                : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
+                : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={turnActions}
                   pinned={pinned} pinHost={pinHost} list={listOf(thread.id)}
                   reportReviewMarkers={(showOtherFlags || showEvery) && thread.id !== focusThread?.id && thread.id !== passThread?.id
                     ? reportReviewMarkers : undefined} reportEvery={showEvery} />)

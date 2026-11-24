@@ -71,6 +71,12 @@ interface RunBundleProps {
   summary?: string;
   /** The request sits under the row of the cut it is about, and that row is what it saved, with Scarlet's note on it. */
   listedAbove?: boolean;
+  /**
+   * The request is about one cut or edit and is drawn inside the block that lists it. Under that cut's or edit's row,
+   * which says Revising… while Scarlet works, the line for what Scarlet is doing this moment shows only when it names
+   * something: not to say again that it works. Apart from its row the line stays, as nothing else there says so.
+   */
+  underRow?: boolean;
   /** The block's heading says how the run ended ("Stopped"), so its rows don't say it again. */
   banded?: boolean;
   /** The project's editing is paused, so a run in line waits for Continue. */
@@ -114,7 +120,7 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events: all, opening, changes, callNumber, say, result, onStop, actions }: RunBundleProps) {
+function WorkingRun({ task, events: all, opening, changes, callNumber, say, result, onStop, actions, underRow }: RunBundleProps) {
   // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
   // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
   const events = useMemo(() => sinceRerun(task, all), [task, all]);
@@ -157,9 +163,12 @@ function WorkingRun({ task, events: all, opening, changes, callNumber, say, resu
     : doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? STARTING : WORKING);
   // The timeline's status says the same words, so the editor can tell what Scarlet is on without the chat in view.
   usePublishWorkingLine(task.id, words);
+  // Words that only say Scarlet works are marked as plain: under the row of its cut or edit, which says Revising…,
+  // such a line isn't drawn (simple.css). It stays where it is the one place for the run's controls.
+  const plain = !!underRow && (words === WORKING || words === STARTING) && !actions && !onStop;
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
     {aim && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
-    <div className="req-row req-now">
+    <div className={plain ? "req-row req-now is-plain" : "req-row req-now"}>
       <StepMark state="working" />
       {/* The words shimmer while Scarlet works. A narrow chat shortens them to two lines; hovering says them whole. */}
       <span role="status" title={words} className="req-now-text working-text">{words}</span>
@@ -264,9 +273,12 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
 const WORKING = "Working on your edit";
 const PICKING_UP = "Picking up where it left off";
 
-/** How a run that didn't finish ended, in the words its block says: paused for its transcripts, stopped, or failed. */
+/**
+ * How a run that didn't finish ended, in the words its block says: waiting for its transcripts, stopped, or failed.
+ * "Paused" is kept for editing the editor paused with Pause, which Resume picks up; this one waits on a transcript.
+ */
 export function runEnded(task: Task) {
-  return taskNeedsTranscripts(task) ? `Paused · needs ${task.needsTranscripts!.length > 1 ? "transcripts" : "transcript"}`
+  return taskNeedsTranscripts(task) ? `Needs ${task.needsTranscripts!.length > 1 ? "transcripts" : "transcript"}`
     : task.state === "cancelled" ? "Stopped" : task.state === "failed" ? "Couldn’t finish" : undefined;
 }
 

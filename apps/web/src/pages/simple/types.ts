@@ -139,6 +139,11 @@ export interface ChatActions {
   /** Light the timeline's marker at this time, or none: the pointer is over that edit's row in the chat. */
   lightMark(time?: number, target?: HoveredReviewRow): void;
   reply(thread: Thread): void;
+  /**
+   * The question the message box is already answering, by its request, when it is the only one waiting in the project:
+   * the box's tag says Answer, so the question has no Answer link of its own. None while the box is aimed elsewhere.
+   */
+  answering?: string;
   revise(thread: Thread, change: Change): void;
   /**
    * What a request about one cut is called while that cut is a call of the pass waiting now, or an edit of its request
