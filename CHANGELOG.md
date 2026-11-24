@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 23, 2026
 
 - Edits in a list now combine into one row only when they overlap on the timeline exactly, so edits in separate places or that only partly overlap each stay on their own row.
+- While you review an edit, cuts still waiting on your call play as Scarlet would make them, and show on the timeline as a gap with their number, so retakes nearby no longer look missed.
 - When Scarlet can't take out a repeated line cleanly, it now asks you about the cut instead of leaving the line in and marking a To do.
 - The talking-head example skill no longer includes Matt’s own camera setup or editor name, so any editor can adapt it.
 - Scarlet now knows what was said earlier in the chat, so a message like “tell me the timestamps” or “the two clips you just found” is read as being about the request before it, links and times Scarlet showed you while it worked included.
