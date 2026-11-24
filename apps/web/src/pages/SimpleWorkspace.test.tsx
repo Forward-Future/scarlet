@@ -14481,7 +14481,7 @@ it("keeps a dialogue pass's decided calls in Done after the pass applies, and op
   expect(optionalLine(pass)).toBeNull();
 });
 
-it("ticks in See all the cuts that went in with a pass through its calls, Scarlet's own picks too, and not an edit that still waits, a doubt raised since or a cut sent back", async () => {
+it("ticks in Done the cuts that went in with a pass through its calls, Scarlet's own picks too, and not an edit that still waits, a doubt raised since or a cut sent back", async () => {
   const CUTS: Staged[] = [...STAGED, { start: 14, end: 15, reason: "A second go at the sign-off." }];
   finishedPass(CUTS);
   vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
@@ -14519,25 +14519,30 @@ it("ticks in See all the cuts that went in with a pass through its calls, Scarle
   await showFolded();
   await act(async () => {});
   expect(needYou()).toBe("2 need you");
-  await click(seeAll(passCard())!);
-  await act(async () => {});
-  /** Each row of the list: its words, whether it is ticked (the row's class and its tick), its time, and what it ends on. */
+  /** Each row of the list shown: its words, whether it is ticked (the row's class and its tick), its time, and what it ends on. */
   const listed = () => passRows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided"), !!r.querySelector(".simple-pass-tick"),
     r.querySelector(".simple-pass-time")?.textContent, r.querySelector(".simple-pass-value")?.textContent]);
   const lit = () => passRows().find(r => r.getAttribute("aria-current"))?.querySelector(".simple-pass-words")?.textContent;
-  // The cut the editor approved is ticked, and so is the one Scarlet settled: it went in with the pass, and keeps its
-  // amount. The edit that asks for a look and the cut doubted since aren't, and their times still say they need the
-  // editor. The call the editor rejected left its footage in, so it has no row here.
+  const tab = async (name: "For you" | "Working" | "Done") => { await click(tabNamed(passCard(), name)); await act(async () => {}); };
+  // For you has the edit that asks for a look and the cut doubted since. Neither is ticked, and their times say they
+  // need the editor.
   expect(listed()).toEqual([
-    [CUTS[0]!.reason, true, true, "0:02", "−1.0 s"],
     ["mid check", false, false, "0:05, needs you", "Audio"],
-    [CUTS[2]!.reason, true, true, "0:10", "−1.0 s"],
     [CUTS[3]!.reason, false, false, "0:12, needs you", "−1.0 s"],
   ]);
-  // The timeline's dots say the same: filled for the two cuts that are kept, amber for the two that wait.
-  expect(ticks()).toEqual(["kept", "check", "kept", "check"]);
-  // Keep agrees with the ticks. From the edit that waits it goes past the ticked cut to the one doubted since, and from
-  // that one, the last waiting, nothing is left to keep: the card closes, and every row of the list is ticked.
+  // The timeline marks the two that wait, in amber.
+  expect(numbered()).toEqual([["2", "check"], ["4", "check"]]);
+  // Done has the cut the editor approved and the one Scarlet settled, which went in with the pass, both ticked, and
+  // the call the editor rejected, which left its footage in.
+  await tab("Done");
+  expect(listed()).toEqual([
+    [CUTS[0]!.reason, true, true, "0:02", "Kept"],
+    [CUTS[1]!.reason, false, true, "0:05", "Rejected"],
+    [CUTS[2]!.reason, true, true, "0:10", "Kept"],
+  ]);
+  await tab("For you");
+  // Keep agrees with the ticks. From the edit that waits it goes to the cut doubted since, and from that one, the last
+  // waiting, nothing is left to keep: the card closes.
   await click(passRow("mid check"));
   await act(async () => {});
   expect([!!editPanel(), lit()]).toEqual([true, "mid check"]);
@@ -14547,22 +14552,21 @@ it("ticks in See all the cuts that went in with a pass through its calls, Scarle
   await press("k");
   await act(async () => {});
   expect([editPanel(), lit(), needYou()]).toEqual([null, undefined, null]);
-  expect(listed()).toEqual([
-    [CUTS[0]!.reason, true, true, "0:02", "−1.0 s"],
-    ["mid check", true, true, "0:05", "Audio"],
-    [CUTS[2]!.reason, true, true, "0:10", "−1.0 s"],
-    [CUTS[3]!.reason, true, true, "0:12", "−1.0 s"],
-  ]);
-  expect(ticks()).toEqual(["kept", "kept", "kept", "kept"]);
-  // Sent back for revision, the cut Scarlet settled is on its way out: its tick goes, and its row says so where its amount was.
+  // Every row is Done's now, and ticked.
+  await tab("Done");
+  expect(listed().map(([words, , ticked, , ends]) => [words, ticked, ends])).toEqual([[CUTS[0]!.reason, true, "Kept"], ["mid check", true, "Kept"],
+    [CUTS[1]!.reason, true, "Rejected"], [CUTS[2]!.reason, true, "Kept"], [CUTS[3]!.reason, true, "Kept"]]);
+  expect(ticks()).toEqual([]);
+  // Sent back for revision, the cut Scarlet settled is on its way out: it is Working's row, with no tick, and says so
+  // where its amount was.
   const base = data.tasks.find(t => t.id === "task_done")!;
   const now = new Date().toISOString();
   await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_revise_settled", state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined,
     summary: null, changeIds: [], context: { changeId: "chg_ready", editIndex: 1, threadId: thread.id, message: "Leave a beat before it" } }] }));
   await act(async () => {});
-  expect(listed()[2]).toEqual([CUTS[2]!.reason, false, false, "0:10", undefined]);
+  await tab("Working");
+  expect(listed()).toEqual([[CUTS[2]!.reason, false, false, "0:10", undefined]]);
   expect(passRow(CUTS[2]!.reason).querySelector(".simple-pass-check")?.textContent).toBe("Revising…");
-  expect(listed().filter((_, i) => i !== 2).every(([, decided, tick]) => decided && tick)).toBe(true);
 });
 
 it("says under the timeline what Scarlet is doing while it edits the video shown, and a press brings that request into view", async () => {
