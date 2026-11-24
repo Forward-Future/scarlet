@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { buildSystemPrompt, type EarlierRequest } from "@scarlet/mcp/prompt";
-import { agentCapabilities, isAsideTask, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, PROJECT_EDIT_TASK_KINDS, taskRunKind, workspaceCapabilities, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
+import { agentCapabilities, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, PROJECT_EDIT_TASK_KINDS, taskRunKind, workspaceCapabilities, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { notFound } from "../errors.js";
@@ -10,6 +10,7 @@ import { mimeFor, styleGuidePath } from "./graphics.js";
 import { learningCheckContext } from "./learnings.js";
 import { assistantSkills } from "./skills.js";
 import { runAttempts, runRoot } from "./runAttempts.js";
+import { handOffTypes } from "./taskModels.js";
 import { answerHandoffInstruction, recoveryInstruction, savedChanges } from "./taskRecap.js";
 import { resolveTimeline } from "./timeline.js";
 
@@ -67,7 +68,9 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   if (isSkillEdit(task) && !editSkill) throw notFound("the skill this request revises");
   // A run that edits no video is told nothing of the video's timeline, the edit it's about or the editor's skills: a
   // look at one frame, a read for a rule, a skill's revision. An edit's area checks each asked for a prompt, up to 20.
-  const aside = isAsideTask(task) || task.kind === "skill_from_change";
+  // A hand-off edits the video for the request that handed it the work, so it is told what a request is.
+  const handOff = isHandOff(task);
+  const aside = (isAsideTask(task) && !handOff) || task.kind === "skill_from_change";
   const notes = c.noteIds?.length ? ctx.repos.notes.select("project_id = ? AND id IN (SELECT value FROM json_each(?))", [task.projectId, JSON.stringify(c.noteIds)]) : undefined;
   // A request about one staged cut names the pass as it stood when the editor sent it. A revision ahead of it in the
   // queue, or a later part of the pass, has replaced that pass since, so the agent is told about the pass that waits now
@@ -130,6 +133,10 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     // A request has its harness's own shell, file and web tools; a run that edits no video has Scarlet's alone.
     capabilities: { ...(aside && !listens ? agentCapabilities(task.agent) : workspaceCapabilities(agentCapabilities(task.agent, undefined, task.model))), plan: plans },
     ...graphicsContext(ctx, project, task),
+    // The kinds of work the editor gave other models, for a request to hand off; what a hand-off is doing, for one.
+    ...(handOff && c.handOff ? { handOff: { name: c.handOff.name, description: c.handOff.description,
+      request: (c.checksTaskId && ctx.repos.tasks.get(c.checksTaskId)?.context.message) || c.message || task.instruction } }
+      : { taskModels: handOffTypes(ctx, task) }),
   });
   // Whether the host launches the CLI with its own to-do tool on, with its shell, file and web tools (every request:
   // the editor's decision of 2026-11-21 that no rule in Scarlet's code picks which run gets them, so what to use them
@@ -147,7 +154,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
  * What the editor gave a request for its graphics: the files attached to it and the project's style guide. A request that edits no video is given none.
  */
 function graphicsContext(ctx: Ctx, project: Project, task: Task) {
-  if (task.kind === "skill_from_change" || isAsideTask(task)) return {};
+  if (task.kind === "skill_from_change" || (isAsideTask(task) && !isHandOff(task))) return {};
   const attachments = (task.context.attachments ?? []).map(a => ({ ...a, mime: a.mime ?? mimeFor(a.name), path: join(ctx.paths.attachments(project.id), a.id, a.name) }));
   const guide = project.styleGuide;
   const guidePath = styleGuidePath(ctx, project.id, guide);

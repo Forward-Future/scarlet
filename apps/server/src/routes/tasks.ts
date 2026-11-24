@@ -14,6 +14,7 @@ import { jsonBody, requireProjectHeader, requireScoped } from "./util.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
 import { continueWhenReady, interruptTask, retryTask } from "../services/taskRecovery.js";
 import { listenerFor } from "../services/listening.js";
+import { handOffTypes } from "../services/taskModels.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
 
 // `tool_help` reads the rest of a tool's description to a harness given only each tool's first sentence (Gemini's).
@@ -56,6 +57,7 @@ export function taskRoutes(ctx: Ctx) {
     if (body.kind === "learning_check") throw badRequest("not_a_request", "Scarlet starts this check itself, with each request.");
     if (body.kind === "area_check") throw badRequest("not_a_request", "Scarlet starts this check itself, when a save needs it.");
     if (body.kind === "listen_check") throw badRequest("not_a_request", "Scarlet starts this itself, when a request asks to hear a passage.");
+    if (body.kind === "hand_off") throw badRequest("not_a_request", "Scarlet starts this itself, when a request hands work to the model chosen for it.");
     if (body.kind === "broll_make") throw badRequest("not_a_request", "This kind of run is retired.");
     const { mediaId, version } = body.context ?? {};
     if (mediaId && !ctx.db.prepare("SELECT 1 FROM media WHERE id = ? AND project_id = ?").get(mediaId, project.id)) {
@@ -116,8 +118,9 @@ export function taskRoutes(ctx: Ctx) {
   r.get("/projects/:id/tasks", (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const state = c.req.query("state");
-    // A skill edit and a learning check only borrow the project to run in. Neither is part of its conversation.
-    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check', 'area_check', 'listen_check', 'broll_make')" + (state ? " AND state = ?" : ""),
+    // A skill edit and a learning check only borrow the project to run in. Neither is part of its conversation, and a
+    // hand-off's edits are the request's that handed it the work.
+    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check', 'area_check', 'listen_check', 'hand_off', 'broll_make')" + (state ? " AND state = ?" : ""),
       state ? [project.id, TaskState.parse(state)] : [project.id], "created_at DESC");
     const conversation = c.req.query("events") === "conversation"
       ? ctx.repos.taskEvents.conversations(tasks.filter(t => t.kind !== "transcribe").map(t => t.id)) : undefined;
@@ -141,7 +144,9 @@ export function taskRoutes(ctx: Ctx) {
     const events = view === "none" ? [] : ctx.repos.taskEvents.list(task.id, view === "conversation" ? "conversation" : "all");
     // A request whose model can't hear is told which model listens for it, if one is signed in (its `listen` tool).
     const listener = listenerFor(ctx, task);
-    return c.json({ task, checksTaskAttempts: true, events, ...(listener && { listener }) });
+    // A request is told the kinds of work the editor gave other models, signed in now (its `hand_off` tool).
+    const taskModels = handOffTypes(ctx, task).map(({ id, name, description, by }) => ({ id, name, description, by }));
+    return c.json({ task, checksTaskAttempts: true, events, ...(listener && { listener }), ...(taskModels.length && { taskModels }) });
   });
 
   // Called by agent hosts before each run. workDir is the task artifact directory on the host; timeLimit is the run's limit in minutes.

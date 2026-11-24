@@ -1714,7 +1714,7 @@ export function SimpleWorkspace() {
         sourceOpen={sourceOpen} onToggleSource={() => setScriptFor(sourceOpen ? undefined : sourceKey)} cutSwitched={cutSwitched} cutTake={shownSide?.take}
         appliedSide={appliedSide} workspaceActive={workspaceActive} cutKey={cutKey} onChooseCutSide={chooseCutSide}
         setCompareHost={setCompareHost} onRevise={() => actions.revise(focusThread, shownChange)}
-        onKeep={keepShown}
+        onKeep={keepShown} madeBy={shownChange.handedOff}
         // Add asks Scarlet to make or find what the to-do says to add. Its row says Adding… meanwhile, ⌘Z takes the request
         // back as it does a revision, and the card goes on as Keep does, so a run of to-dos is one press each.
         onSentAdd={shownMarker && !reviewed(reviewingEdit) ? task => {

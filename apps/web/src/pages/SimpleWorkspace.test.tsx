@@ -467,6 +467,29 @@ it("keeps the list a request had open across a restart, so a request about one e
   expect([reviewModes(turnFor("chg_approved_2")), optionalLine(turnFor("chg_approved_2"))]).toEqual([tabs(), ["2 optional", "false"]]);
 });
 
+it("labels an edit a task model made with its kind of work and model, quietly in the card's row", async () => {
+  appliedEdits();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_approved_2"
+    ? { ...c, handedOff: { taskId: "motion-graphics", name: "Motion graphics", agent: "gemini", model: "gemini-3-pro" } } : c) };
+  useProjectStore.setState({ current: data });
+  const hosts = useHostsStore.getState();
+  const host = buildDb().hosts[0]!;
+  useHostsStore.setState({ hosts: [{ ...host, online: true, agents: [{ id: "gemini", installed: true, models: ["gemini-3-pro"], modelLabels: { "gemini-3-pro": "Gemini 3 Pro" } }] }] });
+  try {
+    await show();
+    await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
+    await act(async () => {});
+    const by = editPanel()!.querySelector(".edit-card-bar > .edit-card-by");
+    expect([by?.textContent, by?.getAttribute("title")]).toEqual(["Motion graphics · Gemini 3 Pro", "Done by Gemini 3 Pro, the model you chose for Motion graphics in Settings"]);
+    // An edit the chat's model made itself has no label.
+    data = { ...data, changes: data.changes.map(c => c.id === "chg_approved_2" ? { ...c, handedOff: undefined } : c) };
+    await act(async () => useProjectStore.setState({ current: data }));
+    expect(editPanel()!.querySelector(".edit-card-by")).toBeNull();
+  } finally {
+    await act(async () => useHostsStore.setState(hosts, true));
+  }
+});
+
 it("lists a thread's edits once, numbered, and opens one with its decisions under the player", async () => {
   const edits = appliedEdits();
   await showFolded();

@@ -137,9 +137,10 @@ impl RunningTask {
     }
 }
 
-/// A short check beside a request that saves nothing to the video (`isSideCheck` in packages/shared/src/tasks.ts).
+/// A run beside a request that the request waits on: a short check, or a hand-off whose edits join the request
+/// (`isSideCheck` in packages/shared/src/tasks.ts).
 fn is_side_check(kind: &str) -> bool {
-    matches!(kind, "learning_check" | "area_check" | "listen_check")
+    matches!(kind, "learning_check" | "area_check" | "listen_check" | "hand_off")
 }
 
 /// Side checks run at once per runtime beside `max_parallel` requests (`sideCheckSlots` in packages/shared/src/tasks.ts).

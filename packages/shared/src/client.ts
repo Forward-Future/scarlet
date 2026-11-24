@@ -4,6 +4,7 @@
  */
 import type { EditReviewRequest } from "./telemetry.js";
 import type { Listener, ListenResult } from "./capabilities.js";
+import type { HandOffResult } from "./taskModels.js";
 import type { z } from "zod/v3";
 import { apiPathId, appendFields, ClientTransport, isMissingRouteError, ScarletApiError, withQuery } from "./clientTransport.js";
 import type { TranscriptSearchResult } from "./transcriptSearch.js";
@@ -161,6 +162,10 @@ export class ScarletClient extends ClientTransport {
   /** Have a model that hears listen to a passage for this run, and wait up to `wait` seconds for what it heard. */
   listen(projectId: string, request: { taskId: string; mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string }, wait: number) {
     return this.post<ListenResult>(`/projects/${encodeURIComponent(projectId)}/listen?wait=${Math.max(0, Math.round(wait))}`, request);
+  }
+  /** Hand one kind of work to the model the editor chose for it in Task models, and wait up to `wait` seconds for it. */
+  handOff(projectId: string, request: { taskId: string; type?: string; brief?: string; handoffId?: string }, wait: number) {
+    return this.post<HandOffResult>(`/projects/${encodeURIComponent(projectId)}/hand-off?wait=${Math.max(0, Math.round(wait))}`, request);
   }
   reviewCut(projectId: string, request: z.input<typeof InspectionReviewRequest>) {
     return this.post<InspectionResult>(`/projects/${encodeURIComponent(projectId)}/review-cut`, request);
@@ -492,7 +497,8 @@ export class ScarletClient extends ClientTransport {
     return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]> }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
   }
   task(taskId: string, events: "all" | "conversation" | "none" = "all") {
-    return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener }>(path + (events === "all" ? "" : "?events=" + events)));
+    return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener;
+      taskModels?: Array<{ id: string; name: string; description?: string; by: { agent: string; model?: string } }> }>(path + (events === "all" ? "" : "?events=" + events)));
   }
   waitForTranscription(taskId: string) {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; waited?: boolean }>(path + "?wait=transcript"));

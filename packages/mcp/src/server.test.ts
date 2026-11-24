@@ -311,8 +311,9 @@ describe("tools/list", () => {
     const names = tools.map((t) => t.name).sort();
     // Claude's harness does not deliver audio, so nothing offers WAV. This session has no task, so it isn't launched with
     // file tools: nothing imports from the artifact directory or captures a page. Only the check that reads a request
-    // offers a rule, and only a request with a model that can hear signed in has it listen.
-    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "listen", "learning_suggest", "asset_add", "web_capture", "web_video"].includes(n)).sort());
+    // offers a rule, only a request with a model that can hear signed in has it listen, and only one with work the editor
+    // gave another model hands it off.
+    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "listen", "hand_off", "learning_suggest", "asset_add", "web_capture", "web_video"].includes(n)).sort());
     for (const t of tools) expect(Object.keys(t.inputSchema.properties ?? {})).not.toContain("includeAudio");
     expect(JSON.stringify(tools)).not.toMatch(/\bWAV\b|can (hear|play)|accepts audio|consume audio/);
     for (const t of tools) expect(t.description?.length ?? 0).toBeGreaterThan(20);

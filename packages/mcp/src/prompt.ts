@@ -91,6 +91,10 @@ export interface PromptContext {
   attachments?: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
   /** The project's style guide: pasted text in full, or the file it is in. */
   styleGuide?: { name: string; text?: string; path?: string; mime?: string };
+  /** The kinds of work the editor gave other models in Task models, signed in now: the request hands them off (`hand_off`). */
+  taskModels?: Array<{ name: string; description?: string; by: { agent: string; model?: string } }>;
+  /** What a hand_off task does for the request that handed it the work: the editor's kind of work, and what they asked. */
+  handOff?: { name: string; description?: string; request: string };
 }
 
 /** A size the editor reads, for a file. */
@@ -112,6 +116,25 @@ function styleGuideSection(guide: NonNullable<PromptContext["styleGuide"]>): str
 /** The editor's own words on how Scarlet writes to them, from "Talking to you" in Settings. */
 function talkingToYouSection(words: string): string {
   return `# How the editor wants you to write to them\n\nThe editor wrote this in Scarlet's settings for everything you write to them: what you say you will do, your updates, the reason on each edit, your questions and your closing sentences. It is about how you say things; where Scarlet shows your words and how long they can be, above, still holds.\n\n${words.trim()}`;
+}
+
+const modelName = (by: { agent: string; model?: string }) => by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent;
+
+/** The kinds of work the editor gave other models (Task models), for the request that hands them off. */
+function taskModelsSection(types: NonNullable<PromptContext["taskModels"]>): string {
+  const list = types.map(t => `- ${t.name}, to ${modelName(t.by)}${t.description ? `: ${t.description}` : ""}`).join("\n");
+  return `# Work the editor gives to other models\n\nIn Scarlet's settings the editor chose another model for these kinds of work, each with what counts as it:\n\n${list}\n\nWhen a part of this request is one of them, hand that part to its model with \`hand_off\` instead of doing it yourself, with a brief that says what to make or change and where. Its edits join this request. Do the rest yourself.`;
+}
+
+/** What a hand_off task is: one part of a request, for the model running it. */
+function handOffSection(handOff: NonNullable<PromptContext["handOff"]>): string {
+  return `# You are doing one part of a request
+
+In Scarlet's settings the editor gave ${handOff.name} to you${handOff.description ? `, which they describe as: "${handOff.description}"` : ""}. Another model is running their request, and it handed you this part: its brief is your instruction above. What the editor asked: "${handOff.request.trim()}"
+
+- Do this part, and only this part. Save your edits with Scarlet's tools as for any request: they join the editor's request, and the editor reviews them there.
+- Nobody can answer a question while you work. Where something isn't settled, choose what the editor's words and skills point to, and say what you chose.
+- Your closing words go to the model that handed you this, not to the editor: say what you saved, with the change ids, where it is on the timeline, and anything it should know.`;
 }
 
 /**
@@ -449,6 +472,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     }
     parts.push(`# Your task\n\n${lines.join("\n")}`);
   }
+
+  if (ctx.handOff) parts.push(handOffSection(ctx.handOff));
+  else if (ctx.taskModels?.length) parts.push(taskModelsSection(ctx.taskModels));
 
   parts.push(...earlierInChat(ctx.earlier));
 

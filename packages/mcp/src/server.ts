@@ -26,7 +26,7 @@ import {
   type TaskEvent,
 } from "@scarlet/shared";
 import type { Author } from "@scarlet/timeline";
-import { registerChangeAndAssetTools, registerExportAndTaskTools } from "./admin-tools.js";
+import { registerChangeAndAssetTools, registerExportAndTaskTools, type TaskModelOffer } from "./admin-tools.js";
 import { toolAnnotations } from "./annotations.js";
 import { ALWAYS_LOAD, listToolsBriefly } from "./brief-tools.js";
 import { DialogueEvidence } from "./dialogue-decisions.js";
@@ -107,6 +107,11 @@ export interface ScarletMcpContext {
    * one, the request has `listen`; without one, no tool offers to hear.
    */
   listener?: Listener;
+  /**
+   * The kinds of work the editor gave other models in Task models, signed in now, from the engine's answer about the
+   * task. With any, the request has `hand_off`.
+   */
+  taskModels?: TaskModelOffer[];
   /** Directory where the server may write files (OTIO exports). Defaults to the OS temp dir. */
   workDir?: string;
   /** fetch used for binary endpoints (frames). Defaults to global fetch. */
@@ -122,8 +127,9 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   // A request is launched with its harness's own shell, file and web tools; a run that edits no video (a side check, a
   // skill's revision) with Scarlet's alone, and a client Scarlet didn't launch as it says of itself.
   const harness = ctx.capabilities ?? agentCapabilities(ctx.agent, undefined, ctx.author?.model);
-  // A listen has its harness's file tools too, since Gemini hears a passage only by opening its file (`taskPrompt`).
-  const caps = ctx.task && (isProjectEditTask(ctx.task) || ctx.task.kind === "listen_check") ? workspaceCapabilities(harness) : harness;
+  // A listen has its harness's file tools too, since Gemini hears a passage only by opening its file (`taskPrompt`). A
+  // hand-off edits the video for its request, with the tools a request has.
+  const caps = ctx.task && (isProjectEditTask(ctx.task) || ctx.task.kind === "listen_check" || ctx.task.kind === "hand_off") ? workspaceCapabilities(harness) : harness;
 
   type DialogueOperation = ReturnType<typeof taskDialogueOperation>;
   let legacyOperation: Promise<DialogueOperation> | undefined;
@@ -262,6 +268,9 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     if (ctx.task?.kind === "learning_check" ? !LEARNING_CHECK_TOOLS.has(name) : name === "learning_suggest") return false;
     if (ctx.task?.kind === "area_check" && !AREA_CHECK_TOOLS.has(name)) return false;
     if (ctx.task?.kind === "listen_check" && !LISTEN_CHECK_TOOLS.has(name)) return false;
+    // A hand-off does one piece of a request's work for the model running it. Nobody waits on its questions: what it
+    // can't settle goes back in its closing words.
+    if (ctx.task?.kind === "hand_off" && (name === "task_question" || name === "hand_off")) return false;
     return true;
   }
 
@@ -407,7 +416,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   registerExportAndTaskTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, startedAt, task: ctx.task,
-    agent: ctx.agent, getHeader: session.getHeader, artifactDir, postEvent,
+    agent: ctx.agent, getHeader: session.getHeader, artifactDir, postEvent, taskModels: ctx.taskModels, waitLeft,
   });
 
   watchRefusedArguments(server, async (name, args, began, result) => {

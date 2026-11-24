@@ -2,6 +2,7 @@ import { callNumbers, requestText, type AgentId, type Task, type User } from "@s
 import { historyLineage, type Author, type Change, type Project, type Timeline } from "@scarlet/timeline";
 import type { Ctx } from "../../context.js";
 import { now } from "../../db.js";
+import { handedOffBy } from "../handOffScope.js";
 import { parseAssignTo } from "../tasks.js";
 import { resolveTimeline } from "../timeline.js";
 
@@ -27,6 +28,11 @@ export function authorFor(user: User, override?: Partial<Author>): Author {
 }
 
 export function saveChange(ctx: Ctx, change: Change): Change {
+  // A change a hand-off creates for its request says which model made it (Task models).
+  const by = handedOffBy.getStore();
+  if (by && !change.handedOff && change.taskId === by.requestId && !ctx.repos.changes.get(change.id)) {
+    change = { ...change, handedOff: { taskId: by.taskId, name: by.name, agent: by.agent, ...(by.model && { model: by.model }) } };
+  }
   const saved = ctx.repos.changes.put({ ...change, updatedAt: now() });
   ctx.bus.publish({ type: "change.updated", projectId: saved.projectId, change: saved });
   // A dialogue pass's staged cuts hold the project's other requests until the editor has decided them. A host waiting

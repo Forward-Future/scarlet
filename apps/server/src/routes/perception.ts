@@ -14,6 +14,7 @@ import { pictureCuts } from "../services/pictureCuts.js";
 import { screenMotion } from "../services/screenMotion.js";
 import { screenText } from "../services/screenText.js";
 import { listenFor } from "../services/listening.js";
+import { handOff } from "../services/taskModels.js";
 import { askAreas, editShowAreas, showArea, type ShowAreaEdit } from "../services/showArea.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
 import { optionalNumberParam, requireMedia } from "./util.js";
@@ -160,6 +161,21 @@ export function perceptionRoutes(ctx: Ctx) {
     requireActiveAttempt(ctx, requestAttempt(c.req.raw), c.req.param("projectId"), taskId);
     const wait = Math.max(0, Math.min(240, optionalNumberParam(c.req.query("wait"), "wait") ?? 60)) * 1000;
     return c.json(await listenFor(ctx, taskId, { mediaId, from, to, voice: voice === "me" || voice === "other voices" ? voice : undefined, question }, wait));
+  });
+
+  // Hand one kind of work to the model the editor chose for it in Task models, and wait up to `wait` seconds (default
+  // 120) for what it saved and said. Only a running request hands off, for itself.
+  r.post("/projects/:projectId/hand-off", async c => {
+    const body = await c.req.json().catch(() => null) as { taskId?: unknown; type?: unknown; brief?: unknown; handoffId?: unknown } | null;
+    const { taskId, type, brief, handoffId } = body ?? {};
+    if (typeof taskId !== "string" || (typeof handoffId !== "string" && (typeof type !== "string" || typeof brief !== "string"))) {
+      throw badRequest("bad_request", "Send taskId with type and brief, or with handoffId.");
+    }
+    if (typeof brief === "string" && brief.length > 8000) throw badRequest("bad_request", "Brief in up to 8,000 characters.");
+    requireActiveAttempt(ctx, requestAttempt(c.req.raw), c.req.param("projectId"), taskId);
+    const wait = Math.max(0, Math.min(240, optionalNumberParam(c.req.query("wait"), "wait") ?? 120)) * 1000;
+    return c.json(await handOff(ctx, taskId, { type: typeof type === "string" ? type : undefined, brief: typeof brief === "string" ? brief : undefined,
+      handoffId: typeof handoffId === "string" ? handoffId : undefined }, wait));
   });
 
   return r;

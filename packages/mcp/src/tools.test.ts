@@ -786,6 +786,41 @@ describe("source_audio", () => {
 });
 
 // Claude and most Codex models can't hear: a model that can (Gemini first) listens for them and answers in words (2026-11-22).
+// Task models: the editor gives a kind of work to a model of their choosing, and the request hands such work to it (2026-11-24).
+describe("hand_off", () => {
+  const base = { state: "running", projectId: "prj_test", agent: "claude", hostId: "host_a", createdBy: { type: "human", name: "Editor" } } as const;
+  const edit = Task.parse({ ...base, id: "edit-task", kind: "edit", instruction: "Add a lower third", context: {} });
+  const helper = Task.parse({ ...base, id: "hand-task", kind: "hand_off", agent: "gemini", instruction: "Add a lower third",
+    context: { checksTaskId: "edit-task", handOff: { typeId: "motion-graphics", name: "Motion graphics", brief: "Add a lower third" } } });
+  const offers = [{ id: "motion-graphics", name: "Motion graphics", description: "Titles and lower thirds.", by: { agent: "gemini", model: "gemini-3-pro" } }];
+  it("hands a kind of work to the model the editor chose, says so once in the chat, and gives back what it saved", async () => {
+    let answer: unknown = { state: "working", handoffId: "hand-task", by: { agent: "gemini", model: "gemini-3-pro" } };
+    mock.state.extra = (req, res) => req.path === "/projects/prj_test/hand-off" ? reply(res, answer) : false;
+    const c = await connect({ taskId: edit.id, task: edit, taskModels: offers });
+    try {
+      const listed = (await c.listTools()).tools.find(t => t.name === "hand_off");
+      expect(listed?.description).toContain("- Motion graphics (gemini-3-pro): Titles and lower thirds.");
+      expect(textOf(await ok(c, "hand_off", { type: "Motion graphics", brief: "Lower third for Ana from 5 s to 9 s" })))
+        .toBe("gemini-3-pro is still working on it (handoffId hand-task). Carry on with the rest of the request, then call hand_off again with this handoffId for what it saved.");
+      expect(sent("/projects/prj_test/hand-off")[0]!.body).toEqual({ taskId: "edit-task", type: "Motion graphics", brief: "Lower third for Ana from 5 s to 9 s" });
+      answer = { state: "done", handoffId: "hand-task", summary: "Saved chg_1.", changeIds: ["chg_1"], by: { agent: "gemini", model: "gemini-3-pro" } };
+      expect(JSON.parse(textOf(await ok(c, "hand_off", { handoffId: "hand-task" })))).toMatchObject({ by: "gemini-3-pro", saved: ["chg_1"], said: "Saved chg_1." });
+      const told = mock.requests.filter(r => r.path.endsWith("/tasks/edit-task/events") && (r.body as { text?: string }).text?.startsWith("Handed"));
+      expect(told.map(r => (r.body as { text: string }).text)).toEqual(["Handed motion graphics to gemini-3-pro."]);
+    } finally { await c.close(); }
+  });
+  it("is offered only to a request with work given to another model, and a hand-off can't ask the editor or hand off again", async () => {
+    const sessions = [await connect({ taskId: edit.id, task: edit }), await connect({ taskId: helper.id, task: helper, taskModels: offers })];
+    try {
+      const [none, handing] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      expect(none).not.toContain("hand_off");
+      expect(handing).not.toContain("hand_off");
+      expect(handing).not.toContain("task_question");
+      expect(handing).toContain("timeline_propose");
+    } finally { await Promise.all(sessions.map(c => c.close())); }
+  });
+});
+
 describe("listen", () => {
   const base = { state: "running", projectId: "prj_test", agent: "claude", hostId: "host_a", createdBy: { type: "human", name: "Editor" } } as const;
   const edit = Task.parse({ ...base, id: "edit-task", kind: "edit", instruction: "Cut the dialogue", context: {} });
@@ -928,7 +963,7 @@ describe("tool annotations", () => {
   // Every tool that saves an edit, a recommendation, a file or a message to the editor. A harness may retry or
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
   const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
-    "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
+    "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "hand_off", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
     "graphic_render", "style_guide_save", "transcript_fix"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);
 
@@ -1022,12 +1057,14 @@ describe("tool annotations", () => {
     const check = Task.parse({ ...task, id: "check-task", kind: "learning_check", context: { checksTaskId: "asked-task" } });
     const edit = Task.parse({ ...task, id: "edit-task", kind: "edit", instruction: "Add B-roll", context: {} });
     const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: check.id, task: check }),
-      await connect({ agent: "codex", taskId: edit.id, task: edit }), await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" } })];
+      await connect({ agent: "codex", taskId: edit.id, task: edit }), await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" },
+        taskModels: [{ id: "motion-graphics", name: "Motion graphics", by: { agent: "gemini" } }] })];
     try {
       const tools = (await Promise.all(sessions.map(c => c.listTools()))).flatMap(l => l.tools);
       // The hearing session lists every editing tool; the skill request adds the tool that saves its revision, the
       // check that reads a request the one that offers a rule, the edit request the one that captures a page, and a
-      // request whose model can't hear, with a model signed in that can, the one that has it listen.
+      // request whose model can't hear, with a model signed in that can, the one that has it listen, and with work the
+      // editor gave another model, the one that hands it off.
       expect([...new Set(tools.map(t => t.name))].sort()).toEqual(every.filter(name => name !== "skill_save_from_change").sort());
       for (const t of tools) expect(t.annotations, t.name).toEqual(toolAnnotations(t.name));
     } finally { await Promise.all(sessions.map(c => c.close())); }
