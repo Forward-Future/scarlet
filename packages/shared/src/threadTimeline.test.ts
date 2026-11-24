@@ -428,12 +428,48 @@ describe("reviewing one thread on the working interview timeline", () => {
       const joins = [0, timelineDuration(head), ...head.tracks[0]!.clips.map(clip => clip.timelineIn)];
       for (const cut of edits.filter(e => e.beforeCut)) expect(joins.some(join => Math.abs(join - cut.at!) < 1e-6)).toBe(true);
     }
-    // The first cut's two joins lost the pieces either side of them, and are still listed where their footage is out.
-    expect(two.filter(e => e.changeId === "first" && e.at === 9).map(e => e.beforeCut!.removed.end - e.beforeCut!.removed.start)).toEqual([5, 10]);
-    expect(two.filter(e => e.changeId === "second").map(e => [e.label, e.at, e.beforeCut?.removed])).toEqual([["Tightened the middle", 9, { start: 9, end: 16 }]]);
+    // The first cut's two joins lost the pieces either side of them, and the second save cut there too: they are one
+    // join now, and one cut of all it skips, shown from the first cut's version, which plays that as one stretch.
+    expect(two.filter(e => e.beforeCut && e.at === 9).map(e => [e.changeId, e.beforeCut!.removed])).toEqual([["first", { start: 19, end: 41 }]]);
     // The save that rolled the join took nothing out: it is no cut of its own, and its reason to look is on a cut there.
     expect(three.some(e => e.changeId === "third" && e.beforeCut)).toBe(false);
     expect(three.filter(e => e.check === "Listen to the end of the line")).toHaveLength(1);
+  });
+
+  it("folds a save that only eased a join or moved a voice to another track into the edits round it, and puts its doubt on the cut", () => {
+    // On Matt's "reimann 2" a pass that had cut and placed the interviews moved their sound to the dialogue track and
+    // eased fourteen joins with two-frame fades, and each place listed as an edit of its own to look at (2026-11-23).
+    const whole = { ...timelineFromKeepRanges("project", "interview", [{ start: 0, end: 100 }]), version: "v1" };
+    const cutDone = { ...timelineFromKeepRanges("project", "interview", [{ start: 0, end: 40 }, { start: 50, end: 100 }]), version: "v2" };
+    const [left, right] = cutDone.tracks[0]!.clips as [typeof cutDone.tracks[0]["clips"][0], typeof cutDone.tracks[0]["clips"][0]];
+    const fade = 2 / 30;
+    const eased = { ...cutDone, version: "v3", tracks: cutDone.tracks.map((t, i) => i ? t : { ...t, clips: [{ ...left, audioFadeOut: fade }, { ...right, audioFadeIn: fade }] }) };
+    // The picture goes silent and the same footage plays on the dialogue track.
+    const voice = eased.tracks[0]!.clips.map(c => ({ ...c, id: `${c.id}_audio` }));
+    const moved = { ...eased, version: "v4", tracks: eased.tracks.map((t, i) => i === 0 ? { ...t, clips: t.clips.map(c => ({ ...c, volume: 0 })) } : i === 1 ? { ...t, clips: voice } : t) };
+    // Turning the voice down is heard, and is an edit.
+    const quieter = { ...moved, version: "v5", tracks: moved.tracks.map((t, i) => i === 1 ? { ...t, clips: t.clips.map(c => ({ ...c, volume: 0.5 })) } : t) };
+    const versions = new Map([whole, cutDone, eased, moved, quieter].map(tl => [tl.version, tl]));
+    const lineage = ["v1", "v2", "v3", "v4", "v5"].map((version, i, all) => ({ version, parent: i ? all[i - 1]! : null }));
+    const pass = Task.parse({ id: "pass", projectId: "project", kind: "edit", agent: "codex", instruction: "pass", state: "done",
+      createdBy: { type: "human", name: "Editor" }, createdAt: "2026-01-01T00:00:00Z", context: { threadId: "request" } });
+    const save = (id: string, fromVersion: string, toVersion: string, description: string, minute: number, more: object) =>
+      ({ ...change, id, taskId: "pass", fromVersion, toVersion, description, createdAt: `2026-01-01T00:0${minute}:00Z`, ...more });
+    const cut = save("cut", "v1", "v2", "Cut the wait", 1, { ops: [{ op: "rippleDelete", start: 40, end: 50 }], ranges: [{ start: 40, end: 40 }],
+      cutReasons: [{ start: 40, end: 50, reason: "A long wait", summary: "Cut the wait", kind: "pause" }] });
+    const fades = save("fades", "v2", "v3", "Put two-frame fades on the join", 2, {
+      ops: [{ op: "updateClip", clipId: left.id, patch: { audioFadeOut: fade } }, { op: "updateClip", clipId: right.id, patch: { audioFadeIn: fade } }],
+      ranges: [{ start: 40 - fade, end: 40 + fade }],
+      flags: [{ spot: 0, check: "Listen for the end of the word before the join.", taskId: "pass", at: "2026-01-01T00:05:00Z" }] });
+    const move = save("move", "v3", "v4", "Put the voice on the dialogue track", 3, { ranges: [{ start: 0, end: 90 }],
+      ops: [...eased.tracks[0]!.clips.map(c => ({ op: "updateClip", clipId: c.id, patch: { volume: 0 } })), ...voice.map(clip => ({ op: "addClip", trackId: eased.tracks[1]!.id, clip }))] });
+    const down = save("down", "v4", "v5", "Turned the voice down", 4, { ranges: [{ start: 0, end: 90 }],
+      ops: voice.map(c => ({ op: "updateClip", clipId: c.id, patch: { volume: 0.5 } })) });
+    const of = (changes: object[]) => buildThreads({ changes: changes.map(item => Change.parse(item)), notes: [], tasks: [pass] })[0]!;
+    const listed = threadTimeline(of([cut, fades, move, down]), quieter, lineage, version => versions.get(version), 30);
+    expect(listed.map(e => [e.changeId, e.kind])).toEqual([["down", "audio"], ["cut", "cut"]]);
+    // The doubt about the fade is the cut's now, kept under the fade's own identity.
+    expect(listed[1]).toMatchObject({ label: "Cut the wait", check: "Listen for the end of the word before the join.", reviewRef: { changeId: "fades", spot: 0 } });
   });
 
   it("lists what a save took out whether or not Scarlet named its edits, for each way a video is saved", () => {
