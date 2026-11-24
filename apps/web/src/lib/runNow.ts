@@ -1,6 +1,6 @@
 import type { TaskEvent } from "@scarlet/shared";
 import { clock } from "./format";
-import { pendingMediaWaits, taskActivityLabel, toolName, waitingFor } from "./taskActivity";
+import { pendingMediaWaits, taskActivityLabel, TIDYING, toolName, waitingFor } from "./taskActivity";
 import { noteText } from "./taskRun";
 
 /**
@@ -47,7 +47,7 @@ export function runNow(events: readonly TaskEvent[], aim?: string, callNumber?: 
         if (kind === "reasoning") return "Thinking";
         if (kind === "connection") return "Reconnecting to the model";
         if (kind === "compaction") {
-          if (event.data?.active === true && !compactionEnded) return "Compacting context";
+          if (event.data?.active === true && !compactionEnded) return TIDYING;
           compactionEnded = true;
           continue;
         }

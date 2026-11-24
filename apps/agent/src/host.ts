@@ -19,6 +19,7 @@ import { isQuotaEligible, probeSubscriptionQuota } from "./quota.js";
 import { killStoppedNow, stopOrphans } from "./processTree.js";
 import { runAgent as defaultRunAgent } from "./runners/index.js";
 import { codexHomeDir } from "./runners/codex.js";
+import { geminiDir } from "./runners/geminiAcp.js";
 import { addUsage } from "./runners/usage.js";
 import { errMsg, mcpEnv, nodeExecutable, resolveMcpCliPath } from "./runners/spawn.js";
 import { DEFAULT_STALL_MS, type McpSpec, type RunAgentFn, type RunAgentResult, type RunnerEvent, type Workspace } from "./runners/types.js";
@@ -537,6 +538,9 @@ export class AgentHost {
     }
     if (task.agent === "codex" && landed && !interrupted) {
       await rm(codexHomeDir(cwd), { recursive: true, force: true }).catch((err) => this.log(`could not remove the Codex home: ${errMsg(err)}`));
+    }
+    if (task.agent === "gemini" && landed && !interrupted) {
+      await rm(geminiDir(cwd), { recursive: true, force: true }).catch((err) => this.log(`could not remove the Gemini folder: ${errMsg(err)}`));
     }
   }
 

@@ -96,11 +96,11 @@ it("still moves the playhead on a press on the ruler that doesn't drag", async (
   expect(seeks).toEqual([300, 600]);
 });
 
-it("takes the range off on a click on the ruler, which still moves the playhead there", async () => {
+it("keeps the range through a click on the ruler, which still moves the playhead there", async () => {
   await show({ start: 300, end: 450 });
   await press(".timeline-range-zone", 700);
   await release(700);
-  expect(marked).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(marked).not.toHaveBeenCalled();
   expect(picks).toEqual([2100]);
 });
 
@@ -152,7 +152,7 @@ it("goes into the close-up when a drag stops and holds still, and the end it was
   expect(marked.mock.lastCall![0]!.end).toBeCloseTo(450 + 1 / 30);
 });
 
-it("takes the range off on a click on the timeline away from it, and keeps it through a scrub", async () => {
+it("keeps the range through a scrub and a click on the timeline away from it, so it can be played and adjusted", async () => {
   await show({ start: 300, end: 450 });
   const slider = ".timeline-slider";
   // A scrub away from it keeps it.
@@ -164,9 +164,10 @@ it("takes the range off on a click on the timeline away from it, and keeps it th
   await press(slider, 120);
   await act(async () => { container.querySelector(slider)!.dispatchEvent(event("pointerup", 120)); });
   expect(marked).not.toHaveBeenCalled();
+  // A click away from it moves the playhead there and keeps it, so the editor can play into it.
   await press(slider, 600);
   await act(async () => { container.querySelector(slider)!.dispatchEvent(event("pointerup", 600)); });
-  expect(marked).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(marked).not.toHaveBeenCalled();
 });
 
 it("moves an end a frame at a time from the keyboard, and Esc takes the range off", async () => {
