@@ -111,13 +111,40 @@ afterEach(async () => {
 });
 
 const click = (element: Element) => act(async () => (element as HTMLElement).click());
+/**
+ * A request's rows are in the column of edits beside the chat, in the list they belong to: For you (with the optional
+ * edits under it), Working or Done. The editor reads one list at a time, and so do these checks: `shownList` is the one
+ * they look at, For you until Working or Done is pressed (`tabNamed`).
+ */
+let shownList: "For you" | "Working" | "Done" = "For you";
+beforeEach(() => { shownList = "For you"; });
+const railSlots = (threadId: string) => [...container.querySelectorAll<HTMLElement>(
+  `.review-rail ${shownList === "For you" ? '.review-rail-list' : `.review-sec-body[aria-label="${shownList}"]`} .review-slot[data-thread="${threadId}"]`)];
+const WHOLE = Symbol("whole");
+/** A request as the checks read it: what it says in the chat together with its rows in the column of edits. */
+function whole<T extends Element>(scope: T): T {
+  if (!scope || (scope as unknown as Record<symbol, unknown>)[WHOLE]) return scope;
+  const threadId = (scope.closest<HTMLElement>("[data-thread]") ?? scope.querySelector<HTMLElement>("[data-thread]"))?.dataset.thread;
+  if (!threadId) return scope;
+  return new Proxy(scope, { get(target, prop) {
+    if (prop === WHOLE) return true;
+    if (prop === "querySelector") return (selector: string) => target.querySelector(selector) ?? railSlots(threadId).map(slot => slot.querySelector(selector)).find(Boolean)
+      ?? (selector.includes("simple-review-rest") ? container.querySelector(".review-rail .simple-review-rest") : null);
+    if (prop === "querySelectorAll") return (selector: string) => [...target.querySelectorAll(selector), ...railSlots(threadId).flatMap(slot => [...slot.querySelectorAll(selector)])];
+    if (prop === "textContent") return (target.textContent ?? "") + railSlots(threadId).map(slot => slot.textContent).join("");
+    if (prop === "contains") return (node: Node) => target.contains(node) || railSlots(threadId).some(slot => slot.contains(node));
+    const value = Reflect.get(target, prop);
+    return typeof value === "function" ? value.bind(target) : value;
+  } }) as T;
+}
 /** What opens the rest of a request's edits: See all where it has one list, or the "N optional" line under For you's rows. */
-const seeAll = (scope: Element) => scope.querySelector<HTMLButtonElement>(".simple-review-rest, .simple-review-tab:only-child, .simple-pass-toggle");
+const seeAll = (scope: Element) => whole(scope).querySelector<HTMLButtonElement>(".simple-review-rest, .simple-review-tab:only-child, .simple-pass-toggle");
 /**
  * A request's edit rows. Under the tabs, with For you's optional line open, they are two lists, the rows that wait
  * first: there the rows go by their numbers, as the timeline has them, so a test picks an edit and not its place.
  */
-const editRowsIn = (scope: ParentNode) => {
+const editRowsIn = (part: ParentNode) => {
+  const scope = whole(part as Element);
   const rows = [...scope.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
   if (scope.querySelectorAll(".simple-edits").length < 2) return rows;
   const no = (row: Element) => parseInt(row.querySelector(".edit-badge")?.textContent ?? "") || Infinity;
@@ -125,15 +152,26 @@ const editRowsIn = (scope: ParentNode) => {
 };
 /** The three tabs over a request's rows once it has something to review, as `reviewModes` reads them, with the one shown. */
 const tabs = (shown: "For you" | "Working" | "Done" = "For you") => ["For you", "Working", "Done"].map(tab => [tab, String(tab === shown)]);
-const tabNamed = (scope: Element, name: "For you" | "Working" | "Done") => scope.querySelector<HTMLButtonElement>(`.simple-review-tab[aria-label="${name}"]`)!;
+/**
+ * The list to look at. Working and Done are at the foot of the column of edits, each opened by its own line; For you
+ * is always in view, and its count in the chat opens the first of a request's rows that waits.
+ */
+const tabNamed = (scope: Element, name: "For you" | "Working" | "Done") => ({ click() {
+  shownList = name;
+  if (name === "For you") return whole(scope).querySelector<HTMLElement>(".simple-pass-need")?.click();
+  const line = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")].find(button => button.textContent?.startsWith(name))!;
+  if (line.getAttribute("aria-expanded") !== "true") line.click();
+} }) as unknown as HTMLButtonElement;
 /** The line under For you's rows that counts the edits Scarlet didn't flag and opens them: its words, and whether it is open. */
-const optionalLine = (scope: Element) => { const line = scope.querySelector(".simple-review-rest"); return line ? [line.textContent, line.getAttribute("aria-expanded")] : null; };
+const optionalLine = (_scope: Element) => { const line = container.querySelector(".review-rail .simple-review-rest"); return line ? [line.textContent, line.getAttribute("aria-expanded")] : null; };
 /** Each list a request shows, top to bottom: its name and its rows' words. */
-const editLists = (scope: Element) => [...scope.querySelectorAll(".simple-edits")].map(list => [list.getAttribute("aria-label"), [...list.querySelectorAll(":scope > li > .simple-edit .simple-edit-title")].map(t => t.textContent)]);
-const reviewModes = (scope: Element) => [...scope.querySelectorAll(".simple-review-tabs > .simple-review-tab")].map(button => [
-  button.getAttribute("aria-label") ?? button.textContent,
-  button.getAttribute("aria-pressed"),
-]);
+const editLists = (scope: Element) => [...whole(scope).querySelectorAll(".simple-edits")].map(list => [list.getAttribute("aria-label"), [...list.querySelectorAll(":scope > li > .simple-edit .simple-edit-title")].map(t => t.textContent)]);
+/** The lists a request has rows under, with the one being looked at: none for a request with no rows at all. */
+const reviewModes = (scope: Element) => {
+  const threadId = (scope.closest<HTMLElement>("[data-thread]") ?? scope.querySelector<HTMLElement>("[data-thread]"))?.dataset.thread;
+  const has = !!threadId && [...container.querySelectorAll(`.review-rail .review-slot[data-thread="${threadId}"]`)].some(slot => slot.childElementCount > 0);
+  return has ? tabs(shownList) : [];
+};
 /** Most tests work on the rows. Expand list disclosures without previewing a finished request's single edit. */
 const openEdits = async () => {
   for (const toggle of container.querySelectorAll<HTMLElement>('[aria-label="Edits"] :is(.simple-pass-toggle[aria-expanded="false"], .simple-review-tab:only-child[aria-pressed="false"], .simple-review-rest[aria-expanded="false"])')) await click(toggle);
@@ -149,7 +187,7 @@ const fileLoads = () => act(async () => {
 });
 const turns = () => [...container.querySelectorAll<HTMLElement>("section.simple-turn")];
 const threadWith = (changeId: string) => buildThreads(data).find(t => t.changes.some(c => c.id === changeId))!;
-const turnFor = (changeId: string) => turns().find(s => s.getAttribute("aria-label") === threadWith(changeId).title)!;
+const turnFor = (changeId: string) => whole(turns().find(s => s.getAttribute("aria-label") === threadWith(changeId).title)!);
 const buttonIn = (scope: Element, text: string) => [...scope.querySelectorAll("button")].find(b => b.textContent?.trim() === text);
 /** A suggestion's line in its request's block. Pressed, it plays the suggestion. */
 const suggestion = (changeId: string) => turnFor(changeId).querySelector<HTMLButtonElement>(".simple-suggest")!;
@@ -3028,7 +3066,7 @@ const flagged = () => {
     original: data.timeline!, proposed: data.timeline!, firstCut: false } });
   return vi.spyOn(api, "saveCutChoices").mockImplementation(async (id, body) => savedCalls(id, body));
 };
-const passCard = () => turnFor("chg_ready").querySelector<HTMLElement>(".simple-pass")!;
+const passCard = () => whole(turnFor("chg_ready").querySelector<HTMLElement>(".simple-pass")!);
 /** The rows of the pass's list. A request about one of them sits under its row, with buttons of its own that aren't rows. */
 const passRows = () => [...passCard().querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
 /** "N need you" opens the list to just the calls; the first one still waiting plays. A call being revised can't be opened from the list. */

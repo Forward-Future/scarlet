@@ -129,6 +129,16 @@ function Made({ parts, link }: { parts: readonly SentencePart[]; link?: ReactNod
   return <p className="simple-made-line"><span className="simple-made">{parts.map((part, i) => typeof part === "string" ? part : <b key={i}>{part.strong}</b>)}</span>{link}</p>;
 }
 
+/**
+ * In the chat, a request with something waiting on the editor says so after what it made: For you and how many, which
+ * opens the first of them. The rows themselves are in the column of edits.
+ */
+function NeedLink({ need, onOpen }: { need: number; onOpen(): void }) {
+  if (!need) return null;
+  return <button type="button" className="simple-pass-need simple-need-link" aria-label="For you" title={`${need} ${need === 1 ? "needs" : "need"} you`}
+    onClick={letGo(onOpen)}>For you<span className="simple-review-tab-count" aria-hidden="true">{need}</span></button>;
+}
+
 /** One row of a pass's lists: an edit, a call, a rejected edit or a call decided before the pass applied. */
 interface PassRow {
   key: string;
@@ -562,8 +572,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   </>;
   if (rail) {
     const into = (section: RailSection, node: ReactNode) => { const at = rail.host(section, thread.id); return at && node ? createPortal(node, at) : null; };
-    return <div ref={host} className="simple-pass" role="group" aria-label="Dialogue pass">
+    return <div ref={host} className="simple-pass" role="group" aria-label="Dialogue pass" data-thread={thread.id}>
       {made && <Made parts={made} link={seeEvery} />}
+      <NeedLink need={need} onOpen={showNeeded} />
       {outsideList}
       {drawn.map(list => <Fragment key={list.id}>{into(list.id as RailSection, list.rows.length > 0 && rowList(list))}</Fragment>)}
       {pass?.error && <p className="simple-error" role="alert">{pass.error}
@@ -732,8 +743,9 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   useEffect(() => () => rail?.report(thread.id), [rail, thread.id]);
   if (rail) {
     const into = (section: RailSection, node: ReactNode) => { const at = rail.host(section, thread.id); return at && node ? createPortal(node, at) : null; };
-    return <div ref={host} className="simple-pass" role="group" aria-label="Edits">
+    return <div ref={host} className="simple-pass" role="group" aria-label="Edits" data-thread={thread.id}>
       {made && <Made parts={made} link={seeEvery} />}
+      <NeedLink need={need} onOpen={showNeeded} />
       <div className="simple-pass-line req-row">
         {!made && seeEvery}
         <span className="req-right">{aside}

@@ -158,11 +158,12 @@ export function SimpleWorkspace() {
   // The request the editor went to, and an edit of it waiting to play once its markers load.
   const [focus, setFocus] = useState<{ threadId: string; changeId?: string; spot?: number; single?: boolean }>();
   // The column of edits beside the chat is one list for the whole video. Each request draws its rows into it (`rail`).
-  // Under For you's rows one line opens the edits Scarlet didn't flag, for every request at once; Working and Done, at
-  // the column's foot, each open on a press. ↑ ↓ and Keep read whether the optional edits are listed.
+  // Under For you's rows one line opens the edits Scarlet didn't flag, for every request at once. Working, at the
+  // column's foot, is open until the editor folds it, so what Scarlet has is in view; Done opens on a press. ↑ ↓ and
+  // Keep read whether the optional edits are listed.
   const [rail] = useState(() => new RailStore());
   const [optionalOpen, setOptionalOpen] = useState(false);
-  const [railOpen, setRailOpen] = useState({ working: false, done: false });
+  const [railOpen, setRailOpen] = useState({ working: true, done: false });
   const listValue: OpenList = optionalOpen ? "all" : undefined;
   // The requests folded to their headings with the arrow at a heading's left, kept across a restart as the lists are.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => savedCollapsed(current.id));

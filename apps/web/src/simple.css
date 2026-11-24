@@ -1067,3 +1067,6 @@ button.queue-head:hover { color: var(--color-fg); }
 /* In a narrow window the column gives its width back to the chat and the video. */
 @media (max-width: 1100px) { .review-rail { width: 232px; } }
 @media (max-width: 767px) { .review-rail { display: none; } }
+/* In the chat, what waits on the editor is one link after what a request made. Its rows are in the column of edits. */
+.simple-need-link { align-self: flex-start; display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 0; border: 0; background: none; color: var(--color-fg);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
