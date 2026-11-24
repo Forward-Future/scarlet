@@ -555,6 +555,29 @@ describe("timeline_first_cut indexed keeps", () => {
     } finally { await editor.close(); }
   });
 
+  it("starts a heard camera's keep where the screen recording begins when the camera started first", async () => {
+    // The camera started 1.5 s before the screen recording; it is heard, and word indices are its own.
+    const words = [{ text: "Hello", start: 2.0, end: 2.4 }, { text: "there.", start: 2.6, end: 3.0 }];
+    const cam: Transcript = { id: "tc", mediaId: "cam", segments: [{ id: "sc", start: 2, end: 3, text: "Hello there.", words }] };
+    mock.state.transcripts = { cam };
+    mock.state.project.media.push({ id: "cam", kind: "video", name: "camera.mp4", path: "camera.mp4", duration: 4, fps: 30, width: 1920, height: 1080, hasAudio: true, transcriptId: "tc" });
+    mock.state.waveform = (id, from, to, points) => spokenWaveform(id, from, to, points, words);
+    const editor = await connectEditor();
+    try {
+      const result = await editor.callTool({ name: "timeline_first_cut", arguments: {
+        intent: "requested", mediaId: "m1", description: "Sync the camera with the screen.", reason: "Both recordings play together.",
+        keep: [{ fromWord: 0, toWord: 1 }], layer: { mediaId: "cam", offset: -1.5, sound: true, framing: { scale: .25, x: .35, y: .35 } },
+      } }) as CallToolResult;
+      expect(result.isError, textOf(result)).toBeFalsy();
+      const posts = mock.requests.filter(r => r.method === "POST" && r.path === "/projects/prj_test/changes");
+      expect(posts, textOf(result)).toHaveLength(1);
+      const [v1, v2] = ProposeChangeRequest.parse(posts[0]!.body).timeline!.tracks;
+      expect(v1!.clips).toMatchObject([{ mediaId: "m1", sourceIn: 0, timelineIn: 0 }]);
+      expect(v2!.clips).toMatchObject([{ mediaId: "cam", sourceIn: 1.5, timelineIn: 0, volume: 1 }]);
+      expect(textOf(result)).toContain("Kept to m1's footage: keep[0] starts where m1 begins, leaving out 1.5 s of cam before it.");
+    } finally { await editor.close(); }
+  });
+
   it("leaves a cut unapplied when an indexed join cannot land in measured silence", async () => {
     const editor = await connectEditor();
     try {

@@ -275,6 +275,15 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       })) : keep;
       const placed = await firstCutRanges(handles, projectId, indexedLayer ? second! : audio, { ...planSources, pace }, leave);
       const ranges = offset ? placed.ranges.map(r => ({ ...r, start: r.start + offset, end: r.end + offset })) : placed.ranges;
+      // The heard layer can run past mediaId at either end (a camera started before the screen recording), and its head
+      // and tail handles go with it. V1 plays mediaId, so such a keep starts and ends where mediaId has footage.
+      const trimmed: string[] = [];
+      if (offset) ranges.forEach((r, i) => {
+        const start = Math.max(0, r.start), end = media.duration === undefined ? r.end : Math.min(media.duration, r.end);
+        if (start > r.start) trimmed.push(`keep[${i}] starts where ${mediaId} begins, leaving out ${round3(start - r.start)} s of ${layer!.mediaId} before it`);
+        if (end < r.end) trimmed.push(`keep[${i}] ends where ${mediaId} ends, leaving out ${round3(r.end - end)} s of ${layer!.mediaId} after it`);
+        r.start = start; r.end = end;
+      });
       const placement = placed.evidence;
       if (anchor?.mediaId && anchor.time !== undefined && anchor.end !== undefined &&
           (mediaId !== anchor.mediaId || ranges.some(r => r.start < anchor.time! || r.end > anchor.end!)))
@@ -339,6 +348,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
           { type: "text", text: `First edit: ${ranges.length} clip(s), ${total.toFixed(2)} s total${media.duration ? ` from ${media.duration.toFixed(2)} s of source` : ""}.` +
             (layer ? ` Layer ${layer.mediaId}: ${covered.toFixed(2)} s of the ${total.toFixed(2)} s inset on V2 in ${inset.length} clip(s)${total - covered > 0.01 ? `; it has no footage for the other ${(total - covered).toFixed(2)} s, where ${mediaId} plays alone` : ""}.` : "") },
           ...(preset ? [{ type: "text" as const, text: presetInsetText(second!.id, preset, layer?.presenter) }] : []),
+          ...(trimmed.length ? [{ type: "text" as const, text: `Kept to ${mediaId}'s footage: ${trimmed.join("; ")}.` }] : []),
           ...(movedEdges.length ? [{ type: "text" as const, text: JSON.stringify({ movedEdges }) }] : []),
           ...(placement.length ? [{ type: "text" as const, text: placement.join("\n") }] : []),
           ...result.content,
