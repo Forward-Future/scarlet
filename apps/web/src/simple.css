@@ -798,6 +798,9 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .req-lead .said { -webkit-line-clamp: 3; }
 .said.is-open { display: block; }
 .said.is-clipped, .said.is-open { cursor: pointer; }
+/* An address in Scarlet's words, in the reply or on a card: the words' own type, with the rule every link has. */
+.said-link { color: inherit; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; cursor: pointer; }
+.said-link:hover, .said-link:focus-visible { text-decoration-color: currentColor; }
 .req-say.is-note { font-size: 12.5px; color: var(--color-dim); }
 .req-say.is-bad { color: var(--color-bad); }
 /* The editor's answer is their message: it keeps to two lines, as their request does, and opens on a click. */
