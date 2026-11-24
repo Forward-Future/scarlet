@@ -1,8 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
 import { EditBadge, EditVersion, RejectedMark, ThreadAction, ThreadEdits } from "../../components/review/ThreadEdits";
 import { asksEditor, editGroups, revisionWord, useAdding, useRejecting, useReviewed, useRevising, waitingPassRows, waitingRows } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
+import { useFloatingPosition } from "../../lib/uiHooks";
 import { editKindWord, editRowWord } from "../../lib/editKind";
 import { listMoments, type Moment } from "../../lib/editMoments";
 import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../../lib/format";
@@ -76,17 +78,31 @@ function ReviewListTabs({ need, working, done, list: [open, setOpen], reveal, sh
   </div>;
 }
 
+/** What the double check beside "low risk edits" says on hover: what those edits are and that nothing waits on them. */
+export const LOW_RISK_TIP = "Edits Scarlet is confident about. They go into the video without your OK. Open the list to look them over.";
+
 /**
  * The one quiet line under For you's rows: how many edits Scarlet didn't flag are still the editor's to keep or
- * ignore. Closed until pressed; open, those rows are listed under it.
+ * ignore, as "low risk edits" with a double check after the words that says what they are on hover. Closed until
+ * pressed; open, those rows are listed under it.
  */
 function OptionalLine({ count, open, onToggle, inPass }: { count: number; open: boolean; onToggle(): void;
   /** Under a pass's rows, which start a little in from the block's edge. */
   inPass?: boolean }) {
-  return <button type="button" className={inPass ? "simple-review-rest is-pass" : "simple-review-rest"} aria-expanded={open}
-    title={open ? "Hide the edits Scarlet didn’t flag" : "Show the edits Scarlet didn’t flag, in order"} onClick={letGo(onToggle)}>
-    <span className="simple-review-rest-chev" aria-hidden="true"><Icon name="chevron" size={11} /></span>{count} optional
-  </button>;
+  const mark = useRef<HTMLSpanElement>(null);
+  const note = useRef<HTMLSpanElement>(null);
+  const [tip, setTip] = useState(false);
+  useFloatingPosition(tip, mark, note, { rightOffset: 6 });
+  return <>
+    <button type="button" className={inPass ? "simple-review-rest is-pass" : "simple-review-rest"} aria-expanded={open}
+      aria-description={LOW_RISK_TIP} onClick={letGo(onToggle)}
+      onFocus={e => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}>
+      <span className="simple-review-rest-chev" aria-hidden="true"><Icon name="chevron" size={11} /></span>
+      <span className="simple-review-rest-label">{count} low risk {count === 1 ? "edit" : "edits"}<span ref={mark} className="simple-review-rest-checks" aria-hidden="true"
+        onPointerEnter={e => { if (e.pointerType !== "touch") setTip(true); }} onPointerLeave={() => setTip(false)}><Icon name="checks" size={13} /></span></span>
+    </button>
+    {tip && createPortal(<span ref={note} className="button-tip is-wrapping" aria-hidden>{LOW_RISK_TIP}</span>, document.body)}
+  </>;
 }
 
 /** What an empty tab says. For you says it only when it has no optional line either, so the tab is never blank. */
@@ -184,7 +200,7 @@ interface Entry {
  * under three tabs and each is under exactly one. For you, shown until another is pressed, lists what waits on the
  * editor: open calls and flagged edits, each by its number while the pass waits, with Scarlet's note. Pressed, it opens
  * the first one still waiting. A row the editor has just decided or sent back stays there a moment with its new word,
- * then fades and leaves. Under those rows one line counts the edits Scarlet didn't flag ("112 optional"); opened, it
+ * then fades and leaves. Under those rows one line counts the edits Scarlet didn't flag ("112 low risk edits"); opened, it
  * lists them in timeline order, edits that play as one change on one row. Working has the rows Scarlet has, each with
  * the editor's request under it, and Done every decided row. A pass with nothing to review has one list of every edit,
  * behind See all. Once Scarlet is done, what the pass applied is one sentence above the list. A row is one line and
@@ -398,7 +414,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const drawn: Drawn[] = !hasForYou ? (listed ? [{ id: "all", label: "Every edit", rows: entries }] : [])
     : tab === "you" ? [
       { id: "you", label: pass && calls.length ? "Calls that need you" : "Edits that need you", rows: inListOrder([...inPlace("you"), ...heldFrom("you")], order) },
-      ...(optionalOpen ? [{ id: "optional" as const, label: "Optional edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
+      ...(optionalOpen ? [{ id: "optional" as const, label: "Low risk edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
     ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided", rows: inListOrder(inPlace(tab), order) }];
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
   // For you opens the first waiting row on the timeline, or leaves it open if the editor is already on one.
@@ -695,7 +711,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       {some(inYou) ? rows("Edits that need you", inYou) : optional === 0 && <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
       {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
       {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
-      {optionalOpen && some(inOptional) && rows("Optional edits", inOptional)}
+      {optionalOpen && some(inOptional) && rows("Low risk edits", inOptional)}
     </>}
     {hasForYou && tab !== "you" && (countOf(tab) > 0 ? rows(tab === "working" ? "With Scarlet" : "Decided", e => place(e) === tab)
       : <p className="simple-review-empty">{EMPTY_TAB[tab]}</p>)}
