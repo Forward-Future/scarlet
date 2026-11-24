@@ -636,6 +636,47 @@ async fn prepares_a_private_folder_and_an_mcp_identity_for_each_attempt() {
     assert!(hostile.file_name().unwrap().to_string_lossy().chars().all(|c| c.is_ascii_hexdigit()));
 }
 
+/// An app opened from the Dock or Finder, or on Windows, doesn't have `~/.local/bin` on its PATH, where Scarlet's Setup
+/// puts ffmpeg and ffprobe. A request's shell gets launchers for them all the same, and may read their folder.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_request_gets_the_media_tools_setup_installed_off_the_apps_path() {
+    const BARE: &str = "SCARLET_TEST_BARE_PATH";
+    if std::env::var_os(BARE).is_none() {
+        // Run again in a process of its own, with the bare PATH such an app starts with and no login shell to ask.
+        let name = concat!(module_path!(), "::a_request_gets_the_media_tools_setup_installed_off_the_apps_path");
+        let name = name.split_once("::").unwrap().1;
+        let bare = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--nocapture"])
+            .env(BARE, "1").env("PATH", bare.path()).env("SHELL", "/usr/bin/false")
+            .env_remove("FFMPEG_PATH").env_remove("FFPROBE_PATH")
+            .output().unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && text.contains("1 passed"), "{text}");
+        return;
+    }
+    let engine = api::fake::engine(|route, _| match route {
+        r if r.contains("/prompt") => (200, r#"{"systemPrompt":"SYSTEM","instruction":"Cut the pauses","workspace":true}"#.into()),
+        _ => (200, "{}".into()),
+    }).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _) = runtime(&engine.url, dir.path());
+    let installed = crate::ffmpeg::install_dir(&rt.paths.home);
+    std::fs::create_dir_all(&installed).unwrap();
+    for tool in ["ffmpeg", "ffprobe"] {
+        std::fs::write(installed.join(tool), "#!/bin/sh\n").unwrap();
+    }
+    let prepared = rt.prepare(&task("tsk_tools"), false).await.unwrap();
+    let ws = prepared.workspace.unwrap();
+    let tools = prepared.cwd.join(super::workspace::TOOLS_DIR);
+    assert_eq!(ws.bin_dir.as_deref(), Some(tools.as_path()));
+    for tool in ["ffmpeg", "ffprobe"] {
+        assert_eq!(std::fs::read_to_string(tools.join(tool)).unwrap(), super::workspace::launcher(&installed.join(tool).to_string_lossy()));
+    }
+    assert!(ws.read_dirs.contains(&installed), "{:?}", ws.read_dirs);
+}
+
 #[tokio::test]
 async fn the_claim_loop_registers_again_when_forgotten_and_runs_what_it_claims() {
     let claims = std::sync::atomic::AtomicUsize::new(0);
@@ -965,6 +1006,14 @@ fn finished_task_folders_keep_only_artifacts_and_old_ones_are_pruned() {
     prune_task_dirs(&tasks_root, now + 15 * day, None);
     assert!(!task.exists());
     assert!(in_use.exists());
+}
+
+#[test]
+fn names_a_claude_project_folder_as_claude_code_does_for_a_path_with_an_emoji() {
+    // Claude Code reads the path as JavaScript does, in UTF-16 units: 🎬 is two of them, so two dashes. é is one.
+    let claude = Path::new("/c");
+    let cwd = Path::new("/Users/me/🎬 Café/tasks-v2/ab12");
+    assert_eq!(claude_project_dir(cwd, claude), Some(claude.join("projects").join("-Users-me----Caf--tasks-v2-ab12")));
 }
 
 #[test]

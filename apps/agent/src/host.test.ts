@@ -9,6 +9,7 @@ import { type AddressInfo } from "node:net";
 import { ScarletClient, type Task, type TaskEvent } from "@scarlet/shared";
 import * as mock from "@scarlet/mcp/mock";
 import { AgentHost, type HostOptions } from "./host.js";
+import type { AgentConfig } from "./config.js";
 import { promptTimeLimit, stalledReason, timedOutReason } from "./runLimits.js";
 import { claudeConfigDir, claudeProjectDir, claudeProjectDirs, pruneTaskDirs, removeClaudeSessions, removeControlFiles } from "./taskDirs.js";
 import { humanDuration } from "./taskReports.js";
@@ -205,6 +206,38 @@ it("records the engine's resulting state and a question that no longer pauses th
   expect(lines).toContain(`[host] question task=${task.id} attempt=${startedAt} outcome=not_waiting`);
   expect(requests.filter(path => path.endsWith("/complete"))).toHaveLength(2);
   expect(lines.join("\n")).not.toContain("Private");
+});
+
+it("stays stopped when it is stopped while it is still starting", async () => {
+  const sent: string[] = [];
+  const client = new ScarletClient({
+    baseUrl: "https://fixture.test",
+    fetch: async (input) => {
+      const { pathname } = new URL(String(input));
+      sent.push(pathname);
+      if (pathname.endsWith("/hosts/register")) return Response.json({ host: { id: "host_1", userId: "u1", name: "one", platform: "test", agents: [], online: true } });
+      if (pathname.endsWith("/claim")) return Response.json({ task: null });
+      return Response.json({});
+    },
+  });
+  let detected!: () => void;
+  const detecting = new Promise<void>((resolve) => { detected = resolve; });
+  const host = new AgentHost({
+    client, config: { server: "https://fixture.test", token: "fixture" }, workRoot, mcpCliPath: "fixture-mcp",
+    runner: async () => ({ ok: true, summary: "" }), ws: false, heartbeatMs: 10, idlePollMs: 10, log: () => undefined,
+    detect: async () => {
+      await detecting;
+      return [{ id: "claude", installed: true, loggedIn: true, version: "2.1.0", models: ["opus"] }];
+    },
+  });
+  const started = host.start();
+  // Detecting the assistants takes seconds. Quit meanwhile.
+  await host.stop();
+  detected();
+  await started;
+  await delay(80);
+  // Nothing goes on behind the quit: no registration, no heartbeat, no claim.
+  expect(sent).toEqual([]);
 });
 
 it("names a run started with runOne in its heartbeats, and stops it when a heartbeat's reply says it was cancelled", async () => {
@@ -717,6 +750,23 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
     expect(seen[1]!.model).toBe("opus");
     // An empty summary still completes with something to show.
     expect(plain.completes).toMatchObject([{ state: "done", summary: "Done." }]);
+  });
+
+  it("falls back to the default limits when agent.json holds a value that isn't a positive number", async ({ signal }) => {
+    const seen: RunAgentOptions[] = [];
+    const runner: RunAgentFn = async (opts) => {
+      seen.push(opts);
+      return { ok: true, summary: "" };
+    };
+    for (const bad of ["ten", -5, 0]) {
+      const srv = await startServer();
+      // A hand-edited file: none of these may be read as a limit.
+      const config = { server: srv.server.url, token: "agent-token", name: "test-host", timeoutMinutes: bad, stallMinutes: bad, maxParallel: bad } as unknown as AgentConfig;
+      await startHostAndWait(makeHost(srv, runner, undefined, { config }).host, once(srv.events, "complete", { signal }));
+      expect(srv.claims[0]).toMatchObject({ body: { agents: ["claude"], checkAgents: ["claude"] } });
+      expect(srv.prompts.map((p) => p.timeLimit)).toEqual([undefined]);
+    }
+    expect(seen.map((run) => [run.timeoutMs, run.stallMs])).toEqual([[undefined, DEFAULT_STALL_MS], [undefined, DEFAULT_STALL_MS], [undefined, DEFAULT_STALL_MS]]);
   });
 
   it("says why it stopped a silent run or one at its time cap, and marks both as interrupted so they can be resumed", async ({ signal }) => {

@@ -1112,6 +1112,32 @@ describe("timeline_join_audit", () => {
     } finally { await c.close(); }
   });
 
+  it("pages timeline_transcript without skipping a word said over the last one a page shows", async () => {
+    // Two speakers on two mics: each short “yeah” on m2 starts and ends inside a longer word on m1.
+    const long = Array.from({ length: 200 }, (_, i) => ({ text: `long_${String(i).padStart(3, "0")}`, start: i * 0.2, end: i * 0.2 + 0.19 }));
+    const short = Array.from({ length: 200 }, (_, i) => ({ text: `yeah_${String(i).padStart(3, "0")}`, start: i * 0.2 + 0.05, end: i * 0.2 + 0.1 }));
+    mock.state.transcripts.m1 = { id: "t-long", mediaId: "m1", segments: [{ id: "s1", start: 0, end: 40, text: "long", words: long }] };
+    mock.state.transcripts.m2 = { id: "t-short", mediaId: "m2", segments: [{ id: "s2", start: 0, end: 40, text: "yeah", words: short }] };
+    const tl = emptyTimeline("prj_test");
+    tl.version = "crosstalk";
+    tl.tracks[1]!.clips = [makeMediaClip("m1", 0, 40, 0)];
+    tl.tracks.push({ id: "a2", kind: "audio", name: "Mic", muted: false, hidden: false, clips: [makeMediaClip("m2", 0, 40, 0)] } as Timeline["tracks"][number]);
+    mock.state.timeline = tl;
+    const c = await connect({ agent: "gemini", capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 2_000 } });
+    try {
+      const seen = new Set<string>();
+      let from: number | undefined;
+      for (let page = 0; page < 100; page++) {
+        const read = textOf(await ok(c, "timeline_transcript", { detail: "words", ...(from !== undefined && { from }) }));
+        for (const m of read.matchAll(/(long|yeah)_\d{3}/g)) seen.add(m[0]);
+        const next = /continue with from=([\d.]+)\./.exec(read);
+        if (!next) break;
+        from = Number(next[1]);
+      }
+      expect([...short.map(w => w.text), ...long.map(w => w.text)].filter(t => !seen.has(t))).toEqual([]);
+    } finally { await c.close(); }
+  });
+
   it("pages timeline_join_audit and timeline_get to stay within caps.resultChars", async () => {
     const tl = emptyTimeline("prj_test");
     tl.version = "many_joins";

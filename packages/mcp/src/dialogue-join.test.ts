@@ -92,6 +92,20 @@ describe("native retake boundaries", () => {
     const moved = checkDialogueJoin(tl, p, { start: 1.73, end: 3.5 }, [heard(.001)]);
     expect(moved.start).toBeLessThan(1.7);
   });
+  it("says how far the nearest quiet or low point is in timeline seconds on a clip at half speed", () => {
+    // The low point at -45 dBFS between “game” and “let” from the first test, 0.055 s of the recording before the
+    // start: at half speed that is 0.11 s of the video.
+    const said = [{ start: 1, end: 1.3, text: "this" }, { start: 1.3, end: 1.56, text: "game" }, { start: 1.56, end: 1.7, text: "let" },
+      { start: 1.7, end: 1.8, text: "me" }, { start: 1.8, end: 2.1, text: "throw" }, { start: 2.1, end: 2.4, text: "them" }, { start: 3.6, end: 3.9, text: "next" }];
+    const talk = [{ start: 1, end: 2.4 }, { start: 3.6, end: 3.9 }];
+    const rms = Array.from({ length: 500 }, (_, i) => i >= 149 && i <= 151 ? .0056 : talk.some(v => v.start <= i/100 && i/100 < v.end) ? .12 : .001);
+    const slow: JoinPage = { mediaId: "mic", start: 0, end: 5, edges: joinEvidence(said, { from: 0, to: 5, peaks: rms, rms, speechActivity: talk }) };
+    const { p, tl } = fixture();
+    tl.tracks[1]!.clips = [makeMediaClip("mic", 0, 5, 0, { speed: .5 })];
+    const told = checkDialogueJoin(tl, p, { start: 3.14, end: 7 }, [slow]);
+    expect(told).toMatchObject({ status: "review", inSound: ["start"] });
+    expect(told.reason).toContain("The nearest quiet or low point is 0.11 s earlier at 3.03 s (-45 dBFS)");
+  });
   it("only moves inward, past complete edge words, onto project frames in quiet audio", () => {
     const { p, tl } = fixture();
     const fixed = checkDialogueJoin(tl,p,{start:1.15,end:3.6},[page]);

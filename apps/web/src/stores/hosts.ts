@@ -43,7 +43,8 @@ export const useHostsStore = create<HostsState>((set, get) => ({
   async load() {
     clearTimeout(retryTimer);
     retryTimer = undefined;
-    set({ status: "loading" });
+    // A list already read stays ready while it is read again, so what waits on it doesn't close and reopen.
+    if (get().status !== "ready") set({ status: "loading" });
     const read = reports.begin();
     const seq = ++started;
     try {

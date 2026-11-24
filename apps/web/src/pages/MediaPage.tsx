@@ -5,6 +5,7 @@ import { api, errorMessage, IS_DESKTOP } from "../lib/client";
 import { desktop } from "../lib/desktop";
 import { ACCEPTED_MEDIA, canPreviewMedia, isPreparingMedia, MEDIA_FORMAT_HINT, MEDIA_FORMATS } from "../lib/upload";
 import { clock } from "../lib/format";
+import { isComposing } from "../lib/hotkeys";
 import { isLink } from "../lib/pendingImports";
 import { useProjectStore } from "../stores/project";
 import { ImportTranscriptionNotice, TranscriptLine, useImportTranscription } from "../components/media/TranscriptionAction";
@@ -146,8 +147,10 @@ function NoteEditor({ media, onClose }: { media: MediaAsset; onClose(): void }) 
         placeholder="For example: Finished sponsor read. Insert it whole after the intro. Don’t cut it."
         onChange={e => setDraft(e.target.value)}
         onKeyDown={e => {
+          // While an input method composes, Enter commits its words and Esc puts its candidates away.
+          if (isComposing(e)) return;
           if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
-          else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void save(); }
+          else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void save(); }
         }} />
       <div className="media-note-actions">
         <button type="button" className="btn-ghost media-note-save" disabled={busy} onClick={() => void save()}>Save</button>
