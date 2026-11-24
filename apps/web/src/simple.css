@@ -833,6 +833,12 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
 .simple-pass-list > li > button.is-decided .edit-badge.is-kept,
 .simple-edit.is-decided .edit-badge.is-kept { background: rgba(255, 255, 255, .06); border-color: var(--color-line); color: var(--color-dim); }
+/* A cut or edit sent back whose request stopped to ask the editor something waits on them again: its row is as bright
+   as one that waits, its number amber, and its word says so in amber and holds still. A call's row can't be pressed
+   while it is sent back, and isn't dimmed for that here. */
+.simple-pass-list > li > button.is-asking:disabled { color: var(--color-fg); }
+.simple-pass-list > li > button.is-asking:disabled .edit-badge.is-check { border-color: var(--color-warn); color: var(--color-warn); }
+.simple-pass-value.is-need { color: var(--color-warn); }
 .req .simple-edits { margin: 0 0 6px; padding-top: 0; border-top: 0; }
 .simple-action.is-menu { margin: 0; gap: 6px; font-size: 12px; color: var(--color-dim); }
 

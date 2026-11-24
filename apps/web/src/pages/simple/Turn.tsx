@@ -5,7 +5,7 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
-import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/threadEditState";
+import { editGroups, listPlaces, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { TipButton } from "../../components/ui/TipButton";
 import { errorMessage } from "../../lib/client";
@@ -21,7 +21,7 @@ import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useUiStore } from "../../stores/ui";
 import { PassSummary, ThreadResult } from "./PassSummary";
-import { callRowKey, isWorking, letGo, listedBefore, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
+import { callRowKey, isWorking, letGo, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
 
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
 const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|Scarlet couldn’t finish this edit\.)$/;
@@ -159,12 +159,14 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const waits = (edit: ThreadEdit) => !!edit.check && !reviewed(edit) && !deferred(edit) && !revising(edit);
     const reported = reportEvery ? located : located.filter(waits);
     if (!reported.length) return;
-    const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, members[0]!.i + 1] as const)));
-    const markers = reported.map(edit => ({ edit, number: numbers.get(edit)!, total: located.length,
+    // Each dot has the number its row has in the chat, which an edit keeps when another is rejected.
+    const order = listPlaces(thread, located, rejected);
+    const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, order.number(members[0]!.edit)!] as const)));
+    const markers = reported.map(edit => ({ edit, number: numbers.get(edit)!, total: order.total,
       state: reviewed(edit) ? "kept" as const : waits(edit) ? "check" as const : undefined }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
-  }, [thread.id, head, located, reviewed, deferred, revising, reportReviewMarkers, reportEvery]);
+  }, [thread.id, head, located, rejected, reviewed, deferred, revising, reportReviewMarkers, reportEvery]);
   // A thread with a dialogue pass sums it up on one line instead of listing every cut.
   const waitingPass = openPass(thread, allTasks);
   const pendingPass = !!waitingPass;
@@ -218,8 +220,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const owner = runs.find(run => run.attempts.some(t => passTasks.has(t.id)))
     ?? (pendingPass ? runs.find(run => !aboutOne(run) && run.attempts.some(t => t.id === waitingPass?.taskId)) ?? runs.find(run => !aboutOne(run)) : undefined)
     ?? runs[0];
-  const hasForYouRejected = rejected.some(e => !!e.wasCheck || listedBefore(passListed.current, e));
-  const hasRows = summed ? listed.length > 0 || hasForYouRejected || actions.pass?.threadId === thread.id || hasDecidedCalls : listed.length > 0 || hasForYouRejected;
+  // A rejected edit keeps its row, also when it was the request's only edit: nothing else says it was rejected (2026-11-23).
+  const hasRows = listed.length > 0 || rejected.length > 0 || (summed && (actions.pass?.threadId === thread.id || hasDecidedCalls));
   // With no line for the pass (it was thrown away), its list is closed: a pass staged again starts folded. A pass that
   // went in leaves the thread's edits, and the list of those still waiting on the editor stays open: their place in
   // the chat must not go with the calls (2026-11-16).

@@ -33,6 +33,17 @@ it("names a few edits that aren't cuts, and counts many by kind", () => {
   expect(say([...frames, { label: "The Ledger’s article", kind: "broll" }, { label: "Launch demo", kind: "broll" }])).toBe("Made 4 reframes and 2 B-roll shots.");
 });
 
+it("only counts the few edits it would name while their list is open under it, and names them again once it is closed", () => {
+  const edits = [{ label: "music bed" }, { label: "captions" }, { label: "wrap." }];
+  const open = (listed: Parameters<typeof madeSentence>[0]) => sentenceText(madeSentence(listed, length, false, true));
+  expect([say(edits), open(edits)]).toEqual(["Made 3 edits: music bed, captions, wrap.", "Made 3 edits."]);
+  expect(madeSentence(edits, length, false, true)).toEqual(["Made ", { strong: "3" }, " edits", "."]);
+  // Only the form that names edits changes: one edit still says Scarlet's sentence, and counts stay counts.
+  expect(open([{ label: "music bed", summary: "Laid a music bed under the intro." }])).toBe("Laid a music bed under the intro.");
+  const four = [...edits, { label: "zoom", kind: "zoom" as const }];
+  expect(open(four)).toBe(say(four));
+});
+
 it("says what Scarlet said about the one edit a request made", () => {
   expect(say([{ label: "Camera full-frame for the intro", summary: "Made the host camera fill the frame for the intro lines." }])).toBe("Made the host camera fill the frame for the intro lines.");
   const flagged = { label: "Trim the pause", check: "The join lands on a breath", reason: "The gap interrupts the answer." };

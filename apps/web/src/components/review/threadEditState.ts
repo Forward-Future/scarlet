@@ -125,15 +125,52 @@ export function useRevising(thread: Thread | undefined) {
   }, [thread]);
 }
 
+/** What a row ends on while Scarlet has stopped work on its cut or edit to ask the editor something: the words its card uses. */
+export const NEEDS_ANSWER = "Needs your answer";
+
+/** Whether the request on its way for a cut or an edit has stopped to ask the editor a question: its row waits on them again. */
+export const asksEditor = (run: { state: Task["state"] } | undefined) => run?.state === "waiting_for_user";
+
 /**
  * The word on a row whose edit or cut has a request with Scarlet: "Revising…", "Rejecting…" or, for a to-do Scarlet
  * was asked to add, "Adding…" once Scarlet has started on it ("Rechecking…" when Scarlet sent an approved cut back to itself), "Up next" while it is next in line in the queue, and "Queued" while it waits behind other work
- * or while editing is paused.
+ * or while editing is paused. While that request waits on the editor's answer it is "Needs your answer": the row isn't
+ * busy, it is their turn (2026-11-23), and it reads Revising… again once they answer.
  */
 export function revisionWord(run: { id: string; state: Task["state"] } | undefined, { rejecting = false, adding = false, recheck = false, nextQueuedId }: { rejecting?: boolean; adding?: boolean; recheck?: boolean; nextQueuedId?: string } = {}) {
   if (!run) return undefined;
   if (run.state === "queued") return nextQueuedId && run.id === nextQueuedId ? "Up next" : "Queued";
+  if (asksEditor(run)) return NEEDS_ANSWER;
   return rejecting ? "Rejecting…" : adding ? "Adding…" : recheck ? "Rechecking…" : "Revising…";
+}
+
+/**
+ * Where a request's rejected edits stand among the ones still in the video, and the number each of those goes by in
+ * the chat's list and on the timeline's dots: its place among every edit of the request in the video's order, the
+ * rejected ones counted too. So an edit keeps its number when another is rejected (1, ×, 3), and a rejected row shows
+ * none (2026-11-23). `slot` is how many edits in the video come before a rejected one. Edits at the very same time
+ * keep the order they were saved in.
+ */
+export function listPlaces<T extends ListedEdit>(thread: Pick<Thread, "changes"> | undefined, edits: readonly T[], rejected: readonly ListedEdit[] = noEdits) {
+  const savedAt = new Map(thread?.changes.map((change, i) => [change.id, i]));
+  const at = (edit: ListedEdit) => (edit as ThreadEdit).at ?? edit.range.start;
+  // A revision, and the engine's put-back of a rejected edit, stand where the edit they replaced was first saved.
+  const saved = (edit: ListedEdit) => { const first = edit.previous[0] ?? edit; return (savedAt.get(first.changeId) ?? savedAt.size) * 1e6 + first.spot; };
+  const slots = new Map(rejected.map(gone => {
+    const next = edits.findIndex(edit => at(gone) < at(edit) || (at(gone) === at(edit) && saved(gone) < saved(edit)));
+    return [gone, next < 0 ? edits.length : next] as const;
+  }));
+  const slot = (gone: ListedEdit) => slots.get(gone) ?? edits.length;
+  const ahead = edits.map((_, i) => rejected.reduce((n, gone) => n + (slot(gone) <= i ? 1 : 0), 0));
+  return {
+    slot,
+    /** The edit's number. One that isn't in the list has none. */
+    number: (edit: T) => { const i = edits.indexOf(edit); return i < 0 ? undefined : i + 1 + ahead[i]!; },
+    /** How many numbers the request has given out: its edits in the video and the rejected ones. */
+    total: edits.length + rejected.length,
+    /** The rejected edits in the order their rows go. */
+    gone: [...rejected].sort((a, b) => slot(a) - slot(b) || at(a) - at(b) || saved(a) - saved(b)),
+  };
 }
 
 /**

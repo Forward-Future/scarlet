@@ -215,7 +215,7 @@ export function useCallListen({ current, pass, passThread, revisionInput, listen
     if (start === null || end === null || end < start) return;
     const cut = { start, end };
     const after = cutAudition(cut, "after", duration, { others: baseCuts, beyond: true });
-    const focus = focusAround(cut, duration, `Removed · ${lengthLabel(heard.end - heard.start)}`, { playbackEnd: after.end });
+    const focus = focusAround(cut, duration, `Took out · ${lengthLabel(heard.end - heard.start)}`, { playbackEnd: after.end });
     const shown = focus && baseRemovals.filter(r => r.removed.end > focus.view.start && r.removed.start < focus.view.end);
     if (!focus || !shown?.length) return;
     // The working cut must be this version with exactly those passages out. One that differs here in any other way
