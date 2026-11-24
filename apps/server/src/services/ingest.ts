@@ -290,7 +290,14 @@ export async function ingestMedia(
     if (clientSignal?.aborted) throw cancelled();
     // An import stopped, by its project going to the trash, says so rather than blaming the file.
     signal.throwIfAborted();
-    throw badRequest("probe_failed", `ffprobe could not read the file: ${errorMessage(e)}`);
+    // FFprobe names the copy in the project's library, and itself, by full path. The log keeps them; the editor
+    // reads the file's own name.
+    const reason = errorMessage(e);
+    ctx.log(`[ingest] probe_failed media=${logId(mediaId)} project=${logId(project.id)}: ${reason}`);
+    const bin = (e as { bin?: unknown }).bin;
+    let shown = reason.replaceAll(dest, name).replaceAll(mediaDir, "");
+    if (typeof bin === "string" && bin) shown = shown.replaceAll(bin, basename(bin));
+    throw badRequest("probe_failed", `ffprobe could not read the file: ${shown}`);
   }
   let stored: MediaWithStatus;
   try {

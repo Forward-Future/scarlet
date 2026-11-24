@@ -119,3 +119,19 @@ it("adds another plan from the line that says who is signed in, and offers none 
   await act(async () => useHostsStore.setState({ hosts: [{ id: "h", agents: all } as unknown as AgentHost] }));
   expect(container.querySelector(".first-signed-in")?.textContent).toBe("✓ Signed in with Claude, ChatGPT and Google");
 });
+
+it("keeps Add another plan open while it reads the models again", async () => {
+  const claude = agent("claude", { loggedIn: true, auth: "subscription" });
+  const hosts = [{ id: "h", online: true, agents: [claude, agent("codex")] } as unknown as AgentHost];
+  vi.spyOn(desktop, "hostStatus").mockResolvedValue(localHost([claude, agent("codex")]));
+  let read!: (value: { hosts: AgentHost[] }) => void;
+  const hostsRead = vi.spyOn(api, "hosts").mockReturnValueOnce(new Promise(resolve => { read = resolve; }));
+  useHostsStore.setState({ hosts, load: previousHosts.load });
+  await show();
+  await act(async () => button("Add another")!.click());
+  expect(hostsRead).toHaveBeenCalledTimes(1);
+  expect(container.querySelector(".first-sign-in h2")?.textContent).toBe("Add another plan");
+  await act(async () => read({ hosts }));
+  expect(container.querySelector(".first-sign-in h2")?.textContent).toBe("Add another plan");
+  expect(hostsRead).toHaveBeenCalledTimes(1);
+});

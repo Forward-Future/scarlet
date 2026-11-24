@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Learning, LearningDecision } from "@scarlet/shared";
 import { errorMessage } from "../../lib/client";
 import { clock } from "../../lib/format";
+import { isComposing } from "../../lib/hotkeys";
 import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useAgentAvailability } from "../agent/AgentChip";
@@ -64,7 +65,8 @@ export function LearningsPanel({ onClose, focus, onOpenDecision }: { onClose(): 
       if (!panel.current?.contains(at) && !at?.closest?.('[role="listbox"]')) close.current();
     };
     const key = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || document.querySelector('[role="listbox"]')) return;
+      // While an input method composes, Esc puts its candidates away: the rule being reworded stays as written.
+      if (e.key !== "Escape" || isComposing(e) || document.querySelector('[role="listbox"]')) return;
       e.preventDefault();
       e.stopPropagation();
       if (rewording.current) rewording.current();
@@ -207,7 +209,7 @@ function LearningRow({ learning, rewording, focused, onOpenDecision }: { learnin
     {editing ? <textarea ref={field} className="learn-rule learn-rule-edit" aria-label="Rule" rows={1} maxLength={280} spellCheck value={draft}
       onChange={e => setDraft(e.target.value.replace(/[\r\n]+/g, " "))}
       onKeyDown={e => {
-        if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+        if (e.key !== "Enter" || isComposing(e)) return;
         e.preventDefault();
         // Leaving the line keeps what was written.
         reviseButton.current?.focus();

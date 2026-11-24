@@ -1112,6 +1112,32 @@ describe("timeline_join_audit", () => {
     } finally { await c.close(); }
   });
 
+  it("pages timeline_transcript without skipping a word said over the last one a page shows", async () => {
+    // Two speakers on two mics: each short “yeah” on m2 starts and ends inside a longer word on m1.
+    const long = Array.from({ length: 200 }, (_, i) => ({ text: `long_${String(i).padStart(3, "0")}`, start: i * 0.2, end: i * 0.2 + 0.19 }));
+    const short = Array.from({ length: 200 }, (_, i) => ({ text: `yeah_${String(i).padStart(3, "0")}`, start: i * 0.2 + 0.05, end: i * 0.2 + 0.1 }));
+    mock.state.transcripts.m1 = { id: "t-long", mediaId: "m1", segments: [{ id: "s1", start: 0, end: 40, text: "long", words: long }] };
+    mock.state.transcripts.m2 = { id: "t-short", mediaId: "m2", segments: [{ id: "s2", start: 0, end: 40, text: "yeah", words: short }] };
+    const tl = emptyTimeline("prj_test");
+    tl.version = "crosstalk";
+    tl.tracks[1]!.clips = [makeMediaClip("m1", 0, 40, 0)];
+    tl.tracks.push({ id: "a2", kind: "audio", name: "Mic", muted: false, hidden: false, clips: [makeMediaClip("m2", 0, 40, 0)] } as Timeline["tracks"][number]);
+    mock.state.timeline = tl;
+    const c = await connect({ agent: "gemini", capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 2_000 } });
+    try {
+      const seen = new Set<string>();
+      let from: number | undefined;
+      for (let page = 0; page < 100; page++) {
+        const read = textOf(await ok(c, "timeline_transcript", { detail: "words", ...(from !== undefined && { from }) }));
+        for (const m of read.matchAll(/(long|yeah)_\d{3}/g)) seen.add(m[0]);
+        const next = /continue with from=([\d.]+)\./.exec(read);
+        if (!next) break;
+        from = Number(next[1]);
+      }
+      expect([...short.map(w => w.text), ...long.map(w => w.text)].filter(t => !seen.has(t))).toEqual([]);
+    } finally { await c.close(); }
+  });
+
   it("pages timeline_join_audit and timeline_get to stay within caps.resultChars", async () => {
     const tl = emptyTimeline("prj_test");
     tl.version = "many_joins";
@@ -1647,6 +1673,41 @@ describe("screen_text", () => {
     expect(await description(await connect())).toContain("media_frame at a line's start second shows that frame");
     const blind = await connect({ capabilities: { images: false, audio: false, files: false } });
     expect(await description(blind)).not.toContain("media_frame");
+  });
+});
+
+describe("screen_motion", () => {
+  const screen = { id: "scr", kind: "video" as const, name: "screen.mp4", path: "screen.mp4", duration: 1801, fps: 30, width: 1920, height: 1080, hasAudio: false };
+  beforeEach(() => {
+    mock.state.project.media = [...mock.state.project.media, screen];
+    mock.state.extra = (req, res) => req.path.endsWith("/media/scr/screen-motion")
+      ? reply(res, { mediaId: "scr", from: Number(req.query.get("from")), to: Number(req.query.get("to")), seconds: [], detail: [], readSeconds: 1, done: true }) : false;
+  });
+  const asked = async (clips: MediaClip[], args: Record<string, unknown>) => {
+    const tl = emptyTimeline("prj_test");
+    tl.version = "screen";
+    tl.tracks[0]!.clips = clips;
+    mock.state.timeline = tl;
+    mock.requests.length = 0;
+    const c = await connect();
+    try { await ok(c, "screen_motion", args); } finally { await c.close(); }
+    const query = sent("/projects/prj_test/media/scr/screen-motion", "GET").at(-1)!.query;
+    return [Number(query.get("from")), Number(query.get("to"))];
+  };
+
+  it("reads only the source seconds the asked range plays, a second either side", async () => {
+    // Five seconds near the end of a 30-minute recording: its own minute, not the whole recording.
+    expect(await asked([makeMediaClip("scr", 0, 1801, 0, { volume: 0 })], { from: 1505, to: 1510 })).toEqual([1504, 1511]);
+    // A range given backwards asks for the same seconds.
+    expect(await asked([makeMediaClip("scr", 0, 1801, 0, { volume: 0 })], { from: 1510, to: 1505 })).toEqual([1504, 1511]);
+    // At double speed from source 200, timeline 150-160 plays source 300-320.
+    expect(await asked([makeMediaClip("scr", 200, 400, 100, { volume: 0, speed: 2 })], { from: 150, to: 160 })).toEqual([299, 321]);
+    // Two clips of the recording, each partly in the range: the end of one and the start of the next.
+    expect(await asked([makeMediaClip("scr", 0, 60, 0, { volume: 0 }), makeMediaClip("scr", 1000, 1060, 60, { volume: 0 })], { from: 55, to: 65 })).toEqual([54, 1006]);
+    // With no range, the whole of what plays.
+    expect(await asked([makeMediaClip("scr", 30, 90, 0, { volume: 0 })], {})).toEqual([29, 91]);
+    // A clip that runs past its recording's end: the range in that tail still asks from inside the recording.
+    expect(await asked([makeMediaClip("scr", 0, 1810, 0, { volume: 0 })], { from: 1805, to: 1808 })).toEqual([1800, 1809]);
   });
 });
 

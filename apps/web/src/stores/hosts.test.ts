@@ -47,6 +47,17 @@ it("lays a host reported during an older read over that read when it lands first
   expect(ids()).toEqual(["mac", "reported (offline)"]);
 });
 
+it("stays ready while a list it has already read is read again", async () => {
+  const read = deferred();
+  vi.spyOn(api, "hosts").mockReturnValueOnce(read.promise);
+  useHostsStore.setState({ hosts: [host("mac")], status: "ready" });
+  const again = useHostsStore.getState().load();
+  expect(useHostsStore.getState().status).toBe("ready");
+  read.resolve({ hosts: [host("mac"), host("linux")] });
+  await again;
+  expect([useHostsStore.getState().status, ids()]).toEqual(["ready", ["linux", "mac"]]);
+});
+
 it("doesn't let an older read's failure mark the list as failed while a newer read is on its way", async () => {
   const older = deferred(), newer = deferred();
   vi.spyOn(api, "hosts").mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);

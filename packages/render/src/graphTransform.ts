@@ -55,8 +55,9 @@ export function videoClockStart(clip: Pick<MediaClip, "keyframes" | "videoFadeIn
 export function proxyHeightForClip(clip: MediaClip, asset: MediaAsset, width: number, height: number): number | undefined {
   if (!asset.width || !asset.height || clip.keyframes?.length || clip.effects.length) return;
   const t = clip.transform;
-  const croppedWidth = 1 - (t?.cropLeft ?? 0) - (t?.cropRight ?? 0);
-  const croppedHeight = 1 - (t?.cropTop ?? 0) - (t?.cropBottom ?? 0);
+  // Crops that add up to the whole frame or more leave the 1 percent the render draws (`transformChain`), not less.
+  const croppedWidth = Math.max(0.01, 1 - (t?.cropLeft ?? 0) - (t?.cropRight ?? 0));
+  const croppedHeight = Math.max(0.01, 1 - (t?.cropTop ?? 0) - (t?.cropBottom ?? 0));
   return Math.ceil(Math.min(height / croppedHeight, width * asset.height / (asset.width * croppedWidth)) * (t?.scale ?? 1));
 }
 

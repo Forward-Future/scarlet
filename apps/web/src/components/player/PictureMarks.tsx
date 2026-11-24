@@ -103,8 +103,13 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
   const surface = useRef<HTMLDivElement>(null);
 
   // Playing on, leaving marking, or another video under the player ends any active stroke or drag. The marks stay with the message.
+  // Only playback that starts ends the marking: M pressed while the video plays pauses it, and the player hears that
+  // it stopped a moment after the marking began.
+  const wasPlaying = useRef(playing);
   useEffect(() => {
-    if (marking && (playing || !sameVideo)) usePictureMarksStore.getState().stop();
+    const playedOn = playing && !wasPlaying.current;
+    wasPlaying.current = playing;
+    if (marking && (playedOn || !sameVideo)) usePictureMarksStore.getState().stop();
     if (!marking || playing || !sameVideo) {
       drawing.current = undefined;
       setLive(undefined);
@@ -339,7 +344,9 @@ export function marksTakeEscape(e: KeyboardEvent) {
 export function toggleMarking(projectId: string, at: Omit<MarkedFrame, "marks">) {
   const store = usePictureMarksStore.getState();
   if (store.marking === projectId) return store.stop();
+  // A video that was playing has run on past the frame by the time it stops: it goes back to the frame marked.
+  const wasPlaying = usePlayerStore.getState().playing;
   player.pause();
   const frame = store.start(projectId, at);
-  if (Math.abs(frame.time - at.time) > 1e-6) player.seek(frame.time, true);
+  if (wasPlaying || Math.abs(frame.time - at.time) > 1e-6) player.seek(frame.time, true);
 }

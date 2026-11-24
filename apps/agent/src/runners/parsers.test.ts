@@ -483,6 +483,22 @@ describe("gemini ACP parser", () => {
     });
   });
 
+  it("reads a relative path from the task folder, so one that climbs out of it is refused", () => {
+    const roots = ["/w", "/Applications/Google Chrome.app"];
+    const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, roots);
+    // Three folders up from a task folder is Scarlet's own, where its token is kept.
+    expect(allow({ name: "read_file", rawInput: { path: "../../../agent.json" } })).toBe(false);
+    expect(allow({ name: "read_file", rawInput: { file_path: "artifacts/../../secret" } })).toBe(false);
+    expect(allow({ name: "read_file", locations: [{ path: "../secret" }] })).toBe(false);
+    // Inside the task folder, a relative path is fine, as are words that only look like one.
+    expect(allow({ name: "write_file", rawInput: { file_path: "artifacts/page.html", content: "<a href=\"../index.html\">back</a>" } })).toBe(true);
+    expect(allow({ name: "read_file", rawInput: { path: "artifacts/../notes.md" } })).toBe(true);
+    expect(allow({ name: "read_file", locations: [{ path: "artifacts/page.html" }] })).toBe(true);
+    expect(allow({ name: "run_shell_command", rawInput: { command: "cd .. && ls" } })).toBe(true);
+    // With no folder to read it from, a relative path is refused.
+    expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: "notes.md" }] } }, [""])).toBe(false);
+  });
+
   it("normalizes unnormalized workspace roots and ignores empty roots", () => {
     expect(workspacePermission({ toolCall: { name: "write_file", locations: [{ path: "/w/artifacts/page.html" }] } }, ["/w/sub/.."])).toBe(true);
     expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: "/w/../etc/passwd" }] } }, ["/w/sub/.."])).toBe(false);

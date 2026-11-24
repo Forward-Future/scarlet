@@ -198,6 +198,8 @@ const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floo
 
 /** Describe how the offset behaves across the recording: constant, a steady drift, or jumps between steady parts. */
 export function fitSync(found: SyncPoint[]): SyncFit & { mismatched?: number } {
+  // A lone passage has no neighbour to agree with: it is reported as the one match, not thrown out as a mismatch.
+  if (found.length < 2) return fitPoints(found);
   // A passage that agrees with neither neighbour matched the wrong place: a sound that happens twice, or noise.
   const points = found.filter((p, i) => [found[i - 1], found[i + 1]].some(q => q && Math.abs(q.offset - p.offset) <= 2 * TOLERANCE));
   const mismatched = found.length - points.length;
