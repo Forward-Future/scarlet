@@ -30,6 +30,11 @@ import { workspaceTools } from "./workspaceTools.js";
 
 const QUOTA_TTL_MS = 60_000;
 
+/** A positive number from agent.json, else undefined for its default: the file is edited by hand and may hold anything. */
+function positive(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 export interface HostOptions {
   client: ScarletClient;
   config: AgentConfig;
@@ -463,7 +468,7 @@ export class AgentHost {
   // -- claim loop -----------------------------------------------------------
 
   private async claimLoop(): Promise<void> {
-    const limit = Math.min(8, Math.max(1, this.config.maxParallel ?? 4));
+    const limit = Math.min(8, Math.max(1, Math.floor(positive(this.config.maxParallel) ?? 4)));
     const checkLimit = sideCheckSlots(limit);
     while (!this.stopped) {
       const available = this.agents.filter(a => a.installed && a.loggedIn !== false && (CLI_AGENTS as string[]).includes(a.id));
@@ -589,7 +594,7 @@ export class AgentHost {
     if (signal.aborted) return complete("cancelled", undefined, "cancelled");
     const runner = this.opts.runner ?? defaultRunAgent;
     const timeoutMs = this.runTimeoutMs;
-    const stallMs = this.opts.stallMs ?? (this.config.stallMinutes ?? DEFAULT_STALL_MS / 60_000) * 60_000;
+    const stallMs = this.opts.stallMs ?? (positive(this.config.stallMinutes) ?? DEFAULT_STALL_MS / 60_000) * 60_000;
     const liveUsage = createLiveUsageReporter(this.client, task, signal, this.log);
     let questionSeen: string | undefined;
     // A runner that returns says whether its run ended on a question. Only one that threw leaves the question it saw.
@@ -720,7 +725,8 @@ export class AgentHost {
 
   /** The optional cap on one run: the host's option, or else the config's minutes. None by default. */
   private get runTimeoutMs(): number | undefined {
-    return this.opts.timeoutMs ?? (this.config.timeoutMinutes ? this.config.timeoutMinutes * 60_000 : undefined);
+    const minutes = positive(this.config.timeoutMinutes);
+    return this.opts.timeoutMs ?? (minutes ? minutes * 60_000 : undefined);
   }
 
   /** Prepare the task folder, fetch the engine's prompt and build the MCP spec. `fresh` skips resuming the CLI session. */
