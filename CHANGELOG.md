@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- When Scarlet lines up your screen recording with your camera, it now sees right away where the words you say are on that screen, so quotes and pages you read from it are less likely to be left out of the video.
 - Edits made at separate places in the video now stay individual rows in the edit list instead of being bundled into one spanning range, a crop or reframe beside a zoom no longer gets labeled Zoom or shows zoom numbers from another clip, and a Check note attaches only to an edit on that time range.
 - While you review an edit, cuts still waiting on your call play as Scarlet would make them, and show on the timeline as a gap with their number, so retakes nearby no longer look missed.
 - When Scarlet can't take out a repeated line cleanly, it now asks you about the cut instead of leaving the line in and marking a To do.
