@@ -61,3 +61,17 @@ describe("applyWordFix", () => {
     expect(applyWordFixes(t, undefined)).toBe(t);
   });
 });
+
+describe("applyWordFix where the transcript already reads the fix", () => {
+  it("leaves a place alone that already says the longer replacement, so the fix doesn't double a word", () => {
+    const said = transcript([["Claude", 0, .5], ["Code", .5, 1], ["and", 1, 1.2], ["Claude", 1.2, 2], ["code.", 2, 2.5], ["Claude", 3, 3.5]]);
+    const { transcript: out, places, wordsAdded } = applyWordFix(said, { find: "Claude", replace: "Claude Code" });
+    // The one that says it in lower case reads the fix's case, word for word, as any other place would.
+    expect(texts(out)).toEqual(["Claude", "Code", "and", "Claude", "Code.", "Claude", "Code"]);
+    expect(places.map(p => [p.index, p.before, p.after])).toEqual([[3, "Claude code.", "Claude Code."], [5, "Claude", "Claude Code"]]);
+    expect(wordsAdded).toBe(1);
+    // The same fix made again changes nothing, and so does one whose find ends the replacement.
+    expect(applyWordFix(out, { find: "Claude", replace: "Claude Code" }).places).toEqual([]);
+    expect(applyWordFix(out, { find: "code", replace: "Claude Code" }).places).toEqual([]);
+  });
+});

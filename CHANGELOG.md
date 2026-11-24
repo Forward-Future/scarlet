@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- A transcript fix that adds a word, such as Claude to Claude Code, no longer doubles the word where the transcript already said it right (“Claude Code Code”), and making the fix again changes nothing.
 - When Scarlet moves a clip's voice to the dialogue track, for a crossfade, a J or L cut or to line up its picture, the voice keeps the audio track you chose and its volume changes, such as music dipping under speech, instead of going back to the first track at a flat level.
 
 ## November 23, 2026
