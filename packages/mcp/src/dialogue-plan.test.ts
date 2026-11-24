@@ -221,6 +221,17 @@ describe("dialogue plan", () => {
       evidence: expect.stringContaining("Applied as placed, as unsureJoins asked: Placed from 1.2 s, where the first “where” begins") });
   });
 
+  it("keeps a same-word join held when its placed start would cross the selection, whatever unsureJoins says", async () => {
+    const { tl, sources } = sameWordFixture();
+    // The selection starts after where the first “where” begins (1.2 s), so the start Scarlet found is outside it.
+    const plan = await planDialogueCuts({ tl, localPauses: false, unsureJoins: "cut", anchor: { time: 1.21, end: 4 },
+      cuts: [cut({ mediaId: "mic", fromWord: 4, toWord: 5 })] }, sources);
+    expect(plan).toMatchObject({ outcome: "ready", decisions: [{ review: true, held: expect.stringContaining("would cross the selected range") }] });
+    if (plan.outcome !== "ready") return;
+    expect(plan.decisions[0]!.appliedAsPlaced).toBeUndefined();
+    expect(dialogueGate(plan).decisions[0]).toMatchObject({ outcome: "review", evidence: expect.not.stringContaining("Applied as placed") });
+  });
+
   it("leaves a range that keeps the first delivery playing twice as given, and says from where a cut takes it out", async () => {
     const { tl, sources } = sameWordFixture();
     // Given as the repeated “would” alone, with the voice in right after the cut, the range leaves “where ‖ where”
