@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- Scrolling a long list of edits above the message box no longer scrolls the request's heading out of sight or leaves blank space under the list.
 - Scarlet now writes card notes and To dos in short, plain sentences instead of technical specs with timestamps, durations, or beat-by-beat breakdowns.
 - Scarlet can use a video from the web as B-roll: give it a link (YouTube and most video sites) or ask it to find one, and it takes just the part that fits. The edit’s card shows where the clip came from.
 - A To do Scarlet left for you, such as a spot for B-roll, now has Add (A), Later (L) and a × that rejects it: Add has Scarlet make or find what the to-do asks for and put it in the video there, and the × takes the to-do away.
