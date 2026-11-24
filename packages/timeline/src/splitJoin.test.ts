@@ -105,6 +105,12 @@ describe("splitJoinOps", () => {
     const tl = conversation();
     expect(() => splitJoinOps(tl, media, FPS, [{ at: 4, shift: 3.99 }])).toThrow(/too soon to start/);
   });
+  it("says the time of a join a few milliseconds before a whole minute as that minute, not 60 seconds", () => {
+    const tl = emptyTimeline("p");
+    tl.tracks[0]!.clips = [makeMediaClip("host", 0, 59.996, 0, { id: "a" }), makeMediaClip("guest", 0, 10, 59.996, { id: "b" })];
+    expect(() => splitJoinOps(tl, media, FPS, [{ at: 119.997, shift: -0.2 }]))
+      .toThrow(`No join on ${tl.tracks[0]!.id} at 2:00.00. The nearest is at 1:00.00 (59.996 s).`);
+  });
 });
 
 describe("a splitJoin step in a proposal", () => {
