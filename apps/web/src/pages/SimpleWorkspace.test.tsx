@@ -549,7 +549,7 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   // numbered as on the timeline, with no line to open them.
   expect([editLists(turn), lowRisk(turn)]).toEqual([[["Edits that need you", ["wrap"]], ["Low risk edits", ["music bed", "captions"]]], "2 low risk"]);
   expect([turn.querySelector(".simple-review-rest"), container.querySelector(".review-low-head")?.textContent, container.querySelector(".review-low-body .simple-edits")?.getAttribute("aria-label")])
-    .toEqual([null, "Low risk2", "Low risk edits"]);
+    .toEqual([null, "Low Risk Edits(2)", "Low risk edits"]);
   expect(rows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["music bed", "captions", "wrap"]);
   expect(rows().map(r => r.querySelector(".edit-badge")?.textContent)).toEqual(["1", "2", "3"]);
   expect(turn.querySelector(".simple-suggest")).toBeNull();
@@ -2929,11 +2929,11 @@ it("lists every edit of a long list under Low risk in the column at once, with n
   const inChat = container.querySelector(`#simple-chat .simple-pass[data-thread="${threadWith("chg_approved_2").id}"]`)!;
   const head = container.querySelector<HTMLButtonElement>(".review-low-head")!;
   expect([head.textContent, head.getAttribute("aria-expanded"), turn.querySelector(".simple-review-rest"), container.querySelector(".simple-review-tabs, .simple-review-tab")])
-    .toEqual(["Low risk12", "true", null, null]);
+    .toEqual(["Low Risk Edits(12)", "true", null, null]);
   expect([lowRisk(turn), editLists(turn).map(([name, titles]) => [name, titles!.length]), inChat.querySelector(".simple-made") !== null, inChat.querySelector(".simple-pass-toggle, .simple-review-rest, .simple-edits")])
     .toEqual(["12 low risk", [["Low risk edits", 12]], true, null]);
   expect([buttonIn(turn, "See all"), buttonIn(turn, "See both")]).toEqual([undefined, undefined]);
-  expect(rows()[0]!.closest(".review-low-body")?.getAttribute("aria-label")).toBe("Low risk");
+  expect(rows()[0]!.closest(".review-low-body")?.getAttribute("aria-label")).toBe("Low Risk Edits");
   // With one request there, its rows have no line naming it.
   expect(container.querySelector(".review-low-name")).toBeNull();
   // The heading folds them away and opens them again.
@@ -3503,7 +3503,7 @@ it("lists an applied pass under For you, Working and Done, and the cuts Scarlet 
   expect([container.querySelector(".simple-review-tabs, .simple-review-tab"), container.querySelector("#simple-chat .simple-pass-list")]).toEqual([null, null]);
   expect([list()?.parentElement?.className, list()?.closest(".review-rail-list")?.getAttribute("aria-label"), lists()])
     .toEqual(["review-slot", "For you", [["Edits that need you", 1], ["Low risk edits", 2]]]);
-  expect(pass.querySelector('.simple-pass-list[aria-label="Low risk edits"]')?.closest(".review-low-body")?.getAttribute("aria-label")).toBe("Low risk");
+  expect(pass.querySelector('.simple-pass-list[aria-label="Low risk edits"]')?.closest(".review-low-body")?.getAttribute("aria-label")).toBe("Low Risk Edits");
   expect([container.querySelector(".review-rail-head h2")?.textContent, foot()]).toEqual(["For you1", [["Working0", true, "false"], ["Done0", true, "false"]]]);
   const need = () => pass.querySelector<HTMLElement>(".simple-pass-need")!;
   expect(need().getAttribute("title")).toBe("1 needs you");
@@ -3683,7 +3683,7 @@ it("lists a pass's edits Scarlet didn't flag under Low risk in the column, at on
   const inChat = () => container.querySelector(`#simple-chat .simple-pass[data-thread="${threadWith("chg_approved_2").id}"]`)!;
   // The pass's cuts are listed under Low risk, in its place there: no line to open them, no tab row anywhere, and the
   // chat has the pass's sentence with no link to a list and no list.
-  expect([listRows().map(rowText), lowRisk(turn()), listRows()[0]!.closest(".review-low-body")?.getAttribute("aria-label")]).toEqual([["music bed", "captions", "wrap"], "3 low risk", "Low risk"]);
+  expect([listRows().map(rowText), lowRisk(turn()), listRows()[0]!.closest(".review-low-body")?.getAttribute("aria-label")]).toEqual([["music bed", "captions", "wrap"], "3 low risk", "Low Risk Edits"]);
   expect([container.querySelector(".simple-review-tabs, .simple-review-tab, .simple-review-rest"), inChat().querySelector(".simple-pass-toggle, .simple-review-rest, .simple-pass-list")])
     .toEqual([null, null]);
   expect(inChat().querySelector(".simple-made")?.textContent).toContain("3");
@@ -13977,13 +13977,12 @@ it("lists every request's low-risk edits under its name, and puts a request's ed
   await act(async () => {});
   expect(band("chg_later").classList.contains("is-marked")).toBe(true);
   expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
-  // The edits Scarlet didn't flag are under Low risk in the column of edits, every request's at once, the latest
-  // request's first. With more than one request there, each one's rows are under a dim line with its words, so their
-  // numbers (1, 2, then 1, 2, 3) read.
+  // The edits Scarlet didn't flag are under Low Risk Edits in the column of edits, every request's at once, the latest
+  // request's first, in one list with nothing naming the request (the editor's choice, 2026-11-24).
   const names = () => [...container.querySelectorAll(".review-low-name")].map(name => name.textContent);
   const listed = () => [...container.querySelectorAll(".review-low-body .simple-edits")].map(list => [list.closest<HTMLElement>(".review-slot")?.dataset.thread, list.children.length]);
   const both = [[threadWith("chg_later").id, 2], [threadWith("chg_approved_2").id, 3]];
-  expect([names(), listed()]).toEqual([["Fade both ends", "Frame the screen"], both]);
+  expect([names(), listed()]).toEqual([[], both]);
   expect(container.querySelector("#simple-chat .simple-edits, .simple-review-tab, .simple-review-rest")).toBeNull();
   // A request's band with an edit of it open leaves the card and shows that request's edits.
   await click(editRows("chg_later")[0]!);
@@ -14128,7 +14127,7 @@ it("folds the request above the message box to its heading too, its list of edit
     expect(unit().closest(".simple-pin")).not.toBeNull();
     const under = () => [...unit().children].filter(el => !el.classList.contains("unit-msg"));
     /** The request's rows in each part of the column, and whether that part is on screen. */
-    const inColumn = () => ["For you", "Low risk", "Working", "Done"].map(part => {
+    const inColumn = () => ["For you", "Low Risk Edits", "Working", "Done"].map(part => {
       const host = container.querySelector<HTMLElement>(`.review-rail :is(.review-rail-list, .review-low-body, .review-sec-body)[aria-label="${part}"]`)!;
       return [part, !host.hasAttribute("hidden"), host.querySelectorAll(`.review-slot[data-thread="${thread.id}"] .simple-edit`).length];
     });
@@ -14136,7 +14135,7 @@ it("folds the request above the message box to its heading too, its list of edit
     expect(under().some(el => el.querySelector(".simple-edits"))).toBe(false);
     expect(under().map(el => styled(el, "display")[0])).not.toContain("none");
     const rows = inColumn();
-    expect(rows).toEqual([["For you", true, 1], ["Low risk", true, 2], ["Working", true, 1], ["Done", false, 0]]);
+    expect(rows).toEqual([["For you", true, 1], ["Low Risk Edits", true, 2], ["Working", true, 1], ["Done", false, 0]]);
     expect(container.querySelector('.review-sec-body[aria-label="Working"] .simple-edit + .subunit[data-run="task_fix"]')).not.toBeNull();
     // Folded there, it is its heading alone. The column of edits is the whole video's, not the block's: its rows stay.
     await click(unit().querySelector<HTMLButtonElement>(".unit-msg > .unit-fold")!);

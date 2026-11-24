@@ -1015,7 +1015,7 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .review-rail-count { font-weight: 500; color: var(--color-warn); font-variant-numeric: tabular-nums; }
 .review-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .review-rail-list { padding: 8px 12px 12px; }
-.review-slot, .review-low-group { display: contents; }
+.review-slot { display: contents; }
 /* Low risk: the edits Scarlet didn't flag, under For you's rows and quieter, with no amber (2026-11-24). */
 .review-low { padding: 4px 12px 12px; }
 .review-low[hidden] { display: none; }
@@ -1026,7 +1026,6 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .review-low-head svg { margin-left: auto; color: var(--color-dim); transition: transform .14s ease; }
 .review-low-head[aria-expanded="true"] svg { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .review-low-head svg { transition: none; } }
-.review-low-name { margin: 8px 6px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--color-dim); }
 .review-low-body .simple-pass-list > li > button, .review-low-body .simple-edit { color: var(--color-muted); }
 .review-low-body :is(.simple-pass-value, .simple-edit-value, .simple-pass-time, .simple-pass-check, .simple-edit-check, .edit-version) { color: var(--color-dim); }
 .review-low-body .edit-badge { border-color: var(--color-dim); color: var(--color-muted); }

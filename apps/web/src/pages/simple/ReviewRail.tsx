@@ -7,15 +7,12 @@ import { letGo } from "./types";
 /**
  * The column of edits between the chat and the video, for the whole video (the editor chose it on 2026-11-24, as
  * T3 Code lists its threads). What waits on the editor fills it, as one list with no tabs: every request draws its own
- * rows into its place there. Under them, quieter, Low risk lists every request's edits Scarlet didn't flag, at once and
- * under a dim line naming the request when more than one has some (the editor chose this on 2026-11-24, in place of a
- * line under each request's rows that opened them). At the column's foot Working lists the edits Scarlet is revising,
+ * rows into its place there. Under them, quieter, "Low Risk Edits (5)" lists every request's edits Scarlet didn't flag,
+ * at once and in one list, with no line naming the request (the editor chose this on 2026-11-24, in place of a line
+ * under each request's rows that opened them). At the column's foot Working lists the edits Scarlet is revising,
  * open until the editor folds it, and Done counts what the editor has decided and opens on a press. A request about the
  * whole video is not here: it runs in the chat.
  */
-/** A request's name over its low-risk rows: its words, or for edits that came with no request, plainly that. */
-const nameOf = (thread: Thread) => thread.tasks.length ? thread.title : "Earlier edits";
-
 export function ReviewRail({ store, threads, open, onOpen, selected }: {
   store: RailStore;
   /** The requests in the order their rows are listed: the latest first. */
@@ -34,13 +31,8 @@ export function ReviewRail({ store, threads, open, onOpen, selected }: {
   }, [selected]);
   const slots = (section: "you" | "working" | "done") => threads.map(thread =>
     <div key={thread.id} className="review-slot" data-thread={thread.id} ref={store.ref(section, thread.id)} />);
-  // Low risk numbers each request's edits on their own (1, 2, 3, then 1, 2): with more than one request there, each
-  // request's rows sit under a dim line with its words, so the numbers read. An edit with no request is an earlier one.
-  const lowFrom = threads.filter(thread => (store.info(thread.id)?.optional ?? 0) > 0);
-  const lowSlots = threads.map(thread => <div key={thread.id} className="review-low-group">
-    {lowFrom.length > 1 && lowFrom.includes(thread) && <p className="review-low-name" title={nameOf(thread)}>{nameOf(thread)}</p>}
-    <div className="review-slot" data-thread={thread.id} ref={store.ref("low", thread.id)} />
-  </div>);
+  // One list of every request's low-risk rows, with nothing naming the request (the editor's choice, 2026-11-24).
+  const lowSlots = threads.map(thread => <div key={thread.id} className="review-slot" data-thread={thread.id} ref={store.ref("low", thread.id)} />);
   const nothing = need + optional + working + done === 0;
   const section = (name: "Working" | "Done", key: "working" | "done", count: number) => {
     const shown = open[key] && count > 0;
@@ -63,8 +55,8 @@ export function ReviewRail({ store, threads, open, onOpen, selected }: {
       {/* The edits Scarlet didn't flag, listed at once and quieter, open until the editor folds them. */}
       <div className="review-low" hidden={optional === 0}>
         <button type="button" className="review-low-head" aria-expanded={open.low} onClick={letGo(() => onOpen("low", !open.low))}>
-          <span>Low risk</span><b>{optional}</b><Icon name="chevron" size={10} /></button>
-        <div className="review-low-body" role="group" aria-label="Low risk" hidden={!open.low}>{lowSlots}</div>
+          <span>Low Risk Edits</span><b>({optional})</b><Icon name="chevron" size={10} /></button>
+        <div className="review-low-body" role="group" aria-label="Low Risk Edits" hidden={!open.low}>{lowSlots}</div>
       </div>
     </div>
     <div className="review-rail-foot">
