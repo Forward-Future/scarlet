@@ -94,7 +94,7 @@ export function OptionalLine({ count, open, onToggle, inPass }: { count: number;
   </button>;
 }
 
-/** What an empty tab says. For you says it only when it has no optional line either, so the tab is never blank. */
+/** What an empty tab says. In the chat alone For you says it only when it has no optional line either, so the tab is never blank. */
 const EMPTY_TAB = { you: "Nothing waits on you.", working: "Nothing in the works.", done: "Nothing decided yet." } as const;
 
 /** The rows a turn holds for its lists while its block moves: which were just acted on, and the edit last opened. */
@@ -199,20 +199,23 @@ interface Entry {
  * under three tabs and each is under exactly one. For you, shown until another is pressed, lists what waits on the
  * editor: open calls and flagged edits, each by its number while the pass waits, with Scarlet's note. Pressed, it opens
  * the first one still waiting. A row the editor has just decided or sent back stays there a moment with its new word,
- * then fades and leaves. Under those rows one line counts the edits Scarlet didn't flag ("112 optional"); opened, it
- * lists them in timeline order, edits that play as one change on one row. Working has the rows Scarlet has, each with
+ * then fades and leaves. Beside the column of edits the edits Scarlet didn't flag are listed under Low risk at once; in
+ * the chat alone, one line under those rows counts them ("112 optional") and opens them. Either way they go in
+ * timeline order, edits that play as one change on one row. Working has the rows Scarlet has, each with
  * the editor's request under it, and Done every decided row. A pass with nothing to review has one list of every edit,
  * behind See all. Once Scarlet is done, what the pass applied is one sentence above the list. A row is one line and
  * opens its edit or call in the card on the timeline, where Keep and Reject edit move on to the next that waits. A
  * request about one cut or edit that is still in the chat (`nests`) sits directly under that cut's or edit's row.
  * `aside` is what the run used, when that shows.
  */
-export function PassSummary({ projectId, thread, edits, rejected = noRejected, actions, aside, list: listState, listedNeed, working, nests = noNests, spent = noSpent, linger: heldLinger, lastOpen: heldOpen }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[];
+export function PassSummary({ projectId, thread, edits, rejected = noRejected, actions, aside, list: listState, listedNeed, working, nests = noNests, spent = noSpent, linger: heldLinger, lastOpen: heldOpen, listLoaded }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[];
   /** Edits the editor rejected: out of the video, each keeps a row in the list of every edit, with a × and "Rejected". */
   rejected?: Omit<ThreadEdit, "at">[];
   actions: ChatActions; aside?: ReactNode; list: PassList; listedNeed: RefObject<Set<string>>; working?: boolean; nests?: readonly Nest[]; spent?: Spent;
   /** The rows just acted on and the edit last opened, held by the turn: see `ThreadResult`. */
-  linger?: ReviewLinger; lastOpen?: RefObject<string | undefined> }) {
+  linger?: ReviewLinger; lastOpen?: RefObject<string | undefined>;
+  /** The engine's list of the request's edits has come: before then a row may move only because the list arrived. */
+  listLoaded?: boolean }) {
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
@@ -241,7 +244,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const hasForYou = (pass?.calls.length ?? 0) > 0 || forYouEdits.length > 0 || forYouRejected.length > 0 || decidedCallRows.length > 0;
   const tabbed = hasForYou || !!rail;
   const tab = tabShown(open);
-  const optionalOpen = tabbed && open === "all";
+  // Beside the column of edits the edits Scarlet didn't flag are always listed, under Low risk; in the chat they are
+  // behind one line under For you's rows.
+  const optionalOpen = tabbed && (open === "all" || !!rail);
   // While the pass makes its final check of the finished cut, the fixes it applies are marked New in the list: nothing
   // else tells them from the cuts that went in before (2026-11-14).
   const rerun = working ? thread.tasks.find(t => !!t.repeatAudit?.returns && !!t.startedAt && isWorking(t.state)) : undefined;
@@ -259,8 +264,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   // without a click or a tab, so a request whose only edit was rejected still says so (2026-11-23).
   const onlyRejected = !edits.length && rejected.length > 0 && !pass && !tabbed;
   const listed = fullList || onlyRejected || (!!single && !tabbed && open !== "need" && !!actions.showing && matchesEdit(actions.showing, single));
-  // The For you list closes only if there are no For you items at all.
-  useEffect(() => { if (open === "need" && !tabbed) setOpen(undefined); }, [open, tabbed]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The For you list closes only if there are no For you items at all. Beside the column of edits there is no list of
+  // every edit to open: one left open from the line that used to open the edits Scarlet didn't flag lets go.
+  useEffect(() => { if ((open === "need" && !tabbed) || (open === "all" && !!rail)) setOpen(undefined); }, [open, tabbed, rail]); // eslint-disable-line react-hooks/exhaustive-deps
   // A line mounted with its list already open is the same list, moved with its request between the conversation and
   // the place above the message box. It leaves the timeline where it is, so an edit of another request the editor has
   // open stays open. The list has the timeline back when that edit closes.
@@ -406,7 +412,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       at: Math.min(...members.map(m => m.at)) });
   }
   // A row that has just left For you for Working or Done stays a moment where it was, with its new word.
-  if (tabbed) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was })), optionalOpen && tab === "you");
+  // Beside the column a low-risk row is held only once the engine's list has come: one moving as it arrives was never acted on.
+  if (tabbed) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was })), optionalOpen && (rail ? listLoaded !== false : tab === "you"));
   const heldFrom = (from: "you" | "optional") => entries.filter(e => (e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
   const inPlace = (place: RowPlace) => entries.filter(e => e.place === place);
   // While the pass waits its rows go by their numbers, in the order each reached the editor; a list with a row that
@@ -418,7 +425,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const youLabel = pass && calls.length ? "Calls that need you" : "Edits that need you";
   const drawn: Drawn[] = rail ? [
       { id: "you", label: youLabel, rows: inListOrder([...inPlace("you"), ...heldFrom("you")], order) },
-      ...(optionalOpen ? [{ id: "optional" as const, label: "Optional edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
+      { id: "optional", label: "Low risk edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) },
       { id: "working", label: "With Scarlet", rows: inListOrder(inPlace("working"), order) },
       { id: "done", label: "Decided", rows: inListOrder(inPlace("done"), order) },
     ] : !tabbed ? (listed ? [{ id: "all", label: "Every edit", rows: entries }] : [])
@@ -445,7 +452,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     if (!onEntry || openId === was) return;
     // A row still in For you only for the moment after it was decided is Working's or Done's.
     const shown = tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalOpen) : onEntry.place === tab;
-    if (!shown) setOpen(onEntry.place === "you" ? undefined : onEntry.place === "optional" ? "all" : onEntry.place);
+    if (!shown) setOpen(onEntry.place === "you" ? undefined : onEntry.place === "optional" ? rail ? undefined : "all" : onEntry.place);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
   // While the pass's calls are listed, what is outside the list comes after it.
   const callsListed = hasForYou && !!pass && calls.length > 0;
@@ -479,9 +486,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   useKeepSelectedInView(host, selectedKey, ".simple-pass-list [aria-current=\"true\"]");
   // What the request has in each list of the column, and the way to its first and last row that waits.
   const waits = () => inListOrder(inPlace("you"), order).filter(e => e.row.needs || e.row.asks);
+  const lowRisk = () => inListOrder(optional, order).filter(e => !!e.row.open);
   useEffect(() => {
     rail?.report(thread.id, empty ? undefined : { you: need, optional: optional.length, working: inPlace("working").length, done: inPlace("done").length,
-      openFirst: () => waits()[0]?.row.open?.(), openLast: () => waits().at(-1)?.row.open?.() });
+      openFirst: () => waits()[0]?.row.open?.(), openLast: () => waits().at(-1)?.row.open?.(),
+      openFirstLow: () => lowRisk()[0]?.row.open?.(), openLastLow: () => lowRisk().at(-1)?.row.open?.() });
   });
   useEffect(() => () => rail?.report(thread.id), [rail, thread.id]);
   if (empty) return null;
@@ -572,12 +581,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       {made && <Made parts={made} link={seeEvery} />}
       <NeedLink need={need} onOpen={showNeeded} />
       {outsideList}
-      {/* For you's place holds the rows that wait, then the one line that counts the edits Scarlet didn't flag, and those rows once it's open. */}
-      {into("you", (drawn[0]!.rows.length > 0 || optional.length > 0) && <>
-        {drawn[0]!.rows.length > 0 && rowList(drawn[0]!)}
-        {optional.length > 0 && <OptionalLine inPass count={optional.length} open={optionalOpen} onToggle={() => setOpen(optionalOpen ? undefined : "all")} />}
-        {drawn.filter(list => list.id === "optional" && list.rows.length > 0).map(rowList)}
-      </>)}
+      {/* For you's place holds the rows that wait; Low risk's the edits Scarlet didn't flag, listed at once. */}
+      {into("you", drawn[0]!.rows.length > 0 && rowList(drawn[0]!))}
+      {drawn.filter(list => list.id === "optional").map(list => <Fragment key={list.id}>{into("low", list.rows.length > 0 && rowList(list))}</Fragment>)}
       {drawn.filter(list => list.id === "working" || list.id === "done").map(list =>
         <Fragment key={list.id}>{into(list.id as RailSection, list.rows.length > 0 && rowList(list))}</Fragment>)}
       {pass?.error && <p className="simple-error" role="alert">{pass.error}
@@ -606,18 +612,21 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
  * What any other request made, as the rows of its block: one sentence, then a link that opens the edits themselves,
  * numbered as on the timeline. Edits of one name that overlap exactly are one edit. Once Scarlet flagged one, the rows
  * sit under three tabs, as a pass's do, each with the number it has in the whole list: For you lists the flagged edits
- * not yet decided and counts them, with the edits Scarlet didn't flag behind one line under them ("3 optional");
+ * not yet decided and counts them, with the edits Scarlet didn't flag under Low risk beside the column of edits, or
+ * behind one line under them in the chat alone ("3 optional");
  * Working has the ones sent back, each with its request under its row; Done has the ones kept or rejected. A row just
  * decided or sent back stays in For you a moment with its new word, then fades and leaves. A request about an edit
  * that is still in the chat (`nests`) sits directly under that edit's row.
  */
-export function ThreadResult({ projectId, thread, edits, rejected, actions, aside, working, nests = noNests, spent = noSpent, list, listedNeed, wasShowing: heldShowing, linger: heldLinger, lastOpen: heldOpen }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[]; rejected?: Omit<ThreadEdit, "at">[]; actions: ChatActions;
+export function ThreadResult({ projectId, thread, edits, rejected, actions, aside, working, nests = noNests, spent = noSpent, list, listedNeed, wasShowing: heldShowing, linger: heldLinger, lastOpen: heldOpen, listLoaded }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[]; rejected?: Omit<ThreadEdit, "at">[]; actions: ChatActions;
   aside?: ReactNode; working?: boolean; nests?: readonly Nest[]; spent?: Spent;
   /** Which list is open and what For you has listed, held by the turn: the block is mounted anew when it moves
    *  between the conversation and the place above the message box, and a list the editor opened must not close then,
    *  nor turn into another. `wasShowing` is whether one of the edits was open when the block last drew, `lastOpen`
    *  which, and `linger` the rows just decided or sent back, which stay in For you a moment. */
-  list: PassList; listedNeed: RefObject<Set<string>>; wasShowing?: RefObject<boolean>; linger?: ReviewLinger; lastOpen?: RefObject<string | undefined> }) {
+  list: PassList; listedNeed: RefObject<Set<string>>; wasShowing?: RefObject<boolean>; linger?: ReviewLinger; lastOpen?: RefObject<string | undefined>;
+  /** The engine's list of the request's edits has come: see `PassSummary`. */
+  listLoaded?: boolean }) {
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
   const linger = useHeldRows(heldLinger);
@@ -641,7 +650,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   // Beside a column of edits every request has its rows under the lists, flagged or not.
   const tabbed = hasForYou || !!rail;
   const tab = tabShown(open);
-  const optionalOpen = tabbed && open === "all";
+  // Beside the column of edits the edits Scarlet didn't flag are always listed, under Low risk.
+  const optionalOpen = tabbed && (open === "all" || !!rail);
   // Where each row is: every edit and every rejected one is under exactly one tab. A request that itself waits on the
   // editor (a question, or one that stopped early) keeps its row in For you.
   const asks = new Set(nests.flatMap(nest => nest.needs ? [nest.key] : []));
@@ -663,7 +673,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       tracked.push({ key, place: "done", was: e.previous.map(editKey) });
     }
     // A row that has just left For you for Working or Done stays a moment where it was, with its new word.
-    linger.track(tracked, optionalOpen && tab === "you");
+    linger.track(tracked, optionalOpen && (rail ? listLoaded !== false : tab === "you"));
   }
   const place = (e: Omit<ThreadEdit, "at">) => placeOf.get(rowOf.get(editKey(e)) ?? "");
   const held = (e: Omit<ThreadEdit, "at">) => (place(e) === "working" || place(e) === "done") ? linger.of(rowOf.get(editKey(e)) ?? "") : undefined;
@@ -686,7 +696,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     wasShowing.current = showingInList;
   }, [showingInList]); // eslint-disable-line react-hooks/exhaustive-deps
   // Under the tabs, an edit opened from somewhere else (the timeline, ⌘Z) shows the tab that holds it: For you for one
-  // that waits, with its optional line open for one Scarlet didn't flag, Working for one sent back, Done for one
+  // that waits, Low risk (or in the chat alone its optional line open) for one Scarlet didn't flag, Working for one sent back, Done for one
   // decided. One opened from the list, stepped to or moved on to is in the tab shown already.
   const openEdit = showing && (shownEdit ?? gone.find(e => matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing)));
   const openId = openEdit ? editKey(openEdit.previous[0] ?? openEdit) : undefined;
@@ -700,10 +710,11 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     // A row still in For you only for the moment after it was decided is Working's or Done's.
     const shown = tab === "you" ? at === "you" || (at === "optional" && optionalOpen) : at === tab;
     if (shown) { if (at === "you") setOpen(o => o ?? "need"); }
-    else if (at) setOpen(at === "you" ? "need" : at === "optional" ? "all" : at);
+    else if (at) setOpen(at === "you" ? "need" : at === "optional" ? rail ? undefined : "all" : at);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // The For you list closes only if there are no For you items at all.
-  useEffect(() => { if (open === "need" && !tabbed) setOpen(undefined); }, [open, tabbed]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The For you list closes only if there are no For you items at all. Beside the column one left open from the line
+  // that used to open the edits Scarlet didn't flag lets go: they are listed under Low risk.
+  useEffect(() => { if ((open === "need" && !tabbed) || (open === "all" && !!rail)) setOpen(undefined); }, [open, tabbed, rail]); // eslint-disable-line react-hooks/exhaustive-deps
   if (tabbed && tab === "you") {
     for (const edit of edits) if (inYou(edit)) listedNeed.current.add(editKey(edit));
     for (const edit of gone) if (inYou(edit)) listedNeed.current.add(editKey(edit));
@@ -739,9 +750,13 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       onHover={ref => actions.lightMark(undefined, ref && { threadId: thread.id, editKey: editKey(ref) })}
       under={edit => nests.filter(nest => nest.key === editKey(edit)).map(nest => nest.node)} spent={edit => spent.get(editKey(edit))} />;
   const optional = countOf("optional");
+  // The low-risk rows' edits, top to bottom: the first edit of each row of the edits Scarlet didn't flag.
+  const lowRisk = () => groups.flatMap(({ members }) => placeOf.get(editKey(members[0]!.edit)) === "optional" ? [members[0]!.edit] : []);
   useEffect(() => {
     rail?.report(thread.id, { you: need, optional, working: countOf("working"), done: countOf("done"),
-      openFirst: () => { if (flagged[0]) actions.openEdit(thread, flagged[0]); }, openLast: () => { const last = flagged.at(-1); if (last) actions.openEdit(thread, last); } });
+      openFirst: () => { if (flagged[0]) actions.openEdit(thread, flagged[0]); }, openLast: () => { const last = flagged.at(-1); if (last) actions.openEdit(thread, last); },
+      openFirstLow: () => { const first = lowRisk()[0]; if (first) actions.openEdit(thread, first); },
+      openLastLow: () => { const last = lowRisk().at(-1); if (last) actions.openEdit(thread, last); } });
   });
   useEffect(() => () => rail?.report(thread.id), [rail, thread.id]);
   if (rail) {
@@ -754,11 +769,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
         <span className="req-right">{aside}
           <ThreadAction projectId={projectId} thread={thread} edits={edits} onPlay={ref => actions.openEdit(thread, ref)} menuOnly menu={false} /></span>
       </div>
-      {into("you", (some(inYou) || optional > 0) && <>
-        {some(inYou) && rows("Edits that need you", inYou)}
-        {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => setOpen(optionalOpen ? undefined : "all")} />}
-        {optionalOpen && some(inOptional) && rows("Optional edits", inOptional)}
-      </>)}
+      {into("you", some(inYou) && rows("Edits that need you", inYou))}
+      {into("low", some(inOptional) && rows("Low risk edits", inOptional))}
       {into("working", countOf("working") > 0 && rows("With Scarlet", e => place(e) === "working"))}
       {into("done", countOf("done") > 0 && rows("Decided", e => place(e) === "done"))}
       {nests.filter(nest => !listed.has(nest.key)).map(nest => nest.node)}

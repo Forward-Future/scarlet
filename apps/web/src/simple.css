@@ -1013,8 +1013,24 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .review-rail-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 54px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--color-line); }
 .review-rail-head h2 { display: flex; align-items: baseline; gap: 7px; margin: 0; font-size: 13px; font-weight: 600; color: var(--color-fg); }
 .review-rail-count { font-weight: 500; color: var(--color-warn); font-variant-numeric: tabular-nums; }
-.review-rail-list { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 12px; }
-.review-slot { display: contents; }
+.review-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.review-rail-list { padding: 8px 12px 12px; }
+.review-slot, .review-low-group { display: contents; }
+/* Low risk: the edits Scarlet didn't flag, under For you's rows and quieter, with no amber (2026-11-24). */
+.review-low { padding: 4px 12px 12px; }
+.review-low[hidden] { display: none; }
+.review-low-head { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 6px; border: 0; background: none; color: var(--color-dim);
+  font: inherit; font-size: 11.5px; font-weight: 500; text-align: left; cursor: pointer; }
+.review-low-head:is(:hover, :focus-visible) { color: var(--color-muted); }
+.review-low-head b { font-weight: 500; color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.review-low-head svg { margin-left: auto; color: var(--color-dim); transition: transform .14s ease; }
+.review-low-head[aria-expanded="true"] svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .review-low-head svg { transition: none; } }
+.review-low-name { margin: 8px 6px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--color-dim); }
+.review-low-body .simple-pass-list > li > button, .review-low-body .simple-edit { color: var(--color-muted); }
+.review-low-body :is(.simple-pass-value, .simple-edit-value, .simple-pass-time, .simple-pass-check, .simple-edit-check, .edit-version) { color: var(--color-dim); }
+.review-low-body .edit-badge { border-color: var(--color-dim); color: var(--color-muted); }
+.review-low-body :is(.simple-pass-time.is-need, .edit-badge.is-check, .simple-pass-value.is-need) { border-color: var(--color-dim); background: none; color: var(--color-dim); }
 .review-rail .simple-review-empty { padding: 8px 6px; }
 .review-rail .simple-review-rest { padding-left: 6px; }
 /* A request's rows have the column's width: no line over them, no height of their own, each on up to two lines. */

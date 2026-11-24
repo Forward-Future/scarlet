@@ -34,7 +34,7 @@ import { appLog } from "../lib/appLog";
 import { clock as clockLabel, lengthLabel, parseTimestamp, plural, preciseRange, removedSeconds } from "../lib/format";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
 import { listMoments, momentRange } from "../lib/editMoments";
-import { reviewStops, rowAfter, rowBeside, rowPlace, rowsOfTab, stopsShown, tabShown, type ListOrder, type ReviewStop } from "../lib/reviewTabs";
+import { inListOrder, reviewStops, rowAfter, rowBeside, rowPlace, rowsOfTab, sectionStops, stopsShown, tabShown, type ListOrder, type ReviewStop } from "../lib/reviewTabs";
 import { editFocus, editKindWord } from "../lib/editKind";
 import { player } from "../lib/player";
 import { cutChange } from "../lib/appliedCutPlayback";
@@ -44,7 +44,7 @@ import type { JoinClock } from "../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, revisionTarget, stagedCuts, type Thread } from "../lib/threads";
 import { runIsActive } from "../lib/taskRun";
 import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, threadRuns, waitingToStart } from "../lib/requestRuns";
-import { callRevisions, decidedPassCalls, isOpenPass, keepGoesTo, noRevisions, openPass, passForYouOrder, passRevision, rejectedCallIndex, reviewCalls, revisedFrom, revisionCut, savedChoices,
+import { callRevisions, decidedPassCalls, isOpenPass, noRevisions, openPass, passForYouOrder, passRevision, rejectedCallIndex, reviewCalls, revisedFrom, revisionCut, savedChoices,
   type Call, type CutChoice, type PassForYouItem } from "../lib/passCalls";
 import { callNow, carriedCall, carryingVersions, revisedCall } from "../lib/carriedCuts";
 import { canPreviewMedia } from "../lib/upload";
@@ -168,7 +168,7 @@ export function SimpleWorkspace() {
   // The column of edits beside the chat is one list for the whole video: each request draws its rows into it (`rail`).
   // Working, at the column's foot, is open until the editor folds it, so what Scarlet has is in view; Done opens on a press.
   const [rail] = useState(() => new RailStore());
-  const [railOpen, setRailOpen] = useState({ working: true, done: false });
+  const [railOpen, setRailOpen] = useState({ working: true, done: false, low: true });
   // The requests folded to their headings with the arrow at a heading's left, kept across a restart as the lists are.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => savedCollapsed(current.id));
   const collapsedOf = useRef(current.id);
@@ -1294,15 +1294,10 @@ export function SimpleWorkspace() {
     })),
     passByNumber,
   ) : [];
-  const { decidedCallEditKeys, decidedCallRows } = useMemo(
+  const { decidedCallEditKeys } = useMemo(
     () => decidedPassCalls(pass && passThread?.id === focusThread?.id ? undefined : focusThread, threadEdits, threadTimeline.rejected),
     [pass, passThread?.id, focusThread, threadEdits, threadTimeline.rejected],
   );
-  // Whether the request has something for the editor to review, now or decided: its rows are then under For you,
-  // Working and Done in the chat, as its block there works it out. With nothing to review it has one list of every edit.
-  const focusTabbed = (passIsFocus && allCalls.length > 0) || decidedCallRows.length > 0
-    || threadEdits.some(e => !!e.check || decidedCallEditKeys.has(editKey(e)))
-    || threadTimeline.rejected.some(e => !!e.wasCheck || decidedCallEditKeys.has(editKey(e)));
   // A flagged edit not yet kept says its place among the ones still to check, as a call does.
   const flaggedRows = useMemo(() => editsByRow.filter(row => row.some(waitingEdit)), [editsByRow, reviewed, revisingEdit]); // eslint-disable-line react-hooks/exhaustive-deps
   const waitingPassForYouEdits = passIsFocus ? passForYouItems.filter((item): item is Extract<PassForYouItem<Call, ThreadEdit>, { kind: "edit" }> => item.kind === "edit" && item.waiting) : [];
@@ -1342,29 +1337,24 @@ export function SimpleWorkspace() {
   // the order its edits are listed in.
   const focusOrder: ListOrder = threadTimeline.moments ? { numbers: passIsFocus && passByNumber } : undefined;
   const passOrder: ListOrder = { numbers: passByNumber };
-  const focusStops = reviewingEdit && focusTabbed ? focusStopsNow() : [];
+  // Every request's rows are in the column of edits, each under one of its parts (For you, Low risk, Working, Done).
+  const focusStops = reviewingEdit ? focusStopsNow() : [];
   const hereStop = reviewingEdit ? focusStops.find(stop => stop.row?.includes(reviewingEdit)) : undefined;
   const here = reviewingEdit ? { at: reviewingEdit.at ?? reviewingEdit.range.start, num: passIsFocus ? passEditNum(reviewingEdit) : undefined } : undefined;
+  // The edit open is a low-risk row: one Scarlet didn't flag that the editor hasn't decided, under Low risk. One just
+  // rejected is no row any more: it is low risk if Scarlet hadn't flagged it, unless Working or Done is the list shown.
+  const onLowRisk = hereStop ? hereStop.place === "optional"
+    : tabShown(focusList) === "you" && !!reviewingEdit && !reviewingEdit.check && !reviewingEdit.wasCheck;
   /** What ↑, ↓ or Keep opens for a stop: its call, or the edit its row is opened by. */
   const stopTarget = (stop: Stop | undefined, lead: (row: readonly ThreadEdit[]) => ThreadEdit): { call: Call } | { edit: ThreadEdit } | undefined =>
     !stop ? undefined : stop.call ? { call: stop.call } : stop.row ? { edit: lead(stop.row) } : undefined;
   function editBeside(delta: number): { edit: ThreadEdit } | { call: Call } | undefined {
     if (!reviewingEdit) return undefined;
-    // Under the tabs, ↑ and ↓ step through the rows of the tab shown, in its order: For you's waiting rows, then the
-    // optional ones while that line is open; Working's; Done's. From an edit that isn't a row there (one just rejected,
-    // or one of another tab) they step to the row after or before where it is.
-    if (focusTabbed) return stopTarget(rowBeside(stopsShown(focusStops, focusList, focusOrder), hereStop, here!, delta, focusOrder),
+    // ↑ and ↓ step through the rows of the part of the column the edit is in, in its order: For you's rows that wait,
+    // Low risk's, Working's or Done's. From an edit that isn't a row there (one just rejected) they step to the row
+    // after or before where it is. Past the request's last row they go on in the next request's (see `stepEdit`).
+    return stopTarget(rowBeside(sectionStops(focusStops, focusList, onLowRisk, focusOrder), hereStop, here!, delta, focusOrder),
       row => row.find(waitingEdit) ?? row[0]!);
-    // With one list of every edit they step through them all. A rejected edit is no row of the list, just rejected or
-    // open again from its row: from it they step to the edit after or before where it was.
-    if (shownRow < 0) {
-      const was = reviewingEdit.at ?? reviewingEdit.range.start, timeOf = (other: ThreadEdit[]) => other[0]!.at ?? other[0]!.range.start;
-      // An edit at the very place it was, as the rest of its moment can be, is the one after it.
-      const row = delta > 0 ? editsByRow.find(other => timeOf(other) >= was) : editsByRow.findLast(other => timeOf(other) < was);
-      return row && { edit: row[0]! };
-    }
-    const row = editsByRow[shownRow + delta];
-    return row && { edit: row.find(waitingEdit) ?? row[0]! };
   }
   // ↑ and ↓ reach the log as a bare key: this says which call they went to.
   function stepToCall(change: Change, call: Call) {
@@ -1373,8 +1363,9 @@ export function SimpleWorkspace() {
   }
   function stepEdit(delta: number) {
     const next = editBeside(delta);
-    // Past a request's last row the list goes on with the next request's.
-    if (!next) return void openElsewhere(focusThread?.id, delta);
+    // Past a request's last row the list goes on with the next request's: from a row that waits, then on into Low risk
+    // after the last of them; from a low-risk row, the next request's, and back up into For you before the first.
+    if (!next) return void openElsewhere(focusThread?.id, delta, false, onLowRisk ? "low" : "you", onLowRisk || tabShown(focusList) === "you");
     if ("call" in next && pass) return stepToCall(pass, next.call);
     if ("edit" in next) {
       // ↑ and ↓ reach the log as a bare key: this says which edit they went to.
@@ -1393,22 +1384,21 @@ export function SimpleWorkspace() {
     return stopTarget(next, row => row.find(passWaitingEdit) ?? row[0]!);
   }
   // Keep goes to the next row that waits on the editor in For you, in its order, a call or a flagged edit, wrapping to
-  // the earlier ones, and the card closes once nothing is left. With For you's optional line open and on an edit
-  // Scarlet didn't flag, it goes to the next optional row instead, then to what waits. A request with one list of
-  // every edit goes down that list to the next row that hasn't been kept.
+  // the earlier ones; once nothing waits it goes on to the first low-risk row, and the card closes once nothing is left.
+  // On a low-risk row (an edit Scarlet didn't flag) it goes to the next low-risk row, wrapping to the earlier ones,
+  // then to another request's, then to what waits.
   const unkeptEdit = (e: ThreadEdit) => !e.check && !reviewed(e) && !revisingEdit(e);
   const stillWaits = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.call ? waiting(stop.call) : !!stop.row?.some(waits);
   const waitingStops = rowsOfTab(focusStops, "you", false, focusOrder).filter(stillWaits(waitingEdit));
-  const onOptional = focusList === "all" && !!hereStop?.row && !hereStop.row.some(e => !!e.check);
-  const afterKeep = !reviewingEdit || !focusTabbed ? undefined
-    : onOptional ? rowAfter(rowsOfTab(focusStops, "you", true, focusOrder).filter(stop => stop.place === "optional"), hereStop, here!, focusOrder) ?? waitingStops[0]
+  const lowStops = inListOrder(focusStops.filter(stop => stop.place === "optional" && !!stop.row), focusOrder);
+  const afterKeep = !reviewingEdit ? undefined
+    : onLowRisk ? rowAfter(lowStops, hereStop, here!, focusOrder)
     : rowAfter(waitingStops, hereStop, here!, focusOrder);
-  const afterListKeep = reviewingEdit && !focusTabbed ? keepGoesTo<Call>(editsByRow, shownRow, e => unkeptEdit(e) || waitingEdit(e), []) : undefined;
   // Keep reaches a moment as ↑ ↓ do: whole, at the edit it is named for, however much of it is kept already. The
   // first of its edits still to keep would open alone and unfold the moment.
   const momentLead = (edit: ThreadEdit) => threadTimeline.moments ? editsByRow.find(row => row.includes(edit))?.[0] ?? edit : edit;
-  const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitingEdit) ?? momentLead(row.find(unkeptEdit) ?? row[0]!)) ?? afterListKeep;
-  const nextEditAfterKeep = nextAfterKeep && "edit" in nextAfterKeep ? afterKeep ? nextAfterKeep.edit : momentLead(nextAfterKeep.edit) : undefined;
+  const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitingEdit) ?? momentLead(row.find(unkeptEdit) ?? row[0]!));
+  const nextEditAfterKeep = nextAfterKeep && "edit" in nextAfterKeep ? nextAfterKeep.edit : undefined;
   const nextCallAfterKeep = nextAfterKeep && "call" in nextAfterKeep ? nextAfterKeep.call : undefined;
   // Keep or Reject edit on a call goes on the same way: to the next row that waits in For you, a call or a flagged edit.
   const openStops = listening && pass ? passStopsNow() : [];
@@ -1523,14 +1513,25 @@ export function SimpleWorkspace() {
       ...(named && { name: threadTimeline.selectedMoment ? `${threadTimeline.selectedMoment.edits.length} edits` : tagOf(named) }) };
   };
   // The column lists every request's rows as one list, the latest request first, so Keep and ↑ ↓ go on from one
-  // request's last row that waits to the next request's first (or, going up, the one before's last).
-  function openElsewhere(from: string | undefined, delta: number, wrap = false) {
+  // request's last row that waits to the next request's first (or, going up, the one before's last). Low risk, under
+  // For you's rows, is one list the same way: ↓ past the last row that waits goes on to its first row, and ↑ above its
+  // first row goes back to the last row that waits; from Working or Done (`onward` false) neither does. `wrap` goes
+  // round to the requests before, for Keep.
+  function openElsewhere(from: string | undefined, delta: number, wrap = false, section: "you" | "low" = "you", onward = true) {
     const ids = railThreads.map(thread => thread.id), at = from ? ids.indexOf(from) : -1;
     const others = delta > 0 ? [...ids.slice(at + 1), ...(wrap ? ids.slice(0, Math.max(at, 0)) : [])] : ids.slice(0, Math.max(at, 0)).reverse();
-    const next = others.find(id => (rail.info(id)?.you ?? 0) > 0);
+    if (openIn(section, delta, others)) return true;
+    if (!onward) return false;
+    if (section === "you" && delta > 0 && !wrap) return openIn("low", 1, ids);
+    if (section === "low" && delta < 0) return openIn("you", -1, [...ids].reverse());
+    return false;
+  }
+  /** Opens the first (or, going up, the last) row of one part of the column in the first of `ids` that has any. */
+  function openIn(section: "you" | "low", delta: number, ids: readonly string[]) {
+    const next = ids.find(id => ((section === "you" ? rail.info(id)?.you : rail.info(id)?.optional) ?? 0) > 0);
     const info = next ? rail.info(next) : undefined;
     if (!info) return false;
-    (delta > 0 ? info.openFirst : info.openLast)?.();
+    (section === "you" ? delta > 0 ? info.openFirst : info.openLast : delta > 0 ? info.openFirstLow : info.openLastLow)?.();
     return true;
   }
   function keepShown() {
@@ -1547,17 +1548,26 @@ export function SimpleWorkspace() {
     }
     moveOnFromShown();
   }
-  // Keep, Add and Reject edit go on to the same place: the next edit or call that still waits, else the card closes.
+  // Keep, Add and Reject edit go on to the same place: the next edit or call that still waits, then the first low-risk
+  // row, else the card closes. From a low-risk row: the next low-risk row, another request's, then what waits, else
+  // the card closes.
   function moveOnFromShown() {
     if (nextEditAfterKeep) actions.playEdit(nextEditAfterKeep, openOnItsOwn(nextEditAfterKeep));
     else if (nextCallAfterKeep) actions.listen(pass!, nextCallAfterKeep);
-    else if (!openElsewhere(focusThread?.id, 1, true)) closeEdit();
+    else if (onLowRisk) {
+      if (openElsewhere(focusThread?.id, 1, true, "low")) return;
+      const waits = stopTarget(waitingStops[0], row => row.find(waitingEdit) ?? row[0]!);
+      if (waits && "edit" in waits) actions.playEdit(waits.edit, openOnItsOwn(waits.edit));
+      else if (waits && "call" in waits) actions.listen(pass!, waits.call);
+      else if (!openElsewhere(focusThread?.id, 1, true)) closeEdit();
+    }
+    else if (!openElsewhere(focusThread?.id, 1, true) && !openIn("low", 1, railThreads.map(thread => thread.id))) closeEdit();
   }
   // A revision sent from a row of For you goes on as Keep does (the editor chose this on 2026-11-23): the row is
   // Working's now, and the card moves to the next one that waits. From Working or Done, and in a request with one
   // list of every edit, the card stays on the edit it revised.
   function moveOnFromRevised() {
-    if (reviewingEdit) { if (focusTabbed && tabShown(focusList) === "you") moveOnFromShown(); return; }
+    if (reviewingEdit) { if (tabShown(focusList) === "you") moveOnFromShown(); return; }
     if (!openCall || !pass || !passThread || tabShown(passList) !== "you") return;
     const next = nextAfterCallDecision;
     player.pause();
@@ -1616,7 +1626,7 @@ export function SimpleWorkspace() {
   const stopListening = () => { player.pause(); setListening(undefined); };
   function stepCut(delta: number) {
     const next = callBeside(delta);
-    if (!next && passThread) return void openElsewhere(passThread.id, delta);
+    if (!next && passThread) return void openElsewhere(passThread.id, delta, false, "you", tabShown(passList) === "you");
     if (!next || !pass || !passThread) return;
     if ("call" in next) return stepToCall(pass, next.call);
     appLog("action", "step", { to: "edit", edit: passEditList.indexOf(next.edit) + 1, of: passEditList.length, change: next.edit.changeId });

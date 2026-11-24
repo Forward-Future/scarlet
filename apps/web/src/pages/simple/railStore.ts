@@ -1,10 +1,13 @@
 import { createContext, useContext, useSyncExternalStore } from "react";
 
-/** The lists of the column on the chat's left: what waits on the editor, the edits Scarlet didn't flag, what is with Scarlet, what is decided. */
-export type RailSection = "you" | "working" | "done";
+/** The lists of the column of edits: what waits on the editor, the edits Scarlet didn't flag (Low risk), what is with Scarlet, what is decided. */
+export type RailSection = "you" | "low" | "working" | "done";
 
-/** What one request has in each list, and how to open its first and last row that waits. */
-export interface RailInfo { you: number; optional: number; working: number; done: number; openFirst?(): void; openLast?(): void }
+/**
+ * What one request has in each list, and how to open its first and last row that waits (`openFirst`, `openLast`) and
+ * its first and last low-risk row (`openFirstLow`, `openLastLow`).
+ */
+export interface RailInfo { you: number; optional: number; working: number; done: number; openFirst?(): void; openLast?(): void; openFirstLow?(): void; openLastLow?(): void }
 
 /**
  * The column of edits beside the chat is one list for the whole video, and each request draws its own rows into it:
@@ -47,7 +50,7 @@ export class RailStore {
     if (!was || was.you !== info.you || was.optional !== info.optional || was.working !== info.working || was.done !== info.done) this.changed();
   }
   info(threadId: string) { return this.infos.get(threadId); }
-  total(section: RailSection | "optional") { let n = 0; for (const info of this.infos.values()) n += info[section]; return n; }
+  total(section: Exclude<RailSection, "low"> | "optional") { let n = 0; for (const info of this.infos.values()) n += info[section]; return n; }
 }
 
 export const ReviewRailContext = createContext<RailStore | undefined>(undefined);
