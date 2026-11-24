@@ -174,6 +174,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Scarlet now counts what you ask to change on an edit it already made when it learns a rule from your decisions.
 - The sound picture Scarlet looks at around a cut now lines up with the words and the cut on recordings whose sound starts a moment after the picture, as phone and camera videos often do.
 - Opened from the Dock, Finder or the Start menu, Scarlet can now use the FFmpeg that Setup installed in the commands it runs while editing.
+- When Scarlet checks where a long screen recording's picture changes around one moment, it reads that moment first instead of working through the whole recording from the start, so the answer comes back in seconds.
 
 ## November 22, 2026
 

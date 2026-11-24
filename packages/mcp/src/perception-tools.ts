@@ -4,7 +4,7 @@
  */
 import { z } from "zod/v3";
 import { DEFAULT_RESULT_CHARS, ScarletApiError, type ProjectDetail, type ScarletClient, type WaveformResponse } from "@scarlet/shared";
-import { timelineDuration, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
+import { sourceAt, timelineDuration, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { auditJoin, formatTimelineTranscript, heardOnlyVerbatim, joinTook, newJoins, timelineJoins, timelineWords, type HeardOnly, type JoinAudit, type TimelineJoin, type TimelineWord } from "./timeline-perception.js";
 import { pictureEntranceReader } from "./picture-entrance.js";
 import { levelProfile, pauseStats, retakeGroups } from "./media-profile.js";
@@ -85,12 +85,17 @@ export function registerPerception(deps: PerceptionDeps) {
    * The recordings whose picture plays in a range of a timeline and their source seconds there: `mediaId`, or by default
    * every one whose sound isn't heard (the screen beside a camera), else every one.
    */
-  function pictureSources(tl: Timeline, project: Project, range: { start: number; end: number }, heardFrom: ReadonlySet<string>, mediaId?: string) {
+  function pictureSources(tl: Timeline, project: Project, range: { start: number; end: number }, heardFrom: ReadonlySet<string>, mediaId?: string, onlyPlaying = false) {
     const pictures = new Map<string, Array<{ sourceIn: number; sourceOut: number }>>();
     for (const track of tl.tracks) if (track.kind === "video" && !track.hidden) for (const c of track.clips) {
       if (c.kind !== "media" || c.enabled === false || project.media.find(m => m.id === c.mediaId)?.kind !== "video") continue;
       if (c.timelineIn > range.end || c.timelineIn + (c.sourceOut - c.sourceIn) / (c.speed ?? 1) < range.start) continue;
-      pictures.set(c.mediaId, [...pictures.get(c.mediaId) ?? [], c]);
+      // Screen motion reads only the source seconds the range plays (keeping the start inside the recording, which a clip
+      // can run past), so a short range of a long recording reads its own minute first; screen text joins a line across
+      // neighbouring minutes, so it reads the clip's whole span.
+      const a = sourceAt(c, range.start), b = sourceAt(c, range.end), end = project.media.find(m => m.id === c.mediaId)?.duration ?? Infinity;
+      pictures.set(c.mediaId, [...pictures.get(c.mediaId) ?? [],
+        onlyPlaying ? { sourceIn: Math.max(c.sourceIn, Math.min(a, b, end)), sourceOut: Math.min(c.sourceOut, Math.max(a, b)) } : c]);
     }
     if (mediaId && !pictures.has(mediaId)) throw new Error(`${mediaId}'s picture doesn't play in ${range.start.toFixed(1)}-${range.end.toFixed(1)} s of version ${tl.version}.`);
     const shown = mediaId ? [mediaId] : [...pictures.keys()].filter(id => !heardFrom.has(id));
@@ -130,7 +135,7 @@ export function registerPerception(deps: PerceptionDeps) {
   async function motionOn(tl: Timeline, project: Project, range: { start: number; end: number }, opts: { mediaId?: string; wait: number }) {
     const transcripts = await wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>());
     const heard = new Set(transcripts.size ? timelineWords(tl, transcripts, range).map(w => w.mediaId) : []);
-    const sources = pictureSources(tl, project, range, heard, opts.mediaId);
+    const sources = pictureSources(tl, project, range, heard, opts.mediaId, true);
     const { reads, unread } = await readPictures<{ seconds: MotionSecond[] }>("screen-motion", sources, opts.wait);
     return { spans: motionSpans(tl, new Map(reads.map(({ id, read }) => [id, read.seconds])), range), ids: sources.map(s => s.id), unread };
   }
