@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A request that punched in at several spots under the same name now says how many zooms it made, instead of naming the same edit over and over.
 - In Media, “Tell Scarlet what this is” and its Cancel button no longer show an underline.
 - Edits in a list now combine into one row only when they overlap on the timeline exactly, so edits in separate places or that only partly overlap each stay on their own row.
 - When Scarlet lines up your screen recording with your camera, it now sees right away where the words you say are on that screen, so quotes and pages you read from it are less likely to be left out of the video.
