@@ -550,9 +550,9 @@ export class MockClient implements ScarletApi {
     runRetry(this.store, retry);
     return { task: retry };
   }
-  async answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice): Promise<{ task: Task }> {
+  async answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice, files?: Parameters<typeof answerTask>[5]): Promise<{ task: Task }> {
     this.requireAuth();
-    return this.latency(answerTask(this.store, taskId, text, skillIds, runWith));
+    return this.latency(answerTask(this.store, taskId, text, skillIds, runWith, files));
   }
 
   // --- hosts / skills / settings ---------------------------------------------------------

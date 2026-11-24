@@ -2190,7 +2190,7 @@ export function SimpleWorkspace() {
   // A press, a scrub, a skip on the timeline, a pause, or N aims a new edit at that moment at once in the box's tag,
   // without writing anything into the input box. A message aimed at a cut or an edit, or one being written, stays where
   // it was. Words chosen in the transcript or a stretch marked on the ruler stay through a seek or pause; only N takes
-  // their place. With a cut or an edit open, a pause into an empty box shows its time in the tag, and the next seek
+  // their place. With a cut or an edit open, a pause or N into an empty box shows its time in the tag, and the next seek
   // moves it there: the message stays the cut's or the edit's, and Scarlet is told the frame the editor stopped on.
   const pickPoint = (picked: AgentContext, how: "seek" | "n" | "pause") => {
     const box = useUiStore.getState();
@@ -2198,7 +2198,8 @@ export function SimpleWorkspace() {
     const written = box.agentDraft.trim();
     const target = box.agentContext;
     if (replyTo) {
-      if (!aimedAtChange(target) || written || how === "n" || (how === "seek" && !pausedAtRef.current)) return;
+      // N takes the frame as a pause does.
+      if (!aimedAtChange(target) || written || (how === "seek" && !pausedAtRef.current)) return;
       setPausedAt({ time: picked.time, version: picked.version, ...picked.mediaId && { mediaId: picked.mediaId } });
       return;
     }
@@ -2252,6 +2253,21 @@ export function SimpleWorkspace() {
     taken.restore();
     return true;
   };
+  // The × on a queued request takes it out of the queue. Its words aren't lost: they land in the message box when that
+  // is empty, to send again, change or clear, aimed as the box is. A request Scarlet made itself has no words of the
+  // editor's to keep, and a message being written or spoken keeps the box.
+  const removeQueued = async (id: string) => {
+    const item = queuedItems.find(i => i.id === id);
+    // The words as they stand in the box, when it is this request's being reworded.
+    const words = item?.fixed ? undefined : rewording?.id === id ? rewording.text : rewordingItem ? undefined : item?.text;
+    const boxIsEmpty = () => { const box = useUiStore.getState(); return !box.agentDraft.trim() && !box.speaking; };
+    const keep = !!words?.trim() && boxIsEmpty();
+    try { await queueAction(cancelTask(id, true)); } catch { return; }
+    if (!keep || !boxIsEmpty()) return;
+    const box = useUiStore.getState();
+    box.setAgentDraft(words!);
+    box.focusComposer();
+  };
   const { effective } = useAgentAvailability();
   const resumeRunWith = resumeRunChoice(tasks, effective);
   const composer = <WorkspaceComposer newEdit={!replyTo} playerVersion={playerVersion} mediaId={source?.id} key={JSON.stringify([current.id, replyTo])} thread={replyThread}
@@ -2272,7 +2288,7 @@ export function SimpleWorkspace() {
     // Pause, Resume and Stop are at the right of the band of the request Scarlet has. Only with no such band, editing
     // paused while requests wait their turn, does the tray hold Resume.
     tray={queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id} opened={trayOpen}
-      onRemove={id => void queueAction(cancelTask(id, true)).catch(() => {})}
+      onRemove={id => void removeQueued(id)}
       paused={editingPaused}
       onContinue={editingPaused && !editing ? () => queueAction(resumeRunWith ? resumeEditing(current.id, resumeRunWith) : resumeEditing(current.id)).catch(() => {}) : undefined}
       // The editor's calls are theirs to put off: the request they hold back can start without them.

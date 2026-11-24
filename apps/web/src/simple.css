@@ -872,6 +872,13 @@ button.queue-head:hover { color: var(--color-fg); }
   color: var(--color-dim); cursor: pointer; }
 .queue-row:hover :is(.queue-remove, .queue-reword, .queue-start), :is(.queue-remove, .queue-reword, .queue-start):focus-visible { color: var(--color-muted); }
 :is(.queue-remove, .queue-reword, .queue-start):hover { background: var(--color-line); color: var(--color-fg); }
+/* A row's icons show on the row under the pointer or holding the keyboard's focus, and on the one whose words are in
+   the box: the other rows are their words alone. They keep their place meanwhile, so nothing in a row moves and Tab
+   still reaches them. Where nothing hovers, as on a touch screen, they always show. */
+.queue-row :is(.queue-remove, .queue-reword, .queue-start) { opacity: 0; }
+.queue-row:is(:hover, :focus-within, .is-rewording) :is(.queue-remove, .queue-reword, .queue-start) { opacity: 1; }
+@media (hover: none) { .queue-row :is(.queue-remove, .queue-reword, .queue-start) { opacity: 1; } }
+@media (prefers-reduced-motion: no-preference) { .queue-row :is(.queue-remove, .queue-reword, .queue-start) { transition: opacity .12s; } }
 /* A queued request's pencil, or a click on its words, puts them in the message box to change. Its row stays lit
    meanwhile, and so does its pencil, which puts them back. */
 .queue-text.is-rewordable { cursor: text; }

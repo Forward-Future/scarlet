@@ -13,7 +13,7 @@ import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, D
 import type { AudioTrackSelection, Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
 import type { ActivityEntry, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
 import type { AgentHost, RunChoice } from "./agents.js";
-import type { CompleteTaskRequest, CreateTaskRequest, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
+import type { CompleteTaskRequest, CreateTaskRequest, PictureMarks, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
 import type { KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
 import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLearningRequest } from "./learnings.js";
 import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
@@ -512,8 +512,9 @@ export class ScarletClient extends ClientTransport {
   continueWhenReady(taskId: string, on: boolean) {
     return this.post<{ task: Task; resumed?: Task }>(`/tasks/${taskId}/continue-when-ready`, { on });
   }
-  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice) {
-    return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { ...runWith, text, skillIds });
+  /** Answer Scarlet's question. Files attached to the answer are kept with the request, as its own are. */
+  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice, files?: { attachments: TaskAttachment[]; pictureMarks?: PictureMarks }) {
+    return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { ...runWith, text, skillIds, ...files });
   }
   /** Keep a queued request from starting while the editor changes its words, or let it go. Renew it to keep holding. */
   holdForRewording(taskId: string, on: boolean) {
