@@ -14110,7 +14110,7 @@ it("goes from a kept edit Scarlet didn't flag to a call still waiting, or a flag
   expect(keepGoesTo([[edit(13, undefined, true)], [edit(21)]], 1, still, [])).toBeUndefined();
 });
 
-it("steps through See all in list order when approving a call or keeping a flagged edit on a pass", async () => {
+it("keeps on through the optional edits and then what waits, on a pass with its optional line open", async () => {
   const { save } = runningPass(STAGED.slice(0, 2)); // calls at 0:02 (Cut 1) and 0:06 (Cut 2)
   const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: undefined, noteIds: [],
     timelineEdits: [
@@ -14134,12 +14134,47 @@ it("steps through See all in list order when approving a call or keeping a flagg
   const cardTitle = () => editPanel()?.querySelector(".edit-card-title")?.textContent;
   await show();
   await act(async () => {});
-  // Switch to the See all list: intro trim (0:01), Cut 1 (0:02), mid trim (0:04), mid check (0:05), late trim (0:05.5), Cut 2 (0:06), outro trim (0:09).
+  // The optional line lists the edits Scarlet didn't flag under the three that wait: Cut 1 (0:02), mid check (0:05)
+  // and Cut 2 (0:06), then intro trim, mid trim, late trim and outro trim.
   await click(seeAll(passCard())!);
   await act(async () => {});
   await click(passRow("intro trim"));
   await act(async () => {});
   expect(cardTitle()).toBe("intro trim");
+  // Keep goes on down the optional edits, not to the calls between them on the timeline.
+  await press("k");
+  expect(cardTitle()).toBe("mid trim");
+  await press("k");
+  expect(cardTitle()).toBe("late trim");
+  await press("k");
+  expect(cardTitle()).toBe("outro trim");
+  // After the last optional edit it goes to what waits: Cut 1, the flagged edit, then Cut 2.
+  await press("k");
+  await act(async () => {});
+  expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 1");
+  await press("k");
+  await act(async () => {});
+  expect(container.querySelector('[aria-label="Call"]')).toBeNull();
+  expect(cardTitle()).toBe(SUMMARY);
+  await press("k");
+  await act(async () => {});
+  expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
+  // Cut 2 is the last call waiting: Keep schedules the pass, and with nothing left to keep the card closes.
+  await press("k");
+  await act(async () => {});
+  expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ applyWhenDone: true }));
+  expect(container.querySelector('[aria-label="Call"]')).toBeNull();
+  expect(editPanel()).toBeNull();
+});
+  DBG(passCard(), "t29 a");
+  const what = () => cardTitle() ?? container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent ?? null;
+  await click(passRow("intro trim"));
+  await act(async () => {});
+  const seq = [what()];
+  for (let i = 0; i < 8; i++) { await press("k"); await act(async () => {}); seq.push(what()); }
+  console.log("DBG", "t29 seq", JSON.stringify(seq), JSON.stringify(save.mock.calls.at(-1)));
+  DBG(passCard(), "t29 end");
+  expect(cardTitle()).toBe("intro trim!");
   // Keep intro trim -> goes to Cut 1 (For you call).
   await press("k");
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 1");
@@ -14168,7 +14203,7 @@ it("steps through See all in list order when approving a call or keeping a flagg
   expect(editPanel()).toBeNull();
 });
 
-it("steps ↑ and ↓ through See all as the list goes while a pass waits, from its edits to its calls and back", async () => {
+it("steps ↑ and ↓ through For you as its list goes while a pass waits, from its optional edits to its calls and back", async () => {
   runningPass(STAGED.slice(0, 2)); // calls at 0:02 (Cut 1) and 0:06 (Cut 2)
   const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: undefined, noteIds: [],
     timelineEdits: [
@@ -14189,9 +14224,24 @@ it("steps ↑ and ↓ through See all as the list goes while a pass waits, from 
   const open = () => editPanel()?.querySelector(".edit-card-title")?.textContent ?? container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent;
   await show();
   await act(async () => {});
-  // See all lists: intro trim (0:01), Cut 1 (0:02), mid trim (0:04), Cut 2 (0:06), outro trim (0:09).
+  // The optional line lists the edits Scarlet didn't flag under the calls that wait.
   await click(seeAll(passCard())!);
   await act(async () => {});
+  expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual([STAGED[0]!.reason, STAGED[1]!.reason, "intro trim", "mid trim", "outro trim"]);
+  await click(passRow("intro trim"));
+  await act(async () => {});
+  // ↓ goes down the list a row at a time, and stops at its end.
+  const seen = [open()];
+  for (let i = 0; i < 3; i++) { await press("ArrowDown"); await act(async () => {}); seen.push(open()); }
+  expect(seen).toEqual(["intro trim", "mid trim", "outro trim", "outro trim"]);
+  // ↑ goes back up it the same way, from the optional edits to the calls over them, and stops at the first.
+  const back = [];
+  for (let i = 0; i < 5; i++) { await press("ArrowUp"); await act(async () => {}); back.push(open()); }
+  expect(back).toEqual(["mid trim", "intro trim", "Cut 2", "Cut 1", "Cut 1"]);
+});
+  DBG(passCard(), "t30 a");
+  const openNow = () => editPanel()?.querySelector(".edit-card-title")?.textContent ?? container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent;
+  { await click(passRow("intro trim")); await act(async () => {}); const s = [openNow()]; for (let i = 0; i < 6; i++) { await press("ArrowDown"); await act(async () => {}); s.push(openNow()); } console.log("DBG t30 down", JSON.stringify(s)); const b = []; for (let i = 0; i < 6; i++) { await press("ArrowUp"); await act(async () => {}); b.push(openNow()); } console.log("DBG t30 up", JSON.stringify(b)); }
   expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(["intro trim", STAGED[0]!.reason, "mid trim", STAGED[1]!.reason, "outro trim"]);
   await click(passRow("intro trim"));
   await act(async () => {});
@@ -14205,7 +14255,7 @@ it("steps ↑ and ↓ through See all as the list goes while a pass waits, from 
   expect(back).toEqual(["Cut 2", "mid trim", "Cut 1", "intro trim"]);
 });
 
-it("keeps advancing through See all from a flagged edit instead of skipping to the next For you edit", async () => {
+it("keeps advancing through the optional edits from one of them, then goes to what waits", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -14217,16 +14267,16 @@ it("keeps advancing through See all from a flagged edit instead of skipping to t
   await show();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  // Switch to See all and start on the first edit.
-  await click(seeAll(turn)!);
-  await act(async () => {});
-  await click(turn.querySelector(".simple-edits .simple-edit")!);
+  // The optional line is open. Start on the first optional edit.
+  expect(editLists(turn)).toEqual([["Edits that need you", ["captions", "wrap"]], ["Optional edits", ["music bed", "zoom"]]]);
+  await click(editRowsIn(turn)[0]!);
   expect(openTitle()).toBe("music bed");
-  await press("k");
-  expect(openTitle()).toBe("captions");
-  // On See all, keeping the flagged captions edit goes to zoom (next in list), not skipping to wrap (next For you).
+  // Keep goes on down the optional edits: zoom is next, not the flagged captions.
   await press("k");
   expect(openTitle()).toBe("zoom");
+  // After the last optional edit it goes to what waits, in order, and closes the card when nothing is left.
+  await press("k");
+  expect(openTitle()).toBe("captions");
   await press("k");
   expect(openTitle()).toBe("wrap");
   await press("k");
