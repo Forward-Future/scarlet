@@ -436,19 +436,27 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-tab-count { color: var(--color-warn); font-variant-numeric: tabular-nums; }
 /* Working's and Done's counts are quiet: only what waits on the editor is amber. */
 .simple-review-tab-tally { color: var(--color-muted); font-variant-numeric: tabular-nums; }
-/* Over For you's rows, one quiet box includes the edits Scarlet didn't flag in For you's list. */
-.simple-review-include { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 4px; padding: 5px 0; border: 0; background: none;
-  color: var(--color-muted); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
-.simple-review-include.is-pass { padding-left: 12px; }
-.simple-review-include:is(:hover, :focus-visible) { color: var(--color-fg); }
-.simple-review-include:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 3px; }
-.simple-review-include-box { display: inline-grid; place-items: center; flex: none; width: 13px; height: 13px; border: 1px solid var(--color-dim);
-  border-radius: 3px; color: var(--color-bg); }
-.simple-review-include[aria-checked="true"] .simple-review-include-box { border-color: var(--color-fg); background: var(--color-fg); }
-/* The double check after "low risk edits": quiet, and says what those edits are on hover. */
-.simple-review-include-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.simple-review-include-checks { display: inline-grid; place-items: center; color: var(--color-dim); cursor: help; }
-.simple-review-include-checks:hover { color: var(--color-fg); }
+/* Over For you's rows, one quiet line for the edits Scarlet didn't flag: a small switch and their count, which
+   includes them in For you's list. */
+.simple-low-risk { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 0 4px; color: var(--color-muted); font-size: 12.5px; }
+.simple-low-risk-toggle { display: inline-flex; align-items: center; gap: 9px; min-width: 0; padding: 4px 0; border: 0; background: none;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; transition: color .18s ease; }
+.simple-low-risk-toggle:is(:hover, :focus-visible, [aria-checked="true"]) { color: var(--color-fg); }
+.simple-low-risk-toggle:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 2px; border-radius: 6px; }
+.simple-low-risk-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.simple-low-risk-switch { position: relative; flex: none; width: 24px; height: 14px; border-radius: 7px; background: var(--color-line);
+  transition: background-color .18s ease; }
+.simple-low-risk-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--color-muted); transition: transform .26s cubic-bezier(.3, 1.3, .5, 1), background-color .2s ease; }
+.simple-low-risk-toggle:hover .simple-low-risk-switch { background: #444; }
+.simple-low-risk-toggle[aria-checked="true"] .simple-low-risk-switch { background: var(--color-hi); }
+.simple-low-risk-toggle[aria-checked="true"] .simple-low-risk-switch::after { transform: translateX(10px); background: var(--color-bg); }
+/* While low risk rows open and close, the list keeps the editor's row still itself (`useLowRiskFold`), the same in
+   every webview: the browser's own scroll anchoring, where there is one, stays out of it. */
+.simple-pass-list, .simple-edits { overflow-anchor: none; }
+@media (prefers-reduced-motion: reduce) {
+  .simple-low-risk-toggle, .simple-low-risk-switch, .simple-low-risk-switch::after { transition: none; }
+}
 .simple-review-empty { margin: 0; padding: 8px 0; color: var(--color-muted); font-size: 12.5px; }
 /* A row the editor has just decided or sent back fades before it leaves For you. */
 .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { opacity: 0; transition: opacity .3s ease; }
@@ -704,8 +712,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .simple-pass > .subunit { margin-left: 3px; }
 /* Under its row the rule hangs from the middle of the row's number, or sits before the row's words where the row
    leads with a time, and the request's own words start where the row's do. */
-.simple-pass-list.is-short > li > .subunit { margin-left: 16px; padding-left: 16px; }
-.simple-pass-list:not(.is-short) > li > .subunit { margin-left: 44px; padding-left: 8px; }
+.simple-pass-list > li > .subunit { margin-left: 44px; padding-left: 8px; }
 .simple-pass-list.has-hours > li > .subunit { margin-left: 58px; }
 .simple-edits > li > .subunit { margin-left: 8px; padding-left: 16px; }
 /* The last row's request ends the list, so the line under the list isn't pushed off by both their margins. */
@@ -898,15 +905,6 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-pass-list > li > button.is-rejected :is(.simple-pass-label, .simple-pass-time, .simple-pass-value),
 .simple-edit.is-rejected :is(.simple-edit-title, .simple-edit-value) { color: var(--color-dim); }
 .edit-badge.is-rejected { border-color: var(--color-line); color: var(--color-dim); }
-/* "Need you" is the short list: a call's number, Scarlet's note, and a word once it's settled or sent back. One number
-   column for the whole list, as every other request's list has, so a kept call's wider badge moves every row's words
-   together and they start on one edge. A request under a row spans the row, and its own width counts for nothing. */
-.simple-pass-list.is-short { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; column-gap: 8px; align-content: start; }
-.simple-pass-list.is-short > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
-.simple-pass-list.is-short > li > * { grid-column: 1 / -1; }
-.simple-pass-list.is-short > li > button { grid-template-columns: subgrid; align-items: center; }
-.simple-pass-list.is-short > li > .subunit { justify-self: stretch; contain: inline-size; }
-.simple-pass-list.is-short :is(.simple-pass-value, .simple-pass-check) { justify-self: end; }
 .simple-pass-list > li > button:is(.is-decided, .is-rejected, :disabled) .edit-badge,
 .simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
 .simple-pass-list > li > button.is-decided .edit-badge.is-kept,

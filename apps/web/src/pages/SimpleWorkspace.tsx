@@ -1271,17 +1271,16 @@ export function SimpleWorkspace() {
   const passList = passThread ? lists[passThread.id] : undefined;
   const passIsFocus = !!pass && !!passThread && passThread.id === focusThread?.id;
   const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
-  const passByNumber = allCalls.some(c => c.askOrder !== undefined);
   const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
     ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
-  // The waiting pass's calls and flagged edits together, in the order For you lists them: by publication number when
-  // asks are numbered, else by timeline position.
+  // The waiting pass's calls and flagged edits together, in the order For you lists them: by time, as its rows lead
+  // with their times (the editor's call, 2026-11-24).
   const passForYouItems = pass && passThread ? passForYouOrder(
     allCalls.map(call => ({ call, at: listedAt.get(call.index) ?? call.start, num: callNo.get(call.index), waiting: waiting(call) })),
     passEditList.filter(e => !!e.check).map(edit => ({
       edit, at: (edit as ThreadEdit).at ?? edit.range.start, num: passEditNum(edit), waiting: !passReviewed(edit) && !passRevising(edit),
     })),
-    passByNumber,
+    false,
   ) : [];
   const { decidedCallEditKeys, decidedCallRows } = useMemo(
     () => decidedPassCalls(pass && passThread?.id === focusThread?.id ? undefined : focusThread, threadEdits, threadTimeline.rejected),
@@ -1327,10 +1326,10 @@ export function SimpleWorkspace() {
     num: passEditNum, calls: callStops(),
     gone: (passThread ? rejectedPassEdits : noEdits).map(e => ({ at: e.range.start, num: passEditNum(e) })),
   });
-  // A pass's lists go by time, or by number while it waits and every row of the list has one; any other request's keep
-  // the order its edits are listed in.
-  const focusOrder: ListOrder = threadTimeline.moments ? { numbers: passIsFocus && passByNumber } : undefined;
-  const passOrder: ListOrder = { numbers: passByNumber };
+  // A pass's lists go by time, the order their rows are drawn in, so ↑ ↓ and Keep step down the list; any other
+  // request's keep the order its edits are listed in.
+  const focusOrder: ListOrder = threadTimeline.moments ? { numbers: false } : undefined;
+  const passOrder: ListOrder = { numbers: false };
   const focusStops = reviewingEdit && focusTabbed ? focusStopsNow() : [];
   const hereStop = reviewingEdit ? focusStops.find(stop => stop.row?.includes(reviewingEdit)) : undefined;
   const here = reviewingEdit ? { at: reviewingEdit.at ?? reviewingEdit.range.start, num: passIsFocus ? passEditNum(reviewingEdit) : undefined } : undefined;
