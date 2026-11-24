@@ -57,10 +57,16 @@ it("lists Cutting and Motion graphics, on the chat's model, and saves a model pi
     const pick = container.querySelector<HTMLButtonElement>("#task-model-motion-graphics")!;
     expect(pick.textContent).toContain("Same as chat");
     await act(async () => pick.click());
-    expect([...document.querySelectorAll("[role=option]")].map(o => o.textContent)).toEqual(["Same as chat", "Opus 5.5", "Gemini 3 Pro"]);
-    await act(async () => [...document.querySelectorAll<HTMLElement>("[role=option]")].find(o => o.textContent === "Gemini 3 Pro")!.click());
+    // The chat's model selector: providers and search on top, Same as chat first, then every model, or one provider's.
+    expect(document.querySelector('[role=dialog][aria-label="Model selector"] [role=group][aria-label=Providers]')).not.toBeNull();
+    const rows = () => [...document.querySelectorAll<HTMLElement>("[role=radio]")].map(o => o.textContent);
+    expect(rows()).toEqual(["Same as chatThe chat’s model does it", "Opus 5.5", "Gemini 3 Pro"]);
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Gemini"][aria-pressed]')!.click());
+    expect(rows()).toEqual(["Same as chatThe chat’s model does it", "Gemini 3 Pro"]);
+    await act(async () => document.querySelector<HTMLElement>('[role=radio][aria-label="Gemini · Gemini 3 Pro"]')!.click());
     expect(update).toHaveBeenLastCalledWith({ taskModels: [DEFAULT_TASK_MODELS[0], { ...DEFAULT_TASK_MODELS[1], model: "gemini:gemini-3-pro" }] });
     expect(container.querySelector("#task-model-motion-graphics")!.textContent).toContain("Gemini 3 Pro");
+    expect(document.querySelector('[aria-label="Model selector"]')).toBeNull();
   } finally {
     await cleanup();
   }

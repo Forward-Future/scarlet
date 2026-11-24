@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { TASK_MODELS_MAX, taskModelChoice, taskModelId, type AgentHost, type AgentId, type TaskModelType } from "@scarlet/shared";
-import { AGENT_LABEL, onlineAgents, useHostsStore } from "../../stores/hosts";
-import { modelChoices, useModelPreferences } from "../../stores/modelPicker";
-import { PreferenceSelect } from "../ui/PreferenceSelect";
+import { AGENT_LABEL, onlineAgents, useHostsStore, type OnlineAgent } from "../../stores/hosts";
+import { modelChoices, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
+import { TaskModelPicker } from "../agent/TaskModelPicker";
 import { Icon, InlineError } from "../ui/primitives";
 import { useServerSetting } from "./useServerSetting";
 
@@ -23,7 +23,9 @@ export function TaskModelsSettings() {
   const { value, error, choose } = useServerSetting("taskModels");
   const [focusId, setFocusId] = useState<string>();
   if (!value) return error ? <InlineError>{error}</InlineError> : null;
-  const choices = modelChoices(onlineAgents(hosts, customOpenaiModels, customClaudeModels, customGeminiModels));
+  const agents = onlineAgents(hosts, customOpenaiModels, customClaudeModels, customGeminiModels);
+  // The selector shows the models the editor shows in the chat's, and the one already chosen for a row.
+  const all = modelChoices(agents);
   const save = (next: TaskModelType[]) => void choose(next);
   const update = (id: string, patch: Partial<TaskModelType>) => save(value.map(t => t.id === id ? { ...t, ...patch } : t));
   const add = () => {
@@ -31,17 +33,11 @@ export function TaskModelsSettings() {
     setFocusId(id);
     save([...value, { id, name: "New task", description: "", model: "same" }]);
   };
-  const optionsFor = (type: TaskModelType) => {
-    const shown = choices.filter(c => !hidden.includes(c.key) || c.key === type.model);
-    const missing = type.model !== "same" && !choices.some(c => c.key === type.model);
-    const saved = missing ? taskModelChoice(type) : undefined;
-    const savedName = saved && taskModelName(hosts, saved);
-    return [
-      { value: "same", label: "Same as chat" },
-      ...shown.map(c => ({ value: c.key, label: c.label, group: AGENT_LABEL[c.agent] })),
-      // A model chosen that isn't signed in now stays chosen, and says so. While the models are read, it's just named.
-      ...(saved ? [{ value: type.model, label: status === "loading" ? savedName! : `${savedName} (not signed in)`, group: AGENT_LABEL[saved.agent as AgentId] }] : []),
-    ];
+  const choicesFor = (type: TaskModelType) => all.filter(c => !hidden.includes(c.key) || c.key === type.model);
+  // A model chosen that isn't signed in now stays chosen, and says so. While the models are read, it isn't called missing.
+  const missingFor = (type: TaskModelType) => {
+    const saved = type.model !== "same" && status !== "loading" && !all.some(c => c.key === type.model) ? taskModelChoice(type) : undefined;
+    return saved && { ...saved, name: taskModelName(hosts, saved) };
   };
   return (
     <section className="card transcription-preferences check-in-preferences task-models-preferences" aria-labelledby="task-models-heading">
@@ -56,7 +52,7 @@ export function TaskModelsSettings() {
       </div>
       <ul className="task-models" aria-label="Task models">
         {value.map(type => (
-          <TaskModelRow key={type.id} type={type} options={optionsFor(type)} focus={focusId === type.id}
+          <TaskModelRow key={type.id} type={type} choices={choicesFor(type)} agents={agents} missing={missingFor(type)} focus={focusId === type.id}
             onFocused={() => setFocusId(undefined)} onChange={patch => update(type.id, patch)}
             onDelete={() => save(value.filter(t => t.id !== type.id))} />
         ))}
@@ -70,9 +66,11 @@ export function TaskModelsSettings() {
 }
 
 /** One kind of work: its name and what counts as it, saved when the editor leaves the field or presses Enter, and its model, saved when picked. */
-function TaskModelRow({ type, options, focus, onFocused, onChange, onDelete }: {
+function TaskModelRow({ type, choices, agents, missing, focus, onFocused, onChange, onDelete }: {
   type: TaskModelType;
-  options: { value: string; label: string; group?: string }[];
+  choices: ModelChoice[];
+  agents: OnlineAgent[];
+  missing?: { agent: string; model?: string; name: string };
   focus: boolean;
   onFocused(): void;
   onChange(patch: Partial<TaskModelType>): void;
@@ -122,8 +120,8 @@ function TaskModelRow({ type, options, focus, onFocused, onChange, onDelete }: {
           onChange={e => setDescription(e.target.value)} onBlur={saveDescription} onKeyDown={onEnter} />
       </div>
       <div className="task-model-pick">
-        <PreferenceSelect id={`task-model-${type.id}`} label={`Model for ${shownName}`} value={type.model} options={options}
-          onChange={model => onChange({ model })} />
+        <TaskModelPicker id={`task-model-${type.id}`} label={`Model for ${shownName}`} value={type.model} choices={choices} agents={agents}
+          missing={missing} onChange={model => onChange({ model })} />
       </div>
       <button type="button" className="btn-icon task-model-delete" aria-label={`Delete ${shownName}`} title={`Delete ${shownName}`} onClick={onDelete}>
         <Icon name="x" size={12} />
