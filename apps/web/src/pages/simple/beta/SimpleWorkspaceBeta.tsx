@@ -59,7 +59,7 @@ import { aimedAtChange, approves, belongsTo, firstKey, isWorking, noEdits, noop,
   type ChatActions, type HoveredReviewRow, type Listening, type LocatedReview, type OpenList, type OpenPass, type Panel, type PassList, type ReportReviewMarkers } from "../types";
 import { WorkspaceComposer } from "./WorkspaceComposerBeta";
 import { SimpleHeader } from "../SimpleHeader";
-import { TranscriptRail } from "../TranscriptRail";
+import { TRANSCRIPT_RAIL_MIN, TranscriptRail } from "../TranscriptRail";
 import { savedRewording, saveRewording } from "../rewordingStorage";
 import { savedCollapsed, savedOpenLists, saveCollapsed, saveOpenLists } from "../openListsStorage";
 import { ReviewRail } from "../ReviewRail";
@@ -2278,13 +2278,14 @@ export function SimpleWorkspaceBeta() {
     }
   };
   // Taking the tag off (Backspace in an empty box, or its ×) makes the message a new edit about the whole video. ⌘Z in
-  // the empty box puts the aim back as it was, until the box is aimed again or written in.
+  // the empty box puts the aim back as it was, until the box is aimed again or written in. Taken off a box with words in
+  // it, the tag isn't ⌘Z's to put back: the words keep their own ⌘Z, also once the editor has deleted them.
   const clearTarget = () => {
     const ui = useUiStore.getState();
     const was = { replyTo, label: targetLabel, forItem: aimForItem.current, context: ui.agentContext };
     const before = aims.current;
     settleAim.current("new");
-    tagTakenOff.current = aims.current === before ? undefined : { aim: aims.current, restore: () => {
+    tagTakenOff.current = aims.current === before || ui.agentDraft.trim() ? undefined : { aim: aims.current, restore: () => {
       const box = useUiStore.getState();
       // The new edit's own box keeps no "whole video" aim left from the tag taken off.
       if (!box.agentDraft) box.setAgentContext(null);
@@ -2365,7 +2366,9 @@ export function SimpleWorkspaceBeta() {
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
         onPaths={paths => { void uploads.startPaths(paths); setPanel("media"); }}
         onFiles={files => { uploads.start(files); setPanel("media"); }}>
-        <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}>
+        <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}
+          // Leave room for the edits column beside the chat, and for an open Transcript at its narrowest.
+          beside="simple-review-rail" reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}>
           <SimpleHeader projectName={current.project.name} importing={importing} importFailed={importFailed}
             threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} menuSays={menuSays} toLearn={toLearn}
             transcript={transcript} setTranscript={setTranscript} setPanel={setPanel} openLearnings={() => { setLearnFocus(undefined); setPanel("learnings"); }}
@@ -2442,7 +2445,7 @@ export function SimpleWorkspaceBeta() {
           </div>}
         </div>
         {transcript && <TranscriptRail compact={compact} paneKey={source?.id ?? previewVersion ?? head}
-          draft={previewTimeline} source={source} onAsk={askAbout} onClose={() => setTranscript(false)} />}
+          draft={previewTimeline} source={source} beside={["simple-chat", "simple-review-rail"]} onAsk={askAbout} onClose={() => setTranscript(false)} />}
       </Dropzone>
     </main>
     {panel === "media" && <MediaDrawer uploads={uploads} notice={local ? undefined : notice}

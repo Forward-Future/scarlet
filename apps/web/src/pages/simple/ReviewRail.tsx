@@ -48,7 +48,7 @@ export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow }
       <div className="review-sec-body" role="group" aria-label={name} hidden={!shown}>{slots(key)}</div>
     </>;
   };
-  return <aside ref={host} className="review-rail" aria-label="Edit lists" hidden={nothing}>
+  return <aside ref={host} id="simple-review-rail" className="review-rail" aria-label="Edit lists" hidden={nothing}>
     <header className="review-rail-head">
       <h2>For you{need > 0 && <span className="review-rail-count" title={`${need} ${need === 1 ? "needs" : "need"} you`}>{need}</span>}</h2>
     </header>

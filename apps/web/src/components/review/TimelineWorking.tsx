@@ -1,14 +1,29 @@
 import { useRef } from "react";
 import type { Task } from "@scarlet/shared";
+import { blurOnPointerClick } from "../../lib/hotkeys";
 import { useWorkingLines } from "../../lib/workingLines";
 import { StepMark } from "./RunBundle";
 
 const FLASH_MS = 1200;
+const flashTimers = new WeakMap<HTMLElement, number>();
 
-/** The chat's row for a request at work: its own line of what it is doing, not one of a request drawn inside it. */
+/** The chat or edits-rail row for a request at work: its own line of what it is doing, not one of a request drawn inside it. */
 function chatRowOf(taskId: string): { scroll: HTMLElement; flash: HTMLElement } | undefined {
-  const run = document.querySelector<HTMLElement>(`#simple-chat [data-run="${CSS.escape(taskId)}"]`);
+  const escaped = CSS.escape(taskId);
+  const run = document.querySelector<HTMLElement>(`#simple-chat [data-run="${escaped}"], .review-rail [data-run="${escaped}"]`);
   if (!run) return;
+  // A request folded to its band, or one under a row of it, has nothing else in view: the band is what is shown and lit.
+  const band = run.closest(".unit.is-collapsed")?.querySelector<HTMLElement>(":scope > .unit-msg");
+  if (band) return { scroll: band, flash: band };
+  // In the beta edits rail, a revision inside a folded Working section lights that section's header instead.
+  const foldedSection = run.closest<HTMLElement>(".review-sec-body[hidden]");
+  if (foldedSection?.previousElementSibling instanceof HTMLElement) {
+    return { scroll: foldedSection.previousElementSibling, flash: foldedSection.previousElementSibling };
+  }
+  // In the beta one-row revision style, `.subunit > .req` is visually hidden while the parent `<li>` holds the row.
+  if (run.classList.contains("subunit") && run.closest("[data-new-layout]") && run.parentElement?.tagName === "LI") {
+    return { scroll: run.parentElement, flash: run.parentElement };
+  }
   const now = [...run.querySelectorAll<HTMLElement>(".req-now")].find(row => row.closest("[data-run]") === run);
   // A request under a cut's or an edit's row is small enough to light whole; a request's block lights its working line.
   return { scroll: now ?? run, flash: run.classList.contains("subunit") ? run : now ?? run };
@@ -34,13 +49,18 @@ export function TimelineWorking({ tasks, rootOf = task => task.resumeRootId ?? t
     if (!row) return;
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     row.scroll.scrollIntoView?.({ block: "center", behavior: still ? "auto" : "smooth" });
+    const prev = flashTimers.get(row.flash);
+    if (prev !== undefined) window.clearTimeout(prev);
     row.flash.removeAttribute("data-flash");
     void row.flash.offsetWidth;
     row.flash.setAttribute("data-flash", "");
-    window.setTimeout(() => row.flash.removeAttribute("data-flash"), FLASH_MS);
+    flashTimers.set(row.flash, window.setTimeout(() => {
+      row.flash.removeAttribute("data-flash");
+      flashTimers.delete(row.flash);
+    }, FLASH_MS));
   };
   return <button type="button" className="timeline-working" title="Show in the chat"
-    aria-label={`Scarlet is editing${words ? `: ${words}` : ""}. Show in the chat`} onClick={show}>
+    aria-label={`Scarlet is editing${words ? `: ${words}` : ""}. Show in the chat`} onClick={e => { blurOnPointerClick(e); show(); }}>
     <StepMark state="working" />
     <span className="timeline-working-text">Scarlet is editing{words && <span> · {words}</span>}</span>
   </button>;

@@ -93,7 +93,7 @@ function AudioTrackPicker({ media, onError }: { media: MediaAsset; onError(messa
     }
   };
   return (
-    <div className="mt-1 flex items-center gap-1.5 text-2xs text-ink-3">
+    <div className="mt-1 flex items-center gap-1.5 text-[11.5px] text-dim">
       <span>Audio</span>
       <PreferenceSelect
         compact

@@ -22,6 +22,9 @@
   min-height: 100dvh;
 }
 .library-welcome .library-heading { margin-bottom: 0; padding-bottom: 18px; border-bottom: 1px solid #292929; }
+/* The FFmpeg notice takes a row of its own, at its own height, so what the page opens on keeps the middle. */
+.library-welcome:has(> .ffmpeg-banner) { grid-template-rows: auto auto 1fr; }
+.library-welcome > .ffmpeg-banner { margin: 18px 0 0; }
 .library-first-edit {
   place-self: center;
   padding-block: 42px clamp(56px, 10vh, 108px);

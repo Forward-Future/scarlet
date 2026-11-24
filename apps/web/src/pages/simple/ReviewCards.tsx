@@ -13,7 +13,7 @@ import { taskModelName } from "../../components/shell/TaskModelsSettings";
 import { useHostsStore } from "../../stores/hosts";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
-import { useHotkeys } from "../../lib/hotkeys";
+import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
 import { editKey } from "../../lib/keptEdits";
 import type { Call, CutChoice, Revision } from "../../lib/passCalls";
 import { isRecheck, type Thread } from "../../lib/threads";
@@ -203,7 +203,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
         : !beforeCut && shownKind && <span className={reviewingEdit.kind === "restore" ? "edit-card-length is-added" : "edit-card-length is-kind"}>{shownKind}</span>}
       {/* Scarlet asks the editor to look or listen at a part of the video, which the timeline marks. It is a pill like the
           edit's kind, in amber: a press plays just that part, and its times are on hover. */}
-      {reviewRange && <button type="button" className="edit-card-length is-check" onClick={onPlayCheck}
+      {reviewRange && <button type="button" className="edit-card-length is-check" onClick={e => { blurOnPointerClick(e); onPlayCheck(); }}
         title={`Play the part to check, ${checkSpan(reviewRange)}`}>Check</button>}
       {madeBy && <MadeBy by={madeBy} />}
     </div>
