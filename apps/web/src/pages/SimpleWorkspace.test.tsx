@@ -134,8 +134,6 @@ const reviewModes = (scope: Element) => [...scope.querySelectorAll(".simple-revi
   button.getAttribute("aria-label") ?? button.textContent,
   button.getAttribute("aria-pressed"),
 ]);
-// DBG-TEMP
-const DBG = (scope: Element | null | undefined, note = "") => console.log("DBG", note, scope ? JSON.stringify({ tabs: reviewModes(scope), opt: optionalLine(scope), lists: [...scope.querySelectorAll(".simple-pass-list, .simple-edits")].map(l => [l.className, l.getAttribute("aria-label"), [...l.querySelectorAll(":scope > li > button")].map(b => b.textContent + (b.getAttribute("aria-current") ? " <ON>" : "") + (b.className.includes("is-decided") ? " <dec>" : ""))]) }) : "null");
 /** Most tests work on the rows. Expand list disclosures without previewing a finished request's single edit. */
 const openEdits = async () => {
   for (const toggle of container.querySelectorAll<HTMLElement>('[aria-label="Edits"] :is(.simple-pass-toggle[aria-expanded="false"], .simple-review-tab:only-child[aria-pressed="false"], .simple-review-rest[aria-expanded="false"])')) await click(toggle);
@@ -9968,7 +9966,6 @@ it("opens a finished request's edits from the review controls, with no chevron, 
   const turn = turnFor("chg_approved_2");
   const listOpen = () => !!turn.querySelector('.simple-edits[aria-label="Optional edits"]');
   expect(listOpen()).toBe(false);
-  DBG(turn, "t11 a");
   expect(reviewModes(turn)).toEqual(tabs());
   expect(turn.querySelector(".simple-pass-chevron, .run-chevron")).toBeNull();
   // Scarlet's updates along the way aren't kept in the finished request.
@@ -9976,7 +9973,6 @@ it("opens a finished request's edits from the review controls, with no chevron, 
   expect(turn.textContent).not.toContain("Laying the music under the whole edit.");
   // The edits Scarlet didn't flag are behind one line under For you's rows. It opens them, and closes them again.
   await click(seeAll(turn)!);
-  DBG(turn, "t11 b");
   expect(listOpen()).toBe(true);
   expect(reviewModes(turn)).toEqual(tabs());
   await click(turn.querySelector(".simple-pass-need")!);
@@ -10085,9 +10081,7 @@ it("keeps Scarlet's put-back of an edit under that edit's row once the edit read
   // Done's row.
   expect(container.querySelector('.unit[data-run="task_reject"]')).toBeNull();
   const pass = container.querySelector<HTMLElement>('.unit[data-run="task_pass"]')!;
-  DBG(pass, "t12 a");
   await click(tabNamed(pass, "Done"));
-  DBG(pass, "t12 b");
   const under = container.querySelector<HTMLElement>('.subunit[data-run="task_reject"]');
   expect(under?.closest('.unit')?.getAttribute("data-run")).toBe("task_pass");
   expect(wordsOf(under!.querySelector(".subunit-msg p"))).toBe("Reject edit");
@@ -12273,7 +12267,6 @@ it("draws a revision of one applied edit under that edit's row in Working, at wo
   expect(owner().querySelector(".simple-edits")?.getAttribute("aria-label")).toBe("Edits that need you");
   expect(sub()).toBeNull();
   await click(tabNamed(owner(), "Working"));
-  DBG(owner(), "t19 working " + sub()?.outerHTML.slice(0, 600));
   expect(owner().querySelector(".simple-edits")?.getAttribute("aria-label")).toBe("With Scarlet");
   expect(wordsOf(sub().querySelector(".subunit-msg p"))).toBe("Make the captions bigger.");
   expect(sub().querySelector('[aria-label="Scarlet’s work"] .working-text')).not.toBeNull();
@@ -12370,7 +12363,6 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
   // directly under it. The count disappears while Scarlet works on it.
   expect([list()?.getAttribute("aria-label"), rows()]).toEqual(["Edits that need you", [["wrap", "Revising…"]]]);
   expect(container.querySelector('.subunit[data-run="task_fix"]')!.previousElementSibling?.querySelector(".simple-edit-title")?.textContent).toBe("wrap");
-  DBG(owner(), "t21 a");
   expect(reviewModes(owner())).toEqual(tabs());
   expect(owner().querySelector(".simple-review-tab-count")).toBeNull();
   // Scarlet stops to ask the editor something about it. It is their turn again: the row says so in the card's words,
@@ -12397,7 +12389,6 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
       timelineEdits: [{ label: "wrap", range: { start: 11.5, end: 16 } }] }] }));
   await act(async () => {});
   expect(container.querySelector(".simple-pin .unit")).toBeNull();
-  DBG(owner(), "t21 end");
   expect([list(), seeAll(owner())?.getAttribute("aria-expanded"), container.querySelector('[data-run="task_fix"]')]).toEqual([null, "false", null]);
 });
 
@@ -14699,7 +14690,7 @@ it("advances through a pass's For you items in exact list order on K and X acros
   expect(currentCard()).toBeNull();
 });
 
-it("stays within For you when stepping with arrow keys from kept or rejected For you edits", async () => {
+it("steps with the arrow keys within the tab shown: a kept or rejected edit is Done's, and never to an optional one", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({
     version: data.project.head!,
@@ -14715,7 +14706,8 @@ it("stays within For you when stepping with arrow keys from kept or rejected For
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
   const forYouRows = () => [...editRowsIn(turn)];
-  expect(forYouRows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions", "gone check", "wrap"]);
+  // The rejected edit is Done's row: For you has the two that wait.
+  expect(forYouRows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions", "wrap"]);
 
   // Keep captions -> advances directly to wrap.
   await click(forYouRows()[0]!);
@@ -14724,24 +14716,34 @@ it("stays within For you when stepping with arrow keys from kept or rejected For
   await press("k");
   expect(openTitle()).toBe("wrap");
 
-  // Reopen kept captions and press ArrowDown: stays in For you (goes to wrap, never unflagged zoom).
+  // Kept, captions is Done's row. Opened from where it still is in For you for its moment, Done is the tab shown. It
+  // is the only stop there: a rejected edit is none, and the arrows never reach the unflagged zoom.
   await click(forYouRows()[0]!);
   await act(async () => {});
-  expect(openTitle()).toBe("captions");
+  expect([openTitle(), reviewModes(turn)]).toEqual(["captions", tabs("Done")]);
   await press("ArrowDown");
-  expect(openTitle()).toBe("wrap");
+  expect(openTitle()).toBe("captions");
   await press("ArrowUp");
   expect(openTitle()).toBe("captions");
 
-  // Open rejected For you edit and step ArrowDown / ArrowUp: stays within For you (wrap / captions), never zoom.
-  await click(forYouRows()[1]!);
+  // The rejected edit opens from its row. ↓ has nothing after it, and ↑ steps to Done's row before where it was.
+  const gone = () => forYouRows().find(r => r.textContent?.includes("gone check"))!;
+  await click(gone());
   await act(async () => {});
+  expect(openTitle()).toBe("gone check");
   await press("ArrowDown");
-  expect(openTitle()).toBe("wrap");
-  await click(forYouRows()[1]!);
-  await act(async () => {});
+  expect(openTitle()).toBe("gone check");
   await press("ArrowUp");
   expect(openTitle()).toBe("captions");
+
+  // For you opens the one that still waits, and it has no row beside it there.
+  await click(tabNamed(turn, "For you"));
+  await act(async () => {});
+  expect(openTitle()).toBe("wrap");
+  await press("ArrowUp");
+  expect(openTitle()).toBe("wrap");
+  await press("ArrowDown");
+  expect(openTitle()).toBe("wrap");
 });
 
 it("dashes every undecided For you cut and edit on the timeline, and draws decided or unflagged ones solid", async () => {
@@ -14764,6 +14766,9 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
         previous: [], check: "Check framing." },
     ] }));
   const dashed = () => container.querySelector(".simple-timeline-band")?.classList.contains("is-proposed");
+  // A decided row is Done's, and opening it from where it still is in For you shows Done: For you is pressed again
+  // to go on to the next one that waits.
+  const forYou = async () => { await click(tabNamed(passCard(), "For you")); await act(async () => {}); };
   await show();
   await act(async () => {});
   // 1. Waiting call: dashed.
@@ -14774,6 +14779,7 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
   await act(async () => {});
   await openCall("Breath before the price.");
   expect(dashed()).toBe(false);
+  await forYou();
   // 2. Waiting flagged applied cut in For you: dashed, matching waiting calls.
   await click(passRows().find(r => r.textContent?.includes("Flagged cut"))!);
   await act(async () => {});
@@ -14784,6 +14790,7 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
   await click(passRows().find(r => r.textContent?.includes("Flagged cut"))!);
   await act(async () => {});
   expect(dashed()).toBe(false);
+  await forYou();
   // 3. Waiting flagged non-cut edit: dashed while waiting, solid once kept.
   await click(passRows().find(r => r.textContent?.includes("Flagged zoom"))!);
   await act(async () => {});
@@ -14793,7 +14800,8 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
   await click(passRows().find(r => r.textContent?.includes("Flagged zoom"))!);
   await act(async () => {});
   expect(dashed()).toBe(false);
-  // 4. Unflagged cut opened from See all: solid.
+  await forYou();
+  // 4. Unflagged cut opened from the optional line: solid.
   await click(seeAll(passCard())!);
   await act(async () => {});
   await click(passRows().find(r => r.textContent?.includes("Settled cut"))!);
