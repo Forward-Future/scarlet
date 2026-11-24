@@ -122,18 +122,41 @@ export function flagEdit(ctx: Ctx, projectId: string, task: Task, body: FlagEdit
     }
   } else {
     const { start, end } = body.range!;
-    // A cut is a point, where it joins; any other edit is the footage it changed. Each is weighed by how much of the
-    // stretch it shares, a join inside the stretch counting as it would cover it all.
+    // A cut is a point, where it joins; any other edit is the footage it changed. A range-only flag must match an
+    // edit's time range (never latching onto a giant unrelated spanning edit like a music bed or bundled pass): at
+    // least 20% IoU for span-vs-span, and a local stretch (<= 30 s) for a point flag. To flag a short passage inside a
+    // much longer edit, the caller identifies that edit explicitly with changeId and spot.
     const near = 0.25;
+    const minSpanIou = 0.2;
+    const maxPointSpan = 30;
+    const isPointFlag = end - start < 1e-6;
+    const overlaps = (e: ThreadEdit) => e.at !== undefined
+      ? e.at >= start - near && e.at <= end + near
+      : isPointFlag
+        ? start >= e.range.start - near && start <= e.range.end + near
+        : Math.min(end, e.range.end) - Math.max(start, e.range.start) > 0;
     const weigh = (e: ThreadEdit) => {
       if (e.at !== undefined) return e.at >= start - near && e.at <= end + near ? 1 : 0;
+      if (isPointFlag) {
+        if (start < e.range.start - near || start > e.range.end + near) return 0;
+        const span = e.range.end - e.range.start;
+        return span <= maxPointSpan ? 1 / (1 + span) : 0;
+      }
       const shared = Math.min(end, e.range.end) - Math.max(start, e.range.start);
-      if (end - start < 1e-6) return start >= e.range.start - near && start <= e.range.end + near ? 1 : 0;
-      return shared > 0 ? shared / (Math.max(end, e.range.end) - Math.min(start, e.range.start)) : 0;
+      if (shared <= 0) return 0;
+      const iou = shared / (Math.max(end, e.range.end) - Math.min(start, e.range.start));
+      return iou >= minSpanIou ? iou : 0;
     };
     const there = edits.map(e => ({ ...e, weight: weigh(e.edit) })).filter(e => e.weight > 0).sort((a, b) => b.weight - a.weight);
-    if (!there.length) throw badRequest("no_edit_there", `No applied edit is on the working cut (${project.head}) between ${start.toFixed(2)} s and ${end.toFixed(2)} s. ` +
-      "Read the current version's times with timeline_get or timeline_at. If no edit made it, say so in your reply.");
+    if (!there.length) {
+      const broader = edits.filter(e => overlaps(e.edit));
+      const detail = broader.length
+        ? ` Broader edit(s) overlap that spot: ${broader.slice(0, 4).map(({ edit }) =>
+          `${edit.changeId}[${edit.spot}] "${edit.label}" (${edit.range.start.toFixed(2)}\u2013${edit.range.end.toFixed(2)} s)`).join("; ")}. ` +
+          "Pass changeId and spot explicitly if your doubt is about one of those; otherwise, if no edit made it, say so in your reply."
+        : " Read the current version's times with timeline_get or timeline_at. If no edit made it, say so in your reply.";
+      throw badRequest("no_edit_there", `No applied edit matches ${start.toFixed(2)}\u2013${end.toFixed(2)} s on the working cut (${project.head}).${detail}`);
+    }
     [found, ...alsoThere] = there;
   }
   const change = ctx.repos.changes.get(found!.edit.changeId)!;

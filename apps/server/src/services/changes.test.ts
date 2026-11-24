@@ -222,3 +222,128 @@ it("projects only the named change's thread on edit-flags by changeId and preser
     alsoThere: [{ changeId: c1.id, spot: 0, label: "Assemble intro", request: "Assemble intro", range: { start: 0, end: 10 } }],
   });
 });
+
+it("refuses a timelineEdit that bundles disjoint changed stretches across untouched gaps, while allowing individual, contiguous, and single-clip edits", () => {
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "cam", name: "cam.mp4", path: "cam.mp4", kind: "video", duration: 120, hasAudio: true }, "ready");
+  const user = localUser(ctx);
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Frame clips", createdBy: { type: "human", name: "Editor" } });
+  proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Assemble four clips", skipRender: true,
+    ops: [
+      { op: "addClip", trackId: "v1", clip: { id: "c1", kind: "media", mediaId: "cam", timelineIn: 0, sourceIn: 0, sourceOut: 10 } },
+      { op: "addClip", trackId: "v1", clip: { id: "c2", kind: "media", mediaId: "cam", timelineIn: 10, sourceIn: 10, sourceOut: 40 } },
+      { op: "addClip", trackId: "v1", clip: { id: "c3", kind: "media", mediaId: "cam", timelineIn: 40, sourceIn: 40, sourceOut: 50 } },
+      { op: "addClip", trackId: "v1", clip: { id: "c4", kind: "media", mediaId: "cam", timelineIn: 50, sourceIn: 50, sourceOut: 60 } },
+    ],
+  });
+
+  // Bundling two separate reframes (c1 at 0..10 and c3 at 40..50) across untouched c2 (10..40) into one spanning edit is rejected.
+  const scatteredOps = [
+    { op: "updateClip" as const, clipId: "c1", patch: { transform: { scale: 1.15 } } },
+    { op: "updateClip" as const, clipId: "c3", patch: { transform: { scale: 1.15 } } },
+  ];
+  expect(() => proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Punch in on two moments", skipRender: true,
+    ops: scatteredOps,
+    timelineEdits: [{ label: "Punch in on two moments", range: { start: 0, end: 50 } }],
+  })).toThrow(expect.objectContaining({
+    code: "spanning_edit_range",
+    message: expect.stringMatching(/0\.00–10\.00 s.*40\.00–50\.00 s/),
+  }));
+
+  // Listing each separate stretch as its own timelineEdit succeeds.
+  const separate = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Punch in on two moments", skipRender: true,
+    ops: scatteredOps,
+    timelineEdits: [
+      { label: "Punch in on opening", range: { start: 0, end: 10 } },
+      { label: "Punch in on reveal", range: { start: 40, end: 50 } },
+    ],
+  }).change;
+  expect(separate.timelineEdits).toHaveLength(2);
+
+  // A single clip with audioFadeIn + audioFadeOut (diff ranges only at start and end) is one touched clip, not a bundle.
+  const faded = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Fade clip edges", skipRender: true,
+    ops: [{ op: "updateClip", clipId: "c2", patch: { audioFadeIn: 0.2, audioFadeOut: 0.2 } }],
+    timelineEdits: [{ label: "Soften clip edges", range: { start: 10, end: 40 } }],
+  }).change;
+  expect(faded.timelineEdits).toHaveLength(1);
+
+  // Two adjacent/contiguous clips edited together (c3 40..50 and c4 50..60) share one continuous range and succeed.
+  const contiguous = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Frame closing pair", skipRender: true,
+    ops: [
+      { op: "updateClip", clipId: "c3", patch: { transform: { scale: 1.1 } } },
+      { op: "updateClip", clipId: "c4", patch: { transform: { scale: 1.1 } } },
+    ],
+    timelineEdits: [{ label: "Tighten closing pair", range: { start: 40, end: 60 } }],
+  }).change;
+  expect(contiguous.timelineEdits).toHaveLength(1);
+
+  // Revising an existing edit via `replaces` is never blocked even if its ops touch separated spots.
+  const revised = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Adjust opening and reveal", skipRender: true,
+    ops: [
+      { op: "updateClip", clipId: "c1", patch: { transform: { scale: 1.12 } } },
+      { op: "updateClip", clipId: "c3", patch: { transform: { scale: 1.12 } } },
+    ],
+    timelineEdits: [{ label: "Adjust both punches", range: { start: 0, end: 50 }, replaces: { changeId: separate.id, spot: 0 } }],
+  }).change;
+  expect(revised.timelineEdits).toHaveLength(1);
+});
+
+it("refuses range-only edit flags that do not match an edit's time range, while naming broader overlapping edits and still allowing explicit changeId + spot", () => {
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "cam", name: "cam.mp4", path: "cam.mp4", kind: "video", duration: 240, hasAudio: true }, "ready");
+  const user = localUser(ctx);
+  const by = { type: "human" as const, name: "Editor" };
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Assemble", createdBy: by });
+  const bed = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Assemble full take", skipRender: true,
+    ops: [{ op: "addClip", trackId: "v1", clip: { id: "raw", kind: "media", mediaId: "cam", timelineIn: 0, sourceIn: 0, sourceOut: 240 } }],
+    timelineEdits: [{ label: "Full-length music bed", range: { start: 0, end: 240 } }],
+  }).change;
+  const cut = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Cut stumble", skipRender: true,
+    ops: [{ op: "rippleDelete", start: 100, end: 102 }],
+  }).change;
+  const local = proposeChange(ctx, user, project.id, {
+    intent: "requested", taskId: task.id, description: "Trim quiet intro", skipRender: true,
+    ops: [{ op: "updateClip", clipId: "raw", patch: { volume: 0.9 } }],
+    timelineEdits: [{ label: "Local volume tweak", range: { start: 95, end: 115 } }],
+  }).change;
+
+  // A short range-only flag (50..55 s) inside a 240 s spanning edit (IoU ~ 0.02 < 0.2) refuses to hijack it and names the broader edit.
+  expect(() => flagEdit(ctx, project.id, task, FlagEditRequest.parse({
+    check: "Dialogue cut feels tight", range: { start: 50, end: 55 },
+  }))).toThrow(expect.objectContaining({
+    code: "no_edit_there",
+    message: expect.stringMatching(new RegExp(`${bed.id}\\[0\\].*Full-length music bed.*Pass changeId and spot explicitly`)),
+  }));
+
+  // A point flag at 50 s inside the 240 s spanning edit (> 30 s) also refuses to hijack it.
+  expect(() => flagEdit(ctx, project.id, task, FlagEditRequest.parse({
+    check: "Check pause here", range: { start: 50, end: 50 },
+  }))).toThrow(expect.objectContaining({ code: "no_edit_there" }));
+
+  // A point flag at the cut (100 s) prefers the point cut over the overlapping 20 s local span edit.
+  const atCut = flagEdit(ctx, project.id, task, FlagEditRequest.parse({
+    check: "Check this join", range: { start: 100, end: 100 },
+  }));
+  expect(atCut.flagged).toMatchObject({ changeId: cut.id, spot: 0 });
+
+  // A point flag at 108 s (away from the cut, inside the 20 s local edit <= 30 s) matches the local edit, not the 240 s bed.
+  const atLocal = flagEdit(ctx, project.id, task, FlagEditRequest.parse({
+    check: "Check local tweak", range: { start: 108, end: 108 },
+  }));
+  expect(atLocal.flagged).toMatchObject({ changeId: local.id, spot: 0 });
+
+  // Flagging a short passage inside the 240 s edit still works when changeId and spot are passed explicitly.
+  const explicit = flagEdit(ctx, project.id, task, FlagEditRequest.parse({
+    changeId: bed.id, spot: 0, range: { start: 50, end: 55 }, check: "Bed feels loud here",
+  }));
+  expect(explicit.flagged).toMatchObject({ changeId: bed.id, spot: 0 });
+});
+
