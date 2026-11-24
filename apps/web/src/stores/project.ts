@@ -603,8 +603,11 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
           savedProject = h.saved;
           return { project: shown ?? showHeld(h) };
         });
-        // The answer can be older than a head the socket brought meanwhile: when the two disagree, the engine says which is current.
-        if (!stale && heldHead !== undefined && heldHead !== project.head) void get().refreshHead(projectId).catch(() => undefined);
+        // The answer can be older than a head the socket brought meanwhile: when the two disagree, the engine says which is
+        // current. A read that fails is tried again, as after an undo.
+        if (!stale && heldHead !== undefined && heldHead !== project.head) {
+          void get().refreshHead(projectId).catch(headUnread(projectId, get().current?.project.head));
+        }
         // The library lists the latest edit first. A project whose video changed moves there now, not when the list is
         // next read. One that was renamed, archived or paused wasn't edited: its time and its place stay.
         const list = get().list, was = list.find(p => p.id === projectId);
@@ -652,7 +655,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.historyEdit(cur.id, version, action, cur.project.head, cur.project.branch ?? "main");
       replaceChange(change);
       showRewritten(cur.id, project);
-      await get().refreshHead(cur.id);
+      // The undo went through. A timeline that can't be read at once is read again, as after an approval.
+      await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
     },
     async rejectEdits(threadId, head, edits) {
       const cur = get().current;
@@ -660,7 +664,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.rejectEdits(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edits });
       replaceChange(change);
       showRewritten(cur.id, project);
-      void get().refreshHead(cur.id).catch(() => {});
+      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return change.appliedVersion ?? change.toVersion;
     },
     async revise(changeId, body) {

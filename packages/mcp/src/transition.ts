@@ -10,7 +10,9 @@ export interface TransitionJoinInput {
 }
 
 const clock = (seconds: number) => {
-  const m = Math.floor(seconds / 60), s = seconds - m * 60;
+  // Rounded to the hundredth first, so 59.996 s reads 1:00.00 and not 0:60.00.
+  const hundredths = Math.round(seconds * 100);
+  const m = Math.floor(hundredths / 6000), s = (hundredths - m * 6000) / 100;
   return `${m}:${s.toFixed(2).padStart(5, "0")}`;
 };
 

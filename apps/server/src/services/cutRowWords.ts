@@ -10,7 +10,7 @@ const QUOTED = 5;
 /** Rows already named, by edit and version: a cut's footage and its version never change, so neither does its name. */
 const named = new Map<string, string>();
 const NAMED_KEEP = 20_000;
-/** Each transcript's words, read once: a transcript is replaced, never rewritten, when it changes. */
+/** Each transcript's words, read once for each revision of it. */
 const transcriptWords = new Map<string, TranscriptWord[]>();
 const TRANSCRIPTS_KEEP = 64;
 
@@ -58,21 +58,27 @@ const rowKind = (label: string) => label === LEFT_OUT ? "left out" as const : cu
 export function nameCutRowsByWords(ctx: Ctx, projectId: string, edits: ThreadEdit[], read: (version: string) => Timeline | undefined): ThreadEdit[] {
   if (!edits.some(e => !e.summary && e.beforeCut && rowKind(e.label))) return edits;
   const media = new Map(ctx.repos.projects.listMedia(projectId).map(m => [m.id, m.transcriptId]));
+  // A transcript is rewritten in place while its words are placed (each turn of alignment, a spelling fixed meanwhile),
+  // so it is read, and its rows named, by its revision as well as its id.
+  const ids = [...new Set([...media.values()].filter((id): id is string => !!id))];
+  const revisions = new Map((ctx.db.prepare("SELECT transcript_id AS id, revision FROM transcript_revisions WHERE transcript_id IN (SELECT value FROM json_each(?))")
+    .all(JSON.stringify(ids)) as { id: string; revision: string }[]).map(r => [r.id, r.revision]));
+  const revisionOf = (id: string) => `${id}@${revisions.get(id) ?? ""}`;
   const words = (mediaId: string) => {
     const id = media.get(mediaId);
     if (!id) return undefined;
-    let list = transcriptWords.get(id);
+    let list = transcriptWords.get(revisionOf(id));
     if (!list) {
       const transcript = ctx.repos.transcripts.get(id);
       if (!transcript) return undefined;
       list = flattenWords(transcript);
       if (transcriptWords.size >= TRANSCRIPTS_KEEP) transcriptWords.delete(transcriptWords.keys().next().value!);
-      transcriptWords.set(id, list);
+      transcriptWords.set(revisionOf(id), list);
     }
     return list;
   };
   // A transcript read again (a realignment) is a new one, and names the cuts afresh.
-  const transcripts = [...media.values()].join(",");
+  const transcripts = [...media.values()].map(id => id && revisionOf(id)).join(",");
   const versions = new Map<string, Timeline | undefined>();
   return edits.map(edit => {
     const kind = !edit.summary && edit.beforeCut ? rowKind(edit.label) : undefined;

@@ -5,6 +5,7 @@
 import { appliedReviewChange, cutKindRow, intervalCandidates, removedJoins, reviewCutSummaries, timelineDuration, reviewKindRows, reviewReasons, type Change, type CutAssessment, type MediaAsset, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Thread } from "./threads.js";
 import { classifyEdits, type EditKind } from "./editKind.js";
+import { playsSame } from "./playsSame.js";
 
 export interface EditRef { changeId: string; spot: number }
 export interface ThreadEdit extends EditRef {
@@ -108,6 +109,11 @@ export interface SavedEdit extends ThreadEdit {
   putBack?: TimeRange;
   /** What a moved marker still says, when its `todo` comes from that and not from words this change wrote. */
   markerSays?: string;
+  /**
+   * Scarlet named no edit for this place of its save, and the video plays there as it did before (`playsSame`): the
+   * save moved a voice to another track or eased a join with a short fade. It only finished the edits round it.
+   */
+  quiet?: true;
 }
 
 /** A cut Scarlet named no edit for, in a video it built from the pieces to keep. The engine names its row by its words. */
@@ -435,6 +441,8 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
       if (removed && range.start === range.end) edit.beforeCut = { version: beforeVersion, removed };
       const kind = edit.beforeCut ? "cut" : trimmed ? trimmedOf.kind : kinds[spot];
       if (kind) edit.kind = kind;
+      const around = "before" in clocks && clocks.before && clocks.after ? { before: clocks.before, after: clocks.after } : undefined;
+      if (!named && change.ops?.length && !edit.beforeCut && kind !== "cut" && around && playsSame(around.before, around.after, range, fps)) edit.quiet = true;
       if (marked[spot] && !edit.beforeCut) {
         edit.marker = true;
         const todo = edit.check ?? classified.asks[spot];
@@ -493,7 +501,7 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
 
 /** A saved edit as it is listed, without what only placing it on the working cut needs. */
 const listed = ({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack,
-  markerSays: _markerSays, reviewLocation: _reviewLocation, ...edit }: SavedEdit): Omit<ThreadEdit, "at"> => edit;
+  markerSays: _markerSays, reviewLocation: _reviewLocation, quiet: _quiet, ...edit }: SavedEdit): Omit<ThreadEdit, "at"> => edit;
 
 /** The edits one applied change made, in its own clock, as History lists them under its version. */
 export function changeEdits(change: Change): Omit<ThreadEdit, "at">[] {

@@ -273,8 +273,31 @@ pub fn find_on_path(name: &str, env: &HashMap<String, String>) -> Option<String>
     Some(cwd.join(found).to_string_lossy().into_owned())
 }
 
+/// The copy of a CLI a run starts: the first on PATH that Scarlet can launch. A Windows batch shim Scarlet can't see
+/// through to its program (`runner_spec`) is passed over for the next copy, so the assistant check and the runs agree
+/// on one program instead of the check finding a shim every run then fails on.
 pub fn resolve_cli(name: &str, env: &HashMap<String, String>) -> Result<String> {
-    find_on_path(name, env).ok_or_else(|| anyhow!("{name} CLI not found on PATH"))
+    let path = env_get(env, "PATH").map(std::ffi::OsString::from);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let candidates: Vec<String> = which::which_in_all(name, path, &cwd)
+        .map(|found| found.map(|file| cwd.join(file).to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    first_runnable(name, candidates, |file| runner_spec(file, &[], env).map(|_| ()))
+}
+
+/// The first candidate `launchable` accepts. None accepted: why the first was refused, or not found when none exist.
+fn first_runnable(name: &str, candidates: impl IntoIterator<Item = String>, launchable: impl Fn(&str) -> Result<()>) -> Result<String> {
+    let mut refused = None;
+    for file in candidates {
+        match launchable(&file) {
+            Ok(()) => return Ok(file),
+            Err(e) => {
+                log::info!("{name}: passed over {file}: {e:#}");
+                refused.get_or_insert(e);
+            }
+        }
+    }
+    Err(refused.unwrap_or_else(|| anyhow!("{name} CLI not found on PATH")))
 }
 
 /// Run a short command (version checks, auth status) with a timeout and capture its output.
