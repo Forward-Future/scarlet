@@ -14436,7 +14436,10 @@ it("keeps a dialogue pass's decided calls in Done after the pass applies, and op
   // skipped cut as Rejected, in timeline order with the cut Scarlet was sure of, and each opens.
   expect(reviewModes(pass)).toEqual(tabs());
   expect(needYou()).toBeNull();
+  // For you isn't blank: with no row and no optional line it says nothing waits.
+  expect([passRows().length, pass.querySelector(".simple-review-empty")?.textContent]).toEqual([0, "Nothing waits on you."]);
   await click(tabNamed(pass, "Done"));
+  expect(pass.querySelector(".simple-review-empty")).toBeNull();
   const rows = passRows();
   expect(rows.map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided"), r.classList.contains("is-rejected"), r.querySelector(".simple-pass-value")?.textContent, r.disabled]))
     .toEqual([

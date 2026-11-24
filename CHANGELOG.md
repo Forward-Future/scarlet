@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.
 - The timeline's waveform now draws how loud the sound plays as its solid part, with the peaks fainter around it, so two parts that sound as loud look as tall, such as an inserted sponsor read beside your own voice.
 - A level Scarlet changes over part of a clip now shows on the timeline's waveform and in that edit's Before and After.
 - An edit that evens out a clip's level is now called Audio on its card instead of Music dip.

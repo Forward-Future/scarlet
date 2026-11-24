@@ -89,8 +89,8 @@ function OptionalLine({ count, open, onToggle, inPass }: { count: number; open: 
   </button>;
 }
 
-/** What an empty Working or Done says. */
-const EMPTY_TAB = { working: "Nothing in the works.", done: "Nothing decided yet." } as const;
+/** What an empty tab says. For you says it only when it has no optional line either, so the tab is never blank. */
+const EMPTY_TAB = { you: "Nothing waits on you.", working: "Nothing in the works.", done: "Nothing decided yet." } as const;
 
 /** The rows a turn holds for its lists while its block moves: which were just acted on, and the edit last opened. */
 function useHeldRows(held?: ReviewLinger) {
@@ -550,7 +550,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     {drawn.map((list, i) => <Fragment key={list.id}>
       {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
       {list.id === "optional" && optional.length > 0 && <OptionalLine inPass count={optional.length} open onToggle={() => setOpen(undefined)} />}
-      {list.rows.length > 0 ? rowList(list) : (list.id === "working" || list.id === "done") && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
+      {list.rows.length > 0 ? rowList(list) : (list.id === "working" || list.id === "done" || (list.id === "you" && optional.length === 0)) && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
       {list.id === "you" && i === drawn.length - 1 && optional.length > 0 && <OptionalLine inPass count={optional.length} open={false} onToggle={() => { reveal(); setOpen("all"); }} />}
     </Fragment>)}
     {callsListed && outsideList}
@@ -706,7 +706,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     {seeTab}
     {!hasForYou && showsList && rows(undefined)}
     {hasForYou && tab === "you" && <>
-      {some(inYou) && rows("Edits that need you", inYou)}
+      {some(inYou) ? rows("Edits that need you", inYou) : optional === 0 && <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
       {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
       {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
       {optionalOpen && some(inOptional) && rows("Optional edits", inOptional)}
