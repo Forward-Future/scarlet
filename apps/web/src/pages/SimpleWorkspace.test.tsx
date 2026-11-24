@@ -13241,14 +13241,14 @@ it("gives a request's list the place of Scarlet's reply while it's open, and bri
   // For you shows the flagged edit, and Scarlet's reply follows the block.
   expect(reply()).toBe("Check edit 3 to hear how the ending lands.");
   const drawn = block();
-  // With every edit listed, the list has the reply's place and the block stays mounted.
+  // With the optional line open every edit is listed: the lists have the reply's place and the block stays mounted.
+  const lists = () => editLists(block()).map(([name]) => name);
   await click(seeAll(block())!);
-  expect([block().querySelector(".simple-edits")?.getAttribute("aria-label"), reply()]).toEqual(["Edits in this thread", undefined]);
+  expect([lists(), reply()]).toEqual([["Edits that need you", "Optional edits"], undefined]);
   expect(block()).toBe(drawn);
-  // For you opens the flagged edit. Once its card closes, the reply is back with just that edit listed.
-  await click(block().querySelector(".simple-pass-need")!);
-  await press("Escape");
-  expect([block().querySelector(".simple-edits")?.getAttribute("aria-label"), reply()]).toEqual(["Edits that need you", "Check edit 3 to hear how the ending lands."]);
+  // The line pressed again puts the optional edits away, and the reply is back with just the flagged edit listed.
+  await click(seeAll(block())!);
+  expect([lists(), reply()]).toEqual([["Edits that need you"], "Check edit 3 to hear how the ending lands."]);
 });
 
 it("keeps a revision whose new version couldn't be prepared, since nothing else would say it came to nothing", async () => {
@@ -13295,7 +13295,7 @@ it("keeps a list the editor opened on a request open when a revision of one of i
   await act(async () => {});
   expect(block().closest(".simple-pin")).not.toBeNull();
   expect(editRowsIn(block()).length).toBe(3);
-  expect(reviewModes(block())).toEqual([["For you", "false"], ["See all", "true"]]);
+  expect([reviewModes(block()), optionalLine(block())?.[1]]).toEqual([tabs(), "true"]);
   // And back in the conversation once the revision is done.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_fix" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString(), changeIds: ["chg_fixed"] } : t),
     changes: [...d.changes, { ...d.changes.find(c => c.id === "chg_approved_2")!, id: "chg_fixed", taskId: "task_fix", threadId: thread.id, createdAt: new Date().toISOString(),
@@ -13349,8 +13349,10 @@ it("names a queued request about an edit the same way with the timeline on its r
   await show();
   await act(async () => {});
   const tag = () => container.querySelector('[aria-label="Queued requests"] .queue-target')?.textContent;
-  // With the edit open, its request has the timeline, and the tag reads as the edit's row does.
-  await click(editRows("chg_approved_2")[2]!);
+  // The edit a request waits on is Working's row. With it open, its request has the timeline, and the tag reads as
+  // the edit's row does.
+  await click(tabNamed(turnFor("chg_approved_2"), "Working"));
+  await click(editRows("chg_approved_2")[0]!);
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   expect(tag()).toBe("Edit at 0:11");
@@ -13562,15 +13564,16 @@ it("aims an emptied box at the edit that's open now, not the one its deleted mes
   useProjectStore.setState({ current: data });
   await show();
   const rows = () => editRowsIn(turnFor("chg_approved_2"));
-  await click(rows()[1]!);
+  // The list goes from the edit that waits ("wrap", the third by number) to the optional ones under it.
+  await click(rows()[2]!);
   await act(async () => {});
   const first = boxTag();
-  expect(first).toBe("Edit at 0:00");
+  expect(first).toBe("Edit at 0:11");
   // A note is begun on this edit, and the editor steps to the next one: the note stays aimed where it was written.
-  await act(async () => useUiStore.getState().setAgentDraft("Make them smaller"));
+  await act(async () => useUiStore.getState().setAgentDraft("Make it shorter"));
   await press("ArrowDown");
   await act(async () => {});
-  expect(rows()[2]!.getAttribute("aria-current")).toBe("true");
+  expect(rows()[0]!.getAttribute("aria-current")).toBe("true");
   expect(boxTag()).toBe(first);
   // They delete it instead. Nothing is being written any more, so the box talks to the edit on screen: the next note
   // typed must not revise the edit they left.
