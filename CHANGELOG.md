@@ -167,6 +167,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
 - Searching the Transcript now finds a word with an apostrophe in it whether it was written with a straight or a curly one, so “Wendy’s” finds “Wendy's” and “don't” finds “don’t”.
 - With motion reduced, the Transcript now follows the playhead without gliding as the video plays.
+- A range typed with a plain hyphen, like “cut 1:20-1:45”, now marks its end time in the message box and on the timeline, not only its start.
 
 ## November 22, 2026
 
