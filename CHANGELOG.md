@@ -6,6 +6,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- The edits now have a column of their own on the left of the chat: what waits on you fills it for the whole video, with Working and Done at its foot, and the requests waiting their turn are listed under Working instead of on the message box.
+- Opening a cut or an edit now shows its page in the chat's place, with each version and the note that asked for it; New edit, or Esc, brings the conversation back.
+- Keep and ↑ ↓ now carry on from one request's last edit that waits to the next request's.
 - A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.
 - The talking-head example skill no longer includes Matt’s own camera setup or editor name, so any editor can adapt it.
 - Scarlet now knows what was said earlier in the chat, so a message like “tell me the timestamps” or “the two clips you just found” is read as being about the request before it, links and times Scarlet showed you while it worked included.
