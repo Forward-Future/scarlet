@@ -1495,6 +1495,33 @@ it("says an export is waiting to start or finishing, with no percent that would 
   await click(button("Cancel export")!);
 });
 
+it("shows the part of an export an earlier one already encoded as reused, not as progress made", async () => {
+  vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 9, path: "/chosen/cut.mp4" });
+  vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
+  let state: Render = { ...data.renders[0]!, id: "head-start", version: data.project.head!, kind: "full", quality: "delivery", range: null,
+    state: "running", progress: 0.44, reused: { seconds: 198, progress: 0.44 } };
+  vi.spyOn(api, "requestRender").mockImplementation(async () => ({ render: state }));
+  vi.spyOn(api, "render").mockImplementation(async () => ({ render: state }));
+  await show(<ExportSheet hasCut onClose={() => {}} />);
+  await click(exportButton()!);
+  const striped = () => container.querySelector<HTMLElement>(".activity-progress-reused");
+  const key = () => container.querySelector("[data-testid='export-reused']")?.textContent;
+  await act(async () => { await vi.waitFor(() => expect(key()).toBe("Reused from an earlier export · 3:18Exporting now"), { timeout: 2500 }); });
+  expect(container.textContent).toContain("Exporting · 44%");
+  expect(striped()!.style.width).toBe("44%");
+  expect(striped()!.getAttribute("aria-hidden")).toBe("true");
+  // New work fills on past the reused part, which keeps its width.
+  state = { ...state, progress: 0.6 };
+  await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Exporting · 60%"), { timeout: 2500 }); });
+  expect(striped()!.style.width).toBe("44%");
+  // Once the percent stops, so does the split.
+  state = { ...state, progress: 0.97 };
+  await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Finishing…"), { timeout: 2500 }); });
+  expect(striped()).toBeNull();
+  expect(key()).toBeUndefined();
+  await click(button("Cancel export")!);
+});
+
 it("maps a visible cut minute onto only the needed trimmed source chunks", () => {
   const source = data.media.find(m => m.transcriptId)!;
   const base = mediaClipsFor(data.timeline!)[0]!.clip;

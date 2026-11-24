@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- An export that starts partway through now shows that part striped on its bar, with how much of the video it reused from an earlier export, so a head start no longer looks like the export skipped ahead.
 - The timeline's waveform now draws how loud the sound plays as its solid part, with the peaks fainter around it, so two parts that sound as loud look as tall, such as an inserted sponsor read beside your own voice.
 - A level Scarlet changes over part of a clip now shows on the timeline's waveform and in that edit's Before and After.
 - An edit that evens out a clip's level is now called Audio on its card instead of Music dip.

@@ -380,6 +380,8 @@ export const Render = z.object({
   export: ExportSave.extend({ owner: z.string().uuid() }).optional(),
   /** Finished, seekable segments of an in-progress full preview. */
   cachedRanges: z.array(TimeRange).optional(),
+  /** Of a running full or export render: the seconds already encoded by an earlier render, and the progress they account for. */
+  reused: z.object({ seconds: z.number().nonnegative(), progress: z.number().min(0).max(1) }).optional(),
   id: Id,
   projectId: Id,
   version: Id,
