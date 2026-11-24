@@ -5557,7 +5557,7 @@ it("shows Scarlet on two calls at once: each row has its own Stop, and Pause is 
   // has a Stop of its own: Pause is there, and neither on the pass's band nor under its rows. Each request under a row
   // has Stop alone, and neither its time and tokens nor Scarlet's opening sentence: those show on hover. Nothing sits
   // over the message box.
-  expect(container.querySelector(".queue-tray")).toBeNull();
+  expect(container.querySelector(".queue-chat")).toBeNull();
   expect(container.querySelector(".subunit .unit-pause-edit")).toBeNull();
   const pinnedBand = container.querySelector<HTMLElement>(".simple-pin > .unit > .unit-msg")!;
   expect([pinnedBand.closest(".unit") !== block(), [...pinnedBand.querySelectorAll(".unit-actions button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))]).toEqual([true, ["Pause editing", "Stop this edit"]]);
@@ -8454,7 +8454,7 @@ it("keeps a question answerable while project editing is paused", async () => {
   // The box is on the question and says Answer, so the question has no link of its own.
   expect([[...unit.querySelectorAll(".req-say")].map(el => el.textContent), boxTag()]).toEqual([[question], "Answer"]);
   // Resume is on the band of the request that asks, beside Stop: the tray has nothing to say.
-  expect(container.querySelector(".queue-tray")).toBeNull();
+  expect(container.querySelector(".queue-chat")).toBeNull();
   expect(unit.querySelector(".unit-pause-edit")?.getAttribute("aria-label")).toBe("Resume editing");
 });
 
@@ -12619,8 +12619,7 @@ it("draws a revision of an edit under its row while the request that made it sti
   const owner = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   // One block, above the message box: the request at work. The revision has no block of its own, and isn't in the queue.
   expect(container.querySelector('.unit[data-run="task_fix"]')).toBeNull();
-  expect(container.querySelector(".queue-tray")).toBeNull();
-  expect(composer.props!.tray ?? null).toBeNull();
+  expect(container.querySelector('[aria-label="Queued requests"]')).toBeNull();
   // The edit sent back is Working's row in the column of edits, among its request's rows, and the revision is under it.
   await click(tabNamed(owner(), "Working"));
   expect(container.querySelectorAll(".subunit")).toHaveLength(1);
