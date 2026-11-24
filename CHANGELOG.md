@@ -172,6 +172,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Add another plan, from the empty library, stays open instead of flickering on and off.
 - When Scarlet reads a music track, its last section now ends where the track ends instead of up to a second past it.
 - Scarlet now counts what you ask to change on an edit it already made when it learns a rule from your decisions.
+- The sound picture Scarlet looks at around a cut now lines up with the words and the cut on recordings whose sound starts a moment after the picture, as phone and camera videos often do.
 
 ## November 22, 2026
 
