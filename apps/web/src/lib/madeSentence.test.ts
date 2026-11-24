@@ -98,6 +98,12 @@ it("says footage put back as what was done to it, never as something made", () =
   expect(say([back, ...["A", "B", "C", "D"].map(label => ({ label, kind: "zoom" as const }))])).toBe("Put back 1 passage and made 4 zooms.");
 });
 
+it("counts clips from another file put into the video as inserts, not as footage put back", () => {
+  const clip = (label: string) => ({ label, kind: "insert" as const });
+  expect(say([cut(0, 60), cut(100, 171), clip("Kontorovich clip"), clip("Ellenberg clip"), { label: "Sponsor spot", kind: "other" as const, marker: true as const }]))
+    .toBe("Took out 2:11 in 2 cuts, and made 2 inserts, and marked 1 spot for you.");
+});
+
 it("leaves the edits' names to the rows while the open list has one for each of them", () => {
   const edits = [{ label: "music bed", kind: "audio" as const }, { label: "captions", kind: "text" as const }, { label: "wrap" }];
   const open = (list: Parameters<typeof madeSentence>[0]) => sentenceText(madeSentence(list, length, false, true));

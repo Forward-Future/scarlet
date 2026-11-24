@@ -3,6 +3,7 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
 /**
  * What an applied edit did to the cut, so the timeline can draw it for what it is:
  * - `cut` took footage out, `restore` put footage back in.
+ * - `insert` put footage from another file into the video, on the main picture: a clip the editor played on screen, say.
  * - `audio` changed only sound (levels, room tone, a swapped dialogue track).
  * - `dip` moved a clip's level over time, as music dipping under speech does.
  * - `voice` cleaned a voice of the noise and the room around it.
@@ -16,7 +17,7 @@ import { clipRange, intervalCandidates, timelineDuration, type Change, type Clip
  * - `split` moved where a join's sound cuts against its picture: a J cut or an L cut.
  * - `other` did several of these at once, or something else (an assembly, a sync).
  */
-export type EditKind = "cut" | "restore" | "audio" | "dip" | "voice" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "split" | "other";
+export type EditKind = "cut" | "restore" | "insert" | "audio" | "dip" | "voice" | "zoom" | "reframe" | "text" | "broll" | "overlay" | "graphic" | "speed" | "transition" | "split" | "other";
 
 type Op = Record<string, unknown>;
 /**
@@ -133,6 +134,40 @@ function splitAt(clip: Extract<Clip, { kind: "media" }>, split: SplitRecord, pat
   return [{ start: at, end: at }];
 }
 
+/**
+ * The gaps a change opened on the main picture to put another file's footage in, by their step's index. A gap filled
+ * with the same file as the picture beside it puts that file's footage back. One filled with a file that isn't beside
+ * it there is new footage in the video: on Matt's "reimann 2", two clips taken from his screen recording and played
+ * after he introduced them read as "put back 2 passages" (2026-11-23).
+ */
+function insertedGaps(ops: Op[], baseVideo: string | undefined, before: Timeline | undefined, after: Timeline | undefined) {
+  const found = new Set<number>();
+  if (!baseVideo || (!before && !after)) return found;
+  const addedIds = new Set(ops.flatMap(op => op.op === "addClip" && typeof (op.clip as Clip | undefined)?.id === "string" ? [(op.clip as Clip).id] : []));
+  const mediaOf = (clip: Clip | undefined) => clip?.kind === "media" ? clip.mediaId : undefined;
+  ops.forEach((op, index) => {
+    if (op.op !== "rippleInsertGap" || typeof op.at !== "number" || op.trackIds !== undefined) return;
+    const at = op.at;
+    const fill = ops.slice(index + 1).find(next => next.op === "addClip" && next.trackId === baseVideo &&
+      typeof (next.clip as Clip | undefined)?.timelineIn === "number" && Math.abs((next.clip as Clip).timelineIn - at) <= TOUCH)?.clip as Clip | undefined;
+    const media = mediaOf(fill);
+    if (!fill || !media) return;
+    // Beside it on the finished picture, leaving out what this change placed too.
+    const clips = after?.tracks.find(t => t.id === baseVideo)?.clips;
+    const placed = clips && [...clips].sort((x, y) => x.timelineIn - y.timelineIn);
+    const spot = placed?.findIndex(c => c.id === fill.id) ?? -1;
+    if (placed && spot >= 0) {
+      const sides = [placed.slice(0, spot).reverse(), placed.slice(spot + 1)]
+        .map(side => side.find(c => !addedIds.has(c.id)));
+      if (sides.every(c => mediaOf(c) !== media)) found.add(index);
+      return;
+    }
+    // Without the finished picture, a file the main picture didn't play at all is new to it.
+    if (before && !before.tracks.find(t => t.id === baseVideo)?.clips.some(c => mediaOf(c) === media)) found.add(index);
+  });
+  return found;
+}
+
 /** Each op's facet, and where it lands on the finished cut when that can be told. */
 function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
   const laid = laidFiles(media);
@@ -163,6 +198,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
   };
   const markerNow = (id: unknown) => typeof id !== "string" ? undefined
     : after?.markers?.find(m => m.id === id) ?? before?.markers?.find(m => m.id === id);
+  const inserts = insertedGaps(ops, baseVideo, before, after);
   return ops.flatMap((op, index): Placed[] => {
     const now = (time: number) => settled(time, ops.slice(index + 1));
     switch (op.op) {
@@ -171,7 +207,7 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         return [{ facet: "cut", range: at !== undefined ? { start: at, end: at } : undefined }];
       }
       case "rippleInsertGap":
-        return [{ facet: "restore", range: typeof op.at === "number" && typeof op.duration === "number"
+        return [{ facet: inserts.has(index) ? "insert" : "restore", range: typeof op.at === "number" && typeof op.duration === "number"
           ? { start: now(op.at), end: now(op.at + op.duration) } : undefined }];
       case "addClip": {
         const clip = op.clip as Clip | undefined;
@@ -262,6 +298,8 @@ function decide(facets: Facet[], { before, after }: Clocks, whole = false): Verd
   // A cut can carry the trims and room tone that smooth its join; it is still a cut.
   if (set.has("cut") && !set.has("restore")) return "cut";
   if (set.has("restore") && !set.has("cut")) return "restore";
+  // An insert places its footage on the main picture, with its sound under it.
+  if (set.has("insert") && [...set].every(f => f === "insert" || f === "picture" || f === "audio")) return "insert";
   // A dip or a voice cleanup is what it is beside other sound edits: a music bed added and dipped is a dip.
   for (const sound of ["dip", "voice"] as const) if (set.has(sound) && [...set].every(f => f === sound || f === "audio")) return sound;
   // Scaling up alongside a crop or pan on the same edit is still a zoom.
