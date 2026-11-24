@@ -21,6 +21,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - While the mic records, its red button is named "Send (Esc to discard)", and Esc throws the recording away without sending anything.
 - Files and a marked frame attached to an answer to Scarlet's question now go with the answer.
 - A time typed in a message, such as "make it 1:30 long", shows the same "At 1:30" tag as a picked moment, with its × to take it off.
+- Collapsing the request above the message box now hides its list of edits too, instead of only turning the arrow.
 - A request's heading is one line, with the rest on hover; the request Scarlet is working on and the one you picked keep two.
 - With a request's list of edits open, the sentence above it counts the edits instead of naming them a second time.
 - A question no longer has an Answer link under it while the message box is already answering it; the link is back whenever the box is aimed elsewhere.

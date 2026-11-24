@@ -720,6 +720,9 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .simple-pin:has(.simple-pass-list, .simple-edits),
 .simple-pin :is(.unit, .req, .simple-pass):has(.simple-pass-list, .simple-edits) { display: flex; flex-direction: column; min-height: 0; }
 .simple-pin :is(.simple-pass-list, .simple-edits) { max-height: none; overflow-y: auto; }
+/* Folded there, the block is its heading alone. The layout above makes a block with a list a column so the list can
+   scroll, and would keep it showing: the fold comes after it and outranks it. */
+.simple-pin .unit.is-collapsed > :not(.unit-msg) { display: none; }
 /* A row's fill reaches 8px past the list either side; a list that scrolls keeps that room inside itself, so no row is cut off or scrolls sideways. */
 .simple-pin .simple-edits { margin-inline: -8px; padding-inline: 8px; }
 /* Fixed above the message box, the band's own top rule would double the spot's. */
