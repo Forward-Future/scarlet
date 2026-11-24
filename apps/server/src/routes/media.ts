@@ -29,10 +29,18 @@ import { realignTranscript } from "../services/realign.js";
 import { recordingSpeechActivity } from "../services/recordingAudio.js";
 import { jsonBody, numberParam, optionalNumberParam, requireMedia, requireProjectHeader } from "./util.js";
 import { editorFirst } from "../services/editorFirst.js";
+import { footageAt, footageImportId, type SkippedPath } from "../services/footageImport.js";
+import type { MediaWithStatus } from "../repo/projects.js";
+import { errorMessage } from "../util.js";
 
 const ImportRequest = z
   .object({ path: z.string().optional(), url: z.string().url().optional(), kind: MediaKind.optional(), name: z.string().optional(), importId: z.string().uuid().optional(), deferFormat: z.boolean().optional() })
   .refine((b) => !!b.path || !!b.url, { message: "provide `path` or `url`" });
+
+/** Files or folders on this computer, as Scarlet was told where the editor's footage is. */
+const ImportPathsRequest = z.object({ paths: z.array(z.string().trim().min(1)).min(1).max(50) });
+/** How long adding footage waits for its files before answering with those still being copied in. */
+export const IMPORT_PATHS_WAIT_MS = 60_000;
 
 /** How large a captured page can be. A full-page capture of a long article is a few megabytes. */
 const CAPTURE_BYTES = 32 * 1024 * 1024;
@@ -231,6 +239,54 @@ export function mediaRoutes(ctx: Ctx) {
     } finally {
       if (importId) imports.delete(key);
     }
+  });
+
+  // Scarlet adds the editor's recordings from where they said they are: files, or folders of them. They land one at a
+  // time in the order found, so the first video sets the project's size and frame rate as a drop's would. Files still
+  // being copied in when the answer goes carry on after it, even once the run that asked has finished.
+  r.post("/projects/:id/media/import-paths", async c => {
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    requireProjectLocalPauseTarget(ctx, requestAttempt(c.req.raw), project.id);
+    const { paths } = await jsonBody(c, ImportPathsRequest);
+    const transcription = await importTranscriptionPolicy(ctx);
+    const { files, skipped } = await footageAt(paths);
+    const by = { by: "human" as const, name: c.var.user.name, createdAt: now() };
+    const added: MediaWithStatus[] = [];
+    const already: MediaWithStatus[] = [];
+    const failed: SkippedPath[] = [];
+    const landed = new Set<string>();
+    const batch = (async () => {
+      for (const file of files) {
+        const importId = footageImportId(project.id, file);
+        const saved = ctx.repos.projects.importedMedia(project.id, importId);
+        if (saved) {
+          already.push(saved);
+          landed.add(file.path);
+          continue;
+        }
+        const key = JSON.stringify([project.id, importId]);
+        const importing = imports.get(key) ?? ingestMedia(ctx, project, { type: "path", path: file.path, importId }, { transcription, by, uploadedBy: c.var.user.id });
+        imports.set(key, importing);
+        try {
+          added.push(await importing);
+        } catch (error) {
+          if (ctx.projectSignal(project.id).aborted || ctx.shutdown.aborted) return;
+          failed.push({ path: file.path, reason: errorMessage(error) });
+        } finally {
+          if (imports.get(key) === importing) imports.delete(key);
+          landed.add(file.path);
+        }
+      }
+    })().catch(error => { ctx.log(`[import] adding footage stopped part-way: ${errorMessage(error)}`); });
+    void ctx.track(batch, project.id);
+    await Promise.race([batch, new Promise(resolve => setTimeout(resolve, IMPORT_PATHS_WAIT_MS).unref?.())]);
+    const brief = (m: MediaWithStatus) => ({ mediaId: m.id, name: m.name, kind: m.kind, duration: m.duration, width: m.width, height: m.height, fps: m.fps, hasAudio: m.hasAudio });
+    return c.json({
+      added: added.map(brief),
+      alreadyInProject: already.map(brief),
+      copying: files.filter(f => !landed.has(f.path)).map(f => f.path),
+      skipped: [...skipped, ...failed],
+    });
   });
 
   r.get("/projects/:id/media", (c) => {

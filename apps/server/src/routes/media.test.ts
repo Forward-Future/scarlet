@@ -434,3 +434,36 @@ it("returns a retryable shutdown response for an import interrupted during its p
   expect(response.status).toBe(503);
   expect(readdirSync(ctx.paths.media(project.id))).toEqual([]);
 });
+
+it("adds the editor's footage from the files and folders Scarlet was told of, once each", async () => {
+  const { ctx } = workspace;
+  vi.spyOn(ctx.render, "probeMedia").mockResolvedValue({ duration: 0, hasAudio: false, kind: "image" });
+  const shoot = join(directory, "shoot");
+  mkdirSync(join(shoot, "CARD", "CLIPS"), { recursive: true });
+  mkdirSync(join(shoot, ".cache"));
+  writeFileSync(join(shoot, "B10.mov"), "b10");
+  writeFileSync(join(shoot, "B2.mov"), "b2");
+  writeFileSync(join(shoot, "notes.txt"), "not footage");
+  writeFileSync(join(shoot, ".hidden.mov"), "hidden");
+  writeFileSync(join(shoot, ".cache", "proxy.mov"), "proxy");
+  writeFileSync(join(shoot, "CARD", "CLIPS", "C001.mp4"), "c001");
+  const empty = join(directory, "empty");
+  mkdirSync(empty);
+  const add = async (paths: string[]) => {
+    const response = await api("POST", `/projects/${project.id}/media/import-paths`, { paths });
+    expect(response.status).toBe(200);
+    return await response.json() as { added: { name: string }[]; alreadyInProject: { name: string }[]; copying: string[]; skipped: { path: string; reason: string }[] };
+  };
+  const first = await add([shoot, empty, join(directory, "missing"), "shoot/B2.mov"]);
+  expect(first.added.map(m => m.name)).toEqual(["B2.mov", "B10.mov", "C001.mp4"]);
+  expect(first.copying).toEqual([]);
+  expect(first.skipped).toEqual([
+    { path: empty, reason: "No video or audio in this folder or the folders inside it." },
+    { path: join(directory, "missing"), reason: "Nothing is there." },
+    { path: "shoot/B2.mov", reason: "Not a full path. Give it from / or ~." },
+  ]);
+  const again = await add([join(shoot, "B2.mov")]);
+  expect(again).toMatchObject({ added: [], alreadyInProject: [{ name: "B2.mov" }], skipped: [] });
+  expect(ctx.repos.projects.listMedia(project.id).map(m => m.name).sort()).toEqual(["B10.mov", "B2.mov", "C001.mp4"]);
+  await settle();
+});

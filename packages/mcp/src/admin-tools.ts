@@ -174,6 +174,17 @@ export function registerChangeAndAssetTools(deps: ChangeAndAssetToolsDeps) {
       return json(media);
     },
   );
+
+  tool(
+    "media_import",
+    "Add the editor's footage from files or folders on this computer, by full path. A folder adds its videos and audio with those of the folders inside it (two levels down), by name. `~` is the editor's home folder. Files land in the order given, and the first video sets the project's size and frame rate when nothing has yet. `projectName`, when given, renames the project: the name the editor sees in their library and over the chat. Waits up to a minute, then returns each file added (mediaId, name, kind, duration, size), those already in the project from the same place, those still being copied in (they reach `project_get` once copied, with no further call), and each path not added with why. Caches and transcripts follow in the background.",
+    { paths: z.array(z.string()), projectName: z.string().trim().min(1).optional() },
+    async ({ paths, projectName }) => {
+      const named = projectName ? (await client.patch<{ project: { name: string } }>(`/projects/${projectId}`, { name: projectName })).project.name : undefined;
+      const added = paths.length ? await client.post<Record<string, unknown>>(`/projects/${projectId}/media/import-paths`, { paths }) : {};
+      return json({ ...(named && { projectName: named }), ...added });
+    },
+  );
 }
 
 export interface ExportAndTaskToolsDeps {

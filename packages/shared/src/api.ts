@@ -24,6 +24,7 @@
  *  Media
  *   POST   /projects/:id/media      multipart (file, kind?, provenance?) → { media: MediaAsset }   (ingest: probe, hash, proxy, waveform, transcript; MediaAsset.status tracks progress)
  *   POST   /projects/:id/media/import { path | url }     → { media: MediaAsset }      (server-side path or Drive/HTTP URL)
+ *   POST   /projects/:id/media/import-paths { paths }    → { added, alreadyInProject, copying, skipped } (files or folders of footage on this computer; waits up to a minute)
  *   GET    /projects/:id/media                           → { media: MediaAsset[] }
  *   DELETE /projects/:id/media/:mediaId                  → {}                 (a file Scarlet couldn't read; 409 when a version of the video uses it, a request is at work in the project, or the file was read)
  *   GET    /media/:mediaId/file                          → bytes (range requests)

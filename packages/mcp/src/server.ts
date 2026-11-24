@@ -269,7 +269,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         let outcome: ToolOutcome;
         let result: ToolResult;
         try {
-          if (["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "dialogue_check_repeats"].includes(name) && await localPausesMode())
+          if (["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "media_import", "dialogue_check_repeats"].includes(name) && await localPausesMode())
             throw new Error("This request only tightens local pauses. Save classified pauses with dialogue_apply_cuts.");
           if (PASS_WIDE_TOOLS.has(name)) {
             const selected = await revision.useStagedCut();

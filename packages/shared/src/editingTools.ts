@@ -22,8 +22,8 @@ export const EDITING_TOOL_GROUPS = [
     tools: ["change_review_cut", "source_audio"] },
   { title: "Caption generation", description: "Build a caption track from the transcript.",
     tools: ["captions_generate"] },
-  { title: "Asset import and timeline export", description: "Bring in new assets and export a timeline to another editor.",
-    tools: ["asset_add", "export_otio"] },
+  { title: "Asset import and timeline export", description: "Bring in the editor's footage and new assets, name the project and export a timeline to another editor.",
+    tools: ["media_import", "asset_add", "export_otio"] },
 ] as const satisfies ReadonlyArray<{ title: string; description: string; tools: readonly string[] }>;
 
 export type ScarletToolName = typeof EDITING_TOOL_GROUPS[number]["tools"][number];

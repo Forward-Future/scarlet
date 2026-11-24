@@ -13,6 +13,7 @@ import { TrashButton } from "../components/shell/TrashButton";
 import { ConfirmDialog, EmptyState, ErrorState, Icon, InlineError, Loading, Modal, Spinner } from "../components/ui/primitives";
 import { ProjectCard } from "./projects/ProjectCard";
 import { FirstEditGuide, NewProjectModal } from "./projects/NewProjectModal";
+import { StartProject } from "./projects/StartProject";
 
 function ProjectCollection({ projects, view, archived, notice, selectionSlot, selectAllSlot }: {
   projects: ProjectSummary[]; view: "list" | "grid"; archived: boolean; notice: string;
@@ -225,12 +226,15 @@ export function ProjectsPage() {
             <section className="library-first-edit" aria-labelledby="first-edit-title">
               <h2 id="first-edit-title">Make your first edit</h2>
               <p>Drop your footage here, then tell Scarlet what you’d like to change.</p>
+              <StartProject />
               <div className="first-edit-actions">{newProject}{quickStart}</div>
             </section>
-          ) : (
+          ) : (<>
+            {/* Starting a project is for the active ones, where it will be. */}
+            {!archived && <StartProject />}
             <ProjectCollection key={String(archived)} projects={projects} view={view} archived={archived} notice={notice}
               selectionSlot={selectionSlot} selectAllSlot={selectAllSlot} />
-          )}
+          </>)}
         </main>
       </Dropzone>
 

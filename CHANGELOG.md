@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 24, 2026
+
+- Start a project from Projects by telling Scarlet where your videos are, or dropping them on the box: it makes the project, adds the footage, names it and carries on in the new project’s chat.
+
 ## November 21, 2026
 
 - A first cut no longer leaves a lone word or a quick reaction, like “Wow.”, stuck between two cuts where it plays as a stutter: Scarlet takes it out with the cuts beside it or lets the speech run on.

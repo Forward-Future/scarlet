@@ -738,7 +738,7 @@ describe("tool annotations", () => {
   // Every tool that saves an edit, a recommendation, a file or a message to the editor. A harness may retry or
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
   const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
-    "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
+    "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "media_import", "export_otio",
     "graphic_render", "style_guide_save"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);
 
@@ -1418,5 +1418,31 @@ describe("a graphic page's files", () => {
     const html = `<img src="a%b.png"><img src="logo%20dark.svg"><img src='logo%20dark.svg'><link href="https://fonts.example/x.css">
       <img src="/abs/pic.png"><style>@font-face { src: url("fonts/Brand.woff2") } .x { background: url(bg.jpg?v=2) }</style>`;
     expect(relativeLinks(html)).toEqual(["a%b.png", "logo dark.svg", "fonts/Brand.woff2", "bg.jpg"]);
+  });
+});
+
+describe("starting a project from the editor's footage", () => {
+  it("adds files and folders from where the editor said, and names the project", async () => {
+    const extra = mock.state.extra;
+    mock.state.extra = (req, res) => {
+      if (req.method === "POST" && req.path === "/projects/prj_test/media/import-paths")
+        return reply(res, { added: [{ mediaId: "med_a", name: "A001.mov", kind: "video", duration: 62.5 }], alreadyInProject: [], copying: ["/Volumes/Card/A002.mov"], skipped: [{ path: "~/Nope", reason: "Nothing is there." }] });
+      if (req.method === "PATCH" && req.path === "/projects/prj_test") return reply(res, { project: { name: (req.body as { name: string }).name } });
+      return false;
+    };
+    const c = await connect();
+    try {
+      const added = JSON.parse(textOf(await ok(c, "media_import", { paths: ["/Volumes/Card", "~/Nope"] })));
+      expect(sent("/projects/prj_test/media/import-paths")[0]!.body).toEqual({ paths: ["/Volumes/Card", "~/Nope"] });
+      expect(added).toMatchObject({ added: [{ mediaId: "med_a" }], copying: ["/Volumes/Card/A002.mov"], skipped: [{ path: "~/Nope" }] });
+      expect(sent("/projects/prj_test", "PATCH")).toEqual([]);
+      const named = JSON.parse(textOf(await ok(c, "media_import", { paths: [], projectName: "  Card interview  " })));
+      expect(named).toEqual({ projectName: "Card interview" });
+      expect(sent("/projects/prj_test", "PATCH")[0]!.body).toEqual({ name: "Card interview" });
+      expect(sent("/projects/prj_test/media/import-paths")).toHaveLength(1);
+    } finally {
+      mock.state.extra = extra;
+      await c.close();
+    }
   });
 });

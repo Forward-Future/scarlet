@@ -225,7 +225,7 @@ export function summarizeProject(project: Project, timeline: Timeline | null, br
   const s = project.settings;
   const lines = [
     `Project "${project.name}" (${project.id}) — ${s.width}x${s.height} ${s.aspect} @ ${s.fps} fps, head version ${project.head ?? "none"}`,
-    `Media (${project.media.length}):`,
+    `Media (${project.media.length}):${project.media.length ? "" : " none yet. `media_import` adds the editor's recordings from files or folders on this computer and can name the project."}`,
   ];
   for (const m of project.media) {
     const dur = m.duration !== undefined ? `${m.duration.toFixed(2)} s` : "duration unknown";

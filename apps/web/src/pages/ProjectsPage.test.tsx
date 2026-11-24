@@ -14,6 +14,8 @@ import type { ProjectSummary } from "@scarlet/shared";
 import { buildDb, PRJ } from "../lib/mock/fixtures";
 import { useProjectStore } from "../stores/project";
 import { useUiStore } from "../stores/ui";
+import { useHostsStore } from "../stores/hosts";
+import { useModelPreferences } from "../stores/modelPicker";
 import { ProjectsPage } from "./ProjectsPage";
 import { UploadList, useUploader } from "../components/media/UploadDropzone";
 
@@ -59,7 +61,7 @@ it.each(["empty", "populated"])("can start a project from the %s library guide a
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Interview");
       name.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const input = container.querySelector<HTMLInputElement>('dialog[open] input[type="file"]')!;
     expect(container.querySelector("#np-file-types")?.textContent).toMatch(/MP4.*WAV.*JPEG/);
     await act(() => button("Choose files…").click());
     expect(picker.mock.instances).toEqual([input]);
@@ -652,6 +654,122 @@ it("shows one window-wide update on Projects while building and when ready", asy
     await act(() => root.unmount());
     container.remove();
     useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("starts a project with Scarlet from the library: the words and the files dropped on the box go in its first request", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const oldHosts = useHostsStore.getState();
+  const oldPrefs = useModelPreferences.getState();
+  const db = buildDb();
+  const made = { ...db.projects.find(p => p.id === PRJ)!, head: null };
+  const create = vi.fn().mockResolvedValue(made);
+  const createTask = vi.fn().mockResolvedValue({ id: "tsk_start" });
+  const remove = vi.fn().mockResolvedValue(undefined);
+  const projects = [{ ...db.summaries[PRJ]!, poster: null }];
+  vi.spyOn(api, "projects").mockResolvedValue({ projects });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  vi.spyOn(client, "IS_DESKTOP", "get").mockReturnValue(true);
+  const picked = vi.spyOn(desktop, "pickFiles").mockResolvedValue(["/Volumes/Card/A001.mov"]);
+  useProjectStore.setState({ list: projects, listStatus: "ready", createProject: create, createTask, deleteProject: remove });
+  useHostsStore.setState({ load: async () => {}, hosts: [{ ...db.hosts[0]!, online: true,
+    agents: [{ id: "claude", installed: true, models: ["opus"], modelLabels: { opus: "Opus 5.5" } }] }] });
+  useModelPreferences.setState({ hidden: [], favorites: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const box = () => container.querySelector<HTMLTextAreaElement>(".library-start textarea")!;
+  const type = (text: string) => act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), text);
+    box().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const send = () => container.querySelector<HTMLButtonElement>('.library-start [aria-label="Start project"]');
+  const files = () => [...container.querySelectorAll(".library-start .composer-file-name")].map(f => f.textContent);
+  try {
+    await act(async () => root.render(<MemoryRouter><Routes>
+      <Route path="/" element={<ProjectsPage />} /><Route path="/p/:id" element={<p>Project workspace</p>} />
+    </Routes></MemoryRouter>));
+    expect(box().placeholder).toBe("Start a project: say where your videos are, or drop them here");
+    expect(send()).toBeNull();
+    // Files go with the message, from the + or dropped on the box, once each; a drop elsewhere still opens New project.
+    await act(async () => container.querySelector<HTMLButtonElement>('.library-start [aria-label="Add videos"]')!.click());
+    expect(picked).toHaveBeenCalledOnce();
+    const zone = container.querySelector(".library-start[data-file-drop]")!;
+    await act(() => dropTargets.get(zone)!.drop(["/Users/sam/Desktop/Shoot", "/Volumes/Card/A001.mov"]));
+    expect(files()).toEqual(["A001.mov", "Shoot"]);
+    expect(container.querySelector("dialog[open]")).toBeNull();
+    await act(() => container.querySelector<HTMLButtonElement>('[aria-label="Remove A001.mov"]')!.click());
+    expect(files()).toEqual(["Shoot"]);
+    await type("hey, the rest of my videos are in ~/Movies/Interview, let's start a new project");
+    // Shift+Enter is a new line; Enter sends.
+    await act(() => { box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true })); });
+    expect(create).not.toHaveBeenCalled();
+    await act(async () => { box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect(create).toHaveBeenCalledExactlyOnceWith({ name: "New project" });
+    const said = "hey, the rest of my videos are in ~/Movies/Interview, let's start a new project";
+    expect(createTask).toHaveBeenCalledExactlyOnceWith(made.id, { kind: "edit", agent: "claude", model: "opus",
+      instruction: `${said}\n\nFiles the editor gave with this message:\n- /Users/sam/Desktop/Shoot`, context: { message: said } });
+    expect(container.textContent).toBe("Project workspace");
+    expect(remove).not.toHaveBeenCalled();
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    useHostsStore.setState(oldHosts, true);
+    useModelPreferences.setState(oldPrefs, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("takes back the project it made when its request can't be sent, and keeps the words", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const oldHosts = useHostsStore.getState();
+  const oldPrefs = useModelPreferences.getState();
+  const db = buildDb();
+  const made = db.projects.find(p => p.id === PRJ)!;
+  const create = vi.fn().mockResolvedValue(made);
+  const createTask = vi.fn().mockRejectedValue(new Error("The engine is offline"));
+  const remove = vi.fn().mockResolvedValue(undefined);
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  useProjectStore.setState({ list: [], listStatus: "ready", createProject: create, createTask, deleteProject: remove });
+  useHostsStore.setState({ load: async () => {}, hosts: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const box = () => container.querySelector<HTMLTextAreaElement>(".library-first-edit .library-start textarea")!;
+  try {
+    await act(async () => root.render(<MemoryRouter><ProjectsPage /></MemoryRouter>));
+    await act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box(), "Start a project from ~/Movies/Shoot");
+      box().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    // With no model to run it, nothing is made and the box says why.
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Start project"]')!.click());
+    expect(create).not.toHaveBeenCalled();
+    expect(container.querySelector(".library-start")!.textContent).toMatch(/model|Claude|ChatGPT|sign in|Set up/i);
+    await act(() => {
+      useModelPreferences.setState({ hidden: [], favorites: [] });
+      useHostsStore.setState({ hosts: [{ ...db.hosts[0]!, online: true, agents: [{ id: "claude", installed: true, models: ["opus"], modelLabels: { opus: "Opus 5.5" } }] }] });
+    });
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Start project"]')!.click());
+    expect(create).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledExactlyOnceWith(made.id);
+    expect(container.querySelector(".library-start")!.textContent).toContain("The engine is offline");
+    expect(box().value).toBe("Start a project from ~/Movies/Shoot");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    useHostsStore.setState(oldHosts, true);
+    useModelPreferences.setState(oldPrefs, true);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   }

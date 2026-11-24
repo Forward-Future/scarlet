@@ -36,6 +36,17 @@
 }
 .library-first-edit > p { margin-top: 18px; font-size: 16px; line-height: 1.55; color: var(--color-muted); text-wrap: balance; }
 .first-edit-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin-top: 24px; }
+/* The box that starts a project with Scarlet: the chat's own message box, on the library. */
+.library-start { position: relative; max-width: 720px; margin: 0 auto 26px; text-align: left; }
+.library-first-edit .library-start { margin: 28px auto 0; }
+.library-start .composer-box { padding-left: 5px; }
+.library-start .composer-message > * { font-size: 15px; line-height: 22px; padding-block: 5px; }
+.library-start-add { flex: none; width: 30px; height: 30px; border-radius: 50%; color: var(--color-muted); }
+.library-start-add:hover { color: var(--color-fg); }
+.library-start-drop {
+  position: absolute; inset: -6px; z-index: 10; display: grid; place-items: center; border: 2px dashed rgba(255, 255, 255, .4);
+  border-radius: 14px; background: rgba(9, 9, 11, .94); color: var(--color-fg); font-weight: 500; pointer-events: none;
+}
 .first-edit-actions button { min-height: 40px; padding-inline: 16px; gap: 8px; }
 .first-edit-steps { list-style: decimal; padding-inline-start: 1.5rem; }
 .first-edit-steps li { padding-inline-start: .4rem; }
