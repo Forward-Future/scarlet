@@ -8,6 +8,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 - A request that punched in at several spots under the same name now says how many zooms it made, instead of naming the same edit over and over.
 - In Media, “Tell Scarlet what this is” and its Cancel button no longer show an underline.
+- A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.
 - Edits in a list now combine into one row only when they overlap on the timeline exactly, so edits in separate places or that only partly overlap each stay on their own row.
 - When Scarlet lines up your screen recording with your camera, it now sees right away where the words you say are on that screen, so quotes and pages you read from it are less likely to be left out of the video.
 - Edits made at separate places in the video now stay individual rows in the edit list instead of being bundled into one spanning range, a crop or reframe beside a zoom no longer gets labeled Zoom or shows zoom numbers from another clip, and a Check note attaches only to an edit on that time range.
