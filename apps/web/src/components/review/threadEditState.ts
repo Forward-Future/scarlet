@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isAddRequest, isRejectRequest, matchesEdit, threadEditList, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
-import { reviewKey, useDeferredEdits, useKeptEdits } from "../../lib/keptEdits";
+import { reviewKey, useKeptEdits } from "../../lib/keptEdits";
 import { isActiveTask, isWorkingTask } from "../../lib/taskRun";
 import { useProjectStore } from "../../stores/project";
 import { useShownCutStore } from "../../stores/shownCut";
@@ -96,13 +96,6 @@ export function useReviewed(projectId: string, thread: Thread | undefined) {
     return (edit: EditRef & { recheck?: string; reviewRef?: EditRef }) =>
       kept.has(reviewKey(edit)) || (!edit.recheck && !edit.reviewRef && decided.has(edit.changeId));
   }, [kept, thread]);
-}
-
-/** Whether the editor parked a to-do marker for later ("Later") in For you. */
-export function useDeferred(projectId: string, thread: Thread | undefined) {
-  const deferred = useDeferredEdits(projectId, thread);
-  return useMemo(() => (edit: EditRef & { marker?: boolean; recheck?: string; reviewRef?: EditRef }) =>
-    !!edit.marker && deferred.has(reviewKey(edit)), [deferred]);
 }
 
 /**

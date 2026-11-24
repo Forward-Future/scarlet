@@ -3,7 +3,7 @@ import { historyLineage } from "@scarlet/timeline";
 import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { editGroups, noEdits, revisionWord, useAdding, useDeferred, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
+import { editGroups, noEdits, revisionWord, useAdding, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
 import { editRemovedLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
 import { editKey, keepEdits } from "../../lib/keptEdits";
@@ -178,7 +178,6 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   nextQueuedId?: string;
 }) {
   const reviewed = useReviewed(projectId, thread);
-  const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
   const adding = useAdding(thread);
@@ -188,7 +187,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   // An edit made in several places is one row. It stands for the place that's open, else the first one asking for a
   // look, else the first.
   const rows = editGroups(edits).filter(({ members }) => !only || members.some(m => only(m.edit))).map(({ members }) => {
-    const waiting = (m: { edit: ListedEdit }) => !!m.edit.check && !reviewed(m.edit) && !deferred(m.edit) && !revising(m.edit);
+    const waiting = (m: { edit: ListedEdit }) => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit);
     const relevant = only ? members.filter(m => only(m.edit)) : members;
     const shown = members.find(m => m.i === open) ?? members.find(waiting) ?? relevant[0] ?? members[0]!;
     // An edit made in several places keeps its first number, so the list reads 1, 2, 5 and doesn't renumber as places are kept.
@@ -242,18 +241,16 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // A revision on its way takes the edit off the editor's list until it comes back. Its row says so whether or not
       // the editor had kept the edit: the edit they kept is on its way out (2026-11-10).
       const revisingNow = revising(edit), isRevising = !!revisingNow;
-      const isDeferred = !isKept && !isRevising && deferred(edit);
       // Scarlet is on that revision now, so the row's word moves. One waiting its turn sits still.
       const busy = !!revisingNow && isWorkingTask(revisingNow.state);
       const statusWord = revisionWord(revisingNow, { rejecting: rejecting(edit), adding: adding(edit), nextQueuedId });
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       const decided = isKept && !isRevising;
-      // In For you, a handled edit says how it was decided (Kept, or Done for a marker) and a parked to-do says Later.
+      // In For you, a handled edit says how it was decided (Kept, or Done for a marker).
       // Otherwise a cut says how much came out, and any other edit says what it did, or in how many places.
       const value = only && decided ? (edit.marker ? "Done" : "Kept")
-        : isDeferred ? "Later"
         : places > 1 ? `${places} places` : editRemovedLabel(edit) ?? editRowWord(edit);
-      const check = places > 1 ? needs > 0 : !!edit.check && !isDeferred && !isRevising;
+      const check = places > 1 ? needs > 0 : !!edit.check && !isRevising;
       const title = (edit.reason && edit.summary) || edit.label;
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
       // sentence for that.
@@ -266,7 +263,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         // Why an edit asks for a look is on its card, in Scarlet's sentence. Its row keeps to the amber number and says
         // the reason on hover, as a pass's row does.
         title={revised || edit.reason ? undefined : edit.check}
-        aria-label={`Edit ${n}: ${title}${places > 1 ? `, ${places} places` : ""}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : isDeferred ? ", later" : check ? ", check" : ""}`}>
+        aria-label={`Edit ${n}: ${title}${places > 1 ? `, ${places} places` : ""}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
         <EditBadge n={n} kept={isKept} check={check} />
         <span className="simple-edit-title"><span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
@@ -301,7 +298,6 @@ export function ThreadAction({ projectId, thread, edits, onPlay, menuOnly, menu 
   /** Without the menu, only what it reports is left: Filed, Undone. */
   menu?: boolean }) {
   const reviewed = useReviewed(projectId, thread);
-  const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   const completed = useProjectStore(s => s.current?.project.completedThreads);
   const setThreadDone = useProjectStore(s => s.setThreadDone);
@@ -325,7 +321,7 @@ export function ThreadAction({ projectId, thread, edits, onPlay, menuOnly, menu 
   if ((!edits.length && !undoable.length && !undone) || thread.status === "working" || thread.active || thread.question) return null;
   if (isThreadDone(thread, completed)) return <div className="simple-action is-done">{menuOnly ? "Filed" : "Filed."}</div>;
   if (!menu && !undoing && !undone && !error) return null;
-  const left = edits.filter(e => e.check && !reviewed(e) && !deferred(e) && !revising(e));
+  const left = edits.filter(e => e.check && !reviewed(e) && !revising(e));
   async function run(task: () => Promise<void>) {
     setBusy(true);
     setError("");

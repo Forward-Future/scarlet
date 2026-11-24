@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
 
 /**
- * The same decisions and shortcuts for every edit: Revise (R) or Later (L), and Apply (A), Keep (K), or Done (D).
+ * The same decisions and shortcuts for every edit: Revise (R), and Apply (A), Keep (K), or Done (D).
  * `lead` is a pill of the card's own before them, such as a to-do's Add (A).
  */
 export function ReviewActions({ lead, approve, revise, disabled, approvalDisabled, approveLabel = "Apply", approveKey = "A", reviseLabel = "Revise", reviseKey = "R" }: {
@@ -17,7 +17,7 @@ export function ReviewActions({ lead, approve, revise, disabled, approvalDisable
   });
   return <div className="review-actions">
     {lead}
-    {revise && <button type="button" className="btn-ghost" data-key={reviseKey} data-log-control={reviseKey === "L" ? "defer-todo" : "revise-edit"} aria-keyshortcuts={reviseKey} title={`${reviseLabel} (${reviseKey})`} disabled={disabled} onClick={e => {
+    {revise && <button type="button" className="btn-ghost" data-key={reviseKey} data-log-control="revise-edit" aria-keyshortcuts={reviseKey} title={`${reviseLabel} (${reviseKey})`} disabled={disabled} onClick={e => {
       if (reviseKey !== "R") blurOnPointerClick(e);
       revise();
     }}>{reviseLabel}</button>}

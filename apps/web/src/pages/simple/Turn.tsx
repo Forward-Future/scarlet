@@ -5,7 +5,7 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
-import { editGroups, useDeferred, useReviewed, useRevising, useThreadEdits } from "../../components/review/threadEditState";
+import { editGroups, useReviewed, useRevising, useThreadEdits } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { TipButton } from "../../components/ui/TipButton";
 import { errorMessage } from "../../lib/client";
@@ -151,11 +151,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && (!!reportEvery || asksForALook.current)));
   asksForALook.current = listed.some(edit => !!edit.check);
   const reviewed = useReviewed(projectId, thread);
-  const deferred = useDeferred(projectId, thread);
   const revising = useRevising(thread);
   useEffect(() => {
     if (!reportReviewMarkers || !located) return;
-    const waits = (edit: ThreadEdit) => !!edit.check && !reviewed(edit) && !deferred(edit) && !revising(edit);
+    const waits = (edit: ThreadEdit) => !!edit.check && !reviewed(edit) && !revising(edit);
     const reported = reportEvery ? located : located.filter(waits);
     if (!reported.length) return;
     const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, members[0]!.i + 1] as const)));
@@ -163,7 +162,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       state: reviewed(edit) ? "kept" as const : waits(edit) ? "check" as const : undefined }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
-  }, [thread.id, head, located, reviewed, deferred, revising, reportReviewMarkers, reportEvery]);
+  }, [thread.id, head, located, reviewed, revising, reportReviewMarkers, reportEvery]);
   // A thread with a dialogue pass sums it up on one line instead of listing every cut.
   const waitingPass = openPass(thread, allTasks);
   const pendingPass = !!waitingPass;

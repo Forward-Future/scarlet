@@ -2518,7 +2518,7 @@ it("names B-roll from the web B-roll, and opens where it came from behind the ca
   expect([openTitle(), editPanel()!.querySelector(".edit-source"), sourceIcon()?.getAttribute("aria-expanded")]).toEqual(["The Ledger’s article", null, "false"]);
 });
 
-it("opens a marker Scarlet left for the editor as a to-do: what to add first, nothing to compare or keep, and Add, Later and the × that rejects it", async () => {
+it("opens a marker Scarlet left for the editor as a to-do: what to add first, nothing to compare or keep, and Add, Revise and the × that rejects it", async () => {
   appliedEdits();
   vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -2542,18 +2542,20 @@ it("opens a marker Scarlet left for the editor as a to-do: what to add first, no
   // Nothing in the video changed there, so there's no Before to play and nothing to keep.
   expect(panel.querySelector(".review-compare, .edit-card-before")).toBeNull();
   expect([...panel.querySelectorAll(".edit-card-acts button")].map(b => [b.textContent, b.getAttribute("title")]))
-    .toEqual([["Add", "Have Scarlet add it (A)"], ["Later", "Later (L)"], ["", "Reject edit (X)"]]);
-  const focusBefore = useUiStore.getState().composerFocus;
-  await press("r");
-  expect(useUiStore.getState().composerFocus).toBe(focusBefore);
-  await press("u");
-  expect(createTask).not.toHaveBeenCalled();
-  // There is no Done or Keep: D and K record nothing.
+    .toEqual([["Add", "Have Scarlet add it (A)"], ["Revise", "Revise (R)"], ["", "Reject edit (X)"]]);
+  // There is no Later, Done or Keep: L, D and K record nothing.
+  await press("l");
   await press("d");
   await press("k");
   await act(async () => {});
   expect(localStorage.getItem(`scarlet.kept-edits.v1/${PRJ}/${threadWith("chg_approved_2").id}`) ?? "").not.toContain("chg_approved_2/1");
   expect(editPanel()).not.toBeNull();
+  // Revise (R) aims the message box at the to-do, so what's typed next changes what it proposes. Nothing is sent yet.
+  const focusBefore = useUiStore.getState().composerFocus;
+  await press("r");
+  expect(useUiStore.getState().composerFocus).not.toBe(focusBefore);
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2" });
+  expect(createTask).not.toHaveBeenCalled();
 });
 
 it("rejects a to-do with its ×: the engine takes its marker off with no request to Scarlet, and the card says Rejected", async () => {
@@ -2605,7 +2607,7 @@ it("has Scarlet add what a to-do asks for with Add (A): one request about that t
   expect(request.context).toMatchObject({ changeId: "chg_approved_2", editIndex: 1, threadId: threadWith("chg_approved_2").id, message: "Add it" });
   expect(request.instruction).toContain("“Add the other boat renders”");
   await act(async () => { sent(); });
-  // The card goes on as it does after Later, to the next edit that hasn't been kept.
+  // The card goes on as it does after Keep, to the next edit that hasn't been kept.
   expect(openTitle()).toBe("music bed");
   expect(editPanel()!.querySelector('.edit-card-acts button[data-key="A"]')).toBeNull();
 });
@@ -13681,7 +13683,7 @@ it("keeps a to-do marked Done before the card lost Done in For you, marked Done 
   expect([row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Done"]);
 });
 
-it("parks a To do marker in For you with Later (L), drops the waiting count, advances, shows no Later when reopened, and supports ⌘Z", async () => {
+it("offers a To do marker Add, Revise and Reject only: L parks nothing, and Revise (R) aims the box at it while it still waits", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -13690,107 +13692,28 @@ it("parks a To do marker in For you with Later (L), drops the waiting count, adv
       { changeId: "chg_approved_2", spot: 2, label: "intro title", range: { start: 9, end: 11 }, previous: [], check: "Check the intro title" },
     ] }));
   const keepSpy = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
-  vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
   await showFolded();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
   const need = () => turn.querySelector<HTMLElement>(".simple-pass-need")!;
   const rows = () => Array.from(turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit"));
   const actions = () => [...editPanel()!.querySelectorAll(".edit-card-acts button")].map(b => [b.textContent, b.getAttribute("title")]);
-
-  // Only two tabs (For you | See all); both the to-do marker and the flagged edit live in For you.
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
   expect(need().getAttribute("title")).toBe("2 need you");
-  expect(rows().map(r => [r.querySelector(".simple-edit-title")?.textContent, r.querySelector(".simple-edit-value")?.textContent]))
-    .toEqual([["Add studio B-roll", "To do"], ["intro title", "Edit"]]);
 
-  // Pressing L on the to-do parks it in For you as Later without calling keepEdits, drops the waiting count, and advances.
   await click(rows()[0]!);
   await act(async () => {});
-  expect(actions()).toEqual([["Add", "Have Scarlet add it (A)"], ["Later", "Later (L)"], ["", "Reject edit (X)"]]);
+  expect(actions()).toEqual([["Add", "Have Scarlet add it (A)"], ["Revise", "Revise (R)"], ["", "Reject edit (X)"]]);
+  // L no longer parks it: the to-do still waits, and its card stays open.
   await press("l");
   await act(async () => {});
   expect(keepSpy).not.toHaveBeenCalled();
-  expect(need().getAttribute("title")).toBe("1 needs you");
-  expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toContain("Check the intro title");
-  const brollRow = () => rows()[0]!;
-  expect([
-    brollRow().classList.contains("is-decided"),
-    brollRow().querySelector(".edit-badge")?.classList.contains("is-check"),
-    brollRow().querySelector(".edit-badge")?.classList.contains("is-kept"),
-    brollRow().querySelector(".simple-edit-value")?.textContent,
-  ]).toEqual([false, false, false, "Later"]);
-
-  // Keeping the remaining flagged edit closes the card (skipping the parked Later to-do) and clears the badge.
-  await press("k");
-  await act(async () => {});
-  expect(editPanel()).toBeNull();
-  expect([need().getAttribute("title"), turn.querySelector(".simple-review-tab-count")]).toEqual([null, null]);
-
-  // Switching to See all and back to For you preserves the parked Later row.
-  await click(seeAll(turn)!);
-  expect(reviewModes(turn)).toEqual([["For you", "false"], ["See all", "true"]]);
-  await click(need());
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
-  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("Later");
-
-  // Reopening a Later to-do shows Add (A) and the × that rejects it, with no Later; L and D do nothing.
-  await click(brollRow());
-  await act(async () => {});
-  expect(actions()).toEqual([["Add", "Have Scarlet add it (A)"], ["", "Reject edit (X)"]]);
-  await press("l");
-  await press("d");
-  await act(async () => {});
-  expect(editPanel()).not.toBeNull();
-  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("Later");
-
-  // Undo the kept edit and then undo Later: the to-do returns to waiting ("To do") and restores Later (L).
-  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
-  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
-  await act(async () => {});
-  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("To do");
-  expect(brollRow().querySelector(".edit-badge")?.classList.contains("is-check")).toBe(true);
   expect(need().getAttribute("title")).toBe("2 need you");
-  expect(actions()).toEqual([["Add", "Have Scarlet add it (A)"], ["Later", "Later (L)"], ["", "Reject edit (X)"]]);
-});
-
-it("parks a dialogue pass's To do marker as Later in For you without holding up the waiting count or auto-advance", async () => {
-  runningPass();
-  flaggedPart();
-  const request = threadWith("chg_ready").id;
-  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: useProjectStore.getState().current!.project.head!,
-    edits: threadId !== request ? [] : [
-      { changeId: "chg_part", spot: 0, label: "wrap", range: { start: 3, end: 5 }, previous: [], check: "Check the wrap" },
-      { changeId: "chg_part", spot: 1, label: "Shoot B-roll", range: { start: 8, end: 10 }, previous: [], marker: true, check: "Record studio B-roll here" },
-      { changeId: "chg_part", spot: 2, label: "music bed", range: { start: 0, end: 2 }, previous: [] },
-    ] }));
-  const asked = askAll(STAGED).slice(0, 1).map((a, i) => ({ ...a, askOrder: i + 1 }));
-  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked } : c) };
-  useProjectStore.setState({ current: data });
-  await showFolded();
-  await act(async () => {});
-  const turn = turnFor("chg_ready");
-  const need = () => turn.querySelector<HTMLElement>(".simple-pass-need")!;
-
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
-  expect(need().getAttribute("title")).toBe("3 need you");
-  expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".simple-pass-label")?.textContent]))
-    .toEqual([["1", "A clean retake."], ["2", "wrap"], ["3", "Shoot B-roll"]]);
-
-  // Opening the to-do marker and pressing L parks it as Later in For you, drops the badge to 2, and wraps to Cut 1.
-  await click(passRows()[2]!);
-  await act(async () => {});
-  await press("l");
-  await act(async () => {});
+  expect(rows()[0]!.querySelector(".simple-edit-value")?.textContent).toBe("To do");
+  expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toContain("Add B-roll here");
+  // Revise aims the message box at the to-do. It waits on the editor until a revision actually goes out.
+  await press("r");
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2" });
   expect(need().getAttribute("title")).toBe("2 need you");
-  expect(container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent).toBe("Cut 1");
-  const markerRow = passRows()[2]!;
-  expect([
-    markerRow.classList.contains("is-decided"),
-    markerRow.querySelector(".edit-badge")?.classList.contains("is-check"),
-    markerRow.querySelector(".edit-badge")?.classList.contains("is-kept"),
-    markerRow.querySelector(".simple-pass-value")?.textContent,
-  ]).toEqual([false, false, false, "Later"]);
 });
 
 it("keeps a rejected flagged edit in For you marked Rejected and opens its Rejected card on click", async () => {
