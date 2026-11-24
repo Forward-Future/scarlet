@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { SourceCacheStatus } from "@scarlet/shared";
-import type { MediaAsset } from "@scarlet/timeline";
+import type { AudioStreamInfo, AudioTrackSelection, MediaAsset } from "@scarlet/timeline";
 import { api, errorMessage, IS_DESKTOP } from "../lib/client";
 import { desktop } from "../lib/desktop";
 import { ACCEPTED_MEDIA, canPreviewMedia, isPreparingMedia, MEDIA_FORMAT_HINT, MEDIA_FORMATS } from "../lib/upload";
@@ -13,6 +13,7 @@ import { ImportProgress, preparationStep } from "../components/media/ImportProgr
 import { MediaStatusLine } from "../components/media/MediaStatusLine";
 import { cacheLabel, cachePercent, useSourceCaches } from "../components/media/sourceCaches";
 import { useMediaProcessing } from "../components/media/useMediaProcessing";
+import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { ConfirmDialog, EmptyState, Icon, InlineError } from "../components/ui/primitives";
 
 function Thumb({ m }: { m: MediaAsset }) {
@@ -55,6 +56,108 @@ function SourceCache({ cache, name, paused, onCache }: { cache?: SourceCacheStat
   </MediaStatusLine>;
 }
 
+function audioStreamDetail(stream: AudioStreamInfo): string | undefined {
+  const parts: string[] = [];
+  if (stream.title) parts.push(stream.title);
+  else if (stream.language) parts.push(stream.language);
+  if (stream.channels === 1) parts.push("mono");
+  else if (stream.channels === 2) parts.push("stereo");
+  else if (stream.channels) parts.push(`${stream.channels}ch`);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
+/** Shown only on recordings with multiple audio tracks (e.g. OBS or multi-mic podcasts). */
+function AudioTrackPicker({ media, onError }: { media: MediaAsset; onError(message: string): void }) {
+  const streams = media.audioStreams;
+  const [busy, setBusy] = useState(false);
+  if (!streams || streams.length < 2) return null;
+  const value: AudioTrackSelection = media.audioTrack ?? 0;
+  const options: Array<{ value: AudioTrackSelection; label: string; detail?: string }> = [
+    { value: "all", label: "All tracks (mixed)", detail: `${streams.length} tracks` },
+    ...streams.map((s) => ({
+      value: s.index,
+      label: s.title ? `Track ${s.index + 1} — ${s.title}` : `Track ${s.index + 1}`,
+      detail: audioStreamDetail(s),
+    })),
+  ];
+  const change = async (next: AudioTrackSelection) => {
+    setBusy(true);
+    onError("");
+    try {
+      await useProjectStore.getState().setMediaAudioTrack(media.id, next);
+    } catch (e) {
+      onError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-1 flex items-center gap-1.5 text-2xs text-ink-3">
+      <span>Audio</span>
+      <PreferenceSelect
+        compact
+        label={`Audio track for ${media.name}`}
+        value={value}
+        disabled={busy}
+        options={options}
+        onChange={(next) => void change(next)}
+      />
+    </div>
+  );
+}
+
+/**
+ * What the editor says a file is and how to use it, for Scarlet, under the file's length: "Tell Scarlet what this is"
+ * until there is a note, then the note after "For Scarlet:", which a click opens to change. Optional: a file with none
+ * is used as before.
+ */
+function NoteLine({ media, onOpen }: { media: MediaAsset; onOpen(): void }) {
+  return media.editorNote ? (
+    <button type="button" className="media-note is-set" title="Change what Scarlet is told about this file" onClick={onOpen}>
+      <b>For Scarlet:</b> {media.editorNote}
+    </button>
+  ) : (
+    <div className="media-note"><button type="button" className="simple-link" onClick={onOpen}>Tell Scarlet what this is</button></div>
+  );
+}
+
+/** The note being written, across the row's full width. Enter or Save keeps it, Esc or Cancel leaves it as it was. */
+function NoteEditor({ media, onClose }: { media: MediaAsset; onClose(): void }) {
+  const note = media.editorNote ?? "";
+  const [draft, setDraft] = useState(note);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const save = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      if (draft.trim() !== note) await useProjectStore.getState().setMediaNote(media.id, draft);
+      onClose();
+    } catch (e) {
+      setError(errorMessage(e));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="media-note-editor">
+      <div className="media-note-label" aria-hidden="true">Tell Scarlet what this is and how to use it</div>
+      <textarea className="field media-note-field" rows={2} autoFocus maxLength={2000} value={draft} disabled={busy}
+        aria-label={`Tell Scarlet what ${media.name} is and how to use it`}
+        placeholder="For example: Finished sponsor read. Insert it whole after the intro. Don’t cut it."
+        onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
+          else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void save(); }
+        }} />
+      <div className="media-note-actions">
+        <button type="button" className="btn-ghost media-note-save" disabled={busy} onClick={() => void save()}>Save</button>
+        <button type="button" className="simple-link" disabled={busy} onClick={onClose}>Cancel</button>
+      </div>
+      <InlineError>{error}</InlineError>
+    </div>
+  );
+}
+
 const KIND_LABEL: Record<MediaAsset["kind"], string> = { video: "Video", audio: "Audio", image: "Image", graphic: "Graphic" };
 
 export function MediaPage({ uploads, onPlay }: {
@@ -69,6 +172,8 @@ export function MediaPage({ uploads, onPlay }: {
   const [pickerError, setPickerError] = useState("");
   // The unreadable file the editor is asked about before it is taken out.
   const [removal, setRemoval] = useState<MediaAsset | null>(null);
+  /** The file whose note is being written: one at a time. */
+  const [noteOpen, setNoteOpen] = useState<string | null>(null);
   const { items, start, startPaths, localImport, dismiss } = uploads;
   const [picking, setPicking] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -148,6 +253,8 @@ export function MediaPage({ uploads, onPlay }: {
                     m.duration ? clock(m.duration) : m.width && m.height ? `${m.width}×${m.height}` : KIND_LABEL[m.kind]
                   )}
                 </div>
+                {m.status !== "failed" && <AudioTrackPicker media={m} onError={setCacheError} />}
+                {m.status !== "failed" && noteOpen !== m.id && <NoteLine media={m} onOpen={() => setNoteOpen(m.id)} />}
               </div>
               <div className="media-jobs">
                 {isPreparingMedia(m) && <Reading m={m} paused={paused} />}
@@ -156,6 +263,7 @@ export function MediaPage({ uploads, onPlay }: {
                 {/* A file with no audio track has nothing to transcribe. */}
                 {(m.kind === "video" || m.kind === "audio") && m.hasAudio !== false && <TranscriptLine asset={m} available={transcriptionAvailable} cloud={local === false} />}
               </div>
+              {m.status !== "failed" && noteOpen === m.id && <NoteEditor media={m} onClose={() => setNoteOpen(null)} />}
               {/* A file Scarlet couldn't read ends in a small ×, named on hover, that asks before taking it out of the project. */}
               {m.status === "failed" && <button type="button" className="edit-card-icon media-remove" aria-label={`Remove ${m.name}`} title="Remove"
                 onClick={() => setRemoval(m)}><Icon name="x" size={12} /></button>}

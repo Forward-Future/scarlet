@@ -29,6 +29,7 @@ export function WorkspaceComposer({ newEdit, playerVersion, mediaId, ...props }:
       if ((now.playing && !was.playing) || moved(now.time)) release();
     });
   }, [point, written, speaking, playerVersion, mediaId]);
-  const pointTag = point && !point.fromMessage ? `At ${clockLabel(point.time)}` : undefined;
+  // A time typed in the message aims it as a picked moment does, so it has the same tag: it can be seen, and taken off.
+  const pointTag = point ? `At ${clockLabel(point.time)}` : undefined;
   return <Composer {...props} targetTag={props.targetTag ?? pointTag} targetIsPoint={!props.targetTag && !!pointTag} />;
 }

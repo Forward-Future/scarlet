@@ -323,8 +323,9 @@ it("finds what the start-up repairs and the export list look for without reading
     expect(queries.map(sql => (ctx.db.prepare("EXPLAIN QUERY PLAN " + sql).all() as { detail: string }[])[0]!.detail)).toEqual([
       "SEARCH changes USING INDEX changes_project_state (project_id=? AND state=?)",
       "SEARCH changes USING INDEX changes_state (state=?)",
-      "SCAN changes USING INDEX changes_left_out_reread_v3",
+      "SCAN changes USING INDEX changes_left_out_reread_v5",
       "SCAN changes USING INDEX changes_left_out_unread",
+      "SCAN changes USING INDEX changes_first_cut_unread",
       "SCAN tasks USING INDEX tasks_dialogue_unset",
       "SCAN renders USING INDEX renders_export",
     ]);
@@ -363,7 +364,7 @@ it("installs a versioned left-out reread index alongside an earlier build's inde
   const dataDir = join(directory, "legacy-left-out-reading");
   const first = createApp({ dataDir, skillsSeedDir: join(directory, "empty-seed"), env: {}, log: () => {} });
   // Simulate an existing library from an earlier build whose partial index checks reading < 2.
-  first.ctx.db.exec(`DROP INDEX IF EXISTS changes_left_out_reread_v3;
+  first.ctx.db.exec(`DROP INDEX IF EXISTS changes_left_out_reread_v5;
     CREATE INDEX changes_left_out_reread ON changes(created_at) WHERE state = 'approved'
       AND json_array_length(json_extract(json, '$.leftOut.joins')) > 0
       AND coalesce(json_extract(json, '$.leftOut.reading'), 1) < 2;`);
@@ -372,8 +373,8 @@ it("installs a versioned left-out reread index alongside an earlier build's inde
   const second = createApp({ dataDir, skillsSeedDir: join(directory, "empty-seed"), env: {}, log: () => {} });
   try {
     expect(() => recordLeftOutFootage(second.ctx)).not.toThrow();
-    const current = second.ctx.db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'changes_left_out_reread_v3'").get() as { sql: string } | undefined;
-    expect(current?.sql).toContain("< 3");
+    const current = second.ctx.db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'changes_left_out_reread_v5'").get() as { sql: string } | undefined;
+    expect(current?.sql).toContain("< 5");
     const legacy = second.ctx.db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'changes_left_out_reread'").get() as { sql: string } | undefined;
     expect(legacy?.sql).toContain("< 2");
   } finally { await second.ctx.close(); }

@@ -45,7 +45,7 @@ it("reads an edit card's cut as the words either side of one mark, which opens a
   // “click” starts at 11.6 s and “test” ends at 15.9 s: eleven words, more than the mark shows.
   await act(async () => root.render(<EditPassage timeline={timeline()} media={[mic]} range={{ start: 11.55, end: 15.95 }} length="4.4 s" />));
   await settle();
-  const group = () => container.querySelector('[aria-label="Words this cut removes"]')!;
+  const group = () => container.querySelector('[aria-label="Words this cut takes out"]')!;
   const mark = () => group().querySelector<HTMLButtonElement>("button.edit-passage-cut")!;
   expect(group().textContent).toBe("… It broke last week. 4.4 s the new model from Deepseek flew under the radar.");
   expect(group().querySelector(".review-voice")).toBeNull();

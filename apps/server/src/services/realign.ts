@@ -7,6 +7,7 @@
  * recording's saved emissions make it a search, not an inference. A transcript already on this aligner is left alone.
  */
 import { join } from "node:path";
+import { heardAudio } from "@scarlet/render";
 import { newId } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { alignmentVersion, alignsLanguage, alignTranscript } from "../transcribe/wordAlign.js";
@@ -24,11 +25,12 @@ export async function realignTranscript(ctx: Ctx, projectId: string, mediaId: st
   if (!alignsLanguage(original.language)) return { state: "unavailable", reason: "Word alignment doesn’t read this transcript’s language." };
   if (original.alignment === alignmentVersion) return { state: "current" };
   const source = join(ctx.paths.media(projectId), media.path);
-  const emissions = await emissionStore(ctx, projectId, source).catch(() => undefined);
+  const audio = heardAudio(media);
+  const emissions = await emissionStore(ctx, projectId, source, audio).catch(() => undefined);
   signal.throwIfAborted();
   if (!emissions) return { state: "unavailable", reason: "The source recording is unavailable." };
   let failed = false;
-  const segments = await alignTranscript(ctx, { source, language: original.language, segments: original.segments, signal, emissions,
+  const segments = await alignTranscript(ctx, { source, audio, language: original.language, segments: original.segments, signal, emissions,
     work: { mediaId, kind: "alignment" }, onFailure: () => { failed = true; } });
   signal.throwIfAborted();
   if (failed) return { state: "unavailable", reason: "Scarlet couldn’t realign this transcript. Try again when the source recording and aligner are available." };

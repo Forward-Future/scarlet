@@ -768,16 +768,20 @@ describe("listen", () => {
   });
   it("is offered only where it helps: never to a model that hears, nor with no listener signed in", async () => {
     const codexAudio = Task.parse({ ...edit, agent: "codex", model: "gpt-6-astra-audio" });
+    const agyClaude = Task.parse({ ...edit, agent: "gemini", model: "claude-opus-5-5" });
     const sessions = [
       await connect({ taskId: edit.id, task: edit }),
       await connect({ agent: "codex", taskId: codexAudio.id, task: codexAudio, capabilities: agentCapabilities("codex", undefined, "gpt-6-astra-audio"), listener: { agent: "gemini" } }),
+      await connect({ agent: "gemini", taskId: agyClaude.id, task: agyClaude, capabilities: { ...agentCapabilities("gemini", undefined, "claude-opus-5-5"), files: true, briefTools: false }, listener: { agent: "gemini" } }),
     ];
     try {
-      const [none, hears] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      const [none, hears, agyThirdParty] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
       expect(none).not.toContain("listen");
       expect(none).not.toContain("source_audio");
       expect(hears).not.toContain("listen");
       expect(hears).toContain("source_audio");
+      expect(agyThirdParty).toContain("listen");
+      expect(agyThirdParty).not.toContain("source_audio");
     } finally { await Promise.all(sessions.map(c => c.close())); }
   });
   it("gives the run that listens the passage as a file and nothing else", async () => {
@@ -957,13 +961,14 @@ describe("tool annotations", () => {
 
   it("marks exactly the tools that change something as writes, and nothing as destructive", () => {
     expect(every.filter(name => !toolAnnotations(name).readOnlyHint).sort()).toEqual([...writes].sort());
-    for (const name of every.filter(n => n !== "web_capture")) {
+    for (const name of every.filter(n => n !== "web_capture" && n !== "web_video")) {
       const a = toolAnnotations(name);
       // A read may be repeated; a write may not, and every edit stays reversible.
       expect(a).toMatchObject({ idempotentHint: a.readOnlyHint, destructiveHint: false, openWorldHint: false });
     }
     // A page from the web changes nothing in the project, and reads the open web, which may say something else next time.
     expect(toolAnnotations("web_capture")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+    expect(toolAnnotations("web_video")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
     // A name Scarlet doesn't know is never taken for a read.
     expect(toolAnnotations("timeline_delete_everything").readOnlyHint).toBe(false);
   });

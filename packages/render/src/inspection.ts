@@ -10,6 +10,7 @@ import { CUDA_FRAMES_INPUT, rangeInput } from "./mediaInput.js";
 import { withDecoderFallback } from "./probe.js";
 import { toneMapFilters, type HdrTransfer } from "./hdr.js";
 import { waveformFromPcm } from "./waveform.js";
+import { audioMixStreamsFilter, resolveAudioTrack, type HeardAudio } from "./audioTrack.js";
 
 function input(file: string, range: TimeRange, decoder?: SheetOptions["decoder"]) {
   // CUDA frames stay on the GPU until `shrinkFirst` scales them. VideoToolbox frames come back to memory.
@@ -266,22 +267,24 @@ export interface InspectionEvent extends TimeRange {
   deltaDb?: number;
 }
 
-function readReview(file: string, range: TimeRange, signal?: AbortSignal, sheet: string[] = []) {
+/** `audition`: also write the window's audio, padded to its length, to this file. */
+function readReview(file: string, range: TimeRange, signal?: AbortSignal, sheet: string[] = [], audio?: HeardAudio, audition?: string) {
   const duration = range.end - range.start;
   return runCapture(resolveFfmpeg(), [...input(file, range), "-map", "0:v:0", "-an",
     "-vf", `trim=duration=${duration},scale=320:-2,blackdetect=d=0,freezedetect=n=-55dB:d=0.4,metadata=print:key=lavfi.black_start,metadata=print:key=lavfi.black_end`,
-    "-f", "null", "-", ...sheet, ...pcmOutput(0, SOURCE_AUDIO_CLOCK, "-")], { signal, maxStdout: sheet.length ? 1024 * 1024 : undefined });
+    "-f", "null", "-", ...sheet, ...pcmOutputs(audio, [...audition ? [{ filter: auditionFilter(range), output: audition }] : [],
+      { filter: SOURCE_AUDIO_CLOCK, output: "-" }])], { signal, maxStdout: sheet.length ? 1024 * 1024 : undefined });
 }
 
-export async function qualityEvents(file: string, range: TimeRange, origin: number, signal?: AbortSignal): Promise<InspectionEvent[]> {
-  const { stdout, stderr } = await readReview(file, range, signal);
+export async function qualityEvents(file: string, range: TimeRange, origin: number, signal?: AbortSignal, audio?: HeardAudio): Promise<InspectionEvent[]> {
+  const { stdout, stderr } = await readReview(file, range, signal, [], audio);
   return reviewEvents(stderr, stdout, range, origin);
 }
 
 /** Inspect one rendered cut window. Both picture filters see the same decoded frames,
  * and the same audio decode supplies both the level measurements and the optional padded audition. */
 export async function reviewWindow(file: string, range: TimeRange,
-  opts: Pick<SheetOptions, "origin" | "fps" | "count" | "focus" | "signal"> & { includeAudio?: boolean; tempDir: string }) {
+  opts: Pick<SheetOptions, "origin" | "fps" | "count" | "focus" | "signal"> & { includeAudio?: boolean; tempDir: string; audio?: HeardAudio }) {
   const duration = range.end - range.start, start = opts.origin + range.start;
   const times = sampleTimes(duration, opts.fps, opts.count, [], opts.focus === undefined ? undefined : opts.focus - start);
   const scratch = join(opts.tempDir, `review-${randomUUID()}`);
@@ -291,9 +294,8 @@ export async function reviewWindow(file: string, range: TimeRange,
   const labels = await hasDrawtext();
   try {
     const sheet = ["-map", "0:v:0", "-an", "-vf", selectedSheet(duration, times, start, labels),
-      "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2", "-update", "1", picture,
-      ...(audio ? pcmOutput(0, auditionFilter(range), audio) : [])];
-    const { stdout, stderr } = await readReview(file, range, opts.signal, sheet);
+      "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "4", "-f", "image2", "-update", "1", picture];
+    const { stdout, stderr } = await readReview(file, range, opts.signal, sheet, opts.audio, audio);
     // ffmpeg writes no picture when the window decodes no frame: sheetResult then says so instead of naming a temp file.
     const sheetPicture = readFile(picture).catch((error: NodeJS.ErrnoException) => error.code === "ENOENT" ? Buffer.alloc(0) : Promise.reject(error));
     const [jpeg, audition] = await Promise.all([sheetPicture, audio && readFile(audio)]);
@@ -337,12 +339,23 @@ function auditionFilter(range: TimeRange) {
   return `${SOURCE_AUDIO_CLOCK},apad=whole_dur=${range.end - range.start}`;
 }
 
-function pcmOutput(stream: number, filter: string, output: string) {
-  return ["-vn", "-map", `0:a:${stream}`, "-af", filter, "-ac", "1", "-ar", "16000", "-f", "s16le", output];
+/**
+ * 16 kHz mono PCM outputs of the heard audio, each through its own filter. Every track mixed is one mix, split
+ * between the outputs.
+ */
+function pcmOutputs(audio: HeardAudio | undefined, outputs: Array<{ filter: string; output: string }>) {
+  const pcm = ["-ac", "1", "-ar", "16000", "-f", "s16le"];
+  const resolved = resolveAudioTrack(audio?.audioTrack, audio?.audioStreamCount);
+  if (resolved.mode === "single") return outputs.flatMap(({ filter, output }) => ["-vn", "-map", `0:a:${resolved.stream}`, "-af", filter, ...pcm, output]);
+  const several = outputs.length > 1;
+  const graph = [audioMixStreamsFilter(0, resolved.count, { outLabel: "heard", prefix: "heard_" }),
+    ...several ? [`[heard]asplit=${outputs.length}${outputs.map((_, i) => `[heard${i}]`).join("")}`] : [],
+    ...outputs.map(({ filter }, i) => `[heard${several ? i : ""}]${filter}[pcm${i}]`)];
+  return ["-filter_complex", graph.join(";"), ...outputs.flatMap(({ output }, i) => ["-map", `[pcm${i}]`, ...pcm, output])];
 }
 
-export async function audition(file: string, range: TimeRange, signal?: AbortSignal, stream = 0) {
-  const { stdout } = await runCapture(resolveFfmpeg(), [...input(file, range), ...pcmOutput(stream, auditionFilter(range), "-")], { signal, maxStdout: 1024 * 1024 });
+export async function audition(file: string, range: TimeRange, signal?: AbortSignal, audio?: HeardAudio) {
+  const { stdout } = await runCapture(resolveFfmpeg(), [...input(file, range), ...pcmOutputs(audio, [{ filter: auditionFilter(range), output: "-" }])], { signal, maxStdout: 1024 * 1024 });
   return wavFromPcm(stdout);
 }
 

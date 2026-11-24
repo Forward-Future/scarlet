@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { fileInDirectoryAsync } from "@scarlet/render";
+import { fileInDirectoryAsync, heardAudio } from "@scarlet/render";
 import { Hono, type Context } from "hono";
 import type { MediaAsset } from "@scarlet/timeline";
 import { SOURCE_AUDIO_MOST } from "@scarlet/shared";
@@ -27,7 +27,7 @@ function requireSourceRange(from: number | undefined, to: number | undefined) {
 /** Read-only measurements the agent tools need beyond waveforms and transcripts. */
 export function perceptionRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
-  // Integrated loudness (EBU R128) of a source's first audio stream, optionally for a range.
+  // Integrated loudness (EBU R128) of a source's chosen audio track, or its first, optionally for a range.
   r.get("/projects/:projectId/media/:mediaId/loudness", async c => {
     const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "This media has no audio to measure.");
@@ -38,7 +38,7 @@ export function perceptionRoutes(ctx: Ctx) {
     const info = await stat(file);
     // A measurement someone asked for, such as a running edit's, isn't stopped by a pause of the project's media work.
     const result = await measuredLoudness(ctx, file, [media.hash, info.size, info.ctimeMs, info.mtimeMs], { from, to, projectId: media.projectId,
-      stop: ctx.projectSignal(media.projectId) });
+      audio: heardAudio(media), stop: ctx.projectSignal(media.projectId) });
     return c.json({ mediaId: media.id, ...(from !== undefined && { from }), ...(to !== undefined && { to }), ...result });
   });
 

@@ -155,3 +155,45 @@ export function useFileDropTarget(
   };
   return { over, dropProps };
 }
+
+const CHAT_SCROLL_CONTAINERS = ".simple-pass-list:not(.is-moment), .simple-edits, .simple-pin, .simple-chat";
+
+/** Whether `el` is clipped above or below any scrollable ancestor inside the chat rail. */
+export function isClippedInScrollAncestors(el: Element): boolean {
+  const box = el.getBoundingClientRect();
+  if (box.height === 0) return false;
+  for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+    if (parent.matches(CHAT_SCROLL_CONTAINERS)) {
+      const view = parent.getBoundingClientRect();
+      if (view.height > 0 && (box.top < view.top || box.bottom > view.bottom)) return true;
+    }
+    if (parent.matches(".simple-chat, .simple-pin")) break;
+  }
+  return false;
+}
+
+/**
+ * Keeps the currently selected row inside `container` visible within its scroll container(s) whenever `selectedKey`
+ * changes (selection, list filter, or rows above it) and whenever the container resizes and clips the selected row.
+ */
+export function useKeepSelectedInView(
+  container: RefObject<HTMLElement | null>,
+  selectedKey: string | undefined,
+  selector = '[aria-current="true"]',
+) {
+  useLayoutEffect(() => {
+    if (!selectedKey) return;
+    container.current?.querySelector(selector)?.scrollIntoView?.({ block: "nearest" });
+  }, [container, selectedKey, selector]);
+
+  useEffect(() => {
+    const el = container.current;
+    if (!selectedKey || !el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const row = el.querySelector(selector);
+      if (row && isClippedInScrollAncestors(row)) row.scrollIntoView?.({ block: "nearest" });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [container, selectedKey, selector]);
+}

@@ -20,7 +20,7 @@ import {
   type TaskEvent,
 } from "@scarlet/shared";
 import { timelineDuration, type MediaClip, type TimeRange } from "@scarlet/timeline";
-import { colorEvidence, pct1 } from "./analysis.js";
+import { addedAfterRequest, colorEvidence, pct1 } from "./analysis.js";
 import { createAudioOption, percentBox } from "./mcp-schema.js";
 import type { MediaSession } from "./media-session.js";
 import { eachRecording, RecordingList, recordingsAsked, requireMediaAsset, type SessionErrorHelpers } from "./media-state.js";
@@ -112,6 +112,8 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
         id: m.id, name: m.name, kind: m.kind, duration: m.duration, fps: m.fps, width: m.width, height: m.height,
         hasAudio: m.hasAudio, hasTranscript: Boolean(m.transcriptId), ...(m.provenance && { provenance: m.provenance }), ...(m.graphic && { graphic: m.graphic }),
         ...(colorEvidence(m.color) && { color: colorEvidence(m.color) }),
+        ...(m.editorNote && { editorNote: m.editorNote }),
+        ...(addedAfterRequest(m, task?.createdAt) && { addedAfterThisRequest: true }),
       }));
       const tl = detail.timeline;
       moveBase(tl, asked);
@@ -123,6 +125,7 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
         editContext: task && { ...task.context, dialogueRange: session.localRange },
         duration: tl ? timelineDuration(tl) : 0,
         media,
+        ...(media.some(m => m.addedAfterThisRequest) && { addedLater: "The editor added the files marked addedAfterThisRequest after sending this request. They aren't part of it unless the editor's words name them." }),
         tracks: tl ? tl.tracks.map((t) => ({ id: t.id, kind: t.kind, name: t.name, clips: t.clips.length, muted: t.muted, hidden: t.hidden })) : [],
       });
     },

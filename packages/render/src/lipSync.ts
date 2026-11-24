@@ -7,6 +7,7 @@
 import type { TimeRange } from "@scarlet/timeline";
 import { FFMPEG_QUIET_ARGS, SOURCE_AUDIO_CLOCK, resolveFfmpeg, runCapture } from "./exec.js";
 import { rangeInput } from "./mediaInput.js";
+import { audioMapArgs, type HeardAudio } from "./audioTrack.js";
 
 /** The mouth's area of the frame: [left, top, right, bottom] as fractions. */
 export type CropBox = readonly [number, number, number, number];
@@ -98,9 +99,9 @@ export async function mouthMotion(file: string, range: TimeRange, opts: {
 }
 
 /** The sound's loudness over each frame of `range` at `fps`, as the log of its RMS level. */
-export async function frameLoudness(file: string, range: TimeRange, opts: { fps: number; frames: number; stream?: number; signal?: AbortSignal }): Promise<Float32Array> {
+export async function frameLoudness(file: string, range: TimeRange, opts: { fps: number; frames: number; audio?: HeardAudio; signal?: AbortSignal }): Promise<Float32Array> {
   const { stdout } = await runCapture(resolveFfmpeg(), [...FFMPEG_QUIET_ARGS, "-loglevel", "error", ...rangeInput(file, range),
-    "-map", `0:a:${opts.stream ?? 0}`, "-vn", "-af", SOURCE_AUDIO_CLOCK, "-ac", "1", "-ar", String(SOUND_RATE), "-f", "s16le", "-"],
+    ...audioMapArgs(opts.audio, { filters: SOURCE_AUDIO_CLOCK }), "-vn", "-ac", "1", "-ar", String(SOUND_RATE), "-f", "s16le", "-"],
     { signal: opts.signal, maxStderr: 64 * 1024 });
   const samples = new Int16Array(stdout.buffer, stdout.byteOffset, Math.floor(stdout.length / 2));
   const loudness = new Float32Array(opts.frames);
@@ -116,6 +117,8 @@ export async function frameLoudness(file: string, range: TimeRange, opts: { fps:
 /** Measure one stretch of a recording: the mouth in `box` against the sound, shifted up to `maxShift` seconds either way. `curve` is the match at each shift, a frame apart. */
 export async function lipSyncStretch(file: string, range: TimeRange, opts: {
   box: CropBox; width: number; height: number; fps: number; maxShift: number; decoder?: "videotoolbox" | "cuda"; signal?: AbortSignal;
+  /** The sound to measure against: the recording's chosen track, or every track mixed. */
+  audio?: HeardAudio;
 }): Promise<LipSyncReading & { curve: number[] }> {
   let motion: Float32Array;
   try { motion = await mouthMotion(file, range, opts); }
@@ -124,7 +127,7 @@ export async function lipSyncStretch(file: string, range: TimeRange, opts: {
     if (!opts.decoder) throw error;
     motion = await mouthMotion(file, range, { ...opts, decoder: undefined });
   }
-  const loudness = await frameLoudness(file, range, { fps: opts.fps, frames: motion.length, signal: opts.signal });
+  const loudness = await frameLoudness(file, range, { fps: opts.fps, frames: motion.length, audio: opts.audio, signal: opts.signal });
   const curve = shiftCurve(motion, loudness, Math.max(1, Math.round(opts.maxShift * opts.fps)));
   return { ...curvePeak(curve, opts.fps, Math.min(motion.length, loudness.length)), curve: curve.map(n => Math.round(n * 1e4) / 1e4) };
 }

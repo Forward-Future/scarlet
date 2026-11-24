@@ -400,7 +400,9 @@ function threadWaitsOnEditor(ctx: Ctx, projectId: string, threadId: string): boo
 
 /** Only a rule that waits on the editor can be reworded, declined or approved. */
 function requireSuggested(learning: Learning): void {
-  if (learning.state !== "suggested") throw conflict("learning_settled", `this learning is already ${learning.state}`);
+  if (learning.state === "suggested") return;
+  throw conflict("learning_settled", learning.state === "saving" ? "This rule is already being saved."
+    : learning.state === "saved" ? "This rule was already approved." : "This rule was already declined.");
 }
 
 /**

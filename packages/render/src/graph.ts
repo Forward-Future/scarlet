@@ -27,6 +27,7 @@ import type {
   TimeRange,
   TransitionPlan,
 } from "@scarlet/timeline";
+import { audioMixStreamsFilter, resolveAudioTrack, type ResolvedAudioTrack } from "./audioTrack.js";
 import { INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, even, ffmpegMajor, fnum, requireDrawtext } from "./exec.js";
 import { audioEffectDelay, effectFilters } from "./effects.js";
 import { canZscale, toneMapChain, type HdrTransfer } from "./hdr.js";
@@ -308,7 +309,7 @@ async function writeFilterGraph(
     overlay(lbl, tf, "t", moves, p);
   };
 
-  const audioForMedia = (clip: MediaClip, idx: number, p: Placement, skip: number) => {
+  const audioForMedia = (clip: MediaClip, idx: number, p: Placement, skip: number, track: ResolvedAudioTrack, explicitTrack: boolean) => {
     const speed = clip.speed ?? 1;
     // Keep a delayed microphone on the input seek clock. Fill its leading
     // silence before trimming, changing speed or mixing it with other clips.
@@ -330,7 +331,19 @@ async function writeFilterGraph(
     chain.push(`aformat=sample_rates=${SR}:channel_layouts=${layout}`);
     if (p.pos > 0) chain.push(`adelay=${Math.round(p.pos * SR)}S:all=1`);
     const lbl = label("a");
-    lines.push(`[${idx}:a]${chain.join(",")}${lbl}`);
+    if (track.mode === "mix") {
+      const mixed = `amix_${labelN++}`;
+      lines.push(audioMixStreamsFilter(idx, track.count, {
+        sampleRate: SR,
+        channelLayout: layout,
+        outLabel: mixed,
+        prefix: `as_${labelN++}_`,
+      }));
+      lines.push(`[${mixed}]${chain.join(",")}${lbl}`);
+    } else {
+      const pad = track.stream === 0 && !explicitTrack ? `[${idx}:a]` : `[${idx}:a:${track.stream}]`;
+      lines.push(`${pad}${chain.join(",")}${lbl}`);
+    }
     audioLabels.push(lbl);
   };
 
@@ -458,7 +471,17 @@ async function writeFilterGraph(
         // Seeking before a movie's first video keyframe can discard earlier
         // audio packets. Read that prefix from the beginning and trim by PTS.
         const skip = srcStart < firstPicture ? srcStart : 0;
-        audioForMedia(clip, open(file, srcStart - skip, true, p.vis * speed + skip), p, skip);
+        const selectedTrack = clip.audioTrack ?? asset.audioTrack;
+        const streamCount = asset.audioStreams?.length
+          ?? (selectedTrack !== undefined ? (await verifiedProbe(asset))?.audioStreams?.length : undefined);
+        audioForMedia(
+          clip,
+          open(file, srcStart - skip, true, p.vis * speed + skip),
+          p,
+          skip,
+          resolveAudioTrack(selectedTrack, streamCount),
+          selectedTrack !== undefined,
+        );
       }
     }
   }

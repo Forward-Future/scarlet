@@ -376,6 +376,95 @@ describe("reviewing one thread on the working interview timeline", () => {
     expect(threadTimeline(thread([{ ...pass, leftOut: undefined }]), built, [{ version: "v1", parent: null }], v => versions[v], 30)).toHaveLength(3);
   });
 
+  it("lists every stretch a whole first cut left out of the recording as a cut, the talk before the first line too", () => {
+    // Matt's 28-minute talking head was cut to 15 by saving the pieces to keep as the whole video. That save names no
+    // edits and has no steps: it listed as nothing, and the request said it took out 20 s (2026-11-23).
+    const built = { ...timelineFromKeepRanges("project", "interview", [{ start: 135, end: 152 }, { start: 153, end: 300 }, { start: 320, end: 400 }]), version: "v1" };
+    const found = leftOutJoins({ ...built, tracks: built.tracks.map(t => ({ ...t, clips: [] })) }, built, 30, new Map([["interview", 500]]))!;
+    const versions: Record<string, typeof built> = { v1: built, full: { ...found.original, version: "full" } };
+    const first = { ...change, firstCut: true, reason: "Keeps the last full try of each line.", ranges: [{ start: 0, end: timelineDuration(built) }],
+      leftOut: { version: "full", joins: found.joins } };
+    const edits = threadTimeline(thread([first]), built, [{ version: "v1", parent: null }], v => versions[v], 30);
+    expect(edits.map(e => [e.label, e.kind, e.at, e.beforeCut?.removed])).toEqual([
+      ["Cut", "cut", 0, { start: 0, end: 135 }], ["Cut", "cut", 17, { start: 152, end: 153 }],
+      ["Cut", "cut", 164, { start: 300, end: 320 }], ["Cut", "cut", 244, { start: 400, end: 500 }]]);
+    expect(edits.every(e => e.reason === first.reason && e.beforeCut!.version === "full")).toBe(true);
+    const out = edits.reduce((sum, e) => sum + e.beforeCut!.removed.end - e.beforeCut!.removed.start, 0);
+    expect(out).toBeCloseTo(500 - timelineDuration(built));
+    // Picture sync then moves the picture a few frames along, so the first frame of the first cut is no longer in the
+    // video. The talk before the first line is still out, and still listed, at the start.
+    const synced = { ...built, version: "v2", tracks: built.tracks.map((t, i) => i ? t : { ...t, clips: t.clips.map(c => "sourceIn" in c ? { ...c, sourceIn: c.sourceIn + 0.16, sourceOut: c.sourceOut + 0.16 } : c) }) };
+    const later = threadTimeline(thread([first]), synced, [{ version: "v1", parent: null }, { version: "v2", parent: "v1" }], v => ({ ...versions, v2: synced })[v], 30);
+    expect(later.map(e => e.at)).toHaveLength(4);
+    expect(later[0]).toMatchObject({ at: 0, beforeCut: { removed: { start: 0, end: 135 } } });
+    // Before the engine has read it, the save lists as it did: one row for the whole video.
+    expect(threadTimeline(thread([{ ...first, leftOut: undefined }]), built, [{ version: "v1", parent: null }], v => versions[v], 30).map(e => e.label)).toEqual(["Tighten the interview"]);
+  });
+
+  it("counts what later saves took at a first cut's joins once, however each save was made, so the cuts add up to the footage that is out", () => {
+    // On Matt's talking head later saves cut the pieces either side of a first cut's joins, put a little back and
+    // took a flashed frame from between two cuts. Three cuts lost both their neighbours and weren't listed, two sat
+    // inside a clip, and one read as a 7.3 s cut over footage earlier cuts had taken: the total was 6 s out (2026-11-23).
+    const keep = (version: string, ...ranges: [number, number][]) => ({ ...timelineFromKeepRanges("project", "interview", ranges.map(([start, end]) => ({ start, end }))), version });
+    const built = keep("v1", [10, 20], [25, 30], [40, 60]);
+    const found = leftOutJoins({ ...built, tracks: built.tracks.map(t => ({ ...t, clips: [] })) }, built, 30, new Map([["interview", 100]]))!;
+    // A save of the whole video that names nothing takes out the middle piece and a second off each neighbour.
+    const tightened = keep("v2", [10, 19], [41, 60]);
+    // The next, which names its edit, rolls the join: half a second of the first piece comes back.
+    const rolled = keep("v3", [10, 19.5], [41, 60]);
+    const versions: Record<string, typeof built> = { v1: built, v2: tightened, v3: rolled, full: { ...found.original, version: "full" } };
+    const links = [{ version: "v1", parent: null }, { version: "v2", parent: "v1" }, { version: "v3", parent: "v2" }];
+    const first = { ...change, id: "first", firstCut: true, ranges: [{ start: 0, end: 35 }], leftOut: { version: "full", joins: found.joins } };
+    const second = { ...change, id: "second", fromVersion: "v1", toVersion: "v2", description: "Tightened the middle", createdAt: "2026-01-01T00:01:00Z", ranges: [{ start: 9, end: 9 }] };
+    const third = { ...change, id: "third", fromVersion: "v2", toVersion: "v3", description: "Let the line finish", createdAt: "2026-01-01T00:02:00Z",
+      timelineEdits: [{ label: "Let the line finish", range: { start: 9.5, end: 9.5 }, check: "Listen to the end of the line" }] };
+    const out = (edits: ReturnType<typeof threadTimeline>) => edits.reduce((sum, e) => sum + (e.beforeCut ? e.beforeCut.removed.end - e.beforeCut.removed.start : 0), 0);
+    const after = (head: typeof built, ...changes: Change[]) => threadTimeline(thread(changes), head, links.slice(0, changes.length), v => versions[v], 30);
+    const one = after(built, first), two = after(tightened, first, second), three = after(rolled, first, second, third);
+    for (const [edits, head] of [[one, built], [two, tightened], [three, rolled]] as const) {
+      // Every second the recording is longer than the video is in exactly one cut.
+      expect(out(edits)).toBeCloseTo(100 - timelineDuration(head), 3);
+      // And every cut is at the start, the end or the one join, never inside a piece.
+      const joins = [0, timelineDuration(head), ...head.tracks[0]!.clips.map(clip => clip.timelineIn)];
+      for (const cut of edits.filter(e => e.beforeCut)) expect(joins.some(join => Math.abs(join - cut.at!) < 1e-6)).toBe(true);
+    }
+    // The first cut's two joins lost the pieces either side of them, and are still listed where their footage is out.
+    expect(two.filter(e => e.changeId === "first" && e.at === 9).map(e => e.beforeCut!.removed.end - e.beforeCut!.removed.start)).toEqual([5, 10]);
+    expect(two.filter(e => e.changeId === "second").map(e => [e.label, e.at, e.beforeCut?.removed])).toEqual([["Tightened the middle", 9, { start: 9, end: 16 }]]);
+    // The save that rolled the join took nothing out: it is no cut of its own, and its reason to look is on a cut there.
+    expect(three.some(e => e.changeId === "third" && e.beforeCut)).toBe(false);
+    expect(three.filter(e => e.check === "Listen to the end of the line")).toHaveLength(1);
+  });
+
+  it("lists what a save took out whether or not Scarlet named its edits, for each way a video is saved", () => {
+    // One model names every cut and another saves the video with one sentence about it. What came out is the same.
+    const keep = (version: string, ...ranges: [number, number][]) => ({ ...timelineFromKeepRanges("project", "interview", ranges.map(([start, end]) => ({ start, end }))), version });
+    const whole = keep("v1", [0, 100]), cut = keep("v2", [0, 20], [30, 60], [65, 100]);
+    const links = [{ version: "v1", parent: null }, { version: "v2", parent: "v1" }];
+    const versions: Record<string, typeof whole> = { v1: whole, v2: cut };
+    const save = { ...change, fromVersion: "v1", toVersion: "v2", description: "Tightened the interview" };
+    const amounts = (item: Change, read: Record<string, typeof whole> = versions) => threadTimeline(thread([item]), cut, links, v => read[v], 30)
+      .filter(e => e.beforeCut).map(e => [e.at, Math.round((e.beforeCut!.removed.end - e.beforeCut!.removed.start) * 100) / 100]);
+    const both = [[20, 10], [50, 5]];
+    // The video saved whole, with nothing named and with one of its cuts named.
+    expect(amounts(save)).toEqual(both);
+    expect(amounts({ ...save, timelineEdits: [{ label: "Cut the aside", range: { start: 20, end: 20 } }] })).toEqual(both);
+    // Footage rippled out step by step: last cut first, or each in the clock the one before left.
+    expect(amounts({ ...save, ranges: [{ start: 20, end: 20 }, { start: 50, end: 50 }], ops: [{ op: "rippleDelete", start: 60, end: 65 }, { op: "rippleDelete", start: 20, end: 30 }] })).toEqual(both);
+    expect(amounts({ ...save, ops: [{ op: "rippleDelete", start: 20, end: 30 }, { op: "rippleDelete", start: 50, end: 55 }] })).toEqual(both);
+    // Trimmed and moved clip by clip.
+    expect(amounts({ ...save, ops: [{ op: "updateClip", clipId: "a", patch: { sourceOut: 20 } }, { op: "updateClip", clipId: "b", patch: { timelineIn: 20 } }] })).toEqual(both);
+    // Built from the pieces to keep, with steps: the engine read what was left out, named or not.
+    const piece = { op: "addClip" as const, trackId: "v1", clip: cut.tracks[0]!.clips[0]! };
+    const read = leftOutJoins({ ...cut, tracks: cut.tracks.map(t => ({ ...t, clips: [] })) }, cut)!;
+    const pieces = { ...save, ops: [piece], leftOut: { version: "full", joins: read.joins } };
+    const withFull = { ...versions, full: { ...read.original, version: "full" } };
+    expect(amounts(pieces, withFull)).toEqual(both);
+    expect(amounts({ ...pieces, timelineEdits: [{ label: "Kept the answers", range: { start: 0, end: 20 } }] }, withFull)).toEqual(both);
+    // A first cut saved over a video already there, which the engine reads nothing for.
+    expect(amounts({ ...save, firstCut: true, leftOut: { joins: [] } })).toEqual(both);
+  });
+
   it("leaves out the calls the editor skipped when a pass was applied onto an edit that had moved", () => {
     const cut = (version: string, ...keep: [number, number][]) =>
       ({ ...timelineFromKeepRanges("project", "interview", keep.map(([start, end]) => ({ start, end }))), version });
@@ -478,6 +567,25 @@ describe("listing a thread's edits in the chat", () => {
       summary: "Raised the narration 4 dB, which brings the room tone up with it" });
     // A revision's card says what the revision did, not what the edit it replaced did.
     expect(listed[1]!.summary).toBeUndefined();
+  });
+
+  it("keeps an edit that a revision only trimmed inside listed as that edit, not as a cut at its end", () => {
+    // Scarlet inserted a sponsor segment, then took a black frame off its end and named the segment again: the
+    // request's one edit left the list, and the chat had no edit to open (2026-11-23).
+    const v0 = { ...timelineFromKeepRanges("project", "interview", [{ start: 0, end: 200 }]), version: "v0" };
+    const v1 = { ...v0, version: "v1" };
+    const v2 = { ...timelineFromKeepRanges("project", "interview", [{ start: 0, end: 100.5 }, { start: 100.6, end: 200 }]), version: "v2" };
+    const versions = { v0, v1, v2 };
+    const history = [{ version: "v0", parent: null }, { version: "v1", parent: "v0" }, { version: "v2", parent: "v1" }];
+    const inserted = { ...change, id: "insert", fromVersion: "v0", toVersion: "v1",
+      timelineEdits: [{ label: "SpaceX integration", range: { start: 40, end: 100.6 }, summary: "Inserted the SpaceX integration" }] };
+    const trim = { ...change, id: "trim", fromVersion: "v1", toVersion: "v2", createdAt: "2026-01-02T00:00:00Z",
+      description: "Removed a black frame at the end of the SpaceX integration", ops: [{ op: "rippleDelete", start: 100.5, end: 100.6 }],
+      timelineEdits: [{ label: "SpaceX integration", range: { start: 40, end: 100.5 }, summary: "Inserted the SpaceX integration",
+        replaces: { changeId: "insert", spot: 0 } }] };
+    const edits = threadTimeline(thread([Change.parse(inserted), Change.parse(trim)]), v2, history, version => versions[version as keyof typeof versions], 30);
+    expect(edits.map(e => [e.changeId, e.label, e.range, e.beforeCut])).toEqual([["trim", "SpaceX integration", { start: 40, end: 100.5 }, undefined]]);
+    expect(edits[0]!.kind).not.toBe("cut");
   });
 });
 

@@ -1,5 +1,6 @@
 import { AboutSettings } from "../components/shell/AboutSettings";
 import { CheckInSettings } from "../components/shell/CheckInSettings";
+import { TalkingToYouSettings } from "../components/shell/TalkingToYouSettings";
 import { LocalModelNotice, TranscriptionGuide, useLocalModelStatus, useNeedsCrisperSetup } from "../components/shell/LocalModelNotice";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { StorageSettings } from "../components/shell/StorageSettings";
@@ -36,8 +37,8 @@ function typedNumber(text: string | undefined, was: number) {
 }
 
 const transcriptionModels: { value: LocalTranscriptionModel | "openai"; label: string }[] = [
-  { value: "crisperwhisper", label: "CrisperWhisper 2.0 (default)" },
-  { value: "whispercpp", label: "Whisper large-v3-turbo (bundled)" },
+  { value: "whispercpp", label: "Whisper large-v3-turbo (default)" },
+  { value: "crisperwhisper", label: "CrisperWhisper 2.0" },
   { value: "custom", label: "Custom local model" },
   { value: "openai", label: "OpenAI Whisper (cloud)" },
 ];
@@ -317,6 +318,7 @@ export function SettingsPage() {
             <FfmpegSetupCard />
             <ServerSettingsForm section="general" />
             <CheckInSettings />
+            <TalkingToYouSettings />
           </>
         )}
         {tab === "models" && (

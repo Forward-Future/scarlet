@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task, ThreadEdit } from "@scarlet/shared";
 import type { Change, Note } from "@scarlet/timeline";
-import { appliedPassCuts, buildThreads, firstCutDeliveries, requestTarget, revisionTarget, threadConversation } from "./threads";
+import { appliedPassCuts, buildThreads, failureReason, firstCutDeliveries, requestTarget, revisionTarget, threadConversation } from "./threads";
 
 const t0 = Date.parse("2026-10-30T12:00:00Z");
 const at = (min: number) => new Date(t0 + min * 60_000).toISOString();
@@ -104,6 +104,14 @@ describe("buildThreads", () => {
     expect(threadConversation(thread(), []).entries).toMatchObject([{ kind: "request", text: "Keep the sponsor read." }]);
   });
 
+  it("keeps the links in Scarlet's reply to a request that changed nothing", () => {
+    // Scarlet's answer to "find both of those clips" was two links; the chat left out every sentence holding one (2026-11-23).
+    const summary = "Found both clips in your doc. Kontorovich starts at 8:28: https://www.youtube.com/watch?v=zqzk43bSdDI&t=508s Ellenberg: [Watch from 1:26](https://www.youtube.com/watch?v=zqzk43bSdDI&t=86s)";
+    const asked = task("t_find", "done", { instruction: "find both of those clips i referenced", summary, finishedAt: at(2) });
+    const reply = threadConversation(buildThreads({ tasks: [asked], changes: [], notes: [] })[0]!, []).entries.find(e => e.kind === "agent") as { text: string; fullText?: string };
+    expect(reply.fullText ?? reply.text).toBe(`${summary}.`);
+  });
+
   it("shows a reply to a note once, as Scarlet's, and never as a second message from the editor", () => {
     const tasks = [
       task("ask", "done", { instruction: "Tighten the pause", changeIds: ["c1"], summary: "Cut 0.8 s" }),
@@ -169,8 +177,8 @@ describe("buildThreads", () => {
     expect(th!.status).toBe("working");
     // One line, Scarlet's, in the request that made the suggestion: not the engine's reason, its name for the task, or
     // "the agent". It says what is true of the redo: waiting its turn, then under way.
-    const waits = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
-    const redoing = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
+    const waits = "The video changed while this suggestion was waiting. Scarlet will redo it on the video as it is now.";
+    const redoing = "The video changed while this suggestion was waiting. Scarlet is redoing it on the video as it is now.";
     expect(said([asked, redo("queued")])).toEqual([["agent", "asked", waits]]);
     expect(said([asked, redo("running")])).toEqual([["agent", "asked", redoing]]);
     // In line again after Scarlet began it, after a question, it is still under way.
@@ -217,6 +225,23 @@ it("says why the host stopped a run and offers Resume, keeping what it saved", (
   // Hosts used to stop every run at 45 minutes and record only "timed out". Those runs resume too.
   const legacy = task("legacy", "failed", { error: "timed out" });
   expect(notice(legacy)).toMatchObject({ tone: "warn", text: "The edit ran out of time. What it saved is kept.", action: { taskId: legacy.id, label: "Resume agent" } });
+});
+
+it("says why a run failed when its host or model gave a reason that reads, and nothing more when it gave none", () => {
+  const said = (error: string | undefined) => {
+    const failed = task("broke", "failed", { error });
+    const [thread] = buildThreads({ tasks: [failed], changes: [], notes: [] });
+    return threadConversation(thread!, []).entries.find(e => e.kind === "system")?.text;
+  };
+  // What the model or its CLI said is the reason: its own sentence, or the last line it wrote before it ended.
+  expect(said("You’ve hit your usage limit · resets 3pm")).toBe("You’ve hit your usage limit · resets 3pm.");
+  expect(said("claude exited with code 1: Warning: no stdin\nError: Credit balance is too low")).toBe("Credit balance is too low.");
+  expect(failureReason("codex exited with code 1: not signed in to Codex")).toBe("Not signed in to Codex.");
+  // A code alone, a command, a path or a tool's output says nothing to the editor: the heading's word stands alone.
+  for (const error of [undefined, "claude exited with code 1", "render failed", "gemini exited with code 2: at run (/opt/agy/dist/cli.js:41:9)",
+    "codex exited with code 1: {\"type\":\"error\",\"status\":529}", "npm ERR! missing script"]) {
+    expect(said(error)).toBe("Scarlet couldn’t finish this edit.");
+  }
 });
 
 it("offers Resume for a run that failed after saving an edit", () => {
@@ -309,6 +334,29 @@ it("shows the saved first-cut reply and leaves a clean playback recheck out of t
   expect(said(joinNote)).toEqual([reply, joinNote]);
 });
 
+it("says a request's reply once after it was paused for a transcript and then finished", () => {
+  const said = (tasks: Task[]) => {
+    const [thread] = buildThreads({ tasks, changes: [], notes: [] });
+    return threadConversation(thread!, []).entries.flatMap(e => e.kind === "agent" ? [e.text] : []);
+  };
+  const context = { threadId: "pass", message: "/dialogue-pass" };
+  // The engine hands a pass's closing words on to the attempt that finishes it, so both attempts hold the same reply.
+  const reply = "First cut saved. Review the flagged demo holds.";
+  const paused = task("pass", "done", { context, reply, needsTranscripts: ["mic"], finishedAt: at(1) });
+  expect(said([paused])).toEqual([reply]);
+  const finished = task("finish", "done", { context, reply, resumeRootId: paused.id, createdAt: at(2), finishedAt: at(3) });
+  expect(said([{ ...paused, retryTaskId: finished.id }, finished])).toEqual([reply]);
+  // Any other request says what it came to in the end, not also what it said when it paused.
+  const waiting = task("ask", "done", { context: { threadId: "ask", message: "Caption the mic" }, summary: "The mic has no transcript yet.",
+    needsTranscripts: ["mic"], finishedAt: at(1), retryTaskId: "again" });
+  const again = task("again", "done", { context: waiting.context, summary: "Captioned the mic.", resumeRootId: waiting.id, createdAt: at(2), finishedAt: at(3) });
+  expect(said([waiting, again])).toEqual(["Captioned the mic."]);
+  // The same when each attempt applied an edit and closed with words about it.
+  const first = change("cam", "approved", { taskId: waiting.id }), second = change("mic", "approved", { taskId: again.id, createdAt: at(2), updatedAt: at(2) });
+  const [thread] = buildThreads({ tasks: [{ ...waiting, changeIds: [first.id] }, { ...again, changeIds: [second.id] }], changes: [first, second], notes: [] });
+  expect(threadConversation(thread!, []).entries.flatMap(e => e.kind === "agent" ? [e.text] : [])).toEqual(["Captioned the mic."]);
+});
+
 it("leaves out a dialogue part's review that the next part of the same pass took over", () => {
   const id = (n: string, kind: string) => `chg_${n.repeat(64)}_${kind}`;
   const pass = task("Dialogue", "done", { changeIds: [id("a", "applied"), id("a", "review"), id("b", "applied"), id("b", "review")] });
@@ -322,7 +370,8 @@ it("leaves out a dialogue part's review that the next part of the same pass took
   const [thread] = buildThreads({ tasks: [pass], changes, notes: [] });
   const { entries } = threadConversation(thread!, []);
   expect(entries.flatMap(e => e.kind === "change" ? [e.change.id] : []).sort()).toEqual([id("a", "applied"), id("b", "applied"), id("b", "review")].sort());
-  expect(entries.map(e => "text" in e && e.text)).toContain("Dialogue cuts are pending review.");
+  // Where the pass stands is said in the chat's words, not the engine's ("Dialogue cuts are pending review.").
+  expect(entries.map(e => "text" in e && e.text)).toContain("The pass is waiting on your calls.");
 });
 
 it("names what a sent message revised, in the words the box showed", () => {

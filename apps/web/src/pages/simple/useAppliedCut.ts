@@ -105,16 +105,30 @@ export function useAppliedCut({ current, reviewingEdit, focusThread, threadTimel
   // The pass's other cuts, in this cut's clock. Each goes by its time in the video as it runs now, as its row in the
   // pass's list and its tag in the message box do: "Cut at 3:04".
   const sameVersion = useMemo(() => appliedCut ? threadEdits.flatMap(e => e !== reviewingEdit && e.beforeCut?.version === beforeCut!.version
-    ? [{ at: clockLabel(e.at ?? e.range.start), label: e.label as string | undefined, removed: e.beforeCut.removed }] : []) : [], [appliedCut, threadEdits, reviewingEdit, beforeCut]);
+    ? [{ at: clockLabel(e.at ?? e.range.start), label: e.label as string | undefined, removed: e.beforeCut.removed, edit: e as ThreadEdit | undefined }] : []) : [], [appliedCut, threadEdits, reviewingEdit, beforeCut]);
   // A pass applies its cuts in batches, and this cut's version is the one before its own batch. What came out since,
   // in later batches, revisions or other requests, isn't in the video as it runs now either: it's shaded here the
   // same way, by its time now, and After steps over it.
   const since = useMemo(() => appliedCut && beforeTimeline && workingAfter && workingAfter.version !== beforeTimeline.version
     ? removedSince(beforeTimeline, workingAfter, fps) : undefined, [appliedCut, beforeTimeline, workingAfter, fps]);
-  const otherEdits = useMemo(() => !since || !appliedCut ? sameVersion : [...sameVersion,
-    ...besides(since, [appliedCut, ...sameVersion.map(o => o.removed)], fps).map(({ removed, at }) => ({ at: clockLabel(at), removed,
-      label: threadEdits.find(e => e.beforeCut && Math.abs((e.at ?? e.range.start) - at) < 1.5 / fps)?.label }))]
-    .sort((a, b) => a.removed.start - b.removed.start), [sameVersion, since, appliedCut, threadEdits, fps]);
+  const otherEdits = useMemo(() => {
+    if (!since || !appliedCut) return sameVersion;
+    const shown = new Set<ThreadEdit>([reviewingEdit!, ...sameVersion.flatMap(o => o.edit ? [o.edit] : [])]);
+    const match = (at: number, removed: TimeRange) => {
+      const len = removed.end - removed.start;
+      return threadEdits.filter(e => !shown.has(e) && e.beforeCut && Math.abs((e.at ?? e.range.start) - at) < 2 / fps)
+        .sort((a, b) => {
+          const da = Math.abs((a.beforeCut!.removed.end - a.beforeCut!.removed.start) - len);
+          const db = Math.abs((b.beforeCut!.removed.end - b.beforeCut!.removed.start) - len);
+          return da - db;
+        })[0];
+    };
+    return [...sameVersion,
+      ...besides(since, [appliedCut, ...sameVersion.map(o => o.removed)], fps).map(({ removed, at }) => {
+        const edit = match(at, removed);
+        return { at: clockLabel(at), removed, label: edit?.label, edit };
+      })].sort((a, b) => a.removed.start - b.removed.start);
+  }, [sameVersion, since, appliedCut, threadEdits, reviewingEdit, fps]);
   const otherCuts = useMemo(() => otherEdits.map(o => o.removed), [otherEdits]);
   const othersKey = useMemo(() => JSON.stringify(otherCuts), [otherCuts]);
   // Both sides use the same review window. After can travel farther on the source clock to play its kept tail. A

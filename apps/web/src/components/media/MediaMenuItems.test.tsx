@@ -145,15 +145,16 @@ it("says Paused and offers Resume for as long as the project is paused, whatever
   // Resume stays available while the project is paused, even after every video finishes caching.
   vi.mocked(api.sourceCaches).mockResolvedValue({ caches: [{ mediaId: "cam", state: "ready" }] });
   const row = await show([video("cam")], [], vi.fn(), true);
-  expect([rows(), row.getAttribute("aria-description")]).toEqual([["Resume"], "Media processing is paused"]);
+  // The menu's row says what it resumes: the chat's own Pause and Resume are for editing.
+  expect([rows(), row.getAttribute("aria-description")]).toEqual([["Resume media processing"], "Media processing is paused"]);
   await act(async () => container.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click());
   expect(updateProject).toHaveBeenCalledExactlyOnceWith({ mediaPaused: false }, PRJ);
   // A project with no video is the same, and so is one whose video waits to cache.
   await show([], [], vi.fn(), true);
-  expect(rows()).toEqual(["Resume"]);
+  expect(rows()).toEqual(["Resume media processing"]);
   vi.mocked(api.sourceCaches).mockResolvedValue({ caches: [{ mediaId: "cam", state: "uncached", queued: true }] });
   await show([video("cam")], [], vi.fn(), true);
-  expect(rows()).toEqual(["Resume"]);
+  expect(rows()).toEqual(["Resume media processing"]);
   // Not paused, with nothing to cache, there is no row.
   vi.mocked(api.sourceCaches).mockResolvedValue({ caches: [{ mediaId: "mic", state: "ready" }] });
   await show([video("mic")]);
@@ -266,7 +267,8 @@ it("omits Pause from the Media hover card and More menu until media processing i
   await show([video("cam", { status: "ingesting", preparation: { stage: "waveform", fraction: 0.2 } })]);
   expect(container.querySelector(".media-hover-card strong")?.textContent).toBe("Preparing media");
   expect(container.querySelector(".media-hover-card button")?.textContent).toBe("Pause");
-  expect([...container.querySelectorAll('[role="menuitem"]')].map(item => item.textContent)).toEqual(["Pause"]);
+  // Media's own card says Pause; the menu's row, away from Media, says what it pauses.
+  expect([...container.querySelectorAll('[role="menuitem"]')].map(item => item.textContent)).toEqual(["Pause media processing"]);
 });
 
 it("shows one progress row per active job in the hover card without listing individual files", async () => {

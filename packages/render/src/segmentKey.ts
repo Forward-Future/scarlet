@@ -68,6 +68,7 @@ function mediaFingerprint(asset: MediaAsset | undefined, format: SegmentKeyOptio
     path: asset.hash ? undefined : asset.path,
     kind: asset.kind,
     hasAudio: format.pictureOnly ? undefined : asset.hasAudio,
+    ...(format.pictureOnly || asset.audioTrack === undefined ? {} : { audioTrack: asset.audioTrack }),
     sourceAlpha: format.pictureOnly || format.allowProxy ? asset.hasAlpha : undefined,
     proxyGeometry: format.allowProxy ? [asset.width, asset.height, asset.fps, asset.previewClock] : undefined,
     // An HDR source's picture is tone-mapped to SDR. Absent for every other source, so their keys stay as they were.

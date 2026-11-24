@@ -47,6 +47,8 @@ export const WebSource = z.object({
   capture: z.string().optional(),
   /** The part of the capture in the video. */
   region: FrameBox.optional(),
+  /** For a clip of a video on the web: the part of that video it is, in its own seconds. */
+  clip: z.object({ start: z.number().min(0), end: z.number().min(0) }).optional(),
 });
 export type WebSource = z.infer<typeof WebSource>;
 
@@ -56,14 +58,38 @@ export const DialogueVoiceRoles = z.object({
 }).refine(v => v.me !== v.other, "Choose two different isolated inputs");
 export type DialogueVoiceRoles = z.infer<typeof DialogueVoiceRoles>;
 
+/** Metadata for one audio stream inside a media container (`0:a:index`). */
+export const AudioStreamInfo = z.object({
+  /** Zero-based index among the file's audio streams (`0:a:index`). */
+  index: z.number().int().nonnegative(),
+  codec: z.string().optional(),
+  channels: z.number().int().positive().optional(),
+  sampleRate: z.number().int().positive().optional(),
+  language: z.string().optional(),
+  title: z.string().optional(),
+});
+export type AudioStreamInfo = z.infer<typeof AudioStreamInfo>;
+
+/** Which audio stream(s) to read from a multi-track recording: a zero-based stream index or `"all"` to mix every track. */
+export const AudioTrackSelection = z.union([z.literal("all"), z.number().int().nonnegative()]);
+export type AudioTrackSelection = z.infer<typeof AudioTrackSelection>;
+
 export const MediaAsset = z.object({
   voiceRoles: DialogueVoiceRoles.optional(),
+  /** All probed audio streams for recordings with multiple audio tracks (e.g. OBS, podcasts). */
+  audioStreams: z.array(AudioStreamInfo).optional(),
+  /** Selected audio stream index or `"all"` to mix all streams. Absent means the first audio stream (`0`). */
+  audioTrack: AudioTrackSelection.optional(),
   id: Id,
   /** The desktop import that created this asset, retained so retrying that request returns the same file. */
   importId: z.string().uuid().optional(),
   kind: MediaKind,
   /** Human-facing name, usually the original filename. */
   name: z.string(),
+  /** What the editor says this file is and how to use it, in their own words, for Scarlet. */
+  editorNote: z.string().max(2000).optional(),
+  /** When the file was added to the project. Read from its row, never stored with it. */
+  addedAt: z.string().datetime().optional(),
   /** Storage key relative to the project's media root. */
   path: z.string(),
   /** Content hash (sha256 hex) so renders can be cached by content. */
