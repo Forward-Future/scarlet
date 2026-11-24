@@ -358,3 +358,19 @@ it("steps through search matches with next/previous buttons and clears the query
   expect(container.querySelector(".transcript-search-count")).toBeNull();
   expect(container.querySelector<HTMLInputElement>('input[type="search"]')!.value).toBe("");
 });
+
+it("follows the playhead without gliding when motion is reduced, and glides again when it isn't", async () => {
+  const matchMedia = window.matchMedia.bind(window);
+  let reduced = true;
+  vi.spyOn(window, "matchMedia").mockImplementation(query => query === "(prefers-reduced-motion: reduce)"
+    ? Object.create(matchMedia(query), { matches: { get: () => reduced } }) : matchMedia(query));
+  const scroll = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
+  await mount();
+  await act(async () => usePlayerStore.setState({ time: 12.5, playing: true }));
+  expect(scroll.mock.contexts.at(-1)).toBe(at(12));
+  expect(scroll).toHaveBeenLastCalledWith({ block: "center", behavior: "auto" });
+  reduced = false;
+  await act(async () => usePlayerStore.setState({ time: 20.5 }));
+  expect(scroll.mock.contexts.at(-1)).toBe(at(20));
+  expect(scroll).toHaveBeenLastCalledWith({ block: "center", behavior: "smooth" });
+});

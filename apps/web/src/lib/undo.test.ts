@@ -83,6 +83,14 @@ it("says why a revision can't be taken back once the pass it made went in, and m
   expect(useUndoStore.getState().error).toBeUndefined();
 });
 
+it("leaves a revision still at work running when its version has been applied since and it can't be taken back", async () => {
+  recordUndo({ kind: "revision", projectId: "prj", taskId: "task_call" });
+  const changes = [change("pass", "rejected", { replacedBy: "pass_v2" }), change("pass_v2", "approved", { taskId: "task_call" })];
+  expect(await undoLast("prj", { changes, tasks: [task("task_call", "running", { changeId: "pass", cutIndex: 3 })] }, noRevert)).toBeUndefined();
+  expect(useUndoStore.getState().error?.text).toBe("Couldn’t undo the revision: the version it made has been applied since.");
+  expect(api.cancelTask).not.toHaveBeenCalled();
+});
+
 it("takes a call's Keep back through the page that holds its pass, not the Keep before it, and says the page's reason when it can't", async () => {
   recordUndo({ kind: "keep", word: "Keep", projectId: "prj", threadId: "thr", refs: [{ changeId: "chg", spot: 0 }], edit: { changeId: "chg", spot: 0 } });
   recordUndo({ kind: "call", word: "Keep", projectId: "prj", changeId: "pass", index: 2 });

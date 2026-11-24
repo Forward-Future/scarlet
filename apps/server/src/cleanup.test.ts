@@ -118,6 +118,19 @@ it("leaves the note as spoken when the model refuses or answers with nothing", a
   expect([...lines, ...open.lines, ...gem.lines]).toEqual([]);
 });
 
+it("leaves the note as spoken when the rewrite was cut off at its length limit", async () => {
+  // Half an instruction would be sent to the agent in place of everything the editor said.
+  const { ctx } = engine({ enabled: true, provider: "anthropic" }, { anthropicKey: "a" });
+  provider({ stop_reason: "max_tokens", content: [{ type: "text", text: "Cut the cough at the start, then tighten the" }] });
+  expect(await cleanupNote(ctx, spoken, { time: 0 })).toBeNull();
+  const open = engine({ enabled: true, provider: "openai" }, { openaiKey: "o" });
+  provider({ choices: [{ finish_reason: "length", message: { content: "Cut the cough at the start, then tighten the" } }] });
+  expect(await cleanupNote(open.ctx, spoken, { time: 0 })).toBeNull();
+  const gem = engine({ enabled: true, provider: "gemini" }, { geminiKey: "g" });
+  provider({ candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: "Cut the cough at the start, then tighten the" }] } }] });
+  expect(await cleanupNote(gem.ctx, spoken, { time: 0 })).toBeNull();
+});
+
 it("leaves the note as spoken and logs the provider's reason when the request fails, without the note or the key", async () => {
   const anthropic = engine({ enabled: true, provider: "anthropic" }, { anthropicKey: "sk-ant-fixture" });
   provider(`{"error":{"type":"overloaded_error","message":"Overloaded"}}${"x".repeat(400)}`, 529);

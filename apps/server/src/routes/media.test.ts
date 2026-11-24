@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { encodeWaveformCache } from "@scarlet/render";
+import { encodeWaveformCache, resolveFfmpeg, runCapture } from "@scarlet/render";
 import { createProject, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
 import { ScarletClient } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
@@ -196,6 +196,49 @@ it("answers 404 for a frame, loudness or speech of a recording whose file is gon
     expect([path, res.status, await res.json()]).toEqual([path, 404, missing]);
   }
   expect(lines.filter(line => line.startsWith("[error]"))).toEqual([]);
+});
+
+it("shows the last frame for a time past the end of a video, not an engine error", async () => {
+  const { ctx } = workspace;
+  const lines: string[] = [];
+  ctx.log = line => lines.push(line);
+  ctx.paths.ensureProject(project.id);
+  await ffmpeg(["-f", "lavfi", "-i", "color=red:size=160x90:rate=25:duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", join(ctx.paths.media(project.id), "clip.mp4")]);
+  ctx.repos.projects.putMedia(project.id, { id: "clip", name: "Clip", path: "clip.mp4", kind: "video", duration: 1, fps: 25, width: 160, height: 90, hasAudio: false }, "ready");
+  for (const t of [99, 1]) {
+    const res = await api("GET", `/media/clip/frame?t=${t}&w=160`);
+    expect([t, res.status, res.headers.get("Content-Type")]).toEqual([t, 200, "image/jpeg"]);
+  }
+  expect(lines.filter(line => line.startsWith("[error]"))).toEqual([]);
+});
+
+it("says why a file can't be read without the path of Scarlet's library, and logs the path", async () => {
+  const { ctx } = workspace;
+  const lines: string[] = [];
+  ctx.log = line => lines.push(line);
+  const source = join(directory, "Broken interview.mp4");
+  writeFileSync(source, "not a video at all");
+  const res = await api("POST", `/projects/${project.id}/media/import`, { path: source });
+  const { error } = await res.json() as { error: { code: string; message: string } };
+  expect([res.status, error.code]).toEqual([400, "probe_failed"]);
+  expect(error.message).toMatch(/^ffprobe could not read the file: [\s\S]*Invalid data found/);
+  expect(error.message).toContain("Broken interview.mp4");
+  for (const folder of [ctx.paths.media(project.id), realpathSync(directory), directory]) expect(error.message).not.toContain(folder);
+  expect(error.message).not.toMatch(/[\\/]ffprobe(\.exe)? exited/);
+  expect(lines.some(line => line.includes("probe_failed") && line.includes(ctx.paths.media(project.id)))).toBe(true);
+});
+
+it("imports a WebM recording that leaves its length out with its real length", async () => {
+  const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=3.2",
+    "-f", "lavfi", "-i", "sine=duration=3.2", "-c:v", "libvpx", "-c:a", "libopus", "-f", "webm", "pipe:1"]);
+  const source = join(directory, "Screen recording.webm");
+  writeFileSync(source, stdout);
+  const res = await api("POST", `/projects/${project.id}/media/import`, { path: source });
+  expect(res.status).toBe(201);
+  const { media } = await res.json() as { media: { id: string; duration?: number } };
+  expect(media.duration).toBeCloseTo(3.2, 1);
+  await settle();
+  expect(workspace.ctx.repos.projects.getMedia(media.id)?.duration).toBeCloseTo(3.2, 1);
 });
 
 it("saves which input is the editor's voice only once the recording shows two isolated inputs and their mix", async () => {

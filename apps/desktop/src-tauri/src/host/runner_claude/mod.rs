@@ -58,12 +58,12 @@ pub fn claude_run_usage(st: &ClaudeState, model: Option<&str>) -> Option<AgentUs
 pub async fn run_claude(opts: RunOptions) -> RunResult {
     let bin = match opts.resolve_bin("claude") {
         Ok(b) => b,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
     let tmp_dir = opts.cwd.join(CONTROL_DIR);
     let cmd = build_claude_command(opts.model.as_deref(), opts.effort.as_deref(), opts.service_tier.as_deref(), &opts.system_prompt, &opts.instruction, opts.resume_session.as_deref(), can_run_bare(&opts.env), opts.plan, opts.workspace.as_ref(), &opts.mcp, &bin, &tmp_dir);
     if let Err(e) = write_files(&cmd.files).await {
-        return RunResult::failed(e.to_string());
+        return RunResult::failed(format!("{e:#}"));
     }
 
     let st = Arc::new(Mutex::new(ClaudeState::default()));
@@ -90,7 +90,7 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
     spawn.env = with_tool_timeout(&opts.env);
     let outcome = match spawn_lines(&cmd.file, &cmd.args, spawn, handler).await {
         Ok(o) => o,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
 
     let s = st.lock().unwrap().clone();
