@@ -86,6 +86,14 @@ describe("the note on an applied edit's card", () => {
       .toBe("Show an aviation timeline here? Keeps the story moving.");
   });
 
+  it("leads a marker's note with what Scarlet raised about it since, such as the clip it found for the spot", () => {
+    const todo = "Insert the Kontorovich clip here.";
+    const found = "Found it, from 8:28: https://www.youtube.com/watch?v=zqzk43bSdDI&t=508s";
+    expect(editNote(edit({ label: "Kontorovich clip", todo, check: found, recheck: "2026-11-24T01:43:07.000Z", marker: true }))).toBe(`${found}. ${todo}`);
+    // The marker's own words, raised again as they are, are said once.
+    expect(editNote(edit({ label: "Kontorovich clip", todo, check: "Insert the Kontorovich clip here", recheck: "2026-11-24T01:43:07.000Z", marker: true }))).toBe(todo);
+  });
+
   it("keeps leading a revised marker's note with what it asks, not with the word for the revision", () => {
     const why = "Moved to where you say the boat line.";
     expect(editNote(edit({ label: "Boat comparison footage", check: REVISED_CHECK, todo: "Add the other boat renders", summary: why, marker: true })))

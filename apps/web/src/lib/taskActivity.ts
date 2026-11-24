@@ -184,6 +184,8 @@ export function taskActivityLabel(event: TaskEvent, waits: ReadonlySet<string> =
 const technical = /[{}`\n\r\\]|<\/?[a-z!][^<>]*>|[-=]>|https?:\/\/|\b\w+_\w+|(?:^|\s)\/\S|\b(?:MCP|stdout|stderr|JSON|ffmpeg|ffprobe|stack trace|tool call|exit code|API endpoint)\b/i;
 const command = /(?:^|\s)(?:[$%] |(?:bash|zsh|git|npm|pnpm|npx|node|python3?|curl|cargo|sudo|exec_command|ls|cd|chmod|mkdir)\s+\S)|^(?:ran|running|executed) (?:the )?(?:terminal |shell )?commands?\b|&&|\|\|/i;
 
+const webAddress = /https?:\/\/[^\s<>"”’]+/g;
+
 /** Whether words read as a sentence for the editor, rather than a command, a path or what a tool printed. */
 export const readsPlain = (text: string) => !technical.test(text) && !command.test(text);
 
@@ -212,7 +214,11 @@ export function editConfirmation(value?: string | null, instruction?: string, mo
     const sentences: string[] = [];
     for (const part of line.trim().replace(/^[-*]\s+/, "").split(/(?<=[.!?])\s+/u)) {
       const text = part.trim().replace(/\*\*/g, "");
-      if (!text || (mode === "brief" && text.length > 320) || technical.test(text) || command.test(text) || normalize(text) === requested) continue;
+      // A web address Scarlet gives the editor is part of what it says, and the chat makes it a link: a sentence isn't
+      // left out for holding one. Scarlet's answer to "find both of those clips" was its two links, and the chat showed
+      // neither (2026-11-23).
+      const words = text.replace(webAddress, "link");
+      if (!text || (mode === "brief" && text.length > 320) || technical.test(words) || command.test(words) || normalize(text) === requested) continue;
       const sentence = /[.!?…”"]$/.test(text) ? text : text + ".";
       if (seen.has(sentence)) continue;
       seen.add(sentence);

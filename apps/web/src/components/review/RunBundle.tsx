@@ -11,6 +11,7 @@ import { isWorkingTask, PAUSED_HINT, runAim, runIsActive, runItems, runLines, ru
 import { toolName, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
 import { usePublishWorkingLine } from "../../lib/workingLines";
+import { Linked } from "../ui/Linked";
 import { Icon } from "../ui/primitives";
 import { RequestMetrics, Tokens } from "./RequestMetrics";
 
@@ -31,8 +32,9 @@ export function Said({ text, lead, className, fixed, children }: { text: string;
   fixed?: boolean; children?: ReactNode }) {
   const { ref, clipped, open, opens, toggle } = useClippedExpand<HTMLParagraphElement>(text);
   if (fixed) return <p ref={ref} className={`${className ? `${className} ` : ""}said`} title={clipped ? text : undefined}>{lead}{children ?? text}</p>;
+  // An address in the words is a link that opens in the browser; the rest of the words fold and open as before.
   return <p ref={ref} className={`${className ? `${className} ` : ""}said${open ? " is-open" : clipped ? " is-clipped" : ""}`}
-    title={clipped && !open ? "Show all of it" : undefined} aria-expanded={opens ? open : undefined} onClick={opens ? toggle : undefined}>{lead}{children ?? text}</p>;
+    title={clipped && !open ? "Show all of it" : undefined} aria-expanded={opens ? open : undefined} onClick={opens ? toggle : undefined}>{lead}{children ?? <Linked text={text} />}</p>;
 }
 
 /**

@@ -7,6 +7,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 23, 2026
 
 - A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.
+- Scarlet now knows what was said earlier in the chat, so a message like “tell me the timestamps” or “the two clips you just found” is read as being about the request before it, links and times Scarlet showed you while it worked included.
+- What Scarlet finds for you at a place in the video, such as a clip to play there, is now listed under your request and opens on the timeline like any edit, and a web address in Scarlet's reply or on an edit's card is a link that opens in your browser.
+- An export that starts partway through now shows that part striped on its bar, with how much of the video it reused from an earlier export, so a head start no longer looks like the export skipped ahead.
 - The timeline's waveform now draws how loud the sound plays as its solid part, with the peaks fainter around it, so two parts that sound as loud look as tall, such as an inserted sponsor read beside your own voice.
 - A level Scarlet changes over part of a clip now shows on the timeline's waveform and in that edit's Before and After.
 - An edit that evens out a clip's level is now called Audio on its card instead of Music dip.

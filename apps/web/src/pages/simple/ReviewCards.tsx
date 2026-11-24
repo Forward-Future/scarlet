@@ -7,6 +7,7 @@ import { SourceLink, SourceRow } from "../../components/review/EditSource";
 import { OtherTakes } from "../../components/review/OtherTakes";
 import { ReviewActions } from "../../components/review/ReviewActions";
 import { AddTodo, EditVersion, RejectEdit, type RejectedEdit } from "../../components/review/ThreadEdits";
+import { Linked, linkedText } from "../../components/ui/Linked";
 import { Icon } from "../../components/ui/primitives";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
@@ -27,9 +28,9 @@ function EditNote({ text, unchecked }: { text: string; unchecked?: boolean }) {
   const { ref, clipped, open, opens, toggle } = useClippedExpand<HTMLHeadingElement>(text, 0);
   // No button: the pointer changes over a clipped note, and the hover title carries it for anyone not clicking.
   return <h2 ref={ref} className={`edit-card-title${open ? " is-open" : clipped ? " is-clipped" : ""}`}
-    title={open ? undefined : text}
+    title={open ? undefined : linkedText(text)}
     aria-expanded={opens ? open : undefined} onClick={opens ? toggle : undefined}>
-    {unchecked && <span className="edit-card-unchecked">Not checked yet. </span>}{text}</h2>;
+    {unchecked && <span className="edit-card-unchecked">Not checked yet. </span>}<Linked text={text} /></h2>;
 }
 
 /**

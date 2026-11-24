@@ -124,6 +124,7 @@ export const scarletRenderAdapter: RenderAdapter = {
       exportHeight: opts.exportHeight,
       exportRange: opts.exportRange,
       onCachedRanges: opts.onCachedRanges,
+      onReused: opts.onReused,
       omitCaptions: opts.omitCaptions,
       best: opts.best,
       pictureSource: opts.quality === "preview" && opts.exportHeight === undefined ? previewPictures(opts.mediaRoot) : undefined,
