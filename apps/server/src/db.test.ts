@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createProject } from "@scarlet/timeline";
 import { createRepos } from "./repo/index.js";
@@ -117,6 +118,20 @@ it("undoes a transaction that throws, and runs none of the effects it scheduled"
   // Outside a transaction the write is already visible, so an effect runs at once.
   db.afterCommit(() => effects.push("now"));
   expect(effects.at(-1)).toBe("now");
+});
+
+// Node before 22.16 cannot tell whether SQLite still holds the transaction, so it rolls back as before.
+it.skipIf(!("isTransaction" in new DatabaseSync(":memory:")))("throws SQLite's own error when SQLite has already undone the transaction", () => {
+  const write = (body: string) => db.prepare("INSERT INTO notes (body) VALUES (?)").run(body);
+  db.exec("CREATE TEMP TRIGGER refuse BEFORE INSERT ON main.notes WHEN NEW.body = 'refused' BEGIN SELECT RAISE(ROLLBACK, 'refused by trigger'); END");
+  expect(() => db.transaction(() => { write("first"); write("refused"); })()).toThrow("refused by trigger");
+  expect(() => db.transaction(() => { write("first"); db.savepoint(() => write("refused")); })()).toThrow("refused by trigger");
+  // A full disk: the file may not grow past its current size.
+  db.pragma(`max_page_count = ${db.pragma("page_count", { simple: true })}`);
+  expect(() => db.transaction(() => { write("first"); write("x".repeat(20_000)); })()).toThrow("database or disk is full");
+  db.pragma("max_page_count = 1073741823");
+  db.transaction(() => write("kept"))();
+  expect(bodies()).toEqual(["kept"]);
 });
 
 it("keeps a committed write and the effects after it when one effect throws, and reports the one that threw", () => {

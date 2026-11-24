@@ -721,10 +721,16 @@ it("lets the editor tell Scarlet what a file is, under its length, and change or
     field()!.dispatchEvent(new Event("input", { bubbles: true }));
   };
   const key = (k: string) => field()!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+  const { readFileSync } = await import("node:fs");
+  const sheet = document.createElement("style");
+  sheet.textContent = `${readFileSync(`${import.meta.dirname}/../studio.css`, "utf8")}\n${readFileSync(`${import.meta.dirname}/../simple.css`, "utf8")}`;
+  document.head.append(sheet);
   try {
     await act(async () => root.render(<MemoryRouter><MediaPage uploads={{ items: [], start: vi.fn(), dismiss: vi.fn(), localImport: null, startPaths: vi.fn() }} onPlay={vi.fn()} /></MemoryRouter>));
     // A file with no note says what the line is for; nothing about it waits on a note.
+    expect(getComputedStyle(button("Tell Scarlet what this is")!).textDecoration).toBe("none");
     await act(() => button("Tell Scarlet what this is")!.click());
+    expect(getComputedStyle(button("Cancel")!).textDecoration).toBe("none");
     expect(field()?.getAttribute("aria-label")).toBe("Tell Scarlet what Integration.mp4 is and how to use it");
     expect(container.textContent).toContain("Tell Scarlet what this is and how to use it");
     await act(() => { type("Finished sponsor read."); });
@@ -749,6 +755,7 @@ it("lets the editor tell Scarlet what a file is, under its length, and change or
     expect(save).toHaveBeenLastCalledWith(video.id, "");
     expect(button("Tell Scarlet what this is")).toBeTruthy();
   } finally {
+    sheet.remove();
     await act(() => root.unmount());
     container.remove();
     useProjectStore.setState(previous, true);

@@ -20,6 +20,8 @@ import {
   sparkline,
 } from "./analysis.js";
 import { fitSync, matchAudio, syncPoints, syncRate } from "./audio-sync.js";
+import { referenceAtSecondary, SAID_ON_SCREEN_WAIT, saidOnScreen, secondaryAtReference } from "./said-on-screen.js";
+import type { ScreenLine } from "./screen-reading.js";
 import { describeGapSound, GAP_SECONDS, type GapSound } from "./gap-sound.js";
 import type { MediaSession } from "./media-session.js";
 import { eachRecording, RecordingList, recordingsAsked, requireMediaAsset, type SessionErrorHelpers } from "./media-state.js";
@@ -355,7 +357,7 @@ export function registerMediaReadTools(deps: MediaReadToolsDeps) {
     },
   );
 
-  tool("audio_sync", "Measure the sync offset between two recordings of the same event from their shared audio: the seconds the secondary starts after the reference (negative = earlier). Placed from source zero at normal speed, the secondary's timelineIn is the reference's timelineIn plus this offset. No offset means no one offset fits the whole recording: then \`fit\` follows the shared sound through it, with \`points\` (secondary seconds and the offset there). constant gives the offset; drift is a clock that runs at another rate (msPerMinute), which secondarySpeed on every secondary clip cancels; steps are steady parts with a jump between them (a dropout or a paused recording), each part placed at its own offset; unclear says why it couldn't tell.",
+  tool("audio_sync", "Measure the sync offset between two recordings of the same event from their shared audio: the seconds the secondary starts after the reference (negative = earlier). Placed from source zero at normal speed, the secondary's timelineIn is the reference's timelineIn plus this offset. No offset means no one offset fits the whole recording: then \`fit\` follows the shared sound through it, with \`points\` (secondary seconds and the offset there). constant gives the offset; drift is a clock that runs at another rate (msPerMinute), which secondarySpeed on every secondary clip cancels; steps are steady parts with a jump between them (a dropout or a paused recording), each part placed at its own offset; unclear says why it couldn't tell. When one of the two is transcribed and the other is a video, `saidOnScreen` lists where the words said are found, in the same order, in the text on that video's picture as they are said, whether or not its picture is in the edit yet: `from`-`to` in the speech recording's seconds, `pictureAt` the video's, `said` the words. It is what the two recordings share, not a choice of what to show. A video whose text is still being read says how far it has got (`textRead`).",
     { referenceId: z.string(), secondaryId: z.string() },
     async ({ referenceId, secondaryId }) => {
       if (referenceId === secondaryId) throw new Error("referenceId and secondaryId are the same recording. Choose two different recordings.");
@@ -377,13 +379,37 @@ export function registerMediaReadTools(deps: MediaReadToolsDeps) {
       }
       const [reference, secondary] = await Promise.all([envelope(referenceId), envelope(secondaryId)]);
       const match = matchAudio(reference, secondary);
-      if (match) return json(match);
+      if (match) return json({ ...match, ...await onScreen(project, referenceId, secondaryId, { kind: "match", offset: match.secondaryStartRelativeToReference }) });
       if (!reference.length || !secondary.length) return json({ matchedWindows: 0, reason: "No unambiguous constant offset from shared audio." });
       // No one offset fits the whole recording. Follow it through the recording to say how it changes.
       const points = syncPoints(reference, secondary);
       const fit = fitSync(points);
       const shown = points.length > 40 ? points.filter((_, i) => i % Math.ceil(points.length / 40) === 0) : points;
       return json({ matchedWindows: 0, reason: "No unambiguous constant offset from shared audio.", fit,
-        points: shown.map(p => ({ at: Math.round(p.at), offset: round3(p.offset) })) });
+        points: shown.map(p => ({ at: Math.round(p.at), offset: round3(p.offset) })),
+        ...await onScreen(project, referenceId, secondaryId, fit) });
     });
+
+  /**
+   * Where the words said in one of two synced recordings are in the text on the other's picture: the recording with
+   * the most transcribed words is the speech, and the other, when it is a video, the picture. Only the picture's text is
+   * read, so a camera's own picture is never read for text. Nothing when neither is transcribed or the other has no picture.
+   */
+  async function onScreen(project: Awaited<ReturnType<typeof getProject>>["project"], referenceId: string, secondaryId: string, fit: Parameters<typeof secondaryAtReference>[0]) {
+    try {
+      const counted = await Promise.all([referenceId, secondaryId].map(async id => ({ id, words: await transcriptWords(id, false).catch(() => null) ?? [] })));
+      const [speech, other] = counted[1]!.words.length > counted[0]!.words.length ? [counted[1]!, counted[0]!] : [counted[0]!, counted[1]!];
+      const picture = project.media.find(m => m.id === other.id);
+      if (!speech.words.length || picture?.kind !== "video" || !picture.duration) return {};
+      const pictureAt = speech.id === referenceId ? secondaryAtReference(fit) : referenceAtSecondary(fit);
+      if (!pictureAt) return {};
+      const read = await client.get<{ from: number; to: number; readSeconds: number; done: boolean; error?: string; spans: ScreenLine[] }>(
+        `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(picture.id)}/screen-text?from=0&to=${picture.duration}&wait=${SAID_ON_SCREEN_WAIT}`);
+      const found = saidOnScreen(speech, { id: picture.id, lines: read.spans, duration: picture.duration }, pictureAt);
+      const progress = read.done ? {} : { textRead: `${read.readSeconds.toFixed(0)} of ${(read.to - read.from).toFixed(0)} s of ${picture.id}'s text read so far${read.error ? `, stopped: ${read.error}` : ": call audio_sync again for the rest"}` };
+      return { saidOnScreen: { ...found, ...progress } };
+    } catch (err) {
+      return withoutOnce("failed to read where the words said are on screen for audio_sync", {})(err);
+    }
+  }
 }

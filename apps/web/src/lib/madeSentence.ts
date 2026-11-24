@@ -8,7 +8,7 @@ export type SentencePart = string | { strong: string };
 
 /** What each kind of edit is called when the sentence counts it. A kind with no word of its own counts as an edit. */
 const NOUNS: Partial<Record<EditKind, [one: string, many: string]>> = {
-  restore: ["passage put back", "passages put back"], audio: ["sound fix", "sound fixes"], dip: ["music dip", "music dips"],
+  restore: ["passage put back", "passages put back"], insert: ["insert", "inserts"], audio: ["sound fix", "sound fixes"], dip: ["music dip", "music dips"],
   voice: ["voice cleanup", "voice cleanups"], zoom: ["zoom", "zooms"], reframe: ["reframe", "reframes"],
   text: ["text edit", "text edits"], broll: ["B-roll shot", "B-roll shots"], overlay: ["overlay", "overlays"], graphic: ["graphic", "graphics"], speed: ["speed change", "speed changes"],
   transition: ["transition", "transitions"], split: ["split edit", "split edits"],
@@ -34,7 +34,7 @@ export function madeSentence(listed: readonly Listed[], length: (seconds: number
     if (edit.elsewhere) return;
     if (edit.beforeCut) return void cuts.push(edit);
     const group = edit.marker ? spots : places;
-    const key = eachPlace ? String(i) : edit.label, same = group.get(key);
+    const key = eachPlace || edit.kind === "zoom" ? String(i) : edit.label, same = group.get(key);
     if (same) same.places++; else group.set(key, { edit, places: 1 });
   });
   const others = [...places.values()], marked = [...spots.values()];
@@ -53,7 +53,9 @@ export function madeSentence(listed: readonly Listed[], length: (seconds: number
   }
   if (others.length) {
     // Graphics are counted however few: their names are the words on them, which say little in a sentence.
-    if (!cuts.length && others.length <= NAMED && !others.every(o => o.edit.kind === "graphic")) {
+    // Separate spots sharing a generic label (e.g. multiple punch-ins) are also counted by kind rather than repeating the label.
+    const distinctLabels = new Set(others.map(o => o.edit.label)).size === others.length;
+    if (!cuts.length && others.length <= NAMED && !others.every(o => o.edit.kind === "graphic") && (rowsName || distinctLabels)) {
       parts.push("Made ", { strong: String(others.length) }, ` ${others.length === 1 ? "edit" : "edits"}${rowsName ? "" : `: ${others.map(o => o.edit.label.replace(/[.!?]+$/, "")).join(", ")}`}`);
     } else {
       // Counted by what they did, in the order each kind first appears.
