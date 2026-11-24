@@ -12,7 +12,7 @@ import { lstat, mkdir, readFile, realpath, rm, stat, symlink } from "node:fs/pro
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { hasApiKey } from "../detect.js";
+import { hasApiKey, stripVars } from "../detect.js";
 import { privateDirectory, writePrivateFile } from "../private-files.js";
 import { DEFAULT_STALL_MS, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult } from "./types.js";
 import { resolveCli, spawnLines } from "./spawn.js";
@@ -159,6 +159,34 @@ async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<{
 }
 
 /**
+ * `codex exec` reads the user's own `AGENTS.md` from their Codex home, even with `--ignore-user-config` and
+ * `--ignore-rules`, so their personal instructions for their own chats with Codex would reach the run. It gets the
+ * run's own home too, with the file-backed login linked, wherever its login is an API key or that file: a login kept
+ * anywhere else stays in the user's home, so the run still signs in.
+ */
+async function execCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const configuredHome = Object.entries(env).find(([name]) => name.toUpperCase() === "CODEX_HOME")?.[1];
+  const userHome = await realpath(resolve(cwd, configuredHome || join(homedir(), ".codex"))).catch(() => undefined);
+  const authFile = userHome ? join(userHome, "auth.json") : undefined;
+  const auth = authFile ? await stat(authFile).catch(() => undefined) : undefined;
+  const hasAuth = !!auth?.isFile() && auth.size > 0;
+  if (!hasAuth && !hasApiKey("codex", env)) return undefined;
+  const home = codexHomeDir(cwd);
+  try {
+    await privateDirectory(home);
+    if (hasAuth && userHome && authFile) {
+      for (const [from, name] of [[authFile, "auth.json"], [join(userHome, "auth.lock"), "auth.lock"]] as const) {
+        await rm(join(home, name), { force: true });
+        await symlink(from, join(home, name), "file");
+      }
+    }
+    return home;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The run's own Codex home, beside its task folder: outside the folder the agent may write to, and the same for every
  * attempt at the task (the folder is keyed by the run's first task id), so a run cut short or paused on a question
  * resumes its thread. The host removes it once the task lands; the task folders' prune takes one left behind.
@@ -186,10 +214,12 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
   await mkdir(tmpDir, { recursive: true });
   const cmd = buildCodexCommand(opts, bin, tmpDir);
 
+  const execHome = await execCodexHome(opts.cwd, env);
+  const execEnv = execHome ? { ...stripVars(env, ["CODEX_HOME", "CODEX_SQLITE_HOME"]), CODEX_HOME: execHome } : env;
   const st = newCodexState();
   const handle = spawnLines(cmd.file, cmd.args, {
     cwd: opts.cwd,
-    env,
+    env: execEnv,
     stdin: cmd.stdin,
     signal: opts.signal,
     timeoutMs: opts.timeoutMs,

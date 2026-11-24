@@ -68,7 +68,7 @@ export class RenderQueue {
 
   private releaseWorker(id: string) {
     const queued = this.update(id, r => r.queuePid === process.pid && (r.state === "running" || r.state === "queued")
-      ? { state: "queued", progress: 0, queuePid: undefined } : undefined);
+      ? { state: "queued", progress: 0, reused: undefined, queuePid: undefined } : undefined);
     if (queued && queued.kind !== "playback") this.ctx.db.afterCommit(() => {
       this.ctx.log(`[render] requeued render=${logId(id)} project=${logId(queued.projectId)} reason=shutdown`);
     });
@@ -457,7 +457,7 @@ export class RenderQueue {
               // Release durable work only after the cancelled encoder has closed its file.
               if (this.ctx.shutdown.aborted) this.releaseWorker(id);
               else if (ac.signal.reason === yieldCacheWorker) {
-                const queued = this.update(id, r => r.state === "running" ? { state: "queued", progress: 0 } : undefined);
+                const queued = this.update(id, r => r.state === "running" ? { state: "queued", progress: 0, reused: undefined } : undefined);
                 if (queued) {
                   this.ctx.log(`[render] requeued render=${logId(id)} project=${logId(projectId)} reason=higher_priority`);
                   this.ctx.bus.publish({ type: "render.updated", projectId: queued.projectId, render: queued });
@@ -479,7 +479,7 @@ export class RenderQueue {
   }
 
   private async run(id: string, signal: AbortSignal) {
-    let render = this.update(id, r => r.state === "queued" ? { state: "running", progress: 0 } : undefined);
+    let render = this.update(id, r => r.state === "queued" ? { state: "running", progress: 0, reused: undefined } : undefined);
     if (!render) return;
     this.ctx.bus.publish({ type: "render.updated", projectId: render.projectId, render });
 
@@ -533,12 +533,13 @@ export class RenderQueue {
       const output = join(dir, file);
       if (uniqueOutput) unpublished = output;
       let last = 0, progress = 0;
+      let reused: Render["reused"];
       const publishProgress = (cachedRanges?: TimeRange[]) => {
         const t = Date.now();
         if (!cachedRanges && t - last < 500 && progress < 1) return;
         last = t;
         quietProgress(this.ctx, `render progress (${id})`, () => {
-          const upd = this.update(id, r => r.state === "running" ? { progress, ...(cachedRanges && { cachedRanges }) } : undefined);
+          const upd = this.update(id, r => r.state === "running" ? { progress, ...(cachedRanges && { cachedRanges }), ...(reused && { reused }) } : undefined);
           if (upd) this.ctx.bus.publish({ type: "render.updated", projectId: upd.projectId, render: upd });
         });
       };
@@ -553,6 +554,8 @@ export class RenderQueue {
         encoding = await this.ctx.render.renderFullCached(project, timeline, this.ctx.paths.segments(project.id), output, {
           ...opts, ...custom, concurrency: Math.max(1, this.ctx.settings().render.concurrency),
           onCachedRanges: render.kind === "full" && render.quality === "preview" ? publishProgress : undefined,
+          // The renderer reports this just before the progress it accounts for, which saves both.
+          onReused: value => { reused = value; },
         });
       } else if (render.kind === "playback" && render.range) {
         await this.ctx.render.renderPlaybackSegment(project, timeline, render.range, this.ctx.paths.segments(project.id), output, opts);

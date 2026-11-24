@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { TaskAttachment } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
 import { fileBaseName } from "../lib/format";
+import { usePictureMarksStore } from "./pictureMarks";
 
 /** A file dropped or pasted on the message box, on its way into the project or there, waiting for the next message. */
 export interface PendingAttachment {
@@ -38,7 +39,9 @@ export const useAttachmentsStore = create<AttachmentsState>((set, get) => {
   return {
     byProject: {},
     add: (projectId, files) => {
-      const room = MAX_ATTACHMENTS - (get().byProject[projectId]?.length ?? 0);
+      // A frame the editor marked goes out as one of the message's files, so it takes one of the places.
+      const marked = usePictureMarksStore.getState().byProject[projectId]?.marks.length ? 1 : 0;
+      const room = MAX_ATTACHMENTS - marked - (get().byProject[projectId]?.length ?? 0);
       const taken = files.slice(0, Math.max(0, room));
       if (!taken.length) return;
       const rows = taken.map(file => ({ file, row: { key: `att-${++next}`, name: "path" in file ? fileBaseName(file.path) : file.name || "Pasted file", state: "adding" as const } }));

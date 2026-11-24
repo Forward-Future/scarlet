@@ -14,6 +14,7 @@ use super::api::{self, Api};
 use super::detect;
 use super::runner::{self, run_agent, RunOptions};
 use super::runner_codex;
+use super::runner_gemini;
 use super::types::{self, CompleteTaskRequest, McpSpec, RunResult, RunnerEvent, Task, TaskEvent};
 use super::usage;
 use super::workspace::{self, real_path, remove_claude_sessions, remove_control_files, remove_token_file, TASKS_DIR};
@@ -152,6 +153,13 @@ impl HostRuntime {
         if !session_stays && std::fs::symlink_metadata(&codex_home).is_ok_and(|m| m.is_dir()) {
             if let Err(e) = std::fs::remove_dir_all(&codex_home) {
                 log::warn!("task {task_id}: could not remove its Codex home: {e}");
+            }
+        }
+        // So does a Gemini run, in its own Gemini folder.
+        let gemini_dir = runner_gemini::gemini_dir(&dir);
+        if !session_stays && std::fs::symlink_metadata(&gemini_dir).is_ok_and(|m| m.is_dir()) {
+            if let Err(e) = std::fs::remove_dir_all(&gemini_dir) {
+                log::warn!("task {task_id}: could not remove its Gemini folder: {e}");
             }
         }
         // Handed over once its folder is clean: the attempt that resumes the run works in the same folder.

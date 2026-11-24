@@ -269,9 +269,15 @@ ${OPS_DOC}`,
               // Only a measured word split refuses the edit. A recording with nothing to measure goes ahead as asked; one
               // still being prepared is measured when the model calls again.
               const inside = await measureTimeline(on, [op.start, op.end])
-                .then(() => joinAudio(on, project, op, joinPages()).filter(e => e.sound === "sound" && e.transcriptSplitsWord))
+                .then(() => joinAudio(on, project, op, joinPages(), { onTimeline: true }).filter(e => e.sound === "sound" && e.transcriptSplitsWord))
                 .catch(withoutUnlessPreparing(`failed to measure the edges of ripple ${i}`, []));
-              split.push(...inside.map(e => `ops[${i}] ${e.edge} at ${(e.edge === "start" ? op.start : op.end).toFixed(2)} s falls inside “${e.transcriptSplitsWord}”, which is sounding there`));
+              // Where the recording is quiet either side, in the timeline seconds the op is given in, and the levels: named
+              // only the word, a pass measured the edge again with its own scripts before each new try (2026-11-23).
+              const quiet = (e: (typeof inside)[number]) => {
+                const at = [e.quietBeforeOnTimeline, e.quietAfterOnTimeline].filter((q): q is number => q !== undefined).map(q => `${q.toFixed(2)} s`);
+                return (at.length ? ` (the recording is quiet at ${at.join(" and at ")})` : "") + (e.levels ? ` [dBFS in 20 ms steps: ${e.levels}]` : "");
+              };
+              split.push(...inside.map(e => `ops[${i}] ${e.edge} at ${(e.edge === "start" ? op.start : op.end).toFixed(2)} s falls inside “${e.transcriptSplitsWord}”, which is sounding there${quiet(e)}`));
             }
             on = applyOps(on, [op]);
           }
