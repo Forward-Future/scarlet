@@ -258,9 +258,9 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       const decided = isKept && !isRevising;
       // In For you, a handled edit says how it was decided (Kept, or Done for a marker).
-      // Otherwise a cut says how much came out, and any other edit says what it did, or in how many places.
+      // Otherwise a cut says how much came out, and any other edit says what it did.
       const value = only && decided ? (edit.marker ? "Done" : "Kept")
-        : places > 1 ? `${places} places` : editRemovedLabel(edit) ?? editRowWord(edit);
+        : editRemovedLabel(edit) ?? editRowWord(edit);
       const check = asks || (places > 1 ? needs > 0 : !!edit.check && !isRevising);
       const title = (edit.reason && edit.summary) || edit.label;
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
@@ -274,7 +274,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         // Why an edit asks for a look is on its card, in Scarlet's sentence. Its row keeps to the amber number and says
         // the reason on hover, as a pass's row does.
         title={revised || edit.reason ? undefined : edit.check}
-        aria-label={`Edit ${n}: ${title}${places > 1 ? `, ${places} places` : ""}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
+        aria-label={`Edit ${n}: ${title}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
         <EditBadge n={n} kept={isKept} check={check} />
         <span className="simple-edit-title"><span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}

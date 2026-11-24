@@ -209,7 +209,7 @@ export function Drawer({ open, onClose, title, children, width = 380, wrapConten
   const contents = <>
     <div className="flex items-center justify-between px-5 py-3 min-h-[57px] border-b border-line">
       <h2 className="font-semibold text-[14px]">{title}</h2>
-      <button className="btn-icon" aria-label="Close" title="Close (Esc)" onClick={onClose}>
+      <button data-close className="btn-icon" aria-label="Close" title="Close (Esc)" onClick={onClose}>
         <CloseIcon />
       </button>
     </div>

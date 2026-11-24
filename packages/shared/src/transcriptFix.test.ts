@@ -34,6 +34,19 @@ describe("applyWordFix", () => {
     expect(wordsAdded).toBe(-1);
   });
 
+  it("matches a find that has its own 's, and keeps the 's only after the last word", () => {
+    const said = transcript([["Scarlett's", 0, .6], ["editor", .6, 1], ["says", 1, 1.3], ["it's", 1.3, 1.6], ["new", 1.6, 1.9],
+      ["ra,", 1.9, 2.2], ["and", 2.2, 2.5], ["that's", 2.5, 2.9], ["fine.", 2.9, 3.4]]);
+    const fixed = (find: string, replace: string) => applyWordFix(said, { find, replace }).places.map(p => [p.before, p.after]);
+    expect(fixed("Scarlett's", "Scarlet's")).toEqual([["Scarlett's", "Scarlet's"]]);
+    expect(fixed("Scarlett", "Scarlet")).toEqual([["Scarlett's", "Scarlet's"]]);
+    expect(fixed("it's", "its")).toEqual([["it's", "its"]]);
+    expect(fixed("it's", "it is")).toEqual([["it's", "it is"]]);
+    expect(fixed("it's new", "its new")).toEqual([["it's new", "its new"]]);
+    expect(fixed("it's new ra", "it's Neura")).toEqual([["it's new ra,", "it's Neura,"]]);
+    expect(fixed("that fine", "this fine")).toEqual([]);
+  });
+
   it("keeps to a range, and leaves words that already read the fix", () => {
     expect(applyWordFix(t, { find: "Scarlett", replace: "Scarlet", from: 1.5, to: 3 }).places.map(p => p.index)).toEqual([3]);
     expect(applyWordFix(t, { find: "welcome", replace: "Welcome" }).places).toEqual([]);

@@ -1045,8 +1045,8 @@ it("steps ↑ and ↓ among the flagged edits from one that still waits, and on 
   expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
 });
 
-it("counts and steps through a flagged edit made in several places as one edit, as its list does, and keeps it in all of them", async () => {
-  // The captions went on in two places, and Scarlet flagged both. The wrap asks for a look too.
+it("keeps a flagged edit made in separate places as separate rows, steps through each, and keeps only the open one", async () => {
+  // The captions went on in two separate places, and Scarlet flagged both. The wrap asks for a look too.
   appliedEdits().mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
       { changeId: "chg_approved_2", spot: 0, label: "captions", range: { start: 0.2, end: 2.4 }, previous: [], check: "The first line runs long" },
@@ -1057,23 +1057,26 @@ it("counts and steps through a flagged edit made in several places as one edit, 
   await showFolded();
   const turn = turnFor("chg_approved_2");
   const need = () => turn.querySelector(".simple-pass-need")?.getAttribute("title");
-  // Two edits need the editor, on two rows: the captions, in both places, and the wrap.
-  expect(need()).toBe("2 need you");
+  // Three separate edits need the editor, on three rows: both caption spots and the wrap.
+  expect(need()).toBe("3 need you");
   await click(turn.querySelector(".simple-pass-need")!);
   await act(async () => {});
-  expect([...turn.querySelectorAll(".simple-edits .simple-edit-title")].map(t => t.textContent)).toEqual(["captions", "wrap"]);
-  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 2"]);
-  // ↓ goes to the next edit, not to the captions' other place, and ↑ comes back.
+  expect([...turn.querySelectorAll(".simple-edits .simple-edit-title")].map(t => t.textContent)).toEqual(["captions", "captions", "wrap"]);
+  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 3"]);
+  // ↓ steps to the second caption spot, then to the wrap, and ↑ comes back.
   await press("ArrowDown");
-  expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
+  expect([openTitle(), cardCount()]).toEqual(["captions", "2 of 3"]);
+  await press("ArrowDown");
+  expect([openTitle(), cardCount()]).toEqual(["wrap", "3 of 3"]);
   await press("ArrowUp");
-  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 2"]);
-  // Keep keeps the captions in both places and moves on to the wrap, the one edit still waiting.
+  await press("ArrowUp");
+  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 3"]);
+  // Keep keeps only the first caption spot and moves on to the second.
   expect(api.recordEditReview).not.toHaveBeenCalled();
   await press("k");
   expect(vi.mocked(api.recordEditReview).mock.calls).toEqual([[PRJ, { changeId: "chg_approved_2", spot: 0, decision: "keep" }]]);
   await act(async () => {});
-  expect([openTitle(), cardCount(), need()]).toEqual(["wrap", "1 of 1", "1 needs you"]);
+  expect([openTitle(), cardCount(), need()]).toEqual(["captions", "1 of 2", "2 need you"]);
 });
 
 it("takes back the last Keep with ⌘Z, then the one before, with no undo display in the timeline's bottom row", async () => {
@@ -3273,11 +3276,9 @@ it("numbers an applied pass's cuts on the timeline while it has the timeline, as
   expect(drawn()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
 });
 
-it("lists an edit a pass made in many places as one row with its count, and counts it once", async () => {
-  // A fade on every dialogue join of Matt's talking head was 101 rows that all read "Softened every dialogue join",
-  // and the sentence said "102 sound fixes" (2026-11-23). One name, one row: a cut and a flagged edit stay one each.
-  const fades = Array.from({ length: 5 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
-    range: { start: 2 + i * 2, end: 4 + i * 2 }, kind: "audio" as const, previous: [] }));
+it("keeps a pass's non-overlapping edits as separate rows even when they share a name, and counts each", async () => {
+  const fades = Array.from({ length: 3 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 4, end: 4 + i * 4 }, kind: "audio" as const, previous: [] }));
   const cuts = [3, 9].map((at, i) => ({ changeId: "chg_approved_2", spot: 20 + i, label: "Cut", kind: "cut" as const, at, range: { start: at, end: at },
     beforeCut: { version: "v_before", removed: { start: at, end: at + 30 } }, previous: [] }));
   const flagged = { changeId: "chg_approved_2", spot: 30, label: "Softened every dialogue join", range: { start: 13, end: 14 }, kind: "audio" as const,
@@ -3290,22 +3291,23 @@ it("lists an edit a pass made in many places as one row with its count, and coun
   await show();
   await act(async () => {});
   const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
-  expect(pass.querySelector(".simple-made")?.textContent).toBe("Took out 1:00 in 2 cuts, and made 2 sound fixes.");
+  expect(pass.querySelector(".simple-made")?.textContent).toBe("Took out 1:00 in 2 cuts, and made 4 sound fixes.");
   await click(seeAll(pass)!);
   await act(async () => {});
   const rows = () => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
   // The flagged one leads For you; under its line, the rest in the video's order.
   expect(rows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.querySelector(".simple-pass-value")?.textContent])).toEqual([
-    ["Softened every dialogue join", "Audio"], ["Softened every dialogue join", "5 places"], ["Cut", "−30 s"], ["Cut", "−30 s"]]);
-  // Its row opens its first place, and is lit while any of its places is open.
+    ["Softened every dialogue join", "Audio"], ["Softened every dialogue join", "Audio"], ["Cut", "−30 s"],
+    ["Softened every dialogue join", "Audio"], ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"]]);
+  // Opening one fade lights only its own row, not other non-overlapping places with the same name.
   await click(rows()[1]!);
   await act(async () => {});
-  expect(rows().map(r => r.getAttribute("aria-current"))).toEqual([null, "true", null, null]);
+  expect(rows().map(r => r.getAttribute("aria-current"))).toEqual([null, "true", null, null, null, null]);
 });
 
-it("treats an edit a pass made in many places as its one row does: ↑ ↓ step past it, Keep keeps every place, and a cut beside a place opens alone", async () => {
-  const fades = Array.from({ length: 5 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
-    range: { start: 2 + i * 2, end: 4 + i * 2 }, kind: "audio" as const, previous: [] }));
+it("keeps a cut and a partially overlapping ranged edit separate, and keeps only the open place on Keep", async () => {
+  const fades = Array.from({ length: 2 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 6, end: 4 + i * 6 }, kind: "audio" as const, previous: [] }));
   const cuts = [3, 9].map((at, i) => ({ changeId: "chg_approved_2", spot: 20 + i, label: "Cut", kind: "cut" as const, at, range: { start: at, end: at },
     beforeCut: { version: "v_before", removed: { start: at, end: at + 30 } }, previous: [] }));
   data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
@@ -3321,42 +3323,34 @@ it("treats an edit a pass made in many places as its one row does: ↑ ↓ step 
   await act(async () => {});
   const rows = () => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
   const lit = () => rows().map(r => r.getAttribute("aria-current") ? r.querySelector(".simple-pass-value")?.textContent : null);
-  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["5 places", "−30 s", "−30 s"]);
-  // The first cut is a row of its own in the list, so its card is the cut's alone: the fade that starts beside it isn't part of it.
+  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["Audio", "−30 s", "Audio", "−30 s"]);
+  // The cut at 3 s inside the 2–4 s fade does not overlap it exactly, so it opens alone.
   await click(rows()[1]!);
   await act(async () => {});
-  expect(lit()).toEqual([null, "−30 s", null]);
+  expect(lit()).toEqual([null, "−30 s", null, null]);
   expect(editPanel()?.querySelector(".edit-card-length")?.textContent ?? "").not.toMatch(/edits$/);
-  // ↑ goes to the fades' row, at their first place. ↓ from there goes down the list: the cut, then the next cut, never
-  // the fades' other places.
+  // ↑ goes to the first fade, and Keep keeps only that fade — never the second place at 8–10 s.
   await press("ArrowUp");
   await act(async () => {});
-  expect(lit()).toEqual(["5 places", null, null]);
-  await press("ArrowDown");
-  await press("ArrowDown");
-  await act(async () => {});
-  expect(lit()).toEqual([null, null, "−30 s"]);
-  await click(rows()[0]!);
-  await act(async () => {});
-  expect(lit()).toEqual(["5 places", null, null]);
-  // Keep keeps the fades in every place, and their row is ticked.
+  expect(lit()).toEqual(["Audio", null, null, null]);
   await press("k");
   await act(async () => {});
-  expect(keep.mock.calls.flatMap(([, body]) => body.edits.map(e => e.spot)).sort()).toEqual([10, 11, 12, 13, 14]);
+  expect(keep.mock.calls.flatMap(([, body]) => body.edits.map(e => e.spot))).toEqual([10]);
   expect(rows()[0]!.className).toBe("is-decided");
+  expect(rows()[2]!.className).toBe("");
 });
 
-it("puts a request about any place of an edit a pass made in many places under its one row, which says Revising…", async () => {
-  const fades = Array.from({ length: 5 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
-    range: { start: 2 + i * 2, end: 4 + i * 2 }, kind: "audio" as const, previous: [] }));
+it("puts a request about one place of a repeated pass edit under that place's own row, leaving the others alone", async () => {
+  const fades = Array.from({ length: 3 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 4, end: 4 + i * 4 }, kind: "audio" as const, previous: [] }));
   const thread = threadWith("chg_approved_2");
   const base = data.tasks.find(t => t.id === "task_done")!;
   const now = new Date().toISOString();
-  // The editor opened the fades' third place from its dot on the timeline and sent it back.
+  // The editor sent the second fade (spot 11) back.
   data = { ...data, tasks: [...data.tasks,
     { ...base, id: "task_pass", kind: "edit" as const, instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] },
     { ...base, id: "task_revise_fade", state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined, summary: null, changeIds: [],
-      context: { changeId: "chg_approved_2", editIndex: 12, threadId: thread.id, message: "Make this one shorter" } }] };
+      context: { changeId: "chg_approved_2", editIndex: 11, threadId: thread.id, message: "Make this one shorter" } }] };
   useProjectStore.setState({ current: data });
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== thread.id ? [] : [...fades, { changeId: "chg_approved_2", spot: 20, label: "Cut", kind: "cut" as const, at: 13, range: { start: 13, end: 13 },
@@ -3366,10 +3360,10 @@ it("puts a request about any place of an edit a pass made in many places under i
   const pass = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
   await click(seeAll(pass())!);
   await act(async () => {});
-  const row = pass().querySelector<HTMLElement>(".simple-pass-list > li")!;
-  // Sent back, the row ends on where that stands, in place of its count: one word a row.
-  expect([row.querySelector(".simple-pass-value")?.textContent, row.querySelector(".simple-pass-check")?.textContent]).toEqual([undefined, "Revising…"]);
-  expect(wordsOf(row.querySelector(".subunit .subunit-msg > p"))).toBe("Make this one shorter");
+  const items = [...pass().querySelectorAll<HTMLElement>(".simple-pass-list > li")];
+  expect(items.map(li => [li.querySelector(".simple-pass-value")?.textContent, li.querySelector(".simple-pass-check")?.textContent])).toEqual([
+    ["Audio", undefined], [undefined, "Revising…"], ["Audio", undefined], ["−30 s", undefined]]);
+  expect(wordsOf(items[1]!.querySelector(".subunit .subunit-msg > p"))).toBe("Make this one shorter");
   expect(pass().querySelectorAll(".subunit")).toHaveLength(1);
 });
 
@@ -6229,13 +6223,13 @@ it("draws a pass's rows and any other request's rows as one row, and a revised e
   }
 });
 
-/** A pass whose list has a moment: three edits on the cube's reveal that play as one change, between two of their own. */
+/** A pass whose list has a moment: three edits on the cube's reveal that overlap on the timeline exactly, between two of their own. */
 const passWithMoment = (flagged: boolean) => {
   const later = appliedPass(flagged);
   (later.lists[later.earlier] as object[]).splice(0, 1,
-    { changeId: "chg_approved_2", spot: 3, label: "Cube reveal", range: { start: 4, end: 7 }, previous: [], kind: "zoom" },
+    { changeId: "chg_approved_2", spot: 3, label: "Cube reveal", range: { start: 4, end: 7.98 }, previous: [], kind: "zoom" },
     { changeId: "chg_approved_2", spot: 4, label: "Cube inset", range: { start: 4, end: 8 }, previous: [], kind: "reframe" },
-    { changeId: "chg_approved_2", spot: 5, label: "First cube turn", range: { start: 4.5, end: 6.5 }, previous: [], kind: "zoom" });
+    { changeId: "chg_approved_2", spot: 5, label: "First cube turn", range: { start: 4.02, end: 7.98 }, previous: [], kind: "zoom" });
   return later;
 };
 const listRows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-pass-list:not(.is-moment) > li > button")];
@@ -6996,7 +6990,7 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   await click(transcriptLink());
   expect(openHead()!.querySelector(".edit-passage")).toBeNull();
   expect(container.querySelector(".simple-timeline-bracket")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // After steps over the shaded passage, so a click inside it plays it in Before from that point, and the icon lights
   // by itself, with a flash. Without layout the click lands on the passage's first frame.
   const band = () => container.querySelector<HTMLElement>(".simple-timeline-band")!;
@@ -7014,7 +7008,7 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   await press("\\");
   expect(beforeIcon(bar)).toEqual(["BeforeAfter\\", "Before", "false", "Play Before (\\)"]);
   expect(bar.querySelector(".edit-card-before.is-flash")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // \\ switches to Before, which plays straight through the cut.
   await press("\\");
   expect(beforeIcon(bar)).toEqual(["BeforeAfter\\", "Before", "true", "Back to After (\\)"]);
@@ -12392,9 +12386,9 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
   expect([list(), seeAll(owner())?.getAttribute("aria-expanded"), container.querySelector('[data-run="task_fix"]')]).toEqual([null, "false", null]);
 });
 
-it("draws a request about one place of an edit made in several once, under that edit's row, while only what needs the editor is listed", async () => {
+it("keeps a request about an unflagged place of a repeated edit apart from a flagged place's row, and places it under its own row in See all", async () => {
   const { base, thread } = madeRequest();
-  // The captions went on in two places. Scarlet flagged the second, and the editor sent the first back.
+  // The captions went on in two separate places. Scarlet flagged the second, and the editor sent the first back.
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== thread.id ? [] : [
       { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
@@ -12407,15 +12401,18 @@ it("draws a request about one place of an edit made in several once, under that 
   await act(async () => {});
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   expect(block().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
-  // "1 needs you" lists that edit as one row for both its places.
+  // "1 needs you" lists only the flagged place, not both places combined.
   await click(block().querySelector(".simple-pass-need")!);
   await act(async () => {});
   expect([...editRowsIn(block())].map(row => [row.querySelector(".simple-edit-title")?.textContent, row.querySelector(".simple-edit-value")?.textContent]))
-    .toEqual([["captions", "2 places"]]);
-  // The request about the place that wasn't flagged is directly under that row, and not a second time under the list.
-  const under = [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
-  expect(under.map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
-  expect(under[0]!.previousElementSibling?.classList.contains("simple-edit")).toBe(true);
+    .toEqual([["captions", "Edit"]]);
+  // The place that wasn't flagged was sent back: it and the request about it are Working's, on a row of its own.
+  const under = () => [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
+  expect(under()).toEqual([]);
+  await click(tabNamed(block(), "Working"));
+  expect([...editRowsIn(block())].map(row => row.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions"]);
+  expect(under().map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
+  expect(under()[0]!.previousElementSibling?.querySelector(".simple-edit-title")?.textContent).toBe("captions");
 });
 
 it("keeps a request about an edit that isn't among the ones that need the editor under its row in Working", async () => {
@@ -12554,6 +12551,28 @@ const oneAppliedCut = () => {
       beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
   ] });
 };
+it("plays the calls still waiting round an open edit as Scarlet staged them, and shows each as a gap that opens it", async () => {
+  // Retakes a waiting call takes out looked missed while the editor reviewed a zoom over them (2026-11-23).
+  flagged();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: c.cutAssessments!.map(a =>
+    a.index === 1 ? { ...a, start: 9, end: 11 } : a) } : c) };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: data.project.head!, edits: [
+    { changeId: "chg_approved_2", spot: 0, label: "Zoom in on the price", range: { start: 8, end: 14 }, previous: [] },
+  ] });
+  const passage = vi.spyOn(player, "previewRange");
+  await show();
+  await click(buttonIn(turnFor("chg_approved_2"), "See edit")!);
+  await act(async () => {});
+  expect(passage.mock.lastCall?.[5]).toEqual([{ start: 9, end: 11 }, { start: 598, end: 602.5 }]);
+  const gap = container.querySelector<HTMLElement>(".simple-timeline-gap.is-call")!;
+  expect(gap.classList.contains("is-skipped")).toBe(true);
+  expect(gap.textContent).toBe("Cut 1");
+  // A press on it opens the call.
+  await act(async () => { gap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true })); });
+  await act(async () => {});
+  expect(container.querySelector(".edit-card")?.textContent).toContain("Cut 1");
+});
 it("says what each cut took out on one line, however many cuts the editor steps through", async () => {
   flagged();
   useProjectStore.setState({ current: data });
@@ -12576,6 +12595,9 @@ it("says what each cut took out on one line, however many cuts the editor steps 
     expect(editPanel()!.querySelectorAll(".edit-card-what")).toHaveLength(1);
   }
 });
+
+/** The waiting pass's two calls, which an open applied cut's After steps over as staged once the editor plays on. */
+const waitingCallCuts = [{ start: 230, end: 233 }, { start: 598, end: 602.5 }];
 
 const cutRow = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-edits .simple-edit")!;
 
@@ -12601,7 +12623,7 @@ it("opens a cut unlit with its words folded when it is opened again, after Befor
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing “Keep the image test” · After");
   expect(transcriptLink().getAttribute("aria-expanded")).toBe("false");
   expect(openHead()!.querySelector(".edit-passage")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // A click in the red leaves it on Before from that point. Its open row pressed again starts it over as the video
   // runs, unlit: the card stays up, with the timeline still on the cut.
   await act(async () => { container.querySelector<HTMLElement>(".simple-timeline-band")!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, bubbles: true })); });
@@ -12612,7 +12634,7 @@ it("opens a cut unlit with its words folded when it is opened again, after Befor
   expect(beforeIcon(editPanel()!)).toEqual(["BeforeAfter\\", "Before", "false", "Play Before (\\)"]);
   expect(audition.mock.calls.length).toBe(plays + 1);
   // After, from the top of the listen: it steps over the cut again.
-  expect(audition.mock.lastCall?.[0]).toEqual({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] });
+  expect(audition.mock.lastCall?.[0]).toEqual({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts });
   expect(container.querySelector(".simple-timeline-band")?.getAttribute("style")).toBe(band);
   // Closed with Esc and opened again: no flash and no clicked point.
   await press("Escape");
@@ -12758,7 +12780,7 @@ it("leaves the Before key alone until the version before a cut has arrived", asy
   await act(async () => arrive());
   await act(async () => {});
   expect(beforeIcon(editPanel()!)?.[2]).toBe("false");
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
 });
 
 it("keeps a cut's card open while the version before it loads: ← → and the timeline are the player's, and only Esc closes it", async () => {
@@ -12793,7 +12815,7 @@ it("keeps a cut's card open while the version before it loads: ← → and the t
   // Once the version arrives, the cut plays on it as it does when it opens.
   await act(async () => arrive());
   for (let i = 0; i < 4; i++) await act(async () => {});
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // Esc is what closes it.
   await press("Escape");
   expect(editPanel()).toBeNull();
@@ -12844,7 +12866,7 @@ it("says so in a cut's words when the version before it can't be loaded, offers 
   expect(buttonIn(passage(), "Retry transcript")).toBeUndefined();
   expect(buttonIn(monitor, "Retry")).toBeUndefined();
   expect(editPanel()!.querySelector<HTMLButtonElement>(".edit-card-before")!.disabled).toBe(false);
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
 });
 
 it("reads nothing of a cut's words on the video as it runs now while the version before it loads", async () => {

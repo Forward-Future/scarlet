@@ -7,6 +7,12 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 23, 2026
 
 - A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.
+- Edits in a list now combine into one row only when they overlap on the timeline exactly, so edits in separate places or that only partly overlap each stay on their own row.
+- When Scarlet lines up your screen recording with your camera, it now sees right away where the words you say are on that screen, so quotes and pages you read from it are less likely to be left out of the video.
+- Edits made at separate places in the video now stay individual rows in the edit list instead of being bundled into one spanning range, a crop or reframe beside a zoom no longer gets labeled Zoom or shows zoom numbers from another clip, and a Check note attaches only to an edit on that time range.
+- While you review an edit, cuts still waiting on your call play as Scarlet would make them, and show on the timeline as a gap with their number, so retakes nearby no longer look missed.
+- When Scarlet can't take out a repeated line cleanly, it now asks you about the cut instead of leaving the line in and marking a To do.
+- The talking-head example skill no longer includes Matt’s own camera setup or editor name, so any editor can adapt it.
 - Scarlet now knows what was said earlier in the chat, so a message like “tell me the timestamps” or “the two clips you just found” is read as being about the request before it, links and times Scarlet showed you while it worked included.
 - What Scarlet finds for you at a place in the video, such as a clip to play there, is now listed under your request and opens on the timeline like any edit, and a web address in Scarlet's reply or on an edit's card is a link that opens in your browser.
 - An export that starts partway through now shows that part striped on its bar, with how much of the video it reused from an earlier export, so a head start no longer looks like the export skipped ahead.
@@ -96,6 +102,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Settings › General has Talking to you: write in your own words how Scarlet should talk to you in the chat and on its cards, the same in every project and with every model.
 - Edits run on Gemini no longer pick up the personal instructions you wrote for your own Gemini chats, as Claude and Codex edits already didn't.
 - When Scarlet moves a later take to the front of the video, the footage before it no longer shows as one huge cut: only what the video never uses shows as cut.
+- When the disk is full, Scarlet now says so instead of showing a confusing “cannot rollback” error.
+- After an update, a request's estimated cost uses the prices that came with the new version instead of an older price list Scarlet fetched before.
 - Recordings with more than one audio track, such as OBS captures or multi-mic podcasts, have an Audio track picker in Media: choose one track or mix them all, and Scarlet listens to, plays and exports that choice, and transcribes the recording again when you change it.
 - Third-party models run through Antigravity (such as Claude Opus 5.5) now use Gemini to listen to cuts instead of receiving audio files they cannot hear, and no longer appear in the Listening model picker.
 - Dialogue passes on an already-assembled recording stay on batched dialogue cuts instead of rebuilding the whole timeline in one pass, and unsure joins during assembly ask to listen or stage for review rather than forcing exact timestamps.
@@ -115,6 +123,10 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A microphone track that goes silent whenever its speaker isn't talking no longer fills its transcript with the same sentence repeated over the silence, and transcribes much faster.
 - Once your edits are decided and nothing is waiting on you, Export at the top turns white until you export the video, and the export for another editing app is now called “For Resolve, Final Cut or Premiere…”.
 - Scarlet now tells you when Claude Code, Codex or Gemini has a newer version, with a small dot on the model button, and updates it for you with one press from the model menu or Settings › General, the same way you installed it.
+- Project settings now opens with the cursor in the Name field, so you can type a new name straight away instead of a space or Enter closing it.
+- A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
+- Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
+- An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
 
 ## November 22, 2026
 
