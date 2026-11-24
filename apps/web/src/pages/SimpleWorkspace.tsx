@@ -7,7 +7,7 @@ import { appliedReviewChange, timelineDuration, type Change, type CutAssessment,
 import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
 import { editGroups, listPlaces, useReviewed, useRevising } from "../components/review/threadEditState";
 import { QueueInChat, useRewordingHold, type QueuedRequest } from "../components/chat/QueueInChat";
-import { recordEditReview } from "../lib/editReviews";
+import { recordEditReview, recordEditReviews } from "../lib/editReviews";
 import { forgetCalls, recordUndo, undoLast, type CallStep } from "../lib/undo";
 import { editKey, keepEdits, notYetKept } from "../lib/keptEdits";
 import { resumeRunChoice, useAgentAvailability } from "../components/agent/AgentChip";
@@ -1555,13 +1555,31 @@ export function SimpleWorkspace() {
     if (nextEditAfterKeep) actions.playEdit(nextEditAfterKeep, openOnItsOwn(nextEditAfterKeep));
     else if (nextCallAfterKeep) actions.listen(pass!, nextCallAfterKeep);
     else if (onLowRisk) {
-      if (openElsewhere(focusThread?.id, 1, true, "low")) return;
-      const waits = stopTarget(waitingStops[0], row => row.find(waitingEdit) ?? row[0]!);
-      if (waits && "edit" in waits) actions.playEdit(waits.edit, openOnItsOwn(waits.edit));
-      else if (waits && "call" in waits) actions.listen(pass!, waits.call);
-      else if (!openElsewhere(focusThread?.id, 1, true)) closeEdit();
+      if (!openElsewhere(focusThread?.id, 1, true, "low") && !openWaiting()) closeEdit();
     }
     else if (!openElsewhere(focusThread?.id, 1, true) && !openIn("low", 1, railThreads.map(thread => thread.id))) closeEdit();
+  }
+  /** Opens what still waits on the editor, this request's first and then another's. Says whether there was any. */
+  function openWaiting() {
+    const waits = stopTarget(waitingStops[0], row => row.find(waitingEdit) ?? row[0]!);
+    if (waits && "edit" in waits) { actions.playEdit(waits.edit, openOnItsOwn(waits.edit)); return true; }
+    if (waits && "call" in waits) { actions.listen(pass!, waits.call); return true; }
+    return openElsewhere(focusThread?.id, 1, true);
+  }
+  // Mark all done keeps every low-risk edit of the column at once, every request's, as Keep keeps one: the engine is
+  // told, each is Done's, and one ⌘Z takes them all back (the editor's choice, 2026-11-24). A low-risk edit open on the
+  // card goes on as Keep would from it, to what still waits, else the card closes.
+  function keepLowRisk() {
+    const parts = railThreads.flatMap(thread => {
+      const fresh = notYetKept(current.id, thread.id, rail.info(thread.id)?.lowRiskEdits?.() ?? []);
+      return fresh.length ? [{ threadId: thread.id, refs: fresh }] : [];
+    });
+    if (!parts.length) return;
+    const wasOpen = !!reviewingEdit && onLowRisk;
+    for (const part of parts) if (keepEdits(current.id, part.threadId, part.refs, head ?? undefined)) recordEditReviews(current.id, part.refs, "keep");
+    recordUndo({ kind: "keepAll", word: "Mark all done", projectId: current.id, parts });
+    appLog("action", "keep-low-risk", { count: parts.reduce((n, part) => n + part.refs.length, 0), requests: parts.length });
+    if (wasOpen && !openWaiting()) closeEdit();
   }
   // A revision sent from a row of For you goes on as Keep does (the editor chose this on 2026-11-23): the row is
   // Working's now, and the card moves to the next one that waits. From Working or Done, and in a request with one
@@ -1603,7 +1621,7 @@ export function SimpleWorkspace() {
     // A call taken back is open on its card already.
     if (step?.kind === "call") return;
     // A Keep, Add or Reject edit moved the card on: taken back, the card goes back to the edit it was about.
-    const opened = step?.kind === "keep" ? step : step?.edit && step.threadId ? { threadId: step.threadId, edit: step.edit } : undefined;
+    const opened = step?.kind === "keep" ? step : step?.kind === "revision" && step.edit && step.threadId ? { threadId: step.threadId, edit: step.edit } : undefined;
     const thread = opened && threadsNow.current.find(t => t.id === opened.threadId);
     if (opened && thread) latestActions.current.openEdit(thread, opened.edit, undefined, opened.edit.single);
   };
@@ -2386,7 +2404,7 @@ export function SimpleWorkspace() {
         </ChatRail>
         <ReviewRail store={rail} threads={railThreads}
           open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
-          selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined} />
+          selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined} onDoneLow={keepLowRisk} />
         <div className="workspace-stage simple-stage">
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}

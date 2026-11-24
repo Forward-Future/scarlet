@@ -490,7 +490,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   useEffect(() => {
     rail?.report(thread.id, empty ? undefined : { you: need, optional: optional.length, working: inPlace("working").length, done: inPlace("done").length,
       openFirst: () => waits()[0]?.row.open?.(), openLast: () => waits().at(-1)?.row.open?.(),
-      openFirstLow: () => lowRisk()[0]?.row.open?.(), openLastLow: () => lowRisk().at(-1)?.row.open?.() });
+      openFirstLow: () => lowRisk()[0]?.row.open?.(), openLastLow: () => lowRisk().at(-1)?.row.open?.(),
+      lowRiskEdits: () => { const keys = new Set(optional.flatMap(keysOf)); return edits.filter(e => keys.has(editKey(e))); } });
   });
   useEffect(() => () => rail?.report(thread.id), [rail, thread.id]);
   if (empty) return null;
@@ -756,7 +757,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     rail?.report(thread.id, { you: need, optional, working: countOf("working"), done: countOf("done"),
       openFirst: () => { if (flagged[0]) actions.openEdit(thread, flagged[0]); }, openLast: () => { const last = flagged.at(-1); if (last) actions.openEdit(thread, last); },
       openFirstLow: () => { const first = lowRisk()[0]; if (first) actions.openEdit(thread, first); },
-      openLastLow: () => { const last = lowRisk().at(-1); if (last) actions.openEdit(thread, last); } });
+      openLastLow: () => { const last = lowRisk().at(-1); if (last) actions.openEdit(thread, last); },
+      lowRiskEdits: () => groups.flatMap(({ members }) => placeOf.get(editKey(members[0]!.edit)) === "optional" ? members.map(m => m.edit) : []) });
   });
   useEffect(() => () => rail?.report(thread.id), [rail, thread.id]);
   if (rail) {

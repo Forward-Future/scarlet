@@ -2915,6 +2915,63 @@ it("counts an edit decided cut by cut as reviewed, in a long list", async () => 
   expect(turn.querySelector(".simple-pass-need")).toBeNull();
 });
 
+it("marks every low-risk edit done with one press on the Low Risk Edits heading, and ⌘Z takes them all back", async () => {
+  appliedEdits();
+  const keep = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+  const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
+  await showFolded();
+  await act(async () => {});
+  const turn = turnFor("chg_approved_2");
+  const head = () => container.querySelector<HTMLButtonElement>(".review-low-head")!;
+  const done = () => container.querySelector<HTMLButtonElement>(".review-low-done");
+  const section = () => container.querySelector<HTMLElement>(".review-low")!;
+  // Its own press on the heading's line, after the heading and before nothing but the chevron, saying what it does.
+  expect([done()?.title, done()?.getAttribute("aria-label"), head().contains(done()), done()?.parentElement === head().parentElement, !!done()?.querySelector("svg")])
+    .toEqual(["Mark all 2 low-risk edits done", "Mark all 2 low-risk edits done", false, true, true]);
+  expect([listCounts(turn), lowRisk(turn)]).toEqual([["For you1", "Working", "Done"], "2 low risk"]);
+  vi.mocked(api.recordEditReview).mockClear();
+  const lines = await loggedActions(async () => { await click(done()!); });
+  await act(async () => {});
+  // Both are kept as Keep keeps one: the engine is told of each, they are Done's, and Low Risk Edits is gone. The edit
+  // that waits is still For you's, nothing opened on the card, and the press didn't fold the list.
+  expect(lines).toEqual(["[action] keep-low-risk count=2 requests=1"]);
+  expect(vi.mocked(api.recordEditReview).mock.calls.map(([, review]) => review)).toEqual([
+    { changeId: "chg_approved_2", spot: 0, decision: "keep" }, { changeId: "chg_approved_2", spot: 1, decision: "keep" }]);
+  expect(keep).toHaveBeenCalled();
+  expect([listCounts(turn), section().hidden, done(), head().getAttribute("aria-expanded"), editPanel()]).toEqual([["For you1", "Working", "Done2"], true, null, "true", null]);
+  await click(tabNamed(turn, "Done"));
+  expect(editLists(turn)).toEqual([["Decided", ["music bed", "captions"]]]);
+  // One ⌘Z takes the whole press back: both wait under Low Risk Edits again.
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+  await act(async () => {});
+  expect(unkeep).toHaveBeenCalled();
+  expect([listCounts(turn), section().hidden, done()?.title]).toEqual([["For you1", "Working", "Done"], false, "Mark all 2 low-risk edits done"]);
+  await click(tabNamed(turn, "For you"));
+  expect(lowRisk(turn)).toBe("2 low risk");
+});
+
+it("marks a pass's low-risk cuts done from the heading, and the open one's card goes on to what still waits", async () => {
+  appliedPass(true);
+  vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+  await show();
+  await act(async () => {});
+  const pass = turnFor("chg_approved_2");
+  const done = () => container.querySelector<HTMLButtonElement>(".review-low-done");
+  // One of the pass's two low-risk cuts is open on the card; its third cut waits on the editor.
+  const captions = listRows().find(row => rowText(row) === "captions")!;
+  await click(captions);
+  await act(async () => {});
+  expect([openPassRow(), done()?.title, listCounts(pass)]).toEqual(["captions", "Mark all 2 low-risk edits done", ["For you1", "Working", "Done"]]);
+  await click(done()!);
+  await act(async () => {});
+  // Both are Done's, and the card goes on as Keep would from the open one: to the cut that still waits.
+  expect([listCounts(pass), container.querySelector<HTMLElement>(".review-low")!.hidden, openPassRow()]).toEqual([["For you1", "Working", "Done2"], true, "wrap"]);
+  // Kept too, nothing is left: the card closes, as Keep's does.
+  await press("k");
+  await act(async () => {});
+  expect([listCounts(pass), editPanel()]).toEqual([["For you", "Working", "Done3"], null]);
+});
+
 it("lists every edit of a long list under Low risk in the column at once, with no line or link to the rest", async () => {
   const many = Array.from({ length: 12 }, (_, i) => ({ changeId: "chg_approved_2", spot: i, label: `cut ${i + 1}`,
     range: { start: i, end: i }, at: i, previous: [] }));

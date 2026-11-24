@@ -1,3 +1,4 @@
+import type { ThreadEdit } from "@scarlet/shared";
 import { createContext, useContext, useSyncExternalStore } from "react";
 
 /** The lists of the column of edits: what waits on the editor, the edits Scarlet didn't flag (Low risk), what is with Scarlet, what is decided. */
@@ -7,7 +8,9 @@ export type RailSection = "you" | "low" | "working" | "done";
  * What one request has in each list, and how to open its first and last row that waits (`openFirst`, `openLast`) and
  * its first and last low-risk row (`openFirstLow`, `openLastLow`).
  */
-export interface RailInfo { you: number; optional: number; working: number; done: number; openFirst?(): void; openLast?(): void; openFirstLow?(): void; openLastLow?(): void }
+export interface RailInfo { you: number; optional: number; working: number; done: number; openFirst?(): void; openLast?(): void; openFirstLow?(): void; openLastLow?(): void;
+  /** The edits of the request's low-risk rows, every place of each: what Mark all done keeps. */
+  lowRiskEdits?(): Omit<ThreadEdit, "at">[] }
 
 /**
  * The column of edits beside the chat is one list for the whole video, and each request draws its own rows into it:

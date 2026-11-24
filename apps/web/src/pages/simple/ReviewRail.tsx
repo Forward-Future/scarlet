@@ -13,13 +13,18 @@ import { letGo } from "./types";
  * open until the editor folds it, and Done counts what the editor has decided and opens on a press. A request about the
  * whole video is not here: it runs in the chat.
  */
-export function ReviewRail({ store, threads, open, onOpen, selected }: {
+/** What Mark all done says it does, on hover and to screen readers. */
+const doneLabel = (count: number) => count === 1 ? "Mark the low-risk edit done" : `Mark all ${count} low-risk edits done`;
+
+export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow }: {
   store: RailStore;
   /** The requests in the order their rows are listed: the latest first. */
   threads: readonly Thread[];
   open: { working: boolean; done: boolean; low: boolean }; onOpen(section: "working" | "done" | "low", open: boolean): void;
   /** What is open on the card, so its row is kept in view. */
   selected?: string;
+  /** Mark all done: Keep on every low-risk edit at once. */
+  onDoneLow?(): void;
 }) {
   useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
   const host = useRef<HTMLElement>(null);
@@ -54,8 +59,14 @@ export function ReviewRail({ store, threads, open, onOpen, selected }: {
       </div>
       {/* The edits Scarlet didn't flag, listed at once and quieter, open until the editor folds them. */}
       <div className="review-low" hidden={optional === 0}>
-        <button type="button" className="review-low-head" aria-expanded={open.low} onClick={letGo(() => onOpen("low", !open.low))}>
-          <span>Low Risk Edits</span><b>({optional})</b><Icon name="chevron" size={10} /></button>
+        <div className="review-low-row">
+          <button type="button" className="review-low-head" aria-expanded={open.low} onClick={letGo(() => onOpen("low", !open.low))}>
+            <span>Low Risk Edits</span><b>({optional})</b><Icon name="chevron" size={10} /></button>
+          {/* Mark all done keeps every low-risk edit at once, as Keep does one (2026-11-24). It is a press of its own, on the
+              heading's line just before its chevron, and doesn't fold the list. */}
+          {onDoneLow && optional > 0 && <button type="button" className="review-low-done" title={doneLabel(optional)} aria-label={doneLabel(optional)}
+            onClick={letGo(onDoneLow)}><Icon name="checks" size={12} /></button>}
+        </div>
         <div className="review-low-body" role="group" aria-label="Low Risk Edits" hidden={!open.low}>{lowSlots}</div>
       </div>
     </div>
