@@ -545,7 +545,7 @@ it("starts the editor's transcript of a scanned source once per pass", async () 
   }
 });
 
-it("scans for a request sent about a point and for a revision as it does for a whole edit, and for no other task", async () => {
+it("scans for a request sent about a point, a revision, and a hand-off as it does for a whole edit, and for no other task", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-dialogue-kinds-"));
   const app = createApp({ dataDir: dir, skillsSeedDir: dir, env: {}, log: () => {} });
   try {
@@ -564,17 +564,24 @@ it("scans for a request sent about a point and for a revision as it does for a w
       method: "POST", headers: { Authorization: `Bearer ${accessToken(ctx)}`, "Content-Type": "application/json" },
       body: JSON.stringify({ taskId, mediaId: media.id, from: 0, to: 60 }),
     });
-    const running = (kind: "note" | "revise" | "skill_edit" | "skill_from_change") => createTask(ctx, { projectId: project.id, kind, agent: "api",
-      instruction: "Tighten the pauses here", state: "running", createdBy: { type: "scarlet", name: "Scarlet" } });
+    const running = (kind: "edit" | "note" | "revise" | "hand_off" | "skill_edit" | "skill_from_change", context?: Parameters<typeof createTask>[1]["context"]) =>
+      createTask(ctx, { projectId: project.id, kind, agent: "api", instruction: "Tighten the pauses here", state: "running",
+        ...(context && { context }), createdBy: { type: "scarlet", name: "Scarlet" } });
 
-    // The message box sends a request about a point as a note, and a call sent back is a revision.
-    for (const kind of ["note", "revise"] as const) {
-      const task = running(kind);
-      expect((await post("dialogue-scan", task.id)).status, kind).toBe(200);
-      expect((await post("dialogue-detections", task.id)).status, kind).toBe(200);
+    // The message box sends a request about a point as a note, a call sent back is a revision, and a hand-off does a request's cutting.
+    const pass = running("edit");
+    for (const make of [
+      () => running("note"),
+      () => running("revise"),
+      () => running("hand_off", { checksTaskId: pass.id, handOff: { typeId: "cutting", name: "Cutting", brief: "Tighten the pauses here" } }),
+    ]) {
+      const task = make();
+      expect((await post("dialogue-scan", task.id)).status, task.kind).toBe(200);
+      expect((await post("dialogue-detections", task.id)).status, task.kind).toBe(200);
       cancelTask(ctx, task);
       await Promise.all([...ctx.pending]);
     }
+    cancelTask(ctx, pass);
     // A task that edits no video has no scan: one that writes a skill from an approved edit, or revises a skill.
     for (const kind of ["skill_from_change", "skill_edit"] as const) {
       const task = running(kind);

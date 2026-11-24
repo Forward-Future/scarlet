@@ -1,4 +1,4 @@
-import { taskDialogueOperation, RepeatAuditRequest, type Task } from "@scarlet/shared";
+import { isHandOff, taskDialogueOperation, RepeatAuditRequest, type Task } from "@scarlet/shared";
 import { makeTimeMap, TimeRange } from "@scarlet/timeline";
 import type { z } from "zod/v3";
 import type { Ctx } from "../context.js";
@@ -21,7 +21,7 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
   function current() {
     const owner = ctx.repos.tasks.get(task.id);
     if (!owner || owner.startedAt !== task.startedAt || (request.startedAt && owner.startedAt !== request.startedAt) ||
-        !editsDialogue(owner.kind) || !["claimed", "running"].includes(owner.state))
+        !(editsDialogue(owner.kind) || isHandOff(owner)) || !["claimed", "running"].includes(owner.state))
       throw conflict("edit_inactive", "This edit is no longer running.");
     const project = ctx.repos.projects.header(projectId);
     if (!project || project.head !== request.version || (owner.context.branch && owner.context.branch !== project.branch))

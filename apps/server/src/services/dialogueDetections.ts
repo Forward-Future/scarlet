@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileInDirectory, heardAudio, heardAudioKey, speechActivityOf, speechActivityStart, type HeardAudio } from "@scarlet/render";
-import type { DialogueDetections, ServerSettings } from "@scarlet/shared";
+import { isHandOff, type DialogueDetections, type ServerSettings } from "@scarlet/shared";
 import type { MediaAsset, TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict, notFound } from "../errors.js";
@@ -112,8 +112,8 @@ export function dialogueDetector(ctx: Ctx) {
   const unalignedPages = new WeakSet<DialogueDetections>();
   function scanEdit(projectId: string, taskId: string, startedAt?: string): ScanEdit {
     const owner = ctx.repos.tasks.get(taskId);
-    // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does.
-    if (!owner || owner.projectId !== projectId || !editsDialogue(owner.kind)) throw notFound("edit in this project");
+    // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does, and a hand-off does a request's cutting, so it scans as the request would.
+    if (!owner || owner.projectId !== projectId || !(editsDialogue(owner.kind) || isHandOff(owner))) throw notFound("edit in this project");
     return { taskId, startedAt: startedAt ?? owner.startedAt };
   }
   function activeEdit(edit: ScanEdit) {
