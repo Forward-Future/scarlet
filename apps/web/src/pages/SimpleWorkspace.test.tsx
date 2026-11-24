@@ -13453,6 +13453,29 @@ it("folds a request to its heading with the arrow at the heading's left, and ope
   expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(false);
 });
 
+it("folds the request above the message box to its heading too, its list of edits with it", async () => {
+  const { base, thread } = madeRequest();
+  await withSimpleSheet(async () => {
+    await showFolded();
+    await act(async () => {});
+    const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
+    await click(seeAll(block())!);
+    // Scarlet revises one of its edits: the block holds the place above the message box, its list open.
+    await event(d => ({ ...d, tasks: [...d.tasks, captionFix(base, thread.id)] }));
+    await act(async () => {});
+    expect(block().closest(".simple-pin")).not.toBeNull();
+    const under = () => [...block().children].filter(el => !el.classList.contains("unit-msg"));
+    expect(under().some(el => el.querySelector(".simple-edits"))).toBe(true);
+    expect(under().map(el => styled(el, "display")[0])).not.toContain("none");
+    // Folded there, it is its heading alone: the list that scrolls above the box goes out of sight with the rest.
+    await click(block().querySelector<HTMLButtonElement>(".unit-msg > .unit-fold")!);
+    expect(block().classList.contains("is-collapsed")).toBe(true);
+    expect(under().map(el => styled(el, "display")[0])).toEqual(under().map(() => "none"));
+    await click(block().querySelector<HTMLButtonElement>(".unit-msg > .unit-fold")!);
+    expect(under().map(el => styled(el, "display")[0])).not.toContain("none");
+  });
+});
+
 it("shows the whole timeline on any press on a request's band", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) { return this.classList.contains("timeline-slider") ? 1000 : 0; });
   earlierRequestOnly(false);
