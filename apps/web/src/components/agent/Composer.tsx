@@ -10,7 +10,7 @@ import { useAttachmentsStore } from "../../stores/attachments";
 import { usePictureMarksStore } from "../../stores/pictureMarks";
 import { player } from "../../lib/player";
 import { toggleMarking } from "../player/PictureMarks";
-import { isComposing } from "../../lib/hotkeys";
+import { isAltClearRangeKey, isComposing } from "../../lib/hotkeys";
 import { clock, clockRange, playbackClock, preciseRange } from "../../lib/format";
 import type { RecorderResult } from "../../lib/recorder";
 import { useSpeech } from "../../lib/speech";
@@ -525,10 +525,14 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => {
         if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel();
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
-        // Esc in an empty box takes a range off at once, as Esc anywhere else on the page does. A popover that is
-        // open takes its own Esc first.
+        // Esc or Option/Alt+X in an empty box takes a range off at once, as they do elsewhere on the page. A popover
+        // that is open takes its own Esc first.
         if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) takeOffRange();
-        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag)) {
+        if (isAltClearRangeKey(e) && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) {
+          e.preventDefault();
+          rangeTakenOff.current = takeOffRange();
+        }
+        if ((e.key === "Backspace" || (e.key === "Delete" && shownRange)) && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag)) {
           e.preventDefault();
           // "Answer" and "Reply" come off as their own × takes them off.
           if (aimItem) aimItem.onClear(); else takeOffTarget();

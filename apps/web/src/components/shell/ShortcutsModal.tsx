@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { PLATFORM_KEY, SHORTCUTS } from "../../lib/hotkeys";
+import { ALT_KEY, PLATFORM_KEY, SHORTCUTS } from "../../lib/hotkeys";
 import { useUiStore } from "../../stores/ui";
 import { Kbd, Modal } from "../ui/primitives";
 
@@ -19,7 +19,9 @@ export function ShortcutsModal() {
     return () => window.removeEventListener("keydown", close);
   }, [open, setOpen]);
   // The list names the keys of the computer it is on.
-  const platformKey = navigator.userAgent.includes("Macintosh") ? "⌘" : "Ctrl";
+  const isMac = navigator.userAgent.includes("Macintosh");
+  const platformKey = isMac ? "⌘" : "Ctrl";
+  const altKey = isMac ? "⌥" : "Alt";
   return (
     <Modal open={open} onClose={() => setOpen(false)} title="Keyboard shortcuts" width={520}>
       <table className="w-full text-[12.5px]">
@@ -29,7 +31,7 @@ export function ShortcutsModal() {
               <td className="py-1.5 pr-3 whitespace-nowrap">
                 <span className="inline-flex gap-1">
                   {s.keys.map((k) => (
-                    <Kbd key={k}>{k === PLATFORM_KEY ? platformKey : k}</Kbd>
+                    <Kbd key={k}>{k === PLATFORM_KEY ? platformKey : k === ALT_KEY ? altKey : k}</Kbd>
                   ))}
                 </span>
               </td>

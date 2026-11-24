@@ -255,6 +255,10 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
       sample();
     }
     function move(event: PointerEvent) {
+      if (dragId === undefined && event.target instanceof Element && event.target.closest("[data-no-scrub-preview]")) {
+        hide();
+        return;
+      }
       if (dragId !== undefined ? event.pointerId !== dragId : event.pointerType === "touch" || event.buttons) return;
       x = event.clientX;
       if (!paint) paint = requestAnimationFrame(update);
@@ -274,6 +278,7 @@ export function ScrubPreview({ start = 0, duration, pictureAspect = 16 / 9, fram
     }
     function down(event: PointerEvent) {
       if (!event.isPrimary || event.button !== 0) return;
+      if (event.target instanceof Element && event.target.closest("[data-no-scrub-preview]")) return;
       hide();
       dragId = event.pointerId;
       move(event);
