@@ -171,6 +171,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - With a call open, the Transcript shows the words around it as the player does, so pressing a word lands where it should and “Ask about this” on words in the call stays about that call.
 - Add another plan, from the empty library, stays open instead of flickering on and off.
 - When Scarlet reads a music track, its last section now ends where the track ends instead of up to a second past it.
+- Scarlet now counts what you ask to change on an edit it already made when it learns a rule from your decisions.
 
 ## November 22, 2026
 
