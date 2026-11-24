@@ -1,13 +1,14 @@
 /**
  * A request with something for the editor to review lists its edits and calls under three tabs: For you, Working and
- * Done (the editor chose this on 2026-11-23). Every row is in exactly one place: waiting on the editor, optional (an
- * edit Scarlet didn't flag that the editor hasn't decided, folded under For you's rows), with Scarlet, or decided.
+ * Done (the editor chose this on 2026-11-23). Every row is in exactly one place: waiting on the editor, optional (a low
+ * risk edit: one Scarlet didn't flag that the editor hasn't decided, in For you's list once included), with Scarlet,
+ * or decided.
  * The chat draws its lists from this and ↑ ↓ and Keep step by it, so the two can't disagree about a tab's rows.
  */
 export type RowPlace = "you" | "optional" | "working" | "done";
 export type ReviewTab = "you" | "working" | "done";
 
-/** The tab a request's open list shows. For you is the one shown until another is pressed, its optional line open or not. */
+/** The tab a request's open list shows. For you is the one shown until another is pressed, low risk edits included or not. */
 export const tabShown = (open: string | undefined): ReviewTab => open === "working" || open === "done" ? open : "you";
 
 /**
@@ -29,10 +30,10 @@ export function inListOrder<R extends { at: number; num?: number }>(rows: readon
   return order.numbers && sorted.every(r => r.num !== undefined) ? sorted.sort((a, b) => a.num! - b.num!) : sorted;
 }
 
-/** The rows of the tab shown, top to bottom: For you's waiting rows, then the optional ones while that line is open. */
+/** The rows of the tab shown, top to bottom: For you's waiting rows, with the low risk ones among them while included. */
 export function rowsOfTab<R extends { place: RowPlace; at: number; num?: number }>(rows: readonly R[], tab: ReviewTab, optionalOpen: boolean, order: ListOrder): R[] {
-  const of = (place: RowPlace) => inListOrder(rows.filter(r => r.place === place), order);
-  return tab === "you" ? [...of("you"), ...(optionalOpen ? of("optional") : [])] : of(tab);
+  const shown = (place: RowPlace) => tab === "you" ? place === "you" || (optionalOpen && place === "optional") : place === tab;
+  return inListOrder(rows.filter(r => shown(r.place)), order);
 }
 
 /** Where a row is in its list when it isn't one of the list's rows: by number in a list that goes by numbers, else by time. */
