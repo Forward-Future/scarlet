@@ -15,7 +15,7 @@ import { useHostsStore } from "../../stores/hosts";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore, type ProjectData } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
-import { playheadPoints, useUiStore, type AgentContext } from "../../stores/ui";
+import { insertInDraft, playheadPoints, useUiStore, type AgentContext } from "../../stores/ui";
 import { NO_AGENT_REASON } from "./AgentChip";
 import * as mic from "./MicButton";
 import { Composer, NEW_EDIT_HINT } from "./Composer";
@@ -802,21 +802,62 @@ it("shows a call's number and cut time, and clicking the time toggles millisecon
   usePlayerStore.setState({ time: 0 });
 });
 
-it("shows where the editor paused in an open cut's tag, and sends the message to the cut with that frame", async () => {
+it("keeps the open cut's own tag when the editor picked a frame elsewhere, and sends the message to the cut with that frame", async () => {
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
   useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 0:02" });
   await show({ thread: ready, targetTag: "Cut at 0:02", pausedAt: { time: 37.12, version: "ver_before" } });
-  // Shows the paused frame's time alone; the full name on hover still says which cut the message goes to.
-  expect(aimName()?.textContent).toBe("Cut 0:37");
-  expect(aimName()?.title).toBe("About Cut at 0:02, stopped at 0:37");
-  await act(async () => container.querySelector<HTMLButtonElement>(".composer-aim-time")!.click());
-  expect(aimName()?.textContent).toBe("Cut 0:37.120");
-  expect(container.querySelector("textarea")!.placeholder).toBe("What should change at this frame?");
-  expect(container.querySelector("textarea")!.value).toBe("");
+  // The line over the box names the cut, at its own time: a time picked on the timeline is in the words, not here.
+  expect(aimName()?.textContent).toBe("Cut 0:02");
+  expect(aimName()?.title).toBe("About Cut at 0:02");
+  expect(container.querySelector("textarea")!.placeholder).toBe("What should change here?");
   await type("trim more here");
   await submit();
   expect(useProjectStore.getState().revise).toHaveBeenCalledWith(ready.latest!.id, expect.objectContaining({ text: "trim more here",
     position: expect.objectContaining({ cutIndex: 0, time: 2.3, messageTime: { time: 37.12, version: "ver_before" } }) }));
+});
+
+it("reads the times in a message to an open cut as chips that go to their moment", async () => {
+  const ready = buildThreads(current).find(t => t.needs === "decision")!;
+  useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 0:02" });
+  const seek = vi.fn();
+  await show({ thread: ready, targetTag: "Cut at 0:02", chipClock: { duration: 100, seek } });
+  await type("too tight at 0:37, and again at 0:52");
+  const chips = [...container.querySelectorAll<HTMLButtonElement>(".composer-timestamp")];
+  expect(chips.map(chip => chip.textContent)).toEqual(["0:37", "0:52"]);
+  await act(async () => chips[1]!.click());
+  expect(seek).toHaveBeenCalledWith(52);
+  // The cut is still what the message is aimed at.
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: ready.latest!.id, cutIndex: 0 });
+});
+
+it("puts a time picked on the timeline into the words where the cursor is, and one that replaces another in its place", async () => {
+  await show();
+  await type("zoom in and out again");
+  const field = container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  field.setSelectionRange(7, 7);
+  await act(async () => insertInDraft("0:09"));
+  expect([useUiStore.getState().agentDraft, field.selectionStart, document.activeElement === field]).toEqual(["zoom in 0:09 and out again", 13, true]);
+  // At the end of the words it is followed by a space, ready for the next word.
+  field.setSelectionRange(field.value.length, field.value.length);
+  await act(async () => insertInDraft("0:14 – 0:20"));
+  expect(useUiStore.getState().agentDraft).toBe("zoom in 0:09 and out again 0:14 – 0:20 ");
+  // A stretch whose end moved changes its times in place, and one taken off leaves the words.
+  await act(async () => insertInDraft("0:14 – 0:22", "0:14 – 0:20"));
+  expect(useUiStore.getState().agentDraft).toBe("zoom in 0:09 and out again 0:14 – 0:22 ");
+  await act(async () => insertInDraft("", "0:14 – 0:22"));
+  expect(useUiStore.getState().agentDraft).toBe("zoom in 0:09 and out again ");
+});
+
+it("gives the open row a place on the line over the box, with the tag's words behind it", async () => {
+  const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
+  await act(async () => useUiStore.getState().setAgentContext(cut));
+  let slot: HTMLElement | null = null;
+  await show({ targetTag: "Cut at 2:05", aimSlot: el => { slot = el; } });
+  expect(slot).toBe(container.querySelector(".composer-aim-line .composer-aim-row"));
+  expect(container.querySelector(".composer-aim-row + .composer-aim-plain")?.textContent).toBe("Cut 2:05");
+  // Without a row to draw, the line is the tag's words alone.
+  await show({ targetTag: "Cut at 2:05" });
+  expect([container.querySelector(".composer-aim-row"), aimName()?.textContent]).toEqual([null, "Cut 2:05"]);
 });
 
 it("names the open cut by its own time and sends no stopped frame without a pause", async () => {
@@ -1119,45 +1160,34 @@ it("names and clears the cut beside the draft", async () => {
   expect([aimName(), container.querySelector(".composer-tag-name")?.textContent]).toEqual([null, "Reply"]);
 });
 
-it("shows only the chosen range with no tooltip or popover, and clears it independently of an open cut", async () => {
+it("keeps a stretch marked on the timeline off the line over the box: it is in the words, and the line names the open cut", async () => {
   const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
+  const onClearTarget = vi.fn();
   await act(async () => useUiStore.getState().setAgentContext({ ...cut, markedRange: { start: 42, end: 51.5, version: "v2" } }));
-  await show({ targetTag: "Cut at 2:05" });
-  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
-  expect(container.querySelector(".composer-aim-icon")).toBeNull();
-  expect(aimName()?.getAttribute("title")).toBeNull();
-  expect(container.querySelector(".composer-aim-button")).toBeNull();
-  expect(container.querySelector(".composer-aim-card")).toBeNull();
-  expect(aimClear(clearCut)).toBeNull();
-  expect(aimClear(clearRange)).not.toBeNull();
-  const rangeBtn = container.querySelector<HTMLButtonElement>(".composer-aim-time")!;
-  await act(async () => rangeBtn.click());
-  expect(aimName()?.textContent).toBe("Range 0:42.000 – 0:51.500");
-  expect(Array.from(aimName()!.querySelectorAll(".time-ms")).map(el => el.textContent)).toEqual([".000", ".500"]);
-  await act(async () => rangeBtn.click());
-  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
-  await act(async () => aimClear(clearRange)!.click());
-  expect(useUiStore.getState().agentContext).toEqual(cut);
+  await show({ targetTag: "Cut at 2:05", onClearTarget });
   expect(aimName()?.textContent).toBe("Cut 2:05");
   expect(aimName()?.title).toBe("About Cut at 2:05");
-  expect(document.activeElement).toBe(aimField());
-  // Taking the only target off leaves a new edit about the whole video.
+  expect([aimClear(clearRange), aimClear(clearCut)].map(Boolean)).toEqual([false, true]);
+  // Esc in the empty box takes the stretch off and leaves the cut.
+  await act(async () => { aimField().focus(); aimField().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  expect(useUiStore.getState().agentContext).toEqual(cut);
+  expect(onClearTarget).not.toHaveBeenCalled();
+  // Backspace there takes the cut's tag off, as its × does.
+  await act(async () => { aimField().dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true })); });
+  expect(onClearTarget).toHaveBeenCalledTimes(1);
+  // A stretch that is all the message is about has no line over the box at all.
   await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
   await show();
-  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
-  expect(aimName()?.getAttribute("title")).toBeNull();
-  await act(async () => aimClear(clearRange)!.click());
-  expect(useUiStore.getState().agentContext).toBeNull();
   expect(aimName()).toBeNull();
 });
 
-it("automatically shows dimmed milliseconds when a marked range starts and ends within the same second", async () => {
-  await act(async () => useUiStore.getState().setAgentContext({ time: 812.444, end: 812.478, clipIds: [], markedRange: { start: 812.444, end: 812.478 } }));
+it("automatically shows dimmed milliseconds when a chosen range starts and ends within the same second", async () => {
+  await act(async () => useUiStore.getState().setAgentContext({ time: 812.444, end: 812.478, clipIds: [] }));
   await show();
   expect(aimName()?.textContent).toBe("Range 13:32.444 – 13:32.478");
   expect(Array.from(aimName()!.querySelectorAll(".time-ms")).map(el => el.textContent)).toEqual([".444", ".478"]);
   expect(aimName()?.getAttribute("title")).toBeNull();
-  await act(async () => aimClear("Take the marked range 13:32.444 – 13:32.478 off the message")!.click());
+  await act(async () => aimClear("Take the range 13:32.444 – 13:32.478 off the message")!.click());
   expect(useUiStore.getState().agentContext).toBeNull();
 });
 
@@ -1175,60 +1205,15 @@ it.each([
   expect(container.querySelector(".composer-aim-card")).toBeNull();
 });
 
-it("clears a chosen range on Backspace in an empty box before taking off the open cut", async () => {
-  const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
-  const onClearTarget = vi.fn();
-  await act(async () => useUiStore.getState().setAgentContext({ ...cut, markedRange: { start: 42, end: 51.5 } }));
-  await show({ targetTag: "Cut at 2:05", onClearTarget });
-  await act(async () => { aimField().focus(); aimField().dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true })); });
-  expect(useUiStore.getState().agentContext).toEqual(cut);
-  expect(onClearTarget).not.toHaveBeenCalled();
-  expect(aimName()?.textContent).toBe("Cut 2:05");
-  await act(async () => { aimField().dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true })); });
-  expect(onClearTarget).toHaveBeenCalledTimes(1);
-});
-
-it("puts a marked range taken off the empty box back on ⌘Z, until the box is aimed again or written in", async () => {
-  const cut: AgentContext = { changeId: "chg_1", cutIndex: 0, version: "v1", time: 125, end: 127, clipIds: [], label: "Cut at 2:05" };
-  const marked = { ...cut, markedRange: { start: 42, end: 51.5 } };
-  const onRestoreTarget = vi.fn(() => false);
-  const press = async (key: string, init: KeyboardEventInit = {}) => {
-    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
-    await act(async () => { aimField().dispatchEvent(event); });
-    return event.defaultPrevented;
-  };
-  await act(async () => useUiStore.getState().setAgentContext(marked));
-  await show({ targetTag: "Cut at 2:05", onRestoreTarget });
-  // Backspace takes the range off, and ⌘Z puts it back on the cut as it was. Nothing else is asked to undo.
-  await press("Backspace");
-  expect(aimName()?.textContent).toBe("Cut 2:05");
-  expect(await press("z", { metaKey: true })).toBe(true);
+it("takes a marked stretch off the message once its times are deleted from the words", async () => {
+  const marked: AgentContext = { time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } };
+  await act(async () => { useUiStore.getState().setAgentContext(marked); useUiStore.getState().setAgentDraft("too loud 0:42 – 0:51 "); });
+  await show();
+  // Other words changed, the stretch stays.
+  await type("far too loud 0:42 – 0:51 ");
   expect(useUiStore.getState().agentContext).toEqual(marked);
-  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
-  expect(onRestoreTarget).not.toHaveBeenCalled();
-  // Only once: a second ⌘Z has no range to put back.
-  expect(await press("z", { metaKey: true })).toBe(false);
-  expect(onRestoreTarget).toHaveBeenCalledTimes(1);
-  // Its × is the same, also for a range that was all the message was about.
-  await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
-  await show({ onRestoreTarget });
-  await act(async () => aimClear(clearRange)!.click());
-  expect(aimName()).toBeNull();
-  expect(await press("z", { ctrlKey: true })).toBe(true);
-  expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
-  // Words written since the range came off are the message: ⌘Z is theirs.
-  await act(async () => aimClear(clearRange)!.click());
-  await type("Tighten this");
-  await type("");
-  expect(await press("z", { metaKey: true })).toBe(false);
-  expect(aimName()).toBeNull();
-  // A box aimed somewhere else since has that aim, not the range, to keep.
-  await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
-  await act(async () => aimClear(clearRange)!.click());
-  await selectPoint({ time: 9, clipIds: [] });
-  await act(async () => useUiStore.getState().setAgentContext(null));
-  expect(await press("z", { metaKey: true })).toBe(false);
-  expect(aimName()).toBeNull();
+  await type("far too loud ");
+  expect(useUiStore.getState().agentContext).toBeNull();
 });
 
 it("takes a marked range off on the first Esc in an empty box, and leaves a message being written and its range alone", async () => {
