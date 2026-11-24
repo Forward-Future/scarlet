@@ -4,6 +4,11 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 24, 2026
+
+- Your messages are grey bubbles on the right of the chat, and Scarlet's replies are plain text on the left.
+- Requests waiting their turn show in the chat as bubbles above the message box, marked Up next or Queued.
+
 ## November 23, 2026
 
 - The edits now have a column of their own between the chat and the video: what waits on you fills it for the whole video, Working at its foot lists the edits Scarlet is revising, and Done is one line that opens. The chat is just the conversation.
