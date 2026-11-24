@@ -72,6 +72,8 @@ interface RunBundleProps {
   /** The request sits under the row of the cut it is about, and that row is what it saved, with Scarlet's note on it. */
   listedAbove?: boolean;
   /** The block's heading says how the run ended ("Stopped"), so its rows don't say it again. */
+  /** Under the row of the cut or edit it is about: the row says what it is, so Scarlet's opening sentence isn't shown. */
+  under?: boolean;
   banded?: boolean;
   /** The project's editing is paused, so a run in line waits for Continue. */
   paused?: boolean;
@@ -114,7 +116,7 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events: all, opening, changes, callNumber, say, result, onStop, actions }: RunBundleProps) {
+function WorkingRun({ task, events: all, opening, changes, callNumber, say, result, onStop, actions, under }: RunBundleProps) {
   // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
   // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
   const events = useMemo(() => sinceRerun(task, all), [task, all]);
@@ -158,7 +160,7 @@ function WorkingRun({ task, events: all, opening, changes, callNumber, say, resu
   // The timeline's status says the same words, so the editor can tell what Scarlet is on without the chat in view.
   usePublishWorkingLine(task.id, words);
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
-    {aim && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
+    {aim && !under && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
     <div className="req-row req-now">
       <StepMark state="working" />
       {/* The words shimmer while Scarlet works. A narrow chat shortens them to two lines; hovering says them whole. */}

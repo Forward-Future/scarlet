@@ -26,17 +26,15 @@ import { callRowKey, isWorking, letGo, listedBefore, noop, PAUSED_HINT, tagOf, t
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
 const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|Scarlet couldn’t finish this edit\.)$/;
 
-/** "Learned for dialogue-pass: ", or what it was learned from first: "Learned from 4 cuts you rejected, for dialogue-pass: ". */
-function learnedLead(learning: Learning, skill: string | undefined): string {
-  const from = learning.learnedFrom?.decisions.length ? `from ${learning.learnedFrom.decisions.length} ${learning.learnedFrom.what}` : "";
-  return from ? `Learned ${from}${skill ? `, for ${skill}` : ""}: ` : skill ? `Learned for ${skill}: ` : "Learned: ";
+/** "Learned for dialogue-pass: ". What the rule came from ("from 3 cuts you rejected") is said in Learnings, not on the chat's one line. */
+function learnedLead(skill: string | undefined): string {
+  return skill ? `Learned for ${skill}: ` : "Learned: ";
 }
 
 /**
- * A rule Scarlet picked up from this request, under what the request did: what the editor decided that it came from, if
- * it came from their decisions, the skill it is for and the rule in quotes,
- * then Review, which opens Learnings at it, and Decline, which turns the rule down from here. The line goes once the
- * editor decides, here or in Learnings.
+ * A rule Scarlet picked up from this request, under what the request did, on one line: the skill it is for and the rule
+ * in quotes, cut short with an ellipsis when long and whole on hover, then Review, which opens Learnings at it, and
+ * Decline, which turns the rule down from here. The line goes once the editor decides, here or in Learnings.
  */
 function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id: string): void }) {
   const skill = useSkillsStore(s => s.skills.find(k => k.id === learning.skillId)?.name);
@@ -55,12 +53,13 @@ function LearnedLine({ learning, onReview }: { learning: Learning; onReview?(id:
   };
   return <p className="simple-learned">
     <Icon name="bulb" size={13} />
-    <span>{learnedLead(learning, skill)}<span className="simple-learned-rule">“{learning.rule}”</span>
-      {onReview && <> <button type="button" className="simple-learned-review" onClick={() => onReview(learning.id)}
+    <span className="simple-learned-line"><span className="simple-learned-lead">{learnedLead(skill)}</span>
+      <span className="simple-learned-rule" title={learning.rule}>“{learning.rule}”</span>
+      {onReview && <>{" "}<button type="button" className="simple-learned-review" onClick={() => onReview(learning.id)}
         title="Approve or revise it in Learnings">Review</button></>}
       {" "}<button type="button" className="simple-learned-decline" disabled={declining} onClick={decline}
-        title="Don't learn this">Decline</button>
-      {failed && <span className="simple-learned-failed" role="alert"> Couldn't decline. {failed}</span>}</span>
+        title="Don't learn this">Decline</button></span>
+    {failed && <span className="simple-learned-failed" role="alert">Couldn't decline. {failed}</span>}
   </p>;
 }
 
@@ -343,6 +342,11 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     return from === run || (run === owner && (settled(from) || nested.has(from.root)));
   });
 
+  // The block's own heading, when it has one: a request under one of its rows leaves Pause to it.
+  const ownerHeaded = !!owner && entries.some(e => e.kind === "request" && !!e.taskId && owner.attempts.some(t => t.id === e.taskId));
+  // Whether Scarlet has this request and it can be stopped: such a request has controls at its heading's right.
+  const stoppable = (r: Run) => runIsActive(r.task) && !(waitingToStart(r.task) && r.root === r.task.id);
+
   const unit = (run: Run, inside = false): ReactElement => {
     const { task } = run;
     const ids = new Set(run.attempts.map(t => t.id));
@@ -373,8 +377,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       if (e.kind === "agent") { if (!quiet && !(e.onNote && closed)) { told = true; if (!listing) said.push(<Said key={i} className="req-say" text={e.fullText ?? e.text} />); } }
       // Several questions can wait in one block, one from each cut or edit Scarlet works on. They are answered one at a
       // time, in the order asked: Answer is on the one the message box will answer, and moves on once that is sent.
+      // While the box is already answering it (its tag says Answer), the link is left out: it comes back whenever the
+      // box is aimed elsewhere.
       else if (e.kind === "question") said.push(<p key={i} className={e.answered ? "req-say is-quiet" : "req-say"}>{e.text}
-        {!e.answered && (!thread.question || thread.question.id === e.taskId) && <button type="button" className="simple-link is-warn" onClick={() => actions.reply(thread)}>Answer</button>}</p>);
+        {!e.answered && (!thread.question || thread.question.id === e.taskId) && actions.answering !== e.taskId && <button type="button" className="simple-link is-warn" onClick={() => actions.reply(thread)}>Answer</button>}</p>);
       // The editor's answer is their message: two lines at most, and a click opens the rest.
       else if (e.kind === "answer") said.push(<Said key={i} className="req-say is-yours" text={e.text} />);
       // An applied change is on the card's last row. A suggestion still says what it is and how to play it. A pass's
@@ -441,24 +447,32 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const among = !inside && atOnce > 1 && [run, ...(run === owner ? runs.filter(r => nested.has(r.root)) : [])]
       .some(r => aboutOne(r) && isWorking(r.task.state));
     const standing = stands ?? (among ? <span className="unit-word is-at-once" title={`Scarlet is working on ${atOnce} cuts or edits at the same time.`}>Working on {atOnce} at once</span> : null);
-    const stop = runIsActive(task) && !(waitingToStart(task) && run.root === task.id) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
+    const stop = stoppable(run) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
     // A request that edits the video has its controls at the band's right for as long as Scarlet has it: Pause, which
     // holds all editing in the project, then Resume once it is paused, which picks the paused work up first; and Stop,
     // which ends just this one, paused or not. Each is an icon alone, named the moment the pointer rests on it.
     const hold = editingPaused
       ? () => { const runWith = resumeRunChoice(allTasks, effective); return attempt(run.root, runWith ? resumeEditing(projectId, runWith) : resumeEditing(projectId)); }
       : () => attempt(run.root, stopEditing(projectId));
+    const pause = <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
+      aria-description={editingPaused ? "Paused work picks up first, where it left off."
+        : "All editing in this project stops. Nothing new starts, and edits already made stay."}
+      // Pause becomes Resume in place: clicked, it lets go of the focus, so Space plays and can't press Resume.
+      onClick={letGo(hold)}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>;
+    // Pause holds all editing, so a block has it once, on its band: a request under one of its rows has Stop alone, and
+    // the band keeps Pause for as long as Scarlet is on any of them, also once the band's own request is done.
+    const pauseForNested = !inside && !!request && run === owner && runs.some(r => nested.has(r.root) && isProjectEditTask(r.task) && stoppable(r));
     const editActions = editsProject && stop ?
       <div className="unit-actions">
-        <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
-          aria-description={editingPaused ? "Paused work picks up first, where it left off."
-            : "All editing in this project stops. Nothing new starts, and edits already made stay."}
-          // Pause becomes Resume in place: clicked, it lets go of the focus, so Space plays and can't press Resume.
-          onClick={letGo(hold)}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>
+        {!(inside && ownerHeaded) && pause}
         <TipButton className="unit-stop-edit" tip="Stop this edit" aria-label={request ? `Stop this edit: ${request.text}` : "Stop this edit"}
-          aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div> : undefined;
-    const requestControl = editsProject ? editActions : stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>;
-    const headingEnd = <><RequestMetrics attempts={run.attempts} events={events} />{requestControl}</>;
+          aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div>
+      : pauseForNested ? <div className="unit-actions">{pause}</div> : undefined;
+    const requestControl = editActions ?? (!editsProject && stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>);
+    // The request Scarlet is working on keeps its time and tokens in view, where they count up. Any other (finished,
+    // stopped, waiting on the editor or its turn) and one under a row show them when the pointer rests on the heading:
+    // under a row, the row and the line of what Scarlet is on say enough.
+    const headingEnd = <><RequestMetrics attempts={run.attempts} events={events} quiet={inside || !isWorking(task.state)} />{requestControl}</>;
     // The sentence Scarlet opened the request with is written once and stays: picked up after a pause or a restart,
     // the request keeps it, from the first attempt that said one. Only an attempt's whole history says whether it did.
     const before = task.resumeRootId && isWorking(task.state) ? run.attempts.filter(t => t !== task && (t.resumeRootId ?? t.id) === task.resumeRootId) : [];
@@ -466,7 +480,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // A recheck Scarlet began itself is headed too, by its reason after the Auto tag: where it stands and its controls
     // are at that heading's right, as a request's are, and not said again on a row under it.
     const headed = !!request || autoHeading;
-    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} callNumber={actions.callNumber}
+    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} under={inside} callNumber={actions.callNumber}
         say={said.length ? <div className="req-said">{said}</div> : undefined} told={told} result={rows} recovery={recovery}
         // Under its call's row, that row is the cut it saved, with Scarlet's note: the note isn't said again under it.
         // A pass's calls are listed for as long as it waits, so a request keyed to one is always under its row.
@@ -505,7 +519,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // band stays mounted, so Scarlet's work goes on being read while it is out of sight.
     const shut = !!request && !!actions.collapsed?.has(run.root);
     const block = <div key={run.root} className={`unit${shut ? " is-collapsed" : ""}`} data-run={run.root} data-pinned={isPinned || undefined}>
-      {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}`}
+      {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}${isWorking(task.state) || pauseForNested ? " is-live" : ""}`}
         aria-current={marked || undefined} onClick={pressable ? e => {
           if ((e.target as Element).closest('button, a, input, textarea, [role="menu"]') || window.getSelection()?.toString()) return;
           if (markable) actions.mark!(thread.id);

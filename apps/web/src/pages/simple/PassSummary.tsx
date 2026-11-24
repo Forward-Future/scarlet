@@ -304,7 +304,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   };
   // What it came to, once Scarlet is done, while calls still wait too: what it applied so far, with the link that opens
   // every edit after it. Until its cuts are applied, a pass that finished with no call to make says how many it has ready.
-  const made: SentencePart[] | undefined = edits.length ? working ? undefined : madeSentence(distinct, lengthLabel, true)
+  // The edits the sentence would name are said by their rows while the open list has one for each of them.
+  const named = (e: Omit<ThreadEdit, "at">) => !e.beforeCut && !e.marker && !e.elsewhere;
+  const rowsName = filter === "all" || (filter === "need" && distinct.filter(named).every(e => shown.some(r => r.key === editKey(e))));
+  const made: SentencePart[] | undefined = edits.length ? working ? undefined : madeSentence(distinct, lengthLabel, true, rowsName)
     : calls.length || quiet || decidedCallRows.length || forYouRejected.length ? undefined : [{ strong: plural(count, "cut") }, " ready."];
   // The list of every edit goes by moments, at the time of the first of its edits. The moment's row stands for all of
   // them: ticked once they're all kept, Revising… while Scarlet is on one (or Up next / Queued while one waits its
@@ -382,10 +385,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
           their time and tokens, nothing else. The rest of the row keeps the row's own hover. */}
       {/* Every row ends on a word (2026-11-21, the editor's ask): where it stands once it has moved, or else what it is, as See all says. */}
       {filter === "calls" ? (row.state ?? row.value) && <span className={row.busy ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.state ?? row.value}</span>
+        : row.word ? null
         : filter === "need" ? (row.decision ?? row.value) && <span className={row.busy && !row.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.decision ?? row.value}</span>
         : row.value && <span className={row.busy && !row.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.value}</span>}
-      {/* An applied edit sent back, or come back revised, says so after its amount, as a row of any other request's
-          list does: amber once it is back and waits on the editor, quiet while Scarlet is on it. */}
+      {/* An applied edit sent back, or come back revised, ends on that word in place of its amount: quiet while
+          Scarlet is on it, amber once it is back and waits on the editor. One word a row, on the row's own line. */}
       {filter !== "calls" && row.word && <span className={`simple-pass-check${row.revised ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={spent.get(row.key)}>{row.word}</span>}
     </button>
     {/* Folded, a request about any of the moment's edits sits under the moment's row; unfolded, under its edit's. */}
@@ -396,7 +400,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         onPointerEnter={() => actions.lightMark(m.mark, m.hover)} onPointerLeave={() => actions.lightMark()}>
         <span className="simple-pass-label">{m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-pass-words">{m.label}</span>
           {m.version > 0 && <EditVersion n={m.version} hover={spent.get(m.key)} />}</span>
-        {m.value && <span className={m.busy && !m.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(m.key)}>{m.value}</span>}
+        {m.value && !m.word && <span className={m.busy && !m.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(m.key)}>{m.value}</span>}
         {m.word && <span className={`simple-pass-check${m.revised ? "" : " is-kept"}${m.busy ? " working-text" : ""}`} title={spent.get(m.key)}>{m.word}</span>}
       </button>{nests.filter(nest => nest.key === m.key && m.key !== row.key).map(nest => nest.node)}</li>)}
     </ol>}</li>)}
@@ -483,13 +487,15 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     for (const edit of edits) if (only(edit)) listedNeed.current.add(editKey(edit));
     for (const edit of rejected ?? []) if (only(edit)) listedNeed.current.add(editKey(edit));
   }
+  const showsList = open === "all" || needing || (!!single && !!shownEdit && !allForYou);
+  // The edits the sentence would name are said by their rows while the open list has one for each of them.
+  const rowsName = open === "all" || (needing && edits.every(e => e.beforeCut || e.marker || e.elsewhere || isForYou(e)));
   const made = useMemo(() => {
     if (working) return undefined;
-    const said = madeSentence(edits, lengthLabel);
+    const said = madeSentence(edits, lengthLabel, false, rowsName);
     // A request that only flagged an edit another one made has made nothing to say.
     return said.length ? said : undefined;
-  }, [working, edits]);
-  const showsList = open === "all" || needing || (!!single && !!shownEdit && !allForYou);
+  }, [working, edits, rowsName]);
   // An edit made in several places is one row, listed when any of its places is picked, and a request about any of
   // them sits under that row: every place of a row the list shows counts as listed, as the list itself picks its rows.
   const listed = new Set(showsList ? [

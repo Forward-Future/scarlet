@@ -708,3 +708,47 @@ it("names a pass's final check for what it is, and says what it is doing now, no
   expect(view.host.textContent).not.toContain(FIRST);
   expect(view.host.querySelector(".req-now [role=status]")?.textContent).toBe("Checking the video for repeats");
 });
+
+it("keeps a finished request's time and tokens out of its heading, and shows them when the pointer rests on it", () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  const done = { ...task, state: "done" as const, workedMs: 12_000, finishedAt: new Date().toISOString() };
+  useUiStore.getState().setShowRunTokens(true);
+  openProject({ [task.id]: totals() });
+  const view = render(<div className="unit-msg"><p>Trim the pause</p><RequestMetrics attempts={[done]} events={{}} quiet /></div>);
+  const heading = view.host.querySelector<HTMLElement>(".unit-msg")!;
+  const tokens = () => view.host.querySelector<HTMLButtonElement>("button.unit-tokens")!;
+  // The figures stay in the page for the note to hang from and for a screen reader; they just aren't drawn.
+  expect([tokens().classList.contains("is-quiet"), tokens().textContent]).toEqual([true, "12s · 48.2K tokens"]);
+  expect(document.querySelector(".tokens-tip")).toBeNull();
+  // The pointer has to rest: one that only crosses the heading opens nothing.
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })); vi.advanceTimersByTime(100); });
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" })); vi.advanceTimersByTime(1000); });
+  expect(document.querySelector(".tokens-tip")).toBeNull();
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })); vi.advanceTimersByTime(400); });
+  expect([...document.querySelectorAll(".tokens-tip > span")][0]?.textContent).toBe("Active time12s");
+  expect(document.querySelector(".tokens-tip .tokens-tip-total")?.textContent).toBe("Total48,200");
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" })); });
+  expect(document.querySelector(".tokens-tip")).toBeNull();
+  // With tokens off, the hover still says how long it took.
+  act(() => useUiStore.getState().setShowRunTokens(false));
+  expect([tokens().classList.contains("is-quiet"), tokens().textContent]).toEqual([true, "12s"]);
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })); vi.advanceTimersByTime(400); });
+  expect([...document.querySelectorAll(".tokens-tip > span")].map(row => row.textContent)).toEqual(["Active time12s"]);
+  // The request Scarlet is on keeps them in view.
+  view.rerender(<div className="unit-msg"><RequestMetrics attempts={[{ ...task, state: "running" as const, finishedAt: undefined, workedMs: 0 }]} events={{}} /></div>);
+  expect(view.host.querySelector(".is-quiet")).toBeNull();
+  view.unmount();
+  vi.useRealTimers();
+});
+
+it("leaves Scarlet's opening sentence out of a request under a row: the row says what it is", () => {
+  const working: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
+  const at = (seconds: number) => new Date(Date.parse(task.startedAt!) + seconds * 1000).toISOString();
+  const events = [{ type: "log" as const, at: at(0), text: "Starting the editing agent." }, { type: "log" as const, at: at(2), text: "I’ll trim the pause to a beat." }];
+  openProject();
+  const own = render(<RunBundle task={working} events={events} changes={[]} banded />);
+  const under = render(<RunBundle task={working} events={events} changes={[]} banded under />);
+  expect([!!own.host.querySelector(".req-lead"), !!own.host.querySelector(".req-now")]).toEqual([true, true]);
+  expect([!!under.host.querySelector(".req-lead"), !!under.host.querySelector(".req-now")]).toEqual([false, true]);
+  own.unmount(); under.unmount();
+});
