@@ -3,7 +3,7 @@
  * and the downloading, outside the agent's sandbox as page capture is, and Scarlet's own ffmpeg cuts the part.
  */
 import { randomUUID } from "node:crypto";
-import { access, constants, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, mkdtemp, readdir, readFile, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { rootCertificates } from "node:tls";
@@ -64,8 +64,16 @@ async function surroundings(ctx: Ctx): Promise<{ ffmpegDir: string; env: NodeJS.
   const links = join(folder, "ffmpeg");
   await mkdir(links, { recursive: true });
   for (const [name, path] of programs) {
-    await rm(join(links, name), { force: true });
-    await symlink(path, join(links, name));
+    // Several reads start at once, and a yt-dlp already running may be about to use a link: one that names the program
+    // stays, and another is replaced in one step, so the link is never missing and two reads never make it twice.
+    const link = join(links, name);
+    if (await readlink(link).catch(() => undefined) === path) continue;
+    const made = `${link}.${randomUUID()}`;
+    await symlink(path, made);
+    await rename(made, link).catch(async error => {
+      await rm(made, { force: true });
+      throw error;
+    });
   }
   return { ffmpegDir: links, env };
 }

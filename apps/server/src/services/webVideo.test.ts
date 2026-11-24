@@ -1,8 +1,8 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveFfmpeg } from "@scarlet/render";
+import { resolveFfmpeg, resolveFfprobe } from "@scarlet/render";
 import { createProject, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
@@ -165,6 +165,26 @@ describe("videos from the web", () => {
     quitter.abort();
     await expect(first).rejects.toThrow();
     expect((await second)?.text.split("\n")[0]).toBe("1.2 Here is the agent");
+  });
+
+  it.skipIf(process.platform === "win32" || !!process.env.SCARLET_TEST_WEB_VIDEO)("reads several videos at once when ffmpeg goes by another name", async () => {
+    const bin = join(directory, "bin");
+    mkdirSync(bin);
+    symlinkSync(resolveFfmpeg(), join(bin, "ffmpeg-test"));
+    symlinkSync(resolveFfprobe(), join(bin, "ffprobe-test"));
+    const before = { SCARLET_FFMPEG: process.env.SCARLET_FFMPEG, SCARLET_FFPROBE: process.env.SCARLET_FFPROBE };
+    process.env.SCARLET_FFMPEG = join(bin, "ffmpeg-test");
+    process.env.SCARLET_FFPROBE = join(bin, "ffprobe-test");
+    try {
+      const read = await Promise.allSettled(Array.from({ length: 6 }, (_, i) =>
+        aboutWebVideo(workspace.ctx, `https://example.com/watch?v=agents${i}`, new AbortController().signal)));
+      expect(read.map(r => r.status === "rejected" ? String(r.reason) : r.status)).toEqual(Array(6).fill("fulfilled"));
+    } finally {
+      for (const [key, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it.skipIf(!process.env.SCARLET_TEST_WEB_VIDEO)("takes ten seconds of a real video with the real downloader", async () => {
