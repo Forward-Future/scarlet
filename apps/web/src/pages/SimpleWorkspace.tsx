@@ -33,7 +33,7 @@ import { readTimeline } from "../lib/timelineCache";
 import { appLog } from "../lib/appLog";
 import { clock as clockLabel, lengthLabel, parseTimestamp, plural, removedSeconds } from "../lib/format";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
-import { listMoments, momentRange, passRows } from "../lib/editMoments";
+import { listMoments, momentRange } from "../lib/editMoments";
 import { editFocus, editKindWord } from "../lib/editKind";
 import { player } from "../lib/player";
 import { cutChange } from "../lib/appliedCutPlayback";
@@ -1426,7 +1426,7 @@ export function SimpleWorkspace() {
   // On See all, approving or skipping a call moves on to the next item in the full list (edit or call), regardless of
   // whether it is a For you item. On For you, it moves to the next waiting item in For you list order (call or edit).
   const passEditRows = useMemo(() => passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 && threadTimeline.moments
-    ? threadTimeline.moments.map(m => m.edits) : passRows(passEdits).map(m => m.edits),
+    ? threadTimeline.moments.map(m => m.edits) : listMoments(passEdits).map(m => m.edits),
   [passThread?.id, focusThread?.id, threadTimeline.edits.length, threadTimeline.moments, passEdits]);
   const afterSeeAllCall = listening && pass && passThread && passSeeAll
     ? callGoesTo(passEditRows, e => !passReviewed(e) && !passRevising(e),
@@ -1609,8 +1609,7 @@ export function SimpleWorkspace() {
   // a cut, an edit or a call is open the player is on its own passage, and nothing is kept this way.
   const watchedMoments = useMemo(() => {
     if (!focusThread || lists[focusThread.id] !== "all" || !threadTimeline.moments || !passFocused) return [];
-    // An edit made in many places is watched a place at a time: each place played through is kept, as it plays.
-    return threadTimeline.moments.flatMap(m => m.places ? listMoments(m.edits) : [m])
+    return threadTimeline.moments
       .filter(m => m.edits.every(e => !e.check && !e.marker) && m.edits.some(e => !reviewed(e) && !revisingEdit(e)));
   }, [focusThread, lists, threadTimeline.moments, passFocused, reviewed, revisingEdit]);
   const watching = watchedMoments.length > 0 && !reviewingEdit && !listening && !suggestion && !source;

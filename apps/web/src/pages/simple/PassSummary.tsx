@@ -4,7 +4,7 @@ import { EditBadge, EditVersion, RejectedMark, ThreadAction, ThreadEdits } from 
 import { asksEditor, editGroups, revisionWord, useAdding, useRejecting, useReviewed, useRevising, waitingPassRows, waitingRows } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { editKindWord, editRowWord } from "../../lib/editKind";
-import { editPlaces, listMoments, type Moment } from "../../lib/editMoments";
+import { listMoments, type Moment } from "../../lib/editMoments";
 import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../../lib/format";
 import { editKey } from "../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../lib/madeSentence";
@@ -169,18 +169,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const rerun = working ? thread.tasks.find(t => !!t.repeatAudit?.returns && !!t.startedAt && isWorking(t.state)) : undefined;
   const fresh = useMemo(() => new Set(rerun ? thread.changes.filter(c => c.taskId === rerun.id && (c.createdAt ?? "") >= rerun.startedAt!).map(c => c.id) : []),
     [rerun, thread.changes]);
-  // In the list of every edit, edits that play as one change are one row, a moment. Its own edits open under it on a
-  // press of "+ 4 edits", and fold again on the next.
-  // An edit Scarlet made in many places under one name is one row with a count of places, as in any other request's
-  // list: it stands at its first place, apart from the moments. A fade on every dialogue join of Matt's talking head was
-  // 101 rows that all read "Softened every dialogue join" (2026-11-23). A cut, a spot left for the editor and an edit
-  // that asks for a look stay one each.
-  // The card, Keep and ↑ ↓ go by the same grouping (`passRows`), so the row is one stop for them too.
-  const places = useMemo(() => editPlaces(edits), [edits]);
-  /** The edits as the list has them: each edit made in several places once. */
-  const distinct = useMemo(() => edits.filter(e => (places.get(editKey(e))?.first ?? editKey(e)) === editKey(e)), [edits, places]);
-  const moments = useMemo(() => listMoments(edits.filter(e => !places.has(editKey(e)))), [edits, places]);
-  const totalRows = distinct.length + (pass?.calls.length ?? 0);
+  // In the list of every edit, edits that overlap on the timeline exactly are one row, a moment. Its own edits open
+  // under it on a press of "+ 4 edits", and fold again on the next.
+  const moments = useMemo(() => listMoments(edits), [edits]);
+  const totalRows = edits.length + (pass?.calls.length ?? 0);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
   const single = !working && !pass?.running && totalRows === 1 ? edits[0] : undefined;
   // A single preview follows the open card. An explicitly opened list keeps the timeline on the whole pass.
@@ -221,14 +213,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       const forYou = isForYouEdit(e);
       // A folded pass only needs rows that can appear in its call or For you list.
       if (!listed && !forYou) return [];
-      const group = places.get(key);
-      if (group && group.first !== key) return [];
       const seen = reviewed(e);
       // A revision on its way: the row says so until the new version lands, whether or not the editor had kept the
       // edit. A cut the pass applied through its calls counts as kept, so a guard on that left its row as it was.
-      // An edit made in many places is one edit: a request about any of its places is its row's.
-      const asked = group?.members.find(m => !!revising(m)) ?? e;
-      const sent = revising(asked);
+      const sent = revising(e);
       // One that came back revised with no reason from Scarlet says so until it is kept, as any other list's row does.
       const revised = e.check === REVISED_CHECK && !seen && !sent;
       const needs = !!e.check && !seen && !sent;
@@ -237,23 +225,23 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       // Ticked once the editor has kept it: any edit kept, an approved pass call, or a cut that went in with the pass
       // through its calls. That is what Keep's next row, the watch and the timeline's dots go by, so the tick agrees
       // with them (the editor's call, 2026-11-23).
-      const decided = !needs && !sent && ((group ? group.members.every(m => reviewed(m)) : seen) || decidedCallEditKeys.has(key));
+      const decided = !needs && !sent && (seen || decidedCallEditKeys.has(key));
       const decision = decided ? (e.marker ? "Done" : "Kept") : undefined;
       // Where it stands, when it isn't simply waiting: the word a row among the calls ends on. In the list of every edit
       // it follows the row's amount, as in any other request's list, and the amount stays.
-      const word = sent ? revisionWord(sent, { rejecting: rejecting(asked), adding: adding(asked), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
+      const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
       const at = (e as ThreadEdit).at ?? e.range.start;
       const displayAt = (!seen && !sent ? e.reviewRange?.start : undefined) ?? at;
       // Listed with the calls, it has the number it has among them. One that came back revised with a reason of
       // Scarlet's own ends on its version there, as a revised call does, until it is kept or sent back again.
       return [{ key, at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
         label: (e.reason && e.summary) || e.label, n: 0, num: editNumber(e),
-        state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: group ? `${group.members.length} places` : editRemovedLabel(e) ?? editRowWord(e), word, revised, rejected: false, skipped: false,
+        state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: editRemovedLabel(e) ?? editRowWord(e), word, revised, rejected: false, skipped: false,
         forYou, onlyForYou: false,
         // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
         busy: !!sent && isWorking(sent.state), pending: !!sent, needs, asks, sentBack, decided,
         version: e.previous.length ? e.previous.length + 1 : 0, title: revised || e.reason ? undefined : e.check,
-        on: !!showing && (group?.members ?? [e]).some(m => matchesEdit(showing, m)), open: () => actions.openEdit(thread, e), fresh: fresh.has(e.changeId) }];
+        on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e), fresh: fresh.has(e.changeId) }];
     }),
     // A call goes by its number, as on its card and on the timeline.
     ...(pass?.calls ?? []).map((c): PassRow => {
@@ -318,8 +306,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   // every edit after it. Until its cuts are applied, a pass that finished with no call to make says how many it has ready.
   // The edits the sentence would name are said by their rows while the open list has one for each of them.
   const named = (e: Omit<ThreadEdit, "at">) => !e.beforeCut && !e.marker && !e.elsewhere;
-  const rowsName = filter === "all" || (filter === "need" && distinct.filter(named).every(e => shown.some(r => r.key === editKey(e))));
-  const made: SentencePart[] | undefined = edits.length ? working ? undefined : madeSentence(distinct, lengthLabel, true, rowsName)
+  const rowsName = filter === "all" || (filter === "need" && edits.filter(named).every(e => shown.some(r => r.key === editKey(e))));
+  const made: SentencePart[] | undefined = edits.length ? working ? undefined : madeSentence(edits, lengthLabel, true, rowsName)
     : calls.length || quiet || decidedCallRows.length || rejected.length ? undefined : [{ strong: plural(count, "cut") }, " ready."];
   // The list of every edit goes by moments, at the time of the first of its edits. The moment's row stands for all of
   // them: ticked once they're all kept, Revising… while Scarlet is on one (or Up next / Queued while one waits its
@@ -350,14 +338,12 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       title: members.map(m => m.label).join("\n") }, members, more, moment: moment.key,
       unfolded: unfolded.has(moment.key) || members.some(m => m.on) });
   }
-  // A request about any place of an edit made in many places sits under that edit's one row.
-  const rowOf = (key: string) => places.get(key)?.first ?? key;
   let selectedKey: string | undefined;
   if (!empty && filter) {
     let before = 0;
     for (const { row, members, unfolded: momentOpen } of drawn) {
       if (row.on) { selectedKey = `${filter}:${before}:${row.key}`; break; }
-      before += 1 + nests.filter(nest => rowOf(nest.key) === row.key || (!momentOpen && !!members?.some(m => m.key === nest.key))).length;
+      before += 1 + nests.filter(nest => nest.key === row.key || (!momentOpen && !!members?.some(m => m.key === nest.key))).length;
       if (momentOpen && members) {
         for (const m of members) {
           if (m.on) { selectedKey = `${filter}:${before}:member:${m.key}`; break; }
@@ -369,7 +355,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   }
   useKeepSelectedInView(list, selectedKey);
   if (empty) return null;
-  const placed = new Set(filter ? drawn.flatMap(({ row, members }) => [row.key, ...places.get(row.key)?.members.map(editKey) ?? [], ...members?.map(m => m.key) ?? []]) : []);
+  const placed = new Set(filter ? drawn.flatMap(({ row, members }) => [row.key, ...members?.map(m => m.key) ?? []]) : []);
   const fold = (key: string) => setUnfolded(was => { const next = new Set(was); if (!next.delete(key)) next.add(key); return next; });
   // A list that leads with times widens their column for all its rows once one of them is past an hour ("1:02:07").
   const hours = filter !== "calls" && shown.some(row => clockLabel(row.displayAt).length > 5);
@@ -406,7 +392,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       {filter !== "calls" && row.word && <span className={`simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={spent.get(row.key)}>{row.word}</span>}
     </button>
     {/* Folded, a request about any of the moment's edits sits under the moment's row; unfolded, under its edit's. */}
-    {nests.filter(nest => rowOf(nest.key) === row.key || (!open && !!members?.some(m => m.key === nest.key))).map(nest => nest.node)}
+    {nests.filter(nest => nest.key === row.key || (!open && !!members?.some(m => m.key === nest.key))).map(nest => nest.node)}
     {open && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
       {members.map(m => <li key={m.key}><button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
         data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open} title={m.title || m.label} onClick={letGo(() => m.open?.())}
