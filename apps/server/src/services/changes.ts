@@ -11,7 +11,7 @@ export {
   saveCutChoices,
 } from "./changes/cutReview.js";
 export { cutRevisionReference, reviseChange } from "./changes/cutRevisionPrompts.js";
-export { submitDialogueCuts } from "./changes/dialoguePass.js";
+export { applySettledCuts, submitDialogueCuts } from "./changes/dialoguePass.js";
 export { flagEdit, keepEdits, keptEdits, unkeepEdits } from "./changes/editReviews.js";
 export { foldStrandedPasses, recordLeftOutFootage, retireLeftoverPasses, retireStaleSaves } from "./changes/leftOutAndRepairs.js";
 export { approveChange, rejectChange, reopenChange, unapproveChange, wireChangeRenderCompletion } from "./changes/lifecycle.js";

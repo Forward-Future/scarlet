@@ -25,7 +25,7 @@ import { badRequest, conflict } from "../errors.js";
 import { clip, logId, since } from "../logText.js";
 import { recordTaskFinished, recordTaskRequested } from "../telemetry/events.js";
 import { actorFor, agentName, logActivity, quote } from "./activity.js";
-import { applyChoicesWhenDone, retireStaleSaves } from "./changes.js";
+import { applyChoicesWhenDone, applySettledCuts, retireStaleSaves } from "./changes.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { notify } from "./notify.js";
 import { restoreUnreplacedProposal } from "./revisionState.js";
@@ -361,12 +361,18 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
     const finished = { ...task, state: "done" as const };
     ctx.repos.tasks.put(finished);
     for (const change of own()) applyChoicesWhenDone(ctx, change);
+    // A pass with calls still waiting puts the cuts it settled into the video as it finishes, so the video is the edit as it will be.
+    for (const change of own()) applySettledCuts(ctx, change);
     retireStaleSaves(ctx, task);
     // A run resumed after a quit may finish without saving another part. Its earlier attempts' pass still applies.
     const attempts = task.resumeRootId && runAttemptIds(task.projectId, task.resumeRootId);
     if (attempts) for (const change of ctx.repos.changes.select(`project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') IN (${attempts.sql})`,
         [task.projectId, ...attempts.params])) {
       if (change.taskId !== task.id) applyChoicesWhenDone(ctx, change);
+    }
+    if (attempts) for (const change of ctx.repos.changes.select(`project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') IN (${attempts.sql})`,
+        [task.projectId, ...attempts.params])) {
+      if (change.taskId !== task.id) applySettledCuts(ctx, change);
     }
   }
   // A dialogue pass that says it is done is done, whatever its repeat check still lists. What the check last measured

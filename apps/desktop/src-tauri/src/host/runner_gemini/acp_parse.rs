@@ -2,6 +2,7 @@
 //! for Gemini via Antigravity CLI (`agy acp`).
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 use serde_json::{json, Value};
 
@@ -116,7 +117,7 @@ pub const SCARLET_TOOLS: &[&str] = &[
     "faces", "lip_sync",
     "change_get", "change_list", "edit_flag", "notes_list", "note_reply", "note_resolve", "render_request", "render_status",
     "task_log", "task_question", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit",
-    "web_capture", "graphic_render", "graphic_get", "style_guide_save", "attachment_read",
+    "web_capture", "web_video", "graphic_render", "graphic_get", "style_guide_save", "attachment_read",
     "media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area",
     "change_review_cut", "source_audio", "listen",
     "captions_generate",
@@ -465,10 +466,19 @@ pub fn acp_mcp_server(mcp: &McpSpec) -> Value {
 /// agy reads Scarlet's prompt from the session's own system prompt, not a `GEMINI.md`: it cuts a rule file off at
 /// 24,000 bytes, and a pass's prompt with the editor's skill runs past that (28.5 KB on 2026-11-19, losing the skill's
 /// pace, demo and punch-in sections).
-pub fn build_gemini_command(bin: &str) -> RunnerCommand {
+///
+/// `--gemini-dir` gives agy the run's own folder for its settings, rules, plugins and sessions (`gemini_dir`), so the
+/// editor's personal `~/.gemini/GEMINI.md` and plugin rules, written for their own chats with Gemini, don't reach
+/// Scarlet's runs, as they don't for Claude Code (`--restricted`) or Codex (its own `CODEX_HOME`). The sign-in stays:
+/// agy keeps it in the system keychain.
+pub fn build_gemini_command(bin: &str, gemini_dir: Option<&Path>) -> RunnerCommand {
+    let mut args: Vec<String> = vec!["acp".into(), "--sandbox".into(), "--disable-telemetry".into()];
+    if let Some(dir) = gemini_dir {
+        args.extend(["--gemini-dir".into(), dir.to_string_lossy().into_owned()]);
+    }
     RunnerCommand {
         file: bin.to_string(),
-        args: vec!["acp".into(), "--sandbox".into(), "--disable-telemetry".into()],
+        args,
         stdin: None,
         files: BTreeMap::new(),
     }

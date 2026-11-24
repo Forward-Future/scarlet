@@ -6,7 +6,8 @@ import { CutMark, CutWordsLine, EditPassage } from "../../components/review/CutT
 import { SourceLink, SourceRow } from "../../components/review/EditSource";
 import { OtherTakes } from "../../components/review/OtherTakes";
 import { ReviewActions } from "../../components/review/ReviewActions";
-import { EditVersion, RejectEdit, type RejectedEdit } from "../../components/review/ThreadEdits";
+import { AddTodo, EditVersion, RejectEdit, type RejectedEdit } from "../../components/review/ThreadEdits";
+import { Linked, linkedText } from "../../components/ui/Linked";
 import { Icon } from "../../components/ui/primitives";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
@@ -27,9 +28,9 @@ function EditNote({ text, unchecked }: { text: string; unchecked?: boolean }) {
   const { ref, clipped, open, opens, toggle } = useClippedExpand<HTMLHeadingElement>(text, 0);
   // No button: the pointer changes over a clipped note, and the hover title carries it for anyone not clicking.
   return <h2 ref={ref} className={`edit-card-title${open ? " is-open" : clipped ? " is-clipped" : ""}`}
-    title={open ? undefined : text}
+    title={open ? undefined : linkedText(text)}
     aria-expanded={opens ? open : undefined} onClick={opens ? toggle : undefined}>
-    {unchecked && <span className="edit-card-unchecked">Not checked yet. </span>}{text}</h2>;
+    {unchecked && <span className="edit-card-unchecked">Not checked yet. </span>}<Linked text={text} /></h2>;
 }
 
 /**
@@ -124,7 +125,7 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
 export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPassNo, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
-  cutKey, onChooseCutSide, setCompareHost, onRevise, onDefer, onKeep, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
+  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
@@ -160,8 +161,9 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   onChooseCutSide(side: Side): void;
   setCompareHost: (el: HTMLElement | null) => void;
   onRevise(): void;
-  onDefer?: () => void;
   onKeep(): void;
+  /** A to-do that still waits or was parked has Add: the request it sent. */
+  onSentAdd?: (task: Task) => void;
   appliedTarget?: AgentContext;
   rejectTarget?: AgentContext;
   openEditKey?: string;
@@ -209,14 +211,17 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
         {sourceKey && <SourceLink open={sourceOpen} toggle={onToggleSource} />}
       </span>
       <span className="edit-card-acts">
-        {/* A to-do marker changed nothing in the video, so there is nothing to revise: offer Later (L) when still waiting, and Done (D). */}
-        <ReviewActions revise={shownMarker ? onDefer : onRevise}
-          reviseLabel={shownMarker ? "Later" : "Revise"} reviseKey={shownMarker ? "L" : "R"}
-          approve={onKeep} approveLabel={shownMarker ? "Done" : "Keep"} approveKey={shownMarker ? "D" : "K"} />
+        {/* A to-do marker changed nothing in the video, so there is nothing to keep: Add (A) asks Scarlet to make or
+            find what it says to add, Revise (R) aims the message box at it to change what it proposes, and the ×
+            rejects it. */}
+        <ReviewActions lead={shownMarker && onSentAdd && rejectTarget && <AddTodo key={`add ${openEditKey}`} projectId={projectId} thread={focusThread}
+            target={rejectTarget} ask={reviewingEdit.todo} onSent={onSentAdd} />}
+          revise={onRevise}
+          approve={shownMarker ? undefined : onKeep} approveLabel="Keep" approveKey="K" />
         {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
-            a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A spot marked for the editor changed nothing, so
-            it has none. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
-        {appliedTarget && rejectTarget && !shownMarker && <RejectEdit key={`reject ${openEditKey}`} projectId={projectId} thread={focusThread} target={rejectTarget}
+            a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A to-do marked for the editor has it too:
+            its marker comes off. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
+        {appliedTarget && rejectTarget && <RejectEdit key={`reject ${openEditKey}`} projectId={projectId} thread={focusThread} target={rejectTarget}
           edits={rejectedEdits} editsOn={appliedTarget.version}
           onEngine={onEngineReject} onSent={onSentReject} />}
       </span>

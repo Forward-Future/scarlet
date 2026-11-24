@@ -30,6 +30,9 @@ describe("telling what an applied edit did", () => {
   it("names a level that moves over a clip a dip, and voice cleanup a voice cleanup, on the camera's own sound too", () => {
     const dip = [{ time: 0, db: 0, ease: "easeInOut" }, { time: 0.3, db: -18, ease: "linear" }];
     expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { volumeKeyframes: dip } }]), [one], { before: base })).toEqual(["dip"]);
+    // Keys that only even a clip's level out, a little down here and a little up there, are a level change.
+    const evened = [{ time: 0, db: -1.5, ease: "linear" }, { time: 12, db: -1.5, ease: "linear" }, { time: 16, db: 0, ease: "linear" }, { time: 82, db: 0.9, ease: "linear" }];
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { volumeKeyframes: evened } }]), [one], { before: base })).toEqual(["audio"]);
     // A music bed added already dipped, or added and then dipped, is a dip.
     const bed = makeMediaClip("music", 0, 60, 0, { id: "bed" });
     expect(editKinds(change([{ op: "addTrack", track: makeTrack("audio", "Music", "music") }, { op: "addClip", trackId: "music", clip: bed },
