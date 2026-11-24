@@ -158,7 +158,10 @@ export class AgentHost {
       this.stopOrphans(),
     ]);
     this.agents = agents;
+    // Stopped while it was detecting or registering: nothing is started behind the stop.
+    if (this.stopped) return;
     await this.register();
+    if (this.stopped) return;
     void this.refreshQuotas();
     this.heartbeatTimer = setInterval(() => void this.heartbeat(), this.heartbeatMs);
     if (this.opts.ws !== false) this.connectWs();
