@@ -118,6 +118,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Project settings now opens with the cursor in the Name field, so you can type a new name straight away instead of a space or Enter closing it.
 - A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
 - Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
+- An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
 
 ## November 22, 2026
 
