@@ -198,6 +198,20 @@ it("answers 404 for a frame, loudness or speech of a recording whose file is gon
   expect(lines.filter(line => line.startsWith("[error]"))).toEqual([]);
 });
 
+it("shows the last frame for a time past the end of a video, not an engine error", async () => {
+  const { ctx } = workspace;
+  const lines: string[] = [];
+  ctx.log = line => lines.push(line);
+  ctx.paths.ensureProject(project.id);
+  await ffmpeg(["-f", "lavfi", "-i", "color=red:size=160x90:rate=25:duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", join(ctx.paths.media(project.id), "clip.mp4")]);
+  ctx.repos.projects.putMedia(project.id, { id: "clip", name: "Clip", path: "clip.mp4", kind: "video", duration: 1, fps: 25, width: 160, height: 90, hasAudio: false }, "ready");
+  for (const t of [99, 1]) {
+    const res = await api("GET", `/media/clip/frame?t=${t}&w=160`);
+    expect([t, res.status, res.headers.get("Content-Type")]).toEqual([t, 200, "image/jpeg"]);
+  }
+  expect(lines.filter(line => line.startsWith("[error]"))).toEqual([]);
+});
+
 it("saves which input is the editor's voice only once the recording shows two isolated inputs and their mix", async () => {
   const { ctx } = workspace;
   ctx.paths.ensureProject(project.id);
