@@ -102,6 +102,11 @@ it("refuses a range that isn't one, and a source with no sound", async () => {
   expect(await refused("?from=2&to=2")).toEqual([400, "bad_range"]);
   expect(await refused("?from=2&to=1")).toEqual([400, "bad_range"]);
   expect(await refused("?from=soon")).toEqual([400, "bad_param"]);
+  // Past the recording's end FFmpeg hears nothing, and writes a summary of -70 LUFS with a peak at full scale.
+  expect(await refused("?from=5&to=6")).toEqual([400, "bad_range"]);
+  expect(await refused("?from=4")).toEqual([400, "bad_range"]);
+  expect(await refused("?to=-1")).toEqual([400, "bad_range"]);
+  expect(await refused("?to=0")).toEqual([400, "bad_range"]);
   expect(await refused("", "screen")).toEqual([400, "no_audio"]);
   expect(await refused("", "nothing")).toEqual([404, "not_found"]);
   expect((await loudness("", "voice", "prj_other")).status).toBe(404);

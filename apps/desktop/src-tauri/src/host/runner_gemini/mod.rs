@@ -536,7 +536,7 @@ pub fn gemini_dir(run_dir: &Path) -> PathBuf {
 pub async fn run_gemini(opts: RunOptions) -> RunResult {
     let bin = match opts.resolve_bin("agy") {
         Ok(b) => b,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
     let gemini_dir = gemini_dir(&opts.cwd);
     let gemini_dir = match crate::config::private_directory(&gemini_dir) {
@@ -633,7 +633,7 @@ pub async fn run_gemini(opts: RunOptions) -> RunResult {
     poll_handle.abort();
     let outcome = match spawn_res {
         Ok(o) => o,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
 
     let (st, resume_failed) = {

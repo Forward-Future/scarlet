@@ -106,6 +106,8 @@ class CachePoll {
       if (this.listeners.size) return;
       this.unsubscribe?.();
       this.sequence++;
+      // The read still out is dropped with its sequence: a view put up before it answers starts a read of its own.
+      this.inflight = undefined;
       this.again = false;
       clearTimeout(this.timer);
       this.stopWaitingForVisible();

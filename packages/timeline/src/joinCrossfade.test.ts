@@ -275,3 +275,19 @@ describe("the editor's crossfade on dialogue joins", () => {
     });
   });
 });
+
+describe("crossfaded sound keeps its levels and stream", () => {
+  it("keeps the level changes on the same footage and the audio stream on the sound a picture hands to its dialogue track", () => {
+    const { timeline, track } = cut("video");
+    const b = track.clips[1]!;
+    if (b.kind === "media") {
+      b.audioTrack = 1;
+      // At 0.5 s into the clip, timeline 1.5 s: footage the crossfade doesn't move.
+      b.volumeKeyframes = [{ time: 0.5, db: -6, ease: "linear" }];
+    }
+    const result = applyOps(timeline, audioCrossfadeOps(timeline, media, joins, 0.08));
+    const sound = result.tracks.at(-1)!.clips[1]!;
+    expect(sound).toMatchObject({ timelineIn: 0.96, audioTrack: 1 });
+    expect(sound.kind === "media" && sound.volumeKeyframes?.[0]?.time).toBeCloseTo(0.54, 9);
+  });
+});

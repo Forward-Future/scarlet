@@ -419,7 +419,7 @@ function inSoundEvidence(sources: SourceEdge[], at: number, direction: 1 | -1) {
       // Moving a start later, or an end earlier, plays the words between. The other way removes them.
       const keeps = (way === 1) === (direction === 1);
       const what = between.length ? (keeps ? "keeps " : "also removes ") + quote(between) : "with no word between";
-      return `${Math.abs(found - s.at).toFixed(2)} s ${way === 1 ? "later" : "earlier"} at ${round3(at + (found - s.at) / speed)} s (${Math.round(levels.db[i]!)} dBFS), ${what}`;
+      return `${(Math.abs(found - s.at) / speed).toFixed(2)} s ${way === 1 ? "later" : "earlier"} at ${round3(at + (found - s.at) / speed)} s (${Math.round(levels.db[i]!)} dBFS), ${what}`;
     }
   };
   const points = [point(-1), point(1)].filter(Boolean);

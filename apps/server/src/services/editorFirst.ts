@@ -73,8 +73,9 @@ export class EditorFirst {
 
   /** The editor is waiting for this until the returned release is called, however long it takes. */
   hold(): () => void {
-    this.holds++;
+    // Touched before the hold counts, so a hold that starts the editor's activity lowers background work at once.
     this.touch();
+    this.holds++;
     let released = false;
     return () => {
       if (released) return;

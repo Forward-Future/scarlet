@@ -4,7 +4,7 @@
  * be run over stdio (see cli.ts) or embedded in-process.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod/v3";
@@ -366,7 +366,12 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   });
 
   // The only close handler: a second assignment would replace this one.
-  server.server.onclose = () => { diagnosticSessionClosed = true; inspection.close(); reviewTools.close(); };
+  server.server.onclose = () => {
+    diagnosticSessionClosed = true; inspection.close(); reviewTools.close();
+    // The folder made for this session's files when the harness gave none (listening copies, exports, downloaded
+    // videos) is this session's alone: it goes with it. A folder the harness gave is left as it is.
+    if (tempDir) void tempDir.then(dir => rm(dir, { recursive: true, force: true })).catch(err => console.error("[scarlet-mcp] removing the session's temporary files:", err));
+  };
 
   const perception = registerPerception({
     tool, client, projectId: ctx.projectId,

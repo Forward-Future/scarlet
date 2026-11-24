@@ -61,7 +61,8 @@ export async function cleanupNote(
         stop_reason?: string;
         content?: Array<{ type: string; text?: string }>;
       };
-      if (json.stop_reason === "refusal") return null;
+      // A rewrite cut off at its length limit is half an instruction: the note keeps what the editor said.
+      if (json.stop_reason === "refusal" || json.stop_reason === "max_tokens") return null;
       const text = (json.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("").trim();
       return text || null;
     }
@@ -83,7 +84,7 @@ export async function cleanupNote(
       };
       const candidate = json.candidates?.[0];
       if (!candidate) return null;
-      if (candidate.finishReason && candidate.finishReason !== "STOP" && candidate.finishReason !== "MAX_TOKENS") {
+      if (candidate.finishReason && candidate.finishReason !== "STOP") {
         return null;
       }
       const text = (candidate.content?.parts ?? [])
@@ -108,8 +109,10 @@ export async function cleanupNote(
       signal: stop,
     });
     if (!res.ok) throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    return json.choices?.[0]?.message?.content?.trim() || null;
+    const json = (await res.json()) as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }> };
+    const choice = json.choices?.[0];
+    if (choice?.finish_reason === "length") return null;
+    return choice?.message?.content?.trim() || null;
   } catch (e) {
     // A request cancelled by the client can abort with a plain string as its reason.
     ctx.log(`[cleanup] failed: ${e instanceof Error ? e.message : String(e)}`);

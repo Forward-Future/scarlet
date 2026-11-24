@@ -74,6 +74,14 @@ describe("analyzeMusic", () => {
     expect(step.levelDb).toBeGreaterThan(sections[0]!.levelDb + 10);
   });
 
+  it("ends the last section where the music ends, not on a whole step past it", () => {
+    const { samples } = clicks({ bpm: 120, beatsPerBar: 4, seconds: 30.1 });
+    const reading = analyzeMusic(samples, 100);
+    expect(reading.to).toBe(130.1);
+    expect(reading.sections.at(-1)!.end).toBe(reading.to);
+    for (const s of reading.sections) expect(s.start < s.end && s.start >= reading.from && s.end <= reading.to).toBe(true);
+  });
+
   it("says there is no beat in steady noise, and still gives its level", () => {
     const random = noiseSource(3);
     const samples = Float32Array.from({ length: 20 * SAMPLE_RATE }, () => (random() - 0.5) * 0.2);

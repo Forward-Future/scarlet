@@ -2056,6 +2056,26 @@ it("stops waiting for multiple transcripts as soon as one fails, even while anot
   expect(ctx.repos.tasks.get(transcribing[1]!.id)?.state).toBe("running");
 });
 
+it("stops waiting after a few tries when a run whose transcripts are ready can't resume, instead of trying every half minute", () => {
+  const { ctx } = workspace;
+  const task = createTask(ctx, { projectId: project.id, agent: "codex", kind: "edit", instruction: "Tighten",
+    createdBy: { type: "human", name: "Editor" } });
+  saveTask(ctx, { ...task, state: "done", needsTranscripts: ["camera"], continueWhenReady: true });
+  ctx.repos.transcripts.put({ id: "tr_camera", projectId: project.id, mediaId: "camera", segments: [] });
+  const put = ctx.repos.tasks.put.bind(ctx.repos.tasks);
+  vi.spyOn(ctx.repos.tasks, "put").mockImplementation(t => {
+    if (t.resumeRootId === task.id && t.id !== task.id) throw new Error("disk full");
+    return put(t);
+  });
+  const logged = vi.spyOn(ctx, "log");
+  for (let sweep = 0; sweep < 5; sweep++) expect(continueReadyRuns(ctx, project.id)).toEqual([]);
+  const failures = logged.mock.calls.filter(([line]) => line.includes(task.id) && line.includes("disk full"));
+  expect(failures).toHaveLength(3);
+  expect(ctx.repos.tasks.get(task.id)).toMatchObject({ state: "done", needsTranscripts: ["camera"] });
+  expect(ctx.repos.tasks.get(task.id)?.continueWhenReady).toBeUndefined();
+  expect(ctx.repos.tasks.get(task.id)?.retryTaskId).toBeUndefined();
+});
+
 it("honors Don't wait if the editor turns it off after the recovery sweep has listed a ready request", () => {
   const { ctx } = workspace;
   const task = createTask(ctx, { projectId: project.id, agent: "codex", kind: "edit", instruction: "Tighten",
