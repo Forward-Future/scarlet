@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Low risk edits in For you are now a small switch, and turning it on or off no longer moves the chat: their rows open in place among the ones that wait and Scarlet's reply stays put. Their rows open and close with a smooth, staggered animation. Every row in For you now leads with its time, so the list no longer swaps numbers for times, and ↑ ↓ step down it in that order.
 - Settings › Models has Task models: choose which model does each kind of work, such as Cutting or Motion graphics, or add your own. The chat's model hands that work to the model you chose, and each edit made that way says which model made it on its card.
 - A request's list of edits now has more room under its For you, Working and Done tabs, so the first row no longer sits right against them.
 - When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.
