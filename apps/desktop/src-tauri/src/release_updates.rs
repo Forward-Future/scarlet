@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::{Read, Seek, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -17,6 +17,21 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 /// Long enough after launch that the check doesn't compete with opening the project.
 const FIRST_CHECK: Duration = Duration::from_secs(20);
 const CHECK_EVERY: Duration = Duration::from_secs(5 * 60);
+
+/// How long a release that failed to download, verify or stage waits before it downloads again: the next check after
+/// the first failure, then an hour, then six hours.
+fn retry_after(failures: u32) -> Duration {
+    match failures {
+        0 | 1 => CHECK_EVERY,
+        2 => Duration::from_secs(60 * 60),
+        _ => Duration::from_secs(6 * 60 * 60),
+    }
+}
+
+/// Whether `version` failed recently enough that it waits rather than downloading again.
+fn waits(failed: &Option<(String, u32, Instant)>, version: &str, now: Instant) -> bool {
+    failed.as_ref().is_some_and(|(failed, failures, at)| failed == version && now.duration_since(*at) < retry_after(*failures))
+}
 
 /// Whether this build was made with a release manifest to update from.
 pub fn configured(app: &AppHandle) -> bool {
@@ -44,6 +59,8 @@ struct Inner {
     /// The release being downloaded: its version, the bytes so far and the size the server gave.
     downloading: Option<(String, u64, Option<u64>)>,
     installing: bool,
+    /// The release whose download last failed, how many times in a row, and when.
+    failed: Option<(String, u32, Instant)>,
     /// The editor chose Restart to update on Windows, where the release installs as Scarlet exits.
     relaunch: bool,
 }
@@ -111,8 +128,14 @@ async fn check(app: &AppHandle) -> Result<Option<String>, String> {
             return Ok(Some(ready));
         }
     }
+    {
+        let mut inner = updates.inner.lock().unwrap();
+        if waits(&inner.failed, &version, Instant::now()) {
+            return Ok(None);
+        }
+        inner.downloading = Some((version.clone(), 0, None));
+    }
     log::info!("release update: downloading {version} (running {})", update.current_version);
-    updates.inner.lock().unwrap().downloading = Some((version.clone(), 0, None));
     let progress = updates.inner.clone();
     // The package is checked against the release's signature before it comes back.
     let downloaded = update.download(move |chunk, total| {
@@ -124,7 +147,18 @@ async fn check(app: &AppHandle) -> Result<Option<String>, String> {
     let kept = downloaded.map_err(|e| format!("download of {version} failed: {e}")).and_then(|bytes| keep(&bytes));
     let mut inner = updates.inner.lock().unwrap();
     inner.downloading = None;
-    let file = kept?;
+    let file = match kept {
+        Ok(file) => file,
+        Err(error) => {
+            let failures = match &inner.failed {
+                Some((failed, failures, _)) if *failed == version => failures + 1,
+                _ => 1,
+            };
+            inner.failed = Some((version, failures, Instant::now()));
+            return Err(error);
+        }
+    };
+    inner.failed = None;
     // The release on offer until now gives way to the newer one.
     if !inner.installing {
         inner.ready = Some((update, file));
@@ -156,16 +190,20 @@ pub async fn check_now(app: &AppHandle) -> Result<Option<String>, String> {
         log::warn!("release update: check failed: {e}");
         "Couldn’t check for updates. Check your connection, then try again.".to_owned()
     })?;
-    let status = updates.status();
+    let mut inner = updates.inner.lock().unwrap();
     match found.map(|update| update.version) {
         Some(version) => {
-            if status.ready.as_deref() != Some(version.as_str()) && status.downloading.map(|(v, _)| v).as_deref() != Some(version.as_str()) {
+            let here = inner.ready.as_ref().is_some_and(|(update, _)| update.version == version)
+                || inner.downloading.as_ref().is_some_and(|(downloading, _, _)| *downloading == version);
+            if !here {
+                // The editor asked: a release that failed before downloads again now.
+                inner.failed.take_if(|(failed, _, _)| *failed == version);
                 updates.wake.notify_one();
             }
             Ok(Some(version))
         }
         // The manifest has nothing newer than this version, though one may already be here from earlier.
-        None => Ok(status.ready),
+        None => Ok(inner.ready.as_ref().map(|(update, _)| update.version.clone())),
     }
 }
 
@@ -246,6 +284,22 @@ mod tests {
         assert_eq!(share(250, Some(200)), 1.0);
         assert_eq!(share(50, None), 0.0);
         assert_eq!(share(50, Some(0)), 0.0);
+    }
+
+    #[test]
+    fn a_release_that_failed_waits_longer_each_time_until_a_newer_one_is_offered() {
+        let at = Instant::now();
+        let failed = |failures| Some(("0.1.409".to_owned(), failures, at));
+        let after = |minutes: u64| at + Duration::from_secs(minutes * 60);
+        assert!(!waits(&None, "0.1.409", after(0)));
+        assert!(waits(&failed(1), "0.1.409", after(4)));
+        assert!(!waits(&failed(1), "0.1.409", after(5)));
+        assert!(waits(&failed(2), "0.1.409", after(59)));
+        assert!(!waits(&failed(2), "0.1.409", after(60)));
+        assert!(waits(&failed(3), "0.1.409", after(359)));
+        assert!(waits(&failed(9), "0.1.409", after(359)));
+        assert!(!waits(&failed(9), "0.1.409", after(360)));
+        assert!(!waits(&failed(9), "0.1.410", after(0)));
     }
 
     #[test]

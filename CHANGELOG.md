@@ -175,6 +175,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - The sound picture Scarlet looks at around a cut now lines up with the words and the cut on recordings whose sound starts a moment after the picture, as phone and camera videos often do.
 - Opened from the Dock, Finder or the Start menu, Scarlet can now use the FFmpeg that Setup installed in the commands it runs while editing.
 - When Scarlet checks where a long screen recording's picture changes around one moment, it reads that moment first instead of working through the whole recording from the start, so the answer comes back in seconds.
+- When an update fails to download, Scarlet waits longer before downloading it again instead of starting over every few minutes, and Check for updates in Settings still tries again right away.
 
 ## November 22, 2026
 
