@@ -2374,8 +2374,8 @@ export function SimpleWorkspace() {
             <button type="button" className="btn-ghost" onClick={backToVideo}>Back to the video</button>
           </div>}
         </div>
-        {transcript && <TranscriptRail compact={compact} paneKey={source?.id ?? (appliedCut ? beforeCut!.version : draftVersion) ?? head}
-          draft={appliedCut ? beforeTimeline : draft} source={source} onAsk={askAbout} onClose={() => setTranscript(false)} />}
+        {transcript && <TranscriptRail compact={compact} paneKey={source?.id ?? previewVersion ?? head}
+          draft={previewTimeline} source={source} onAsk={askAbout} onClose={() => setTranscript(false)} />}
       </Dropzone>
     </main>
     {panel === "media" && <MediaDrawer uploads={uploads} notice={local ? undefined : notice}
