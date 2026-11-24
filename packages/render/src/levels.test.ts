@@ -103,4 +103,19 @@ describe("rendering moving levels and a cleaned voice", () => {
     for (let i = 48000; i < 2 * 48000; i++) worst = Math.max(worst, Math.abs(through[i]! - before[i]!));
     expect(worst).toBeLessThan(40);
   });
+
+  it("plays a cleaned voice to the end of a cut that stops partway through its recording", async () => {
+    const tone = path.join(dir, "tone.wav");
+    await runCapture("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:d=4", "-ac", "1", tone]);
+    const project = createProject("Tail");
+    project.media.push({ id: "tone", kind: "audio", name: "tone.wav", path: tone, duration: 4, hasAudio: true });
+    const plain = emptyTimeline(project.id);
+    plain.tracks[1]!.clips = [makeMediaClip("tone", 0, 1, 0)];
+    const passed = structuredClone(plain);
+    (passed.tracks[1]!.clips[0] as { effects: Effect[] }).effects = [{ type: "voiceCleanup", params: { mix: 0 }, enabled: true }];
+    const before = await rendered(project, plain, 0, 1.5), through = await rendered(project, passed, 0, 1.5);
+    // The model plays the sound 10 ms late; the cut's last 10 ms are still its sound, not silence.
+    expect(rms(through, 0.99, 0.999)).toBeCloseTo(rms(before, 0.99, 0.999), 0);
+    expect(rms(through, 1.01, 1.5)).toBeLessThan(-60);
+  });
 });

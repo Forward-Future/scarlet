@@ -474,9 +474,11 @@ async function writeFilterGraph(
         const selectedTrack = clip.audioTrack ?? asset.audioTrack;
         const streamCount = asset.audioStreams?.length
           ?? (selectedTrack !== undefined ? (await verifiedProbe(asset))?.audioStreams?.length : undefined);
+        // An effect that plays the sound late reads that much more of it (`audioForMedia`), so the input runs on too.
+        const late = audioEffectDelay(clip.effects);
         audioForMedia(
           clip,
-          open(file, srcStart - skip, true, p.vis * speed + skip),
+          open(file, srcStart - skip, true, (p.vis + late) * speed + skip),
           p,
           skip,
           resolveAudioTrack(selectedTrack, streamCount),
