@@ -3,7 +3,7 @@ import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createProject, type Change, type Project } from "@scarlet/timeline";
-import { ATTEMPT_HEADER, TASK_HEADER, queueOrder, queueWait, taskPlan, type Task, type TaskEvent, type TaskPrompt, type WsEvent } from "@scarlet/shared";
+import { ATTEMPT_HEADER, TASK_HEADER, queueOrder, queueWait, REJECT_MESSAGE, taskPlan, type Task, type TaskEvent, type TaskPrompt, type WsEvent } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { PLAN_STEPS } from "@scarlet/mcp/prompt";
@@ -211,6 +211,23 @@ it("shows a learning check the editor's recent corrections across videos, each w
     { said: "cut tail frames", about: `a cut ${skill.name} made`, elsewhere: true },
     { said: "take more off the beginning", about: `a cut ${skill.name} made` },
   ]);
+});
+
+it("shows a learning check the editor's revision of an applied edit, and not a rejection Scarlet was asked to make", () => {
+  const editor = { type: "human" as const, name: "Editor" };
+  const ts = new Date().toISOString();
+  app.ctx.repos.changes.put({ id: "chg_applied", projectId: project.id, fromVersion: "v1", toVersion: "v2", description: "Captions", author: { type: "agent", name: "Claude" },
+    noteIds: [], timelineEdits: [{ label: "Captions", range: { start: 4, end: 9 } }], ranges: [], state: "approved", renders: [], createdAt: ts, updatedAt: ts } as never);
+  // Revise (R) on an applied edit, and the × that asks Scarlet to put one back, are both requests in the edit's thread.
+  const revised = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Make them smaller",
+    context: { changeId: "chg_applied", editIndex: 0, time: 4, message: "Make them smaller" }, createdBy: editor });
+  const rejected = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "The editor rejected “Captions”.",
+    context: { changeId: "chg_applied", editIndex: 0, time: 4, message: REJECT_MESSAGE }, createdBy: editor });
+  const check = createTask(app.ctx, { projectId: project.id, kind: "learning_check", agent: "claude", instruction: "Make them smaller",
+    context: { checksTaskId: revised.id }, createdBy: editor });
+  const decided = learningCheckContext(app.ctx, check).decided ?? [];
+  expect(decided).toContainEqual(expect.objectContaining({ id: `revised:${revised.id}`, decision: "revised", label: "Captions", note: "Make them smaller" }));
+  expect(decided.map(d => d.id)).not.toContain(`revised:${rejected.id}`);
 });
 
 it("pairs questions with the answers that followed", () => {

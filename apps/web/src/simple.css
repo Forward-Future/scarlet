@@ -447,6 +447,10 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-rest-chev { display: inline-grid; place-items: center; width: 17px; color: var(--color-dim); }
 .simple-review-rest-chev svg { transition: transform .14s ease; }
 .simple-review-rest[aria-expanded="true"] .simple-review-rest-chev svg { transform: rotate(90deg); }
+/* The double check after "low risk edits": quiet, and says what those edits are on hover. */
+.simple-review-rest-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.simple-review-rest-checks { display: inline-grid; place-items: center; color: var(--color-dim); cursor: help; }
+.simple-review-rest-checks:hover { color: var(--color-fg); }
 .simple-review-empty { margin: 0; padding: 8px 0; color: var(--color-muted); font-size: 12.5px; }
 /* A row the editor has just decided or sent back fades before it leaves For you. */
 .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { opacity: 0; transition: opacity .3s ease; }
@@ -662,6 +666,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .button-tip { position: fixed; z-index: 40; width: max-content; max-width: min(240px, calc(100vw - 16px)); padding: 5px 9px;
   border: 1px solid var(--color-line); border-radius: 6px; background: var(--color-panel); box-shadow: 0 3px 12px rgb(0 0 0 / 35%);
   font-size: 12px; line-height: 1.4; font-weight: 400; color: var(--color-fg); white-space: nowrap; pointer-events: none; }
+.button-tip.is-wrapping { white-space: normal; }
 .unit-tokens { flex: none; align-self: baseline; font-size: 12.5px; line-height: 19px; white-space: nowrap; }
 .unit-metrics-dot { color: var(--color-dim); }
 /* A finished request's time and tokens aren't drawn in its heading: they show in the note above when the pointer rests

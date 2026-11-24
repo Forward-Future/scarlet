@@ -298,7 +298,7 @@ const iconPaths: Record<IconName, ReactNode> = {
   plus: <path d="M8 3v10M3 8h10" />,
   chevron: <path d="M6 3l5 5-5 5" />,
   check: <path d="M3 8.5l3 3 7-7" />,
-  checks: <path d="M12 4l-7.33 7.33L1.33 8m13.34-1.33-5 5-1-1" />,
+  checks: <path d="M12 4l-7.33 7.33L1.33 8m13.34-1.33l-5 5-1-1" />,
   x: <path d="M3 3l10 10M13 3L3 13" />,
   pencil: <path d="M10.5 2.5l3 3L6 13H3v-3zM9 4l3 3" />,
   box: <rect x="2.5" y="3.5" width="11" height="9" rx="1.5" />,

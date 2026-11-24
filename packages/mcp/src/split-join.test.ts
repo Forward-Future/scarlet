@@ -1,6 +1,6 @@
 import { applyOps, emptyTimeline, makeMediaClip, splitJoinOps, type TranscriptWord } from "@scarlet/timeline";
 import { describe, expect, it } from "vitest";
-import { splitJoinEvidence } from "./split-join.js";
+import { splitJoinEvidence, splitJoinLabel } from "./split-join.js";
 
 const word = (text: string, start: number, end: number): TranscriptWord => ({ text, start, end });
 // The host's question ends at 5.6 s in their recording; a cut took out “Right, so” at 5.9–6.4 s.
@@ -38,5 +38,16 @@ describe("splitJoinEvidence", () => {
     const [j] = splitJoinEvidence(applyOps(tl, ops), joins, said);
     expect(j).toMatchObject({ split: "L", soundAt: 4.5, voiceOut: 0.6, voiceIn: 0.8, nowHeard: ["Right,", "so"], noLongerHeard: ["Because"] });
     expect(splitJoinEvidence(applyOps(tl, ops), joins, () => null)[0]).toEqual({ at: 3.8, soundAt: 4.5, split: "L", nowHeard: [], noLongerHeard: [] });
+  });
+});
+
+describe("splitJoinLabel", () => {
+  it("names the second a split join is at, as the video's clock reads it", () => {
+    expect(splitJoinLabel({ at: 2.2, shift: -0.2 })).toBe("J cut at 0:02");
+    expect(splitJoinLabel({ at: 75, shift: 0.3 })).toBe("L cut at 1:15");
+    // A join at 3 s that earlier ripples left a hair under it (4.6 - 1.6) is still at 0:03.
+    expect(splitJoinLabel({ at: 4.6 - 1.6, shift: 0 })).toBe("Sound back on the cut at 0:03");
+    // Past an hour, hours and minutes, not 62 minutes.
+    expect(splitJoinLabel({ at: 3725, shift: -0.5 })).toBe("J cut at 1:02:05");
   });
 });

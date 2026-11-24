@@ -2163,6 +2163,24 @@ it("reads 9:16 as the picture's shape, not a time, unless the words before it po
   }));
 });
 
+it("marks both ends of a range typed with a plain hyphen, and no clock a hyphen joins to anything else", async () => {
+  const messageClock = { duration: 4000, version: project.head!, seek: vi.fn() };
+  await show({ messageClock });
+  const stamps = () => Array.from(container.querySelectorAll(".composer-timestamp"), stamp => stamp.textContent);
+  for (const [words, times] of [
+    ["Cut 1:20-1:45", ["1:20", "1:45"]], ["Tighten 9:10-9:16", ["9:10", "9:16"]],
+    ["Mute 0:10.5-0:12", ["0:10.5", "0:12"]], ["Look at 1:20-1:45-2:00", ["1:20", "1:45", "2:00"]],
+    ["Trim 59:30-1:00:10", ["59:30", "1:00:10"]],
+    ["Call at UTC-05:00", []], ["Back up -0:05", []], ["Use clip-1:20", []], ["Shot 100-1:20", []],
+    ["Logged at 00:01:20-05:00", ["00:01:20"]], ["Recorded 2026-11-24 01:20-05:00", ["01:20"]],
+    ["Recorded 11/24/2026 01:20-05:00", ["01:20"]], ["Shot list for 2026-11-24\n1:20-1:45", ["1:20", "1:45"]],
+    ["Cut 1:20--1:45", ["1:20"]],
+  ] as const) {
+    await type(words);
+    expect([words, stamps()]).toEqual([words, times]);
+  }
+});
+
 it("updates the note target when a timestamp is edited and recognizes an hour clock in pasted prose", async () => {
   const messageClock = { duration: 8000, version: project.head!, seek: vi.fn() };
   await show({ messageClock });

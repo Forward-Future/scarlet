@@ -360,7 +360,7 @@ impl HostRuntime {
         // A request's agent gets its harness's own tools, and launchers for the programs this machine has. An engine from
         // before them leaves `workspace` out, and the run has Scarlet's tools only, as it did.
         let workspace = if prompt.workspace {
-            Some(workspace::workspace_tools(&cwd, self.paths.resource_dir.as_deref(), &crate::util::env_map())?)
+            Some(workspace::workspace_tools(&cwd, self.paths.resource_dir.as_deref(), &child_env(&self.paths.home))?)
         } else {
             None
         };

@@ -16,6 +16,12 @@ import { RESUMABLE } from "./taskPrompts.js";
 
 /** A run that keeps losing its worker stops carrying on by itself after this many attempts, and waits for the editor. */
 const LOST_WORKER_ATTEMPTS = 3;
+/**
+ * A run waiting for its transcripts that can't be resumed stops waiting after this many tries, so the editor can ask
+ * again or carry on, instead of being tried and logged every half minute for as long as Scarlet is open.
+ */
+const READY_RESUME_ATTEMPTS = 3;
+const readyResumeFailures = new WeakMap<Ctx, Map<string, number>>();
 
 function completedTranscriptAfter(ctx: Ctx, projectId: string, mediaId: string, since: string) {
   return ctx.repos.transcripts.select(
@@ -402,6 +408,8 @@ export function continueWhenReady(ctx: Ctx, id: string, on: boolean): { task: Ta
     const task = ctx.repos.tasks.get(id)!;
     if (task.retryTaskId) return task;
     if (!taskNeedsTranscripts(task)) throw conflict("not_waiting", "This edit isn’t waiting for a transcript.");
+    // The editor's own ask starts the tries afresh.
+    if (on) readyResumeFailures.get(ctx)?.delete(id);
     if (!!task.continueWhenReady === on) return task;
     ctx.log(`[task] ${id} ${on ? "will resume when its transcripts are ready" : "no longer waits for its transcripts"}`);
     return saveTask(ctx, { ...task, continueWhenReady: on || undefined });
@@ -435,6 +443,12 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
       saveTask(ctx, { ...task, continueWhenReady: undefined });
     }
   }, "immediate");
+  const stopWaiting = ctx.db.transaction((id: string, tries: number) => {
+    const task = ctx.repos.tasks.get(id);
+    if (!task?.continueWhenReady || task.retryTaskId) return;
+    ctx.log(`[task] ${task.id} stopped waiting: it couldn’t resume after ${tries} tries`);
+    saveTask(ctx, { ...task, continueWhenReady: undefined });
+  }, "immediate");
   const resumed: Task[] = [];
   for (const { id } of armed) {
     try {
@@ -442,6 +456,19 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
       if (retry) resumed.push(retry);
     } catch (err) {
       ctx.log(`[task] ${id} couldn’t check its transcripts: ${errorMessage(err)}`);
+      const failures = readyResumeFailures.get(ctx) ?? new Map<string, number>();
+      readyResumeFailures.set(ctx, failures);
+      const tries = (failures.get(id) ?? 0) + 1;
+      if (tries < READY_RESUME_ATTEMPTS) {
+        failures.set(id, tries);
+        continue;
+      }
+      failures.delete(id);
+      try {
+        stopWaiting(id, tries);
+      } catch (err) {
+        ctx.log(`[task] ${id} couldn’t stop waiting: ${errorMessage(err)}`);
+      }
     }
   }
   return resumed;

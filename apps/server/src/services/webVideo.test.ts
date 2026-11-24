@@ -1,13 +1,13 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveFfmpeg } from "@scarlet/render";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveFfmpeg, resolveFfprobe } from "@scarlet/render";
 import { createProject, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { DOWNLOADERS } from "./videoDownloader.js";
-import { captionLines, captionTrack } from "./webVideo.js";
+import { aboutWebVideo, captionLines, captionTrack, webVideoCaptions } from "./webVideo.js";
 
 let directory: string;
 let workspace: ScarletApp;
@@ -29,11 +29,12 @@ if (args.includes("-J")) {
   if (url.includes("list")) { console.log(JSON.stringify({ _type: "playlist", entries: [] })); process.exit(0); }
   if (url.includes("inside")) { console.log(JSON.stringify({ title: "Inside", webpage_url: url, formats: [{ url: "http://192.168.1.20/video.mp4" }] })); process.exit(0); }
   console.log(JSON.stringify({ title: "Agents at work", channel: "The Ledger", duration: url.includes("long") ? 7200 : 90, upload_date: "20261102", license: "Creative Commons Attribution license (reuse allowed)",
-    webpage_url: "https://example.com/watch?v=agents", width: 1920, height: 1080, language: "en", is_live: url.includes("live"),
+    webpage_url: url.includes("slow") ? url : "https://example.com/watch?v=agents", width: 1920, height: 1080, language: "en", is_live: url.includes("live"),
     chapters: [{ start_time: 0, end_time: 30, title: "Intro" }, { start_time: 30, end_time: 90, title: "The demo" }], description: "A demo of agents.",
     subtitles: url.includes("silent") ? {} : { en: [{ ext: "json3", url: "https://example.com/captions" }] }, formats: [{ url: "https://example.com/video.mp4" }] }));
 } else if (args.includes("--skip-download")) {
-  JSON.parse(readFileSync(after("--load-info-json"), "utf8"));
+  const info = JSON.parse(readFileSync(after("--load-info-json"), "utf8"));
+  if (info.webpage_url.includes("slow")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
   writeFileSync(after("-o") + ".en.json3", JSON.stringify({ events: [{ tStartMs: 1200, segs: [{ utf8: "Here is the agent" }] }, { tStartMs: 1300, segs: [{ utf8: "\\n" }] },
     ...Array.from({ length: 2000 }, (_, i) => ({ tStartMs: 5000 + i * 1000, segs: [{ utf8: "running a task, line " + i }] }))] }));
 } else if (args.includes("--download-sections")) {
@@ -151,6 +152,41 @@ describe("videos from the web", () => {
     expect(await said({ url: "https://example.com/watch?v=agents", from: 100, to: 120 })).toEqual([400, "bad_range", "That part is past the video's end: it is 90 seconds long."]);
     expect(await said({ url: "https://example.com/watch?v=agents", from: 10 })).toEqual([400, "bad_range", "Give both `from` and `to`, in seconds of the video."]);
     expect(await said({ url: "https://example.com/watch?v=long", from: 0, to: 700 })).toEqual([400, "bad_range", "One call saves up to 10 minutes. Ask for a shorter part, or for the parts one at a time."]);
+  });
+
+  it.skipIf(process.platform === "win32" || !!process.env.SCARLET_TEST_WEB_VIDEO)("reads the captions for one caller when another who asked at the same time gives up", async () => {
+    const url = "https://example.com/watch?v=slow";
+    await aboutWebVideo(workspace.ctx, url, new AbortController().signal);
+    const quitter = new AbortController();
+    const first = webVideoCaptions(workspace.ctx, url, 0, quitter.signal);
+    first.catch(() => {});
+    // The first caller's read of the captions is under way, and the second joins it.
+    await vi.waitFor(() => expect(calls().some(args => args.includes("--skip-download"))).toBe(true), { timeout: 5000 });
+    const second = webVideoCaptions(workspace.ctx, url, 0, new AbortController().signal);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    quitter.abort();
+    await expect(first).rejects.toThrow();
+    expect((await second)?.text.split("\n")[0]).toBe("1.2 Here is the agent");
+  });
+
+  it.skipIf(process.platform === "win32" || !!process.env.SCARLET_TEST_WEB_VIDEO)("reads several videos at once when ffmpeg goes by another name", async () => {
+    const bin = join(directory, "bin");
+    mkdirSync(bin);
+    symlinkSync(resolveFfmpeg(), join(bin, "ffmpeg-test"));
+    symlinkSync(resolveFfprobe(), join(bin, "ffprobe-test"));
+    const before = { SCARLET_FFMPEG: process.env.SCARLET_FFMPEG, SCARLET_FFPROBE: process.env.SCARLET_FFPROBE };
+    process.env.SCARLET_FFMPEG = join(bin, "ffmpeg-test");
+    process.env.SCARLET_FFPROBE = join(bin, "ffprobe-test");
+    try {
+      const read = await Promise.allSettled(Array.from({ length: 6 }, (_, i) =>
+        aboutWebVideo(workspace.ctx, `https://example.com/watch?v=agents${i}`, new AbortController().signal)));
+      expect(read.map(r => r.status === "rejected" ? String(r.reason) : r.status)).toEqual(Array(6).fill("fulfilled"));
+    } finally {
+      for (const [key, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it.skipIf(!process.env.SCARLET_TEST_WEB_VIDEO)("takes ten seconds of a real video with the real downloader", async () => {

@@ -6,7 +6,7 @@
  * at before it is made.
  */
 import type { TimeRange } from "@scarlet/timeline";
-import { FFMPEG_QUIET_ARGS, requireDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_QUIET_ARGS, SOURCE_AUDIO_CLOCK, requireDrawtext, resolveFfmpeg, runCapture } from "./exec.js";
 import { drawtextFontArg } from "./fonts.js";
 import { rangeInput } from "./mediaInput.js";
 import { audioMixStreamsFilter, resolveAudioTrack, type HeardAudio } from "./audioTrack.js";
@@ -66,7 +66,7 @@ export function soundPictureGraph(opts: SoundPictureOptions): { graph: string; l
   const chains: string[] = heard.mode === "mix" ? [audioMixStreamsFilter(0, heard.count, { outLabel: "heard", prefix: "heard_" })] : [], draw: string[] = [];
   const layout: SoundPictureLayout = { width: W, height, pixelsPerSecond: Math.round(pps * 100) / 100, rows: [] };
   const taps = 2 + (cut ? pieces.length : 0);
-  chains.push(`[${stream}]aresample=16000,aformat=sample_fmts=fltp:channel_layouts=mono,asplit=${taps}${Array.from({ length: taps }, (_, i) => `[a${i}]`).join("")}`);
+  chains.push(`[${stream}]${SOURCE_AUDIO_CLOCK},aresample=16000,aformat=sample_fmts=fltp:channel_layouts=mono,asplit=${taps}${Array.from({ length: taps }, (_, i) => `[a${i}]`).join("")}`);
   const pictures = (wave: string, spectrum: string, width: number, row: number) => {
     chains.push(`[${wave}]showwavespic=s=${width}x${WAVE}:colors=0xe8e8e8:scale=sqrt[w${row}]`, `[${spectrum}]showspectrumpic=s=${width}x${SPECTRUM}:legend=0:scale=log:color=intensity[s${row}]`);
   };

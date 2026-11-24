@@ -225,6 +225,8 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
       }
       complete = true;
       proc.child.stdin?.end();
+      // The list is read. agy can stay up after its input closes, and would hold detection for the whole time limit.
+      proc.kill();
     } });
     function send(message: object) {
       proc.child.stdin?.write(JSON.stringify(agent === "gemini" ? { jsonrpc: "2.0", ...message } : message) + "\n");

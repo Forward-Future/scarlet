@@ -83,6 +83,8 @@ export class LocalWhisperModel {
   private transfer?: LocalModelStatus;
   private failed = false;
   private verifiedStamp?: string;
+  /** A saved file of the right size whose checksum was wrong. Settings asks every few seconds, and hashing ~574 MB each time is too much. */
+  private damagedStamp?: string;
 
   /** `log`: where a download's start and its end go. The engine's log is its console. */
   constructor(private readonly directory: string, private readonly model: PinnedModel = bundledWhisperModel,
@@ -115,10 +117,12 @@ export class LocalWhisperModel {
     if (existing?.isFile() && existing.size === this.model.size) {
       const stamp = `${existing.ino}/${existing.ctimeMs}/${existing.mtimeMs}`;
       if (stamp === this.verifiedStamp) return "ready";
+      if (stamp === this.damagedStamp) return "invalid";
       if (await hashFile(file, undefined, signal) === this.model.sha256) {
         this.verifiedStamp = stamp;
         return "ready";
       }
+      this.damagedStamp = stamp;
     }
     return existing ? "invalid" : "missing";
   }

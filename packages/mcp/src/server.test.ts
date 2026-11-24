@@ -1,7 +1,7 @@
 import "./cutSummaries.testkit.js";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -243,6 +243,29 @@ describe("MCP file tools", () => {
     } finally {
       await c.close();
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the temporary folder it made for files when the session closes, and never a folder it was given", async () => {
+    const c = await connect(undefined, undefined, undefined, undefined, "codex");
+    const exported = await c.callTool({ name: "export_otio", arguments: { version: "v1" } }) as CallToolResult;
+    expect(exported.isError).toBeFalsy();
+    const path = JSON.parse(textOf(exported).split("\n\n").at(-1)!).path as string;
+    const made = dirname(dirname(path));
+    expect(made.startsWith(await realpath(tmpdir()))).toBe(true);
+    expect(await readFile(path, "utf8")).toContain("v1");
+    await c.close();
+    await vi.waitFor(async () => expect(await stat(made).then(() => true, () => false)).toBe(false));
+    // A folder the harness gave is its own: closing leaves it and what was saved there.
+    const given = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
+    try {
+      const kept = await connect(undefined, given, undefined, undefined, "codex");
+      expect((await kept.callTool({ name: "export_otio", arguments: { version: "v1" } }) as CallToolResult).isError).toBeFalsy();
+      await kept.close();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(await readFile(join(given, "exports", "v1.otio"), "utf8")).toContain("v1");
+    } finally {
+      await rm(given, { recursive: true, force: true });
     }
   });
 });
