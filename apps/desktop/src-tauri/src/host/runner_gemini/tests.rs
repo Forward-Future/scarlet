@@ -589,6 +589,21 @@ fn lets_a_request_use_agys_own_tools_inside_its_folders_only() {
     assert!(!allow(json!({ "name": "list_dir", "rawInput": { "paths": ["/w/artifacts", "/w2"] } })));
 }
 
+#[test]
+fn reads_a_relative_path_from_the_task_folder_so_one_that_climbs_out_is_refused() {
+    let roots = vec!["/w".to_string(), "/Applications/Google Chrome.app".to_string()];
+    let allow = |call: Value| workspace_permission(&json!({ "toolCall": call }), &roots);
+    // Three folders up from a task folder is Scarlet's own, where its token is kept.
+    assert!(!allow(json!({ "name": "read_file", "rawInput": { "path": "../../../agent.json" } })));
+    assert!(!allow(json!({ "name": "read_file", "rawInput": { "file_path": "artifacts/../../secret" } })));
+    assert!(!allow(json!({ "name": "read_file", "locations": [{ "path": "../secret" }] })));
+    // Inside the task folder, a relative path is fine, as are words that only look like one.
+    assert!(allow(json!({ "name": "write_file", "rawInput": { "file_path": "artifacts/page.html", "content": "<a href=\"../index.html\">back</a>" } })));
+    assert!(allow(json!({ "name": "read_file", "rawInput": { "path": "artifacts/../notes.md" } })));
+    assert!(allow(json!({ "name": "read_file", "locations": [{ "path": "artifacts/page.html" }] })));
+    assert!(allow(json!({ "name": "run_shell_command", "rawInput": { "command": "cd .. && ls" } })));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn defaults_unset_effort_to_medium_when_agy_starts_at_high() {
