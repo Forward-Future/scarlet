@@ -6,6 +6,10 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- The edits now have a column of their own between the chat and the video: what waits on you fills it for the whole video, Working at its foot lists the edits Scarlet is revising, and Done is one line that opens. The chat is just the conversation.
+- The message box now names the edit it talks to as its row does, with the same number as on the timeline, in place of "Edit 5:10".
+- Shift + click on the timeline, or N, puts that time into your message where the cursor is, and Shift + drag puts a stretch. A plain click or a pause only moves the video and no longer aims the message box.
+- Keep and ↑ ↓ now carry on from one request's last edit that waits to the next request's.
 - A request that punched in at several spots under the same name now says how many zooms it made, instead of naming the same edit over and over.
 - In Media, “Tell Scarlet what this is” and its Cancel button no longer show an underline.
 - A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.
