@@ -3,12 +3,12 @@ import type { EditRef, Task } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { appLog, errorName } from "./appLog";
 import { api, errorMessage } from "./client";
-import { undeferEdits, unkeepEdits, type KeptRef } from "./keptEdits";
+import { unkeepEdits, type KeptRef } from "./keptEdits";
 import { lastAttempt } from "./requestRuns";
 import { isActiveTask } from "./taskRun";
 
 /**
- * What ⌘Z takes back, newest last: the editor's Keeps, Later deferrals, calls, and the revisions they sent, in this
+ * What ⌘Z takes back, newest last: the editor's Keeps, calls, and the revisions they sent, in this
  * window's session. Each ⌘Z takes back one, so several in a row walk back through them.
  */
 export type UndoStep = {
@@ -23,13 +23,6 @@ export type UndoStep = {
   threadId: string;
   refs: KeptRef[];
   /** The edit the card was on, opened again once its Keep is taken back. */
-  edit: EditRef & { single?: boolean };
-} | {
-  kind: "defer";
-  word: "Later";
-  threadId: string;
-  refs: KeptRef[];
-  /** The to-do the card was on, opened again once Later is taken back. */
   edit: EditRef & { single?: boolean };
 } | {
   kind: "revision";
@@ -95,11 +88,11 @@ export function lastStep(steps: readonly UndoStep[], projectId: string) {
   return steps.findLast(step => step.projectId === projectId);
 }
 
-const stepWord = (step: UndoStep) => step.kind === "keep" || step.kind === "defer" ? step.word : step.word ?? "revision";
+const stepWord = (step: UndoStep) => step.kind === "keep" ? step.word : step.word ?? "revision";
 
 /**
  * Take back the newest step in this project. A Keep is taken back here and on the engine, and the edit waits on the
- * editor again. A Later deferral is cleared locally so the to-do waits again. A revision still waiting or under way is
+ * editor again. A revision still waiting or under way is
  * stopped; one that landed is taken out again: an applied version is reverted, and a new version of a pass that waits
  * is put away for the one it replaced. A call's Keep or Reject edit is taken back by the page that holds its pass
  * (`uncall`), which throws the reason when it can't be. Says what it took back, or nothing when there was nothing to
@@ -114,21 +107,20 @@ export async function undoLast(projectId: string, project: { changes: readonly C
   useUndoStore.setState({ undoing: step.id, error: undefined });
   try {
     if (step.kind === "keep") unkeepEdits(projectId, step.threadId, step.refs);
-    else if (step.kind === "defer") undeferEdits(projectId, step.threadId, step.refs);
     else if (step.kind === "call") {
       if (!uncall) throw new Error("its pass isn’t open here.");
       uncall(step);
     }
     else if (step.version) await revert(step.version);
     else if (step.taskId) await undoRevision(step.taskId, project, revert);
-    appLog("action", "undo", { project: projectId, kind: step.kind, ...((step.kind === "keep" || step.kind === "defer") && { change: step.edit.changeId }) });
+    appLog("action", "undo", { project: projectId, kind: step.kind, ...(step.kind === "keep" && { change: step.edit.changeId }) });
     useUndoStore.setState(s => ({ steps: s.steps.filter(other => other.id !== step.id) }));
     return step;
   } catch (error) {
     appLog("action", "undo-failed", { project: projectId, kind: step.kind, name: errorName(error) }, { level: "warn" });
     // It goes from the list all the same: pressed again, ⌘Z goes on to the step before it rather than failing again.
     useUndoStore.setState(s => ({ steps: s.steps.filter(other => other.id !== step.id),
-      error: { projectId, text: `Couldn’t undo ${step.kind === "keep" || step.kind === "defer" || step.word ? stepWord(step) : "the revision"}: ${reason(error)}` } }));
+      error: { projectId, text: `Couldn’t undo ${step.kind === "keep" || step.word ? stepWord(step) : "the revision"}: ${reason(error)}` } }));
   } finally {
     useUndoStore.setState(s => s.undoing === step.id ? { undoing: undefined } : s);
   }

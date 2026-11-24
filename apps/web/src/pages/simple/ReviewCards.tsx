@@ -124,7 +124,7 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
 export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPassNo, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
-  cutKey, onChooseCutSide, setCompareHost, onRevise, onDefer, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
+  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
@@ -160,7 +160,6 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   onChooseCutSide(side: Side): void;
   setCompareHost: (el: HTMLElement | null) => void;
   onRevise(): void;
-  onDefer?: () => void;
   onKeep(): void;
   /** A to-do that still waits or was parked has Add: the request it sent. */
   onSentAdd?: (task: Task) => void;
@@ -211,12 +210,12 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
         {sourceKey && <SourceLink open={sourceOpen} toggle={onToggleSource} />}
       </span>
       <span className="edit-card-acts">
-        {/* A to-do marker changed nothing in the video, so there is nothing to revise or keep: Add (A) asks Scarlet to
-            make or find what it says to add, Later (L) parks it while it still waits, and the × rejects it. */}
+        {/* A to-do marker changed nothing in the video, so there is nothing to keep: Add (A) asks Scarlet to make or
+            find what it says to add, Revise (R) aims the message box at it to change what it proposes, and the ×
+            rejects it. */}
         <ReviewActions lead={shownMarker && onSentAdd && rejectTarget && <AddTodo key={`add ${openEditKey}`} projectId={projectId} thread={focusThread}
             target={rejectTarget} ask={reviewingEdit.todo} onSent={onSentAdd} />}
-          revise={shownMarker ? onDefer : onRevise}
-          reviseLabel={shownMarker ? "Later" : "Revise"} reviseKey={shownMarker ? "L" : "R"}
+          revise={onRevise}
           approve={shownMarker ? undefined : onKeep} approveLabel="Keep" approveKey="K" />
         {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
             a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A to-do marked for the editor has it too:

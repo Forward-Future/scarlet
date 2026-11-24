@@ -218,53 +218,9 @@ export function useKeptEdits(projectId: string, thread: Thread | undefined): Rea
   return useMemo(() => engine.size ? new Set([...local, ...engine]) : local, [local, engine]);
 }
 
-/**
- * To-do markers the editor parked for later ("Later") in this window, per thread. Kept separate from Keeps so the
- * engine does not treat them as finished; marking a deferred to-do Done still overrides it and sends the Keep.
- */
-const DEFER_PREFIX = "scarlet.deferred-edits.v1";
-const deferListeners = new Set<() => void>();
-const deferCache = new Map<string, StoredSet>();
-const deferStorageKey = (projectId: string, threadId: string) => `${DEFER_PREFIX}/${projectId}/${threadId}`;
-
-function readDeferred(projectId: string, threadId: string): ReadonlySet<string> {
-  const key = deferStorageKey(projectId, threadId);
-  let raw: string | null = null;
-  try { raw = localStorage.getItem(key); } catch { /* ignore */ }
-  return cachedSet(deferCache, key, raw);
-}
-
-export function deferEdits(projectId: string, threadId: string, refs: KeptRef[]) {
-  const key = deferStorageKey(projectId, threadId);
-  const before = readDeferred(projectId, threadId);
-  const next = new Set(before);
-  for (const ref of refs) next.add(reviewKey(ref));
-  if (next.size === before.size) return false;
-  storeSet(deferCache, key, next);
-  appLog("review", "deferred", { project: projectId, thread: threadId, count: next.size - before.size });
-  for (const listener of deferListeners) listener();
-  return true;
-}
-
-export function undeferEdits(projectId: string, threadId: string, refs: KeptRef[]) {
-  const key = deferStorageKey(projectId, threadId);
-  const before = readDeferred(projectId, threadId);
-  const keys = new Set(refs.map(reviewKey));
-  const next = new Set([...before].filter(k => !keys.has(k)));
-  storeSet(deferCache, key, next);
-  appLog("review", "undeferred", { project: projectId, thread: threadId, count: keys.size });
-  for (const listener of deferListeners) listener();
-}
-
-export function useDeferredEdits(projectId: string, thread: Thread | undefined): ReadonlySet<string> {
-  const threadId = thread?.id;
-  return useSyncExternalStore(subscribeDeferred, () => threadId ? readDeferred(projectId, threadId) : empty);
-}
-
 const empty: ReadonlySet<string> = new Set();
 const subscriber = (to: Set<() => void>) => (listener: () => void) => {
   to.add(listener);
   return () => { to.delete(listener); };
 };
 const subscribe = subscriber(listeners);
-const subscribeDeferred = subscriber(deferListeners);
