@@ -202,7 +202,7 @@ fn builds_acp_command_prompt_meta_and_mcp_server_entry() {
     // The run's own Gemini folder keeps the user's personal GEMINI.md and plugin rules out.
     let own = gemini_dir(std::path::Path::new("/w/tasks-v2/tsk_1"));
     assert_eq!(own, std::path::Path::new("/w/tasks-v2/tsk_1.gemini"));
-    assert_eq!(build_gemini_command("agy", Some(&own)).args, ["acp", "--sandbox", "--disable-telemetry", "--gemini-dir", "/w/tasks-v2/tsk_1.gemini"]);
+    assert_eq!(build_gemini_command("agy", Some(&own)).args, ["acp", "--sandbox", "--disable-telemetry", "--gemini-dir", own.to_str().unwrap()]);
     assert_eq!(cmd.stdin, None);
     // No GEMINI.md: agy cuts a rule file off at 24,000 bytes.
     assert!(cmd.files.is_empty());

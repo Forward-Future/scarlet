@@ -161,6 +161,7 @@ if (args[0] === "acp" && process.env.FAKE_ACP) {
   createRequire(import.meta.url)(process.env.FAKE_ACP_SCRIPT);
 } else {
 writeFileSync(dir + "/args", args.map(a => a + NL).join(""));
+writeFileSync(dir + "/exec-home", process.env.CODEX_HOME ?? "");
 const input = [];
 for await (const chunk of process.stdin) input.push(chunk);
 writeFileSync(dir + "/stdin", Buffer.concat(input));
