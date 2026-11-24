@@ -242,9 +242,11 @@
 .edit-badge { justify-self: start; display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 1.2px solid var(--color-muted);
   background: var(--color-raised); color: var(--color-fg); font-size: 10px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
 .edit-badge.is-check { border-color: var(--color-warn); color: var(--color-warn); }
-.edit-badge.is-kept { display: inline-flex; align-items: center; gap: 1.5px; width: auto; padding: 0 4px 0 5px; border-radius: 9px;
-  border-color: var(--color-fg); background: var(--color-fg); color: var(--color-bg); }
-.edit-badge.is-kept svg { stroke-width: 2.6; }
+/* Kept: the same round badge, filled, with a small tick on its corner. It keeps the badge's size, so a row kept doesn't
+   widen the numbers' column and shift every row of the list (2026-11-24). */
+.edit-badge.is-kept { position: relative; border-color: var(--color-fg); background: var(--color-fg); color: var(--color-bg); }
+.edit-badge.is-kept svg { position: absolute; right: -6px; bottom: -4px; width: 9px; height: 9px; padding: 1px; border-radius: 50%;
+  background: var(--color-fg); box-shadow: 0 0 0 1.5px var(--color-bg); color: var(--color-bg); stroke-width: 2.8; }
 /* Which version a revised edit or call is on ("v2"): plain small text, as a row's figure is. The same after a row's
    words in either kind of list, where a call's row ends in it, and before the note on a call's card, where hovering it
    shows the earlier version and the note that sent it back. */
@@ -918,6 +920,8 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }
 .simple-pass-list > li > button.is-decided .edit-badge.is-kept,
 .simple-edit.is-decided .edit-badge.is-kept { background: rgba(255, 255, 255, .06); border-color: var(--color-line); color: var(--color-dim); }
+.simple-pass-list > li > button.is-decided .edit-badge.is-kept svg,
+.simple-edit.is-decided .edit-badge.is-kept svg { background: var(--color-muted); }
 /* A cut or edit sent back whose request stopped to ask the editor something waits on them again: its row is as bright
    as one that waits, its number amber, and its word says so in amber and holds still. A call's row can't be pressed
    while it is sent back, and isn't dimmed for that here. */
