@@ -10,6 +10,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - The message box now names the edit it talks to as its row does, with the same number as on the timeline, in place of "Edit 5:10".
 - Shift + click on the timeline, or N, puts that time into your message where the cursor is, and Shift + drag puts a stretch. A plain click or a pause only moves the video and no longer aims the message box.
 - Keep and ↑ ↓ now carry on from one request's last edit that waits to the next request's.
+- A clip Scarlet takes from another recording, such as one you played on screen, and puts into the video now says Insert instead of Put back.
 - A request that punched in at several spots under the same name now says how many zooms it made, instead of naming the same edit over and over.
 - In Media, “Tell Scarlet what this is” and its Cancel button no longer show an underline.
 - A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.

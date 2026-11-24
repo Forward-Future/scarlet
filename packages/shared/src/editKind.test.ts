@@ -18,6 +18,22 @@ describe("telling what an applied edit did", () => {
       { op: "updateClip", clipId: shot.id, patch: { sourceIn: 3, timelineIn: 10 } }]), [one])).toEqual(["restore"]);
   });
 
+  it("names footage from another file put into the main picture an insert, and the recording's own footage put back", () => {
+    const joined = timelineFromKeepRanges("project", "interview", [{ start: 0, end: 10 }, { start: 30, end: 120 }]);
+    const main = joined.tracks.find(t => t.kind === "video")!.id;
+    const fill = (mediaId: string, sourceIn: number) => [{ op: "rippleInsertGap", at: 10, duration: 5 },
+      { op: "addClip", trackId: main, clip: makeMediaClip(mediaId, sourceIn, sourceIn + 5, 10, { id: `fill-${mediaId}` }) }];
+    const clocks = (ops: Record<string, unknown>[]) => ({ before: joined, after: applyOps(joined, ops as never) });
+    const spot = [{ start: 10, end: 15 }];
+    const clip = fill("screen", 2401);
+    expect(editKinds(change(clip), spot, clocks(clip))).toEqual(["insert"]);
+    const back = fill("interview", 10);
+    expect(editKinds(change(back), spot, clocks(back))).toEqual(["restore"]);
+    // Without the finished picture, a file the main picture never played is still new to it.
+    expect(editKinds(change(clip), spot, { before: joined })).toEqual(["insert"]);
+    expect(editKinds(change(back), spot, { before: joined })).toEqual(["restore"]);
+  });
+
   it("names level changes and room tone on an audio track audio, and a cut that smooths its join still a cut", () => {
     const tone = change([{ op: "addTrack", track: makeTrack("audio", "Room tone", "tone") },
       { op: "addClip", trackId: "tone", clip: makeMediaClip("m", 40, 50, 10) },
