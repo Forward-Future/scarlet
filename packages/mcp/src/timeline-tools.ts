@@ -42,7 +42,7 @@ import { sourceRangeToTimeline, sourceToTimeline, timelineWords } from "./timeli
 import { expandDips, type DipReport } from "./music-dips.js";
 import { DOUBLED_SOUND, doubledSoundText, OPS_DOC, validateOps } from "./timeline-validation.js";
 import { errorText, formatZodError, json, text, type ToolRegistrar } from "./tool-result.js";
-import { splitJoinEvidence } from "./split-join.js";
+import { splitJoinEvidence, splitJoinLabel } from "./split-join.js";
 import { transitionOps } from "./transition.js";
 import { registerTimelineGenerateTools } from "./timeline-generate-tools.js";
 
@@ -247,7 +247,7 @@ ${OPS_DOC}`,
           const { project } = await getProject();
           ({ ops: v.ops, joins: splitJoins } = expandSplitJoins(before, project.media, project.settings.fps, v.ops));
           if (!timelineEdits?.length && splitJoins.length === ops.length) body.timelineEdits = splitJoins.map(j => ({
-            label: `${j.shift < 0 ? "J cut" : j.shift > 0 ? "L cut" : "Sound back on the cut"} at ${Math.floor(j.at / 60)}:${String(Math.floor(j.at % 60)).padStart(2, "0")}`,
+            label: splitJoinLabel(j),
             range: { start: Math.min(j.at, j.at + j.shift), end: Math.max(j.at, j.at + j.shift) },
             ...(reason && { reason }),
           }));

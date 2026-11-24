@@ -137,7 +137,8 @@ export async function adjustDecisionEdges(
   // and the passage as it plays if the cut is kept instead.
   await Promise.all(removals.map(async (c, i) => {
     const found = inSound.get(c.input), d = decisions[i]!;
-    if (!found || !d.review) return;
+    // A hold for the selection or footage marked to keep keeps its own words: they are what keeps it held below.
+    if (!found || !d.review || d.held === CROSSES_SCOPE) return;
     const range = { start: d.start, end: d.end };
     const heard = await timelineWordsNear(tl, project, range, mediaId => sources.words(mediaId, undefined, false), 6);
     const plays = joinText(heard, range), kept = keptText(heard, range);

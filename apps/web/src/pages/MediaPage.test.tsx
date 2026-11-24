@@ -740,6 +740,12 @@ it("lets the editor tell Scarlet what a file is, under its length, and change or
 
     await act(() => button("Tell Scarlet what this is")!.click());
     await act(() => { type("  Finished sponsor read. Insert it whole after the intro. "); });
+    // While an input method composes, Enter and Esc are its own: the Enter that commits it (keyCode 229 in WebKit) and
+    // the Esc that puts its candidates away leave the note open with its words.
+    await act(async () => { field()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true })); });
+    await act(async () => { field()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true })); });
+    expect(save).not.toHaveBeenCalled();
+    expect(field()!.value).toBe("  Finished sponsor read. Insert it whole after the intro. ");
     await act(async () => { key("Enter"); });
     expect(save).toHaveBeenCalledExactlyOnceWith(video.id, "  Finished sponsor read. Insert it whole after the intro. ");
     expect(field()).toBeNull();
