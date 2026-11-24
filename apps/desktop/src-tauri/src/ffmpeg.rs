@@ -232,6 +232,15 @@ async fn verify_executable(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Copy an unpacked tool next to its final place. A copy that fails part-way, on a full disk, leaves no half-written file.
+async fn copy_to_staging(extracted: &Path, staging: &Path, name: &str) -> Result<(), String> {
+    tokio::fs::copy(extracted, staging).await.map(|_| ()).map_err(|e| {
+        let _ = std::fs::remove_file(staging);
+        log::warn!("failed copying {name} to {}: {e}", staging.display());
+        "Could not write FFmpeg to disk. Check your free space and permissions.".to_string()
+    })
+}
+
 /// Download, verify, unpack, and install FFmpeg and FFprobe into `~/.local/bin`.
 pub async fn install(home: &Path, resources: Option<&Path>) -> Result<FfmpegStatus, String> {
     let _guard = INSTALL_LOCK.lock().await;
@@ -296,10 +305,7 @@ pub async fn install(home: &Path, resources: Option<&Path>) -> Result<FfmpegStat
         verify_executable(&extracted).await?;
         let target = dest.join(&name);
         let staging = dest.join(format!(".{name}.scarlet-tmp"));
-        tokio::fs::copy(&extracted, &staging).await.map_err(|e| {
-            log::warn!("failed copying {name} to {}: {e}", staging.display());
-            "Could not write FFmpeg to disk. Check your free space and permissions.".to_string()
-        })?;
+        copy_to_staging(&extracted, &staging, &name).await?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -372,5 +378,19 @@ mod tests {
         }
         assert!(is_usable_file(&placeholder));
         assert_eq!(find_tool("ffmpeg", home.path(), None), Some(placeholder));
+    }
+
+    #[tokio::test]
+    async fn failed_copy_leaves_no_staging_file_behind() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = install_dir(home.path());
+        std::fs::create_dir_all(&bin).unwrap();
+        let name = exe_name("ffmpeg");
+        let staging = bin.join(format!(".{name}.scarlet-tmp"));
+        // What a copy cut short leaves: part of the file at the staging path.
+        std::fs::write(&staging, b"partial").unwrap();
+        let missing = home.path().join("gone").join(&name);
+        assert!(copy_to_staging(&missing, &staging, &name).await.is_err());
+        assert!(!staging.exists(), "the half-written staging file should be removed");
     }
 }
