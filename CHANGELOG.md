@@ -6,6 +6,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- The timeline's waveform now draws how loud the sound plays as its solid part, with the peaks fainter around it, so two parts that sound as loud look as tall, such as an inserted sponsor read beside your own voice.
+- A level Scarlet changes over part of a clip now shows on the timeline's waveform and in that edit's Before and After.
+- An edit that evens out a clip's level is now called Audio on its card instead of Music dip.
 - For a request that made several edits, "See all" or "See both" now sits at the end of the sentence, as "See edit" does, until you open the list.
 - Footage a cut removes now reads "Took out" everywhere, or "Takes out" on a cut that hasn't gone in yet, and footage put back reads "Put back", instead of "Removed" and "Added".
 - A call you rejected before its pass went in now opens from its row in For you as a rejected edit does: the timeline goes to where its footage plays, and its card shows Scarlet's note and Rejected.
