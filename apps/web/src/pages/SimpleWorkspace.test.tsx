@@ -962,7 +962,7 @@ it("goes to After at a point picked outside the passage on Before, where Before 
   expect([openTitle(), sideShown(), playhead(), video.paused]).toEqual(["captions", "After", 1, false]);
 });
 
-it("aims a new edit at a pick on Before and After once the editor has taken the revision tag off", async () => {
+it("keeps the box on the open edit through a pick on Before, and unaimed on Before and After once the editor has taken the tag off", async () => {
   beforeClipReady();
   await show();
   await captionsOnBefore();
@@ -971,16 +971,16 @@ it("aims a new edit at a pick on Before and After once the editor has taken the 
   expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 8, ["Edit at 0:04", false]]);
   await press(" ");
   await act(async () => composer.props!.onClearTarget!());
+  // The tag taken off, a press or a skip only moves the video: the new edit is about the whole video.
   await pressTimeline(8.5);
-  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 8.5, ["At 0:08", true]]);
+  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 8.5, [undefined, false]]);
   await skipKey("ArrowLeft");
-  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 7.5, ["At 0:07", true]]);
+  expect([sideShown(), playhead(), pointTag()]).toEqual(["Before", 7.5, [undefined, false]]);
   await click(compareButton(editPanel()!));
   await act(async () => {});
-  // Space pauses After there, which puts the time in the tag; the skip then moves the tag.
   await press(" ");
   await skipKey("ArrowRight");
-  expect([sideShown(), playhead(), pointTag(), useUiStore.getState().agentDraft]).toEqual(["After", 3, ["At 0:03", true], ""]);
+  expect([sideShown(), playhead(), pointTag(), useUiStore.getState().agentDraft]).toEqual(["After", 3, [undefined, false], ""]);
 });
 
 it("goes to After at the point picked while Before is still opening, since there is no clip to move", async () => {
@@ -10587,22 +10587,28 @@ const idle = () => {
   useProjectStore.setState({ current: data });
 };
 const pointTag = () => [composer.props!.targetTag, composer.props!.targetIsPoint];
-it("aims a new edit at the latest manual seek at once, with no second press", async () => {
+/** A press on the timeline with Shift held, on a timeline one pixel a second wide. A drag when `to` is given. */
+async function shiftOnTimeline(from: number, to?: number) {
+  const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
+  slider.getBoundingClientRect = () => ({ left: 0, top: 0, height: 40, width: Number(slider.getAttribute("aria-valuemax")) }) as DOMRect;
+  const pointer = (type: string, x: number) => new PointerEvent(type, { bubbles: true, button: 0, isPrimary: true, pointerId: 1, clientX: x, shiftKey: true });
+  await act(async () => {
+    container.querySelector(".timeline-lanes")!.dispatchEvent(pointer("pointerdown", from));
+    if (to !== undefined) document.dispatchEvent(pointer("pointermove", to));
+    document.dispatchEvent(pointer("pointerup", to ?? from));
+  });
+}
+
+it("only moves the video on a press, a scrub, a skip or a pause: the box isn't aimed and nothing is written", async () => {
   idle();
   await show();
-  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
+  const box = () => [useUiStore.getState().agentDraft, pointTag(), useUiStore.getState().agentContext];
+  const untouched = ["", [undefined, false], null];
+  expect(box()).toEqual(untouched);
   await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:01", true]);
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 1 });
+  expect([playhead(), box()]).toEqual([1, untouched]);
+  // A drag on the timeline scrubs, and where the editor lets go is just where the video is.
   const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
-  await act(async () => { slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
-  expect(pointTag()).toEqual(["At 0:02", true]);
-  // Playback lets go of an empty box's moment, and a pause the app makes picks none of its own.
-  await act(async () => usePlayerStore.setState({ playing: true }));
-  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
-  await act(async () => usePlayerStore.setState({ playing: false, time: 14 }));
-  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
-  // On a drag, the moment is where the editor let go.
   slider.getBoundingClientRect = () => ({ left: 0, width: Number(slider.getAttribute("aria-valuemax")) }) as DOMRect;
   slider.setPointerCapture = vi.fn();
   const pointer = (type: string, x: number) => new PointerEvent(type, { bubbles: true, button: 0, isPrimary: true, pointerId: 1, clientX: x });
@@ -10611,60 +10617,57 @@ it("aims a new edit at the latest manual seek at once, with no second press", as
     slider.dispatchEvent(pointer("pointermove", 8));
     slider.dispatchEvent(pointer("pointerup", 9));
   });
-  expect(pointTag()).toEqual(["At 0:09", true]);
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 9 });
-  await act(async () => useUiStore.getState().setAgentDraft("Zoom in here"));
-  await act(async () => usePlayerStore.setState({ playing: true, time: 12 }));
-  expect(pointTag()).toEqual(["At 0:09", true]);
-  // Browsing while writing keeps the chosen point with the message.
-  await act(async () => usePlayerStore.setState({ playing: false }));
-  await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:09", true]);
-  await act(async () => composer.props!.onClearTarget!());
-  expect(boxNow()).toEqual(["Zoom in here", "whole", JSON.stringify([PRJ, null])]);
-  await press("ArrowLeft");
-  expect(boxTag()).toBeUndefined();
-  expect(useUiStore.getState().agentContext).toBe("whole");
-});
-
-it("aims an empty box at the paused time in its tag without writing into the input box", async () => {
-  idle();
-  await show();
-  // The picture is playing at 0:07.
+  expect([playhead(), box()]).toEqual([9, untouched]);
+  // A pause the editor makes is a pause, nothing more.
   let playing = true;
   vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => !playing);
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { playing = false; });
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => { playing = true; });
-  const box = () => [useUiStore.getState().agentDraft, pointTag()];
   await act(async () => usePlayerStore.setState({ playing: true, time: 7 }));
-  expect([useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext]).toEqual(["", undefined, null]);
-  // Space pauses it: the header tag takes the moment and the input box stays empty.
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["", ["At 0:07", true]]);
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 7 });
-  expect(useUiStore.getState().agentContext).not.toMatchObject({ fromMessage: true });
-  // Playing on clears the empty box's tag, and the next pause aims at the new time.
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: true, time: 11 }));
-  expect([useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext]).toEqual(["", undefined, null]);
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["", ["At 0:11", true]]);
-  // A seek moves the tag while the box is empty.
-  await press("ArrowLeft");
-  expect(box()).toEqual(["", ["At 0:10", true]]);
-  // Words written keep the aimed moment through playing on and pausing again, without writing another timestamp.
-  await act(async () => useUiStore.getState().setAgentDraft("zoom in here"));
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: true, time: 18 }));
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["zoom in here", ["At 0:10", true]]);
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 10 });
+  expect(box()).toEqual(untouched);
+  // And a message being written stays about the whole video through all of it.
+  await act(async () => useUiStore.getState().setAgentDraft("Tighten the intro"));
+  await press("ArrowRight");
+  expect(box()).toEqual(["Tighten the intro", [undefined, false], null]);
 });
 
-it("tags the box with a time typed in the message, as a picked moment's, and its × makes the message about the whole video", async () => {
+it("puts a time into the words on Shift + click, where a plain click only moves the video, and aims a new edit at the first one", async () => {
+  idle();
+  await show();
+  const version = composer.props!.messageClock!.version;
+  await shiftOnTimeline(9);
+  // The time is in the message's own words, the video is there, and the new edit is aimed at that frame with no tag.
+  expect([useUiStore.getState().agentDraft, playhead(), pointTag()]).toEqual(["0:09 ", 9, [undefined, false]]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 9, version, fromMessage: true });
+  // A second one joins the words, and the message stays aimed at the first.
+  await act(async () => useUiStore.getState().setAgentDraft("0:09 zoom in, and out again at"));
+  await shiftOnTimeline(12);
+  expect(useUiStore.getState().agentDraft).toBe("0:09 zoom in, and out again at 0:12 ");
+  // Each time in the words is marked on the timeline.
+  expect([...container.querySelectorAll<HTMLElement>(".timeline-message-time")].map(mark => mark.dataset.time)).toEqual(["9", "12"]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 9, fromMessage: true });
+});
+
+it("marks a stretch on Shift + drag anywhere on the timeline and writes its times into the words, which go with it", async () => {
+  idle();
+  await show();
+  await act(async () => useUiStore.getState().setAgentDraft("the music is too loud"));
+  await shiftOnTimeline(4, 10);
+  const marked = () => (useUiStore.getState().agentContext as AgentContext | null)?.markedRange;
+  expect(marked()).toMatchObject({ start: 4, end: 10 });
+  expect(useUiStore.getState().agentDraft).toBe("the music is too loud 0:04 – 0:10 ");
+  expect(container.querySelector(".timeline-range")).not.toBeNull();
+  // Marked again, the new stretch takes the old one's place in the words.
+  await shiftOnTimeline(5, 12);
+  expect([marked(), useUiStore.getState().agentDraft]).toMatchObject([{ start: 5, end: 12 }, "the music is too loud 0:05 – 0:12 "]);
+  // Taken off, its times leave the words too.
+  await act(async () => { container.querySelector(".timeline-range-handle")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  expect([marked(), useUiStore.getState().agentDraft]).toEqual([undefined, "the music is too loud "]);
+});
+
+it("aims a message at a time typed in it without a tag: the time is read in the words", async () => {
   idle();
   await show();
   const clock = composer.props!.messageClock!;
@@ -10673,18 +10676,14 @@ it("tags the box with a time typed in the message, as a picked moment's, and its
     useUiStore.getState().setAgentContext({ time: 8, version: clock.version, clipIds: [], fromMessage: true });
     useUiStore.getState().setAgentDraft("Make it 0:08 long");
   });
-  // The same tag a picked moment has, so the aim can be seen and taken off.
-  expect(pointTag()).toEqual(["At 0:08", true]);
+  expect(pointTag()).toEqual([undefined, false]);
   // Looking around the timeline keeps the message where it is aimed.
   await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:08", true]);
-  // The ×: the message is about the whole video, with its words as they were.
-  await act(async () => composer.props!.onClearTarget!());
-  expect(boxNow()).toEqual(["Make it 0:08 long", "whole", JSON.stringify([PRJ, null])]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 8, fromMessage: true });
   expect(pointTag()).toEqual([undefined, false]);
 });
 
-it("shows the time the editor pauses on in an open edit's tag, and the message stays the edit's", async () => {
+it("leaves the box as it is when the editor pauses or skips on an open edit, and tells Scarlet the frame only once a time is put in the words", async () => {
   appliedEdits();
   await show();
   await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
@@ -10692,157 +10691,70 @@ it("shows the time the editor pauses on in an open edit's tag, and the message s
   const tag = boxTag();
   const aim = useUiStore.getState().agentContext;
   expect(aim).toMatchObject({ changeId: "chg_approved_2" });
-  let playing = true;
-  vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => !playing);
-  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { playing = false; });
-  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => { playing = true; });
-  const box = () => [useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext, composer.props!.pausedAt?.time];
-  await act(async () => usePlayerStore.setState({ playing: true, time: 7 }));
-  // Space stops the video away from the edit: nothing is written in the box, the tag takes the time, and it is still the edit's.
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["", tag, aim, 7]);
-  // A seek moves it.
-  await press("ArrowLeft");
-  expect(box()).toEqual(["", tag, aim, 6]);
-  // Playing on takes it off, back to the edit's own time.
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: true, time: 9 }));
-  expect(box()).toEqual(["", tag, aim, undefined]);
-  // Words written keep it through playing on, and a later pause doesn't move it.
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: false }));
-  await act(async () => useUiStore.getState().setAgentDraft("trim this"));
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: true, time: 12 }));
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["trim this", tag, aim, 9]);
-});
-
-it("takes the frame under the playhead with N on an open edit, as a pause does: the tag's time moves and the message stays the edit's", async () => {
-  appliedEdits();
-  await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[0]!);
-  await act(async () => {});
-  const tag = boxTag();
-  const aim = useUiStore.getState().agentContext;
-  expect(aim).toMatchObject({ changeId: "chg_approved_2" });
+  // The box names the edit as its row does: the row that's open draws itself on the box's line.
+  expect(typeof composer.props!.aimSlot).toBe("function");
   let playing = true;
   vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => !playing);
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { playing = false; });
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => { playing = true; });
   useUiStore.setState({ composerFocus: 0 });
-  const box = () => [useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext, composer.props!.pausedAt?.time, useUiStore.getState().composerFocus];
-  await act(async () => usePlayerStore.setState({ playing: true, time: 7 }));
-  expect(box()).toEqual(["", tag, aim, undefined, 0]);
-  // N stops the video away from the edit and puts the cursor in the box: the tag takes the frame's time, as after
-  // Space, nothing is written, and the message is still the edit's.
-  await press("n");
-  await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["", tag, aim, 7, 1]);
-  // A seek moves it, and playing on with nothing written takes it off, back to the edit's own time.
-  await press("ArrowLeft");
-  expect(box()).toEqual(["", tag, aim, 6, 1]);
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: true, time: 9 }));
-  expect(box()).toEqual(["", tag, aim, undefined, 1]);
-  // On a video already stopped, N takes the frame it rests on.
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: false, time: 9 }));
-  await press(" ");
-  await act(async () => usePlayerStore.setState({ playing: true, time: 10 }));
-  await act(async () => { player.pause(); usePlayerStore.setState({ playing: false, time: 11 }); });
-  expect(box()).toEqual(["", tag, aim, undefined, 1]);
-  await press("n");
-  expect(box()).toEqual(["", tag, aim, 11, 2]);
-  // Words written keep the frame they were written about: N only brings the cursor back.
-  await act(async () => useUiStore.getState().setAgentDraft("trim this"));
-  await act(async () => usePlayerStore.setState({ time: 14 }));
-  await press("n");
-  expect(box()).toEqual(["trim this", tag, aim, 11, 3]);
-});
-
-it("takes the paused time off an open edit's tag when the words written are erased while the video plays", async () => {
-  appliedEdits();
-  await show();
-  await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
-  await act(async () => {});
-  const tag = boxTag();
-  const aim = useUiStore.getState().agentContext;
-  let playing = true;
-  vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => !playing);
-  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { playing = false; });
-  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => { playing = true; });
   const box = () => [useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext, composer.props!.pausedAt?.time];
   await act(async () => usePlayerStore.setState({ playing: true, time: 7 }));
+  // Space stops the video away from the edit, and a skip moves it: neither touches the box.
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: false }));
-  expect(box()).toEqual(["", tag, aim, 7]);
-  // Words erased while the video is still stopped there leave the frame the editor is on.
-  await act(async () => useUiStore.getState().setAgentDraft("trim this"));
+  expect(box()).toEqual(["", tag, aim, undefined]);
+  await press("ArrowLeft");
+  expect(box()).toEqual(["", tag, aim, undefined]);
+  // N puts the frame's time into the words and the cursor in the box: the message is still the edit's, and Scarlet
+  // is told the frame.
+  await press("n");
+  expect(box()).toEqual(["0:06 ", tag, aim, 6]);
+  expect(useUiStore.getState().composerFocus).toBe(1);
+  // A later time joins the words; the frame told to Scarlet is the first one picked.
+  await act(async () => usePlayerStore.setState({ time: 9 }));
+  await press("n");
+  expect(box()).toEqual(["0:06 0:09 ", tag, aim, 6]);
+  // Playing on with the words erased leaves no frame the editor has left.
   await act(async () => useUiStore.getState().setAgentDraft(""));
-  expect(box()).toEqual(["", tag, aim, 7]);
-  // Words written keep it through playing on.
-  await act(async () => useUiStore.getState().setAgentDraft("trim this"));
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: true, time: 12 }));
-  expect(box()).toEqual(["trim this", tag, aim, 7]);
-  // Erased while it plays, nothing is written and the video has moved on: the tag is the edit's own time again, and
-  // the next message carries no frame the editor has left.
-  await act(async () => useUiStore.getState().setAgentDraft(""));
   expect(box()).toEqual(["", tag, aim, undefined]);
-  await act(async () => useUiStore.getState().setAgentDraft("make it shorter"));
-  expect(box()).toEqual(["make it shorter", tag, aim, undefined]);
 });
 
-it("moves an empty box's point to the next manual seek, and releases it on playback", async () => {
+it("aims a new edit at the frame N took, on the version it was taken on", async () => {
   idle();
   await show();
   await press("n");
-  expect(pointTag()).toEqual(["At 0:00", true]);
-  await press("ArrowRight");
-  expect(pointTag()).toEqual(["At 0:01", true]);
-  await act(async () => usePlayerStore.setState({ playing: true }));
-  await act(async () => usePlayerStore.setState({ playing: false, time: 0 }));
-  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 0, version: data.project.head, fromMessage: true });
+  expect([useUiStore.getState().agentDraft, pointTag()]).toEqual(["0:00 ", [undefined, false]]);
 });
 
-it("drops an empty box's timestamp when the working cut changes at the same clock time", async () => {
-  idle();
-  await show();
-  await press("n");
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 0, version: data.project.head });
-  await event(d => ({ ...d, project: { ...d.project, head: "ver_new_cut" }, timeline: { ...d.timeline!, version: "ver_new_cut" } }));
-  expect([playhead(), boxTag(), useUiStore.getState().agentContext]).toEqual([0, undefined, null]);
-});
-
-it("gives the message box the cursor on N, about the moment the playhead is on, and opens no second box to write in", async () => {
+it("gives the message box the cursor on N, with the playhead's time in the words, and opens no second box to write in", async () => {
   idle();
   await show();
   // How many times the box has been asked to take the cursor. The box stands in here, so it never takes it.
   useUiStore.setState({ composerFocus: 0 });
   const cursor = () => useUiStore.getState().composerFocus;
+  const words = () => useUiStore.getState().agentDraft;
   await act(async () => usePlayerStore.setState({ time: 5, playing: true }));
   const paused = vi.spyOn(player, "pause");
-  expect([cursor(), boxTag()]).toEqual([0, undefined]);
-  // N stops the video on the moment, tags the box with it before anything is typed, and puts the cursor there.
+  expect([cursor(), words(), boxTag()]).toEqual([0, "", undefined]);
+  // N stops the video on the moment, writes its time and puts the cursor there. The box has no tag for it.
   await press("n");
   await act(async () => usePlayerStore.setState({ playing: false }));
   expect(paused).toHaveBeenCalled();
-  expect([cursor(), pointTag()]).toEqual([1, ["At 0:05", true]]);
+  expect([cursor(), words(), pointTag()]).toEqual([1, "0:05 ", [undefined, false]]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 5, fromMessage: true });
   expect(useUiStore.getState().notePopover).toBeNull();
-  // A message already being written about a moment keeps it: N only brings the cursor back.
-  await act(async () => useUiStore.getState().setAgentDraft("Zoom in here"));
+  // A message already being written takes the next time too, and stays aimed at its first.
+  await act(async () => useUiStore.getState().setAgentDraft("0:05 zoom in until"));
   await act(async () => usePlayerStore.setState({ time: 12 }));
   await press("N");
-  expect([cursor(), pointTag()]).toEqual([2, ["At 0:05", true]]);
-  // Sent or cleared, the next N is about where the playhead is then.
+  expect([cursor(), words()]).toEqual([2, "0:05 zoom in until 0:12 "]);
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 5 });
+  // With an edit open the box revises that edit. N gives it the cursor and the time, still aimed at the edit.
   await act(async () => useUiStore.getState().setAgentDraft(""));
-  await press("n");
-  expect([cursor(), pointTag()]).toEqual([3, ["At 0:12", true]]);
-  // With an edit open the box revises that edit. N gives it the cursor, still aimed at the edit, and takes the frame
-  // the playhead is on for the tag's time, as a pause does.
   appliedEdits();
   await act(async () => root.render(null));
   await show();
@@ -10850,7 +10762,7 @@ it("gives the message box the cursor on N, about the moment the playhead is on, 
   await act(async () => {});
   expect(composer.props!.pausedAt).toBeUndefined();
   await press("n");
-  expect([cursor(), boxTag()]).toEqual([4, "Edit at 0:00"]);
+  expect([cursor(), boxTag()]).toEqual([3, "Edit at 0:00"]);
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2", editIndex: 1 });
   expect(composer.props!.pausedAt?.time).toBe(usePlayerStore.getState().time);
 });
@@ -10870,17 +10782,6 @@ it("leaves a box aimed at an edit or at Scarlet's question as it is when a point
   await press("ArrowRight");
   expect(boxTag()).toBe("Edit at 0:00");
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2", editIndex: 1 });
-});
-
-it("keeps a message being written about the whole video so through a seek, though nothing aimed it yet", async () => {
-  idle();
-  await show();
-  await act(async () => useUiStore.getState().setAgentDraft("Tighten the intro"));
-  await press("ArrowRight");
-  expect([boxTag(), useUiStore.getState().agentContext]).toEqual([undefined, null]);
-  // N still takes the current time.
-  await press("n");
-  expect(pointTag()).toEqual(["At 0:01", true]);
 });
 
 it("doesn't bring back a point picked in an earlier visit on an empty box, and keeps one with its message", async () => {
@@ -10911,10 +10812,9 @@ it("keeps explicitly chosen transcript words through timeline seeks before and w
   await press("ArrowRight");
   expect(boxNow()).toEqual(["Tighten this", chosenWords(), JSON.stringify([PRJ, null])]);
   await act(async () => useUiStore.getState().setAgentDraft(""));
+  // N writes the playhead's time into the words and leaves the chosen words as the message's aim.
   await press("n");
-  expect(pointTag()).toEqual(["At 0:02", true]);
-  await act(async () => composer.props!.onClearTarget!());
-  expect(boxTag()).toBeUndefined();
+  expect(boxNow()).toEqual(["0:02 ", chosenWords(), JSON.stringify([PRJ, null])]);
 });
 
 /** Words chosen in the Transcript by a double click on one, then asked about. */
@@ -14889,40 +14789,20 @@ it("lists what waits on the editor for the whole video in one column beside the 
   await showFolded();
   await act(async () => {});
   const rail = container.querySelector<HTMLElement>(".review-rail")!;
-  // The column is the chat's left neighbour: the latest request's rows first, then the earlier request's.
-  expect([rail.nextElementSibling?.id, rail.hidden]).toEqual(["simple-chat", false]);
+  // The column sits between the chat and the video: the latest request's rows first, then the earlier request's.
+  expect([rail.previousElementSibling?.id, rail.nextElementSibling?.classList.contains("simple-stage"), rail.hidden]).toEqual(["simple-chat", true, false]);
   expect(forYouRows().map(rowWords)).toEqual(["Breath before the price.", "The corrected image-input take belongs here.", "wrap"]);
-  // Its heading counts all of them, and New edit is lit while nothing is open.
-  expect([rail.querySelector(".review-rail-head h2")?.textContent, rail.querySelector(".review-new")?.getAttribute("aria-pressed")]).toEqual(["For you3", "true"]);
-  // Working and Done are one line each at its foot: Working is open, Done opens on a press.
-  expect([...rail.querySelectorAll(".review-sec")].map(line => [line.textContent?.replace(/\d+$/, ""), line.getAttribute("aria-expanded")])).toEqual([["Working", "true"], ["Done", "false"]]);
+  // Its heading counts all of them, and it has nothing else: no tabs, no button.
+  expect([rail.querySelector(".review-rail-head")?.textContent, rail.querySelector(".review-rail-head button")]).toEqual(["For you3", null]);
+  // Working and Done are one counted line each at its foot, dim and not pressable while they hold nothing.
+  expect([...rail.querySelectorAll<HTMLButtonElement>(".review-sec")].map(line => [line.textContent, line.getAttribute("aria-expanded"), line.disabled])).toEqual([["Working0", "false", true], ["Done0", "false", true]]);
+  // The conversation is in the chat's column whatever is open.
+  await click(forYouRows().at(-1)!);
+  await act(async () => {});
+  expect([openTitle(), !!container.querySelector(".simple-thread > .simple-chat"), container.querySelector(".edit-page")]).toEqual(["wrap", true, null]);
   // The chat has no list of edits and no tabs: a request with something waiting says so in one link.
   expect(container.querySelector(".simple-chat :is(.simple-edits, .simple-pass-list, .simple-review-tabs), .simple-pin :is(.simple-edits, .simple-pass-list, .simple-review-tabs)")).toBeNull();
   expect([...container.querySelectorAll(".simple-thread .simple-need-link")].map(link => link.textContent).sort()).toEqual(["For you1", "For you2"]);
-});
-
-it("gives the middle column to the cut or edit that's open, and back to the conversation on New edit", async () => {
-  appliedEdits();
-  useProjectStore.setState({ current: data });
-  await showFolded();
-  await act(async () => {});
-  const thread = () => container.querySelector<HTMLElement>(".simple-thread")!;
-  expect([thread().classList.contains("has-page"), container.querySelector(".edit-page")]).toEqual([false, null]);
-  await click(forYouRows()[0]!);
-  await act(async () => {});
-  // The page says what the edit is, the request it came from, and where its one version stands.
-  const page = container.querySelector<HTMLElement>(".edit-page")!;
-  expect([thread().classList.contains("has-page"), page.querySelector(".edit-page-title")?.textContent, page.querySelector(".edit-page-from")?.textContent?.startsWith("From “")])
-    .toEqual([true, editPanel()!.querySelector(".edit-card-title")?.textContent, true]);
-  expect([...page.querySelectorAll(".edit-page-versions > li")].map(li => [li.querySelector(".edit-page-v")?.textContent, li.querySelector(".edit-page-said")?.textContent, li.querySelector(".edit-page-state")?.textContent, li.className]))
-    .toEqual([["v1", "Made by Scarlet", "Waits on you", "is-now"]]);
-  // The conversation stays mounted under it, so nothing in it is lost.
-  expect(thread().querySelector(".simple-chat")).not.toBeNull();
-  expect(container.querySelector(".review-new")?.getAttribute("aria-pressed")).toBe("false");
-  // New edit lets go of the edit: its card closes and the conversation has the column again.
-  await click(container.querySelector(".review-new")!);
-  await act(async () => {});
-  expect([editPanel(), container.querySelector(".edit-page"), thread().classList.contains("has-page"), container.querySelector(".review-new")?.getAttribute("aria-pressed")]).toEqual([null, null, false, "true"]);
 });
 
 it("goes on with Keep from one request's last row that waits to the next request's first", async () => {
@@ -14942,15 +14822,14 @@ it("goes on with Keep from one request's last row that waits to the next request
   expect(container.querySelector(".review-rail-head h2")?.textContent).toBe("For you2");
 });
 
-it("lists a request waiting its turn under Working, in the column of edits, with no tray on the message box", async () => {
+it("keeps a request about the whole video out of the column of edits: it waits its turn in the tray on the message box", async () => {
   const base = data.tasks.find(t => t.id === "task_done")!;
   data = { ...data, tasks: [...data.tasks, { ...base, id: "task_waiting", kind: "edit" as const, state: "queued" as const, startedAt: undefined, finishedAt: undefined, hostId: null, summary: null, changeIds: [],
     instruction: "Add a lower third with my name.", createdAt: new Date(Date.now() + 1000).toISOString(), context: { threadId: "task_waiting", message: "Add a lower third with my name." } }] };
   useProjectStore.setState({ current: data });
   await showFolded();
   await act(async () => {});
-  const working = container.querySelector<HTMLElement>('.review-sec-body[aria-label="Working"]')!;
-  expect(working.querySelector(".queue-tray .queue-text")?.textContent).toBe("Add a lower third with my name.");
-  expect(composer.props?.tray).toBeUndefined();
-  expect(container.querySelector(".composer-dock .queue-tray, .simple-thread .queue-tray")).toBeNull();
+  expect(container.querySelector(".composer-dock .queue-tray .queue-text, .simple-thread .queue-tray .queue-text")?.textContent ?? (composer.props?.tray ? "tray" : null)).not.toBeNull();
+  expect(container.querySelector(".review-rail .queue-tray")).toBeNull();
+  expect(container.querySelector('.review-rail .review-sec-body[aria-label="Working"]')?.textContent).toBe("");
 });
