@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { checkAttachments } from "../services/graphics.js";
 import { z } from "zod/v3";
-import { CompleteTaskRequest, CreateTaskRequest, EDITING_TOOL_GROUPS, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
+import { CompleteTaskRequest, CreateTaskRequest, EDITING_TOOL_GROUPS, PictureMarks, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskAttachment, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict } from "../errors.js";
@@ -188,8 +188,15 @@ export function taskRoutes(ctx: Ctx) {
   });
 
   r.post("/tasks/:taskId/answer", async (c) => {
-    const body = await jsonBody(c, RunChoice.extend({ text: z.string().min(1), skillIds: z.array(z.string().min(1)).optional() }));
+    const body = await jsonBody(c, RunChoice.extend({ text: z.string().min(1), skillIds: z.array(z.string().min(1)).optional(),
+      attachments: z.array(TaskAttachment).max(20).optional(), pictureMarks: PictureMarks.optional() }));
     if (body.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to run this request.");
+    // Files sent with an answer are kept with the request as its own files are, so the run is told of them the same way.
+    const answering = body.attachments?.length ? requireTask(c.req.param("taskId")) : undefined;
+    const attached = answering && await checkAttachments(ctx, answering.projectId, body.attachments);
+    if (body.pictureMarks && !attached?.some(a => a.id === body.pictureMarks!.attachmentId)) {
+      throw badRequest("unknown_attachment", "The marked frame's picture isn't attached to this message. Mark the frame again.");
+    }
     // The answer, any model switch, the requeue and its activity entry land together, after the state check.
     const updated = ctx.db.transaction(() => {
       const task = requireTask(c.req.param("taskId"));
@@ -208,6 +215,13 @@ export function taskRoutes(ctx: Ctx) {
         ...(switched && { session: undefined, sessionRevokedFor: task.startedAt }),
       } : { ...task };
       if (body.skillIds?.length) prepared.context = { ...prepared.context, skillIds: [...new Set([...(prepared.context.skillIds ?? []), ...body.skillIds])] };
+      if (attached) {
+        const kept = prepared.context.attachments ?? [];
+        const files = [...kept, ...attached.filter(a => !kept.some(k => k.id === a.id))];
+        if (files.length > 20) throw badRequest("too_many_attachments", "This request already has as many files as it can take. Take some off and answer again.");
+        // The request's own marked frame stays the one described. A frame marked for the answer is one of its files, with the marks drawn on it.
+        prepared.context = { ...prepared.context, attachments: files, ...(body.pictureMarks && !prepared.context.pictureMarks && { pictureMarks: body.pictureMarks }) };
+      }
       const { task: updated } = appendTaskEvent(ctx, prepared, { type: "answer", text: body.text });
       if (switched) ctx.log(`[task] ${task.id} switched ${task.agent}/${task.model ?? "default"} → ${updated.agent}/${updated.model ?? "default"} on answer`);
       logActivity(ctx, { projectId: task.projectId, actor: actorFor(c.var.user), type: "question.answered", summary: `${c.var.user.name} answered ${agentName(updated.agent)}: ${quote(body.text, 120)}`, data: { taskId: task.id, threadId: task.context.threadId, question: task.question } });

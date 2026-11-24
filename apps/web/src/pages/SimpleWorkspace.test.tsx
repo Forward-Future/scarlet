@@ -10325,6 +10325,26 @@ it("aims an empty box at the paused time in its tag without writing into the inp
   expect(useUiStore.getState().agentContext).toMatchObject({ time: 10 });
 });
 
+it("tags the box with a time typed in the message, as a picked moment's, and its × makes the message about the whole video", async () => {
+  idle();
+  await show();
+  const clock = composer.props!.messageClock!;
+  // The box aims a message at the first time written in it. It stands in here, so the aim is set as it sets it.
+  await act(async () => {
+    useUiStore.getState().setAgentContext({ time: 8, version: clock.version, clipIds: [], fromMessage: true });
+    useUiStore.getState().setAgentDraft("Make it 0:08 long");
+  });
+  // The same tag a picked moment has, so the aim can be seen and taken off.
+  expect(pointTag()).toEqual(["At 0:08", true]);
+  // Looking around the timeline keeps the message where it is aimed.
+  await press("ArrowRight");
+  expect(pointTag()).toEqual(["At 0:08", true]);
+  // The ×: the message is about the whole video, with its words as they were.
+  await act(async () => composer.props!.onClearTarget!());
+  expect(boxNow()).toEqual(["Make it 0:08 long", "whole", JSON.stringify([PRJ, null])]);
+  expect(pointTag()).toEqual([undefined, false]);
+});
+
 it("shows the time the editor pauses on in an open edit's tag, and the message stays the edit's", async () => {
   appliedEdits();
   await show();
@@ -10359,6 +10379,49 @@ it("shows the time the editor pauses on in an open edit's tag, and the message s
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: false }));
   expect(box()).toEqual(["trim this", tag, aim, 9]);
+});
+
+it("takes the frame under the playhead with N on an open edit, as a pause does: the tag's time moves and the message stays the edit's", async () => {
+  appliedEdits();
+  await show();
+  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[0]!);
+  await act(async () => {});
+  const tag = boxTag();
+  const aim = useUiStore.getState().agentContext;
+  expect(aim).toMatchObject({ changeId: "chg_approved_2" });
+  let playing = true;
+  vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => !playing);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { playing = false; });
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => { playing = true; });
+  useUiStore.setState({ composerFocus: 0 });
+  const box = () => [useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext, composer.props!.pausedAt?.time, useUiStore.getState().composerFocus];
+  await act(async () => usePlayerStore.setState({ playing: true, time: 7 }));
+  expect(box()).toEqual(["", tag, aim, undefined, 0]);
+  // N stops the video away from the edit and puts the cursor in the box: the tag takes the frame's time, as after
+  // Space, nothing is written, and the message is still the edit's.
+  await press("n");
+  await act(async () => usePlayerStore.setState({ playing: false }));
+  expect(box()).toEqual(["", tag, aim, 7, 1]);
+  // A seek moves it, and playing on with nothing written takes it off, back to the edit's own time.
+  await press("ArrowLeft");
+  expect(box()).toEqual(["", tag, aim, 6, 1]);
+  await press(" ");
+  await act(async () => usePlayerStore.setState({ playing: true, time: 9 }));
+  expect(box()).toEqual(["", tag, aim, undefined, 1]);
+  // On a video already stopped, N takes the frame it rests on.
+  await press(" ");
+  await act(async () => usePlayerStore.setState({ playing: false, time: 9 }));
+  await press(" ");
+  await act(async () => usePlayerStore.setState({ playing: true, time: 10 }));
+  await act(async () => { player.pause(); usePlayerStore.setState({ playing: false, time: 11 }); });
+  expect(box()).toEqual(["", tag, aim, undefined, 1]);
+  await press("n");
+  expect(box()).toEqual(["", tag, aim, 11, 2]);
+  // Words written keep the frame they were written about: N only brings the cursor back.
+  await act(async () => useUiStore.getState().setAgentDraft("trim this"));
+  await act(async () => usePlayerStore.setState({ time: 14 }));
+  await press("n");
+  expect(box()).toEqual(["trim this", tag, aim, 11, 3]);
 });
 
 it("takes the paused time off an open edit's tag when the words written are erased while the video plays", async () => {
@@ -10439,15 +10502,18 @@ it("gives the message box the cursor on N, about the moment the playhead is on, 
   await act(async () => useUiStore.getState().setAgentDraft(""));
   await press("n");
   expect([cursor(), pointTag()]).toEqual([3, ["At 0:12", true]]);
-  // With an edit open the box revises that edit, and N gives it the cursor as it is.
+  // With an edit open the box revises that edit. N gives it the cursor, still aimed at the edit, and takes the frame
+  // the playhead is on for the tag's time, as a pause does.
   appliedEdits();
   await act(async () => root.render(null));
   await show();
   await click(turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[1]!);
   await act(async () => {});
+  expect(composer.props!.pausedAt).toBeUndefined();
   await press("n");
   expect([cursor(), boxTag()]).toEqual([4, "Edit at 0:00"]);
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2", editIndex: 1 });
+  expect(composer.props!.pausedAt?.time).toBe(usePlayerStore.getState().time);
 });
 
 it("leaves a box aimed at an edit or at Scarlet's question as it is when a point is picked", async () => {
@@ -11193,6 +11259,54 @@ it("says in the banner why a queued request couldn't be taken out, until one is"
   await click(remove());
   expect(cancelTask).toHaveBeenCalledTimes(2);
   expect(banner()).toBeUndefined();
+});
+
+it("puts a removed queued request's words in the empty message box, and only removes it when the box holds a draft or Scarlet made the request", async () => {
+  idle();
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const waiting = (id: string, words: string, ms: number) => ({ ...base, id, kind: "edit" as const, state: "queued" as const, instruction: words, changeIds: [], summary: null, hostId: null,
+    context: { threadId: id, message: words }, createdAt: at(ms), startedAt: undefined, finishedAt: undefined });
+  data = { ...data, tasks: [...data.tasks, waiting("task_frame", "/frame-screen", 1000), waiting("task_lower", "Add a lower third with my name.", 2000),
+    waiting("task_music", "Lower the music.", 3000), { ...waiting("task_own", "Check the joins again.", 4000), createdBy: { type: "scarlet" as const, name: "Scarlet" } }] };
+  const cancelTask = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ current: data, cancelTask, holdForRewording: vi.fn().mockResolvedValue(undefined) });
+  await show();
+  await act(async () => {});
+  const tray = () => container.querySelector<HTMLElement>('[aria-label="Queued requests"]')!;
+  await click(tray().querySelector(".queue-head")!);
+  const row = (words: string) => [...tray().querySelectorAll<HTMLElement>(".queue-row")].find(r => r.querySelector(".queue-text")?.textContent === words)!;
+  const remove = (words: string) => click(row(words).querySelector(".queue-remove")!);
+  useUiStore.setState({ composerFocus: 0 });
+  const box = () => { const ui = useUiStore.getState(); return [ui.agentDraft, ui.agentContext, ui.composerFocus]; };
+  expect(box()).toEqual(["", null, 0]);
+  // The × takes the request out, and its words land in the empty box with the cursor: to send again, change or clear.
+  // No tag comes with them: the box is aimed as it was.
+  await remove("Add a lower third with my name.");
+  expect(cancelTask).toHaveBeenLastCalledWith("task_lower", true);
+  expect(box()).toEqual(["Add a lower third with my name.", null, 1]);
+  // The box holds a draft now: the next request removed is only removed.
+  await remove("Lower the music.");
+  expect(cancelTask).toHaveBeenLastCalledWith("task_music", true);
+  expect(box()).toEqual(["Add a lower third with my name.", null, 1]);
+  // A request Scarlet made itself has no words of the editor's: it has no pencil, and its × only removes it.
+  await act(async () => useUiStore.getState().setAgentDraft(""));
+  expect(row("Check the joins again.").querySelector(".queue-reword")).toBeNull();
+  await remove("Check the joins again.");
+  expect(cancelTask).toHaveBeenLastCalledWith("task_own", true);
+  expect(box()).toEqual(["", null, 1]);
+  // One the engine wouldn't take out is still in the queue, so its words stay there.
+  cancelTask.mockRejectedValueOnce(new Error("Scarlet has already started on it."));
+  await remove("/frame-screen");
+  expect(box()).toEqual(["", null, 1]);
+  // Removed while its words are in the box being changed, they stay in the box as they stood there.
+  await click(row("/frame-screen").querySelector(".queue-reword")!);
+  await act(async () => composer.props!.rewording!.onChange("/frame-screen on the demo only"));
+  await remove("/frame-screen");
+  expect(cancelTask).toHaveBeenLastCalledWith("task_frame", true);
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_frame" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
+  expect(composer.props?.rewording).toBeUndefined();
+  expect(box()).toEqual(["/frame-screen on the demo only", null, 2]);
 });
 
 it("takes the banner about a queued request away once that request moves on, with nothing left in the tray to press", async () => {

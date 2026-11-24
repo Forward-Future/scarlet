@@ -194,16 +194,18 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   };
 
   /** Continue the focused thread, start a note at a moment, or start a new request. */
-  /** Sends the message, and says whether the files attached to it went with it. An answer to Scarlet's question can't carry any: they wait for the next message. */
+  /** Sends the message, and says whether the files attached to it went with it. An answer to Scarlet's question carries them as any other message does. */
   const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[], files?: TaskAttachment[], drawn?: PictureMarks): Promise<boolean> => {
     const attachments = files?.length ? files : undefined;
     const carried = attachments && { attachments, ...(drawn && { pictureMarks: drawn }) };
     if (question) {
       const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
         : anchor ? `At ${anchor.markedRange || anchor.end !== undefined ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
-      if (effective && runChoiceDiffers(question, effective)) await answerTask(question.id, answer, skillIds, effective);
+      const runWith = effective && runChoiceDiffers(question, effective) ? effective : undefined;
+      if (carried) await answerTask(question.id, answer, skillIds, runWith, carried);
+      else if (runWith) await answerTask(question.id, answer, skillIds, runWith);
       else await answerTask(question.id, answer, skillIds);
-      return false;
+      return true;
     }
     if (!effective) throw new Error(unavailableReason);
     let context: Parameters<typeof createTask>[1]["context"];
@@ -311,9 +313,14 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (boxIsFree()) onSent?.();
   };
   const speech = useSpeech(async (text) => {
-    // Said while the box held a queued request's words: what was said takes their place. Words the editor put back
-    // meanwhile stay as they were, and what was said for them is not sent as a new request.
-    if (voiceReword.current) return saveWords(voiceReword.current, text);
+    // Said while the box held a queued request's words: what was said takes their place in the box, and waits there
+    // as typed words do. The tick saves it and Esc leaves the request as it was. Words the editor put back meanwhile
+    // stay as they were, and what was said for them is not sent as a new request.
+    if (voiceReword.current) {
+      voiceReword.current.request?.onChange(text);
+      inputRef.current?.focus();
+      return;
+    }
     const anchor = voiceAnchor.current === undefined ? displayAnchor : voiceAnchor.current;
     try {
       const { files, drawn, done } = await filesFor();

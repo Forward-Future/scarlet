@@ -7,12 +7,14 @@ import type {
   CreateTaskRequest,
   FullRenderKeys,
   Learning,
+  PictureMarks,
   ProjectSummary,
   Render,
   RenderRequest,
   RunChoice,
   SpeakerProgress,
   Task,
+  TaskAttachment,
   TaskEvent,
   TrashedProject,
   UsageTotals,
@@ -113,7 +115,7 @@ interface ProjectState {
   retryTask(taskId: string, runWith?: RunChoice): Promise<void>;
   /** Finish a run that ended without its transcripts once they are ready, or stop waiting to. */
   continueWhenReady(taskId: string, on: boolean): Promise<void>;
-  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice): Promise<void>;
+  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice, files?: { attachments: TaskAttachment[]; pictureMarks?: PictureMarks }): Promise<void>;
   /** Keep a queued request from starting while its words are changed, or let it go. */
   holdForRewording(taskId: string, on: boolean): Promise<void>;
   /** Change the words of a request still waiting its turn. */
@@ -769,7 +771,9 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { task, resumed } = await api.continueWhenReady(taskId, on);
       patch(task.projectId, (d) => ({ tasks: resumed ? upsertAnswered(upsert(d.tasks, task), resumed) : upsert(d.tasks, task) }));
     },
-    async answerTask(taskId, text, skillIds, runWith) {
+    async answerTask(taskId, text, skillIds, runWith, files) {
+      // Files attached to the answer go with it. Without any, the call is as it always was.
+      if (files) return taskAnswered(api.answerTask(taskId, text, skillIds, runWith, files));
       return taskAnswered(runWith ? api.answerTask(taskId, text, skillIds, runWith) : api.answerTask(taskId, text, skillIds));
     },
     async holdForRewording(taskId, on) {
