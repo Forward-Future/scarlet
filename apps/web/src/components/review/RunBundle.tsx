@@ -47,7 +47,8 @@ export function Said({ text, lead, className, fixed, children }: { text: string;
  *   plan, no list of what it did, and no percent but one: while the recordings are transcribed it says how far along
  *   they are. Its words shimmer. With no heading above it, Stop ends the line.
  * - When Scarlet asks something, or a request waits its turn: one row saying so, with its one action. A block whose
- *   heading already says where it stands (`banded`) leaves a question to the heading: its dot, the question and Answer.
+ *   heading already says where it stands (`banded`) leaves a question to the heading's dot: the question itself sits on
+ *   top of the message box.
  *   With no heading, the row opens the steps Scarlet took before it asked.
  * - When a run stops early: the row that says what it saved, with its one action.
  * - `say`: Scarlet's words, when it has any for the editor.
@@ -189,8 +190,8 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, held, 
   // One the editor holds back says so, as the tray does of the request that's next: it won't start by itself.
   const waitsOnEditor = waiting && !paused ? held : undefined;
   const label = waiting ? paused ? "Paused" : waitsOnEditor?.words ?? "Queued" : "Needs your answer";
-  // A question's steps open from its line. A question under a heading has no such line: the heading's dot, the question
-  // and Answer say it. Nor has a paused request: its heading says Paused.
+  // A question's steps open from its line. A question under a heading has no such line: the heading's dot says it, and
+  // the question is on top of the message box. Nor has a paused request: its heading says Paused.
   const line = !(banded && (asking || (waiting && paused)));
   const opens = asking && shown.length > 0;
   return <div className="req" data-state={asking ? "asking" : "working"} aria-label="Scarlet’s work" aria-busy={!asking}>

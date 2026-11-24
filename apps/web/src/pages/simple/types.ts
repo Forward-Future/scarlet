@@ -139,7 +139,7 @@ export interface ChatActions {
   /** Light the timeline's marker at this time, or none: the pointer is over that edit's row in the chat. */
   lightMark(time?: number, target?: HoveredReviewRow): void;
   reply(thread: Thread): void;
-  /** The question the message box is answering now, by its task: its Answer link in the chat would only say so again. */
+  /** The question the message box is answering now, by its task: the question is over the box, so Answer on its band would only say so again. */
   answering?: string;
   revise(thread: Thread, change: Change): void;
   /**

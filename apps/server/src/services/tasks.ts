@@ -7,6 +7,7 @@ import {
   isSkillEdit,
   planText,
   PROJECT_EDIT_TASK_KINDS,
+  questionChoicesOf,
   reviewItemPath,
   skillCommands,
   splitAgentTarget,
@@ -243,7 +244,7 @@ export function appendTaskEvent(ctx: Ctx, task: Task, ev: TaskEvent): { task: Ta
   let next: Task = task;
   if (task.state === "claimed") next = { ...next, state: "running", startedAt: next.startedAt ?? receivedAt };
   if (ev.type === "question") {
-    next = { ...recordWorkThrough(next, receivedAt), state: "waiting_for_user", question: ev.text };
+    next = { ...recordWorkThrough(next, receivedAt), state: "waiting_for_user", question: ev.text, questionChoices: questionChoicesOf(ev.data) };
     notify(ctx, `Agent question: ${ev.text.slice(0, 80)}`, {
       body: ev.text,
       projectId: task.projectId,
@@ -251,7 +252,7 @@ export function appendTaskEvent(ctx: Ctx, task: Task, ev: TaskEvent): { task: Ta
     });
   } else if (ev.type === "answer") {
     const operation = editsDialogue(task.kind) && requestedDialogue(ctx, ev.text);
-    next = { ...next, workedMs: pausedWork(ctx, task), state: "queued", hostId: null, question: null,
+    next = { ...next, workedMs: pausedWork(ctx, task), state: "queued", hostId: null, question: null, questionChoices: undefined,
       ...(operation && operation !== taskDialogueOperation(task) && { context: { ...task.context, dialogueOperation: operation, dialogueRange: undefined }, repeatAudit: undefined }),
       ...(task.cutConflict && { cutConflict: { ...task.cutConflict, answered: true, retried: undefined } }) };
   } else if (ev.type === "change" && typeof ev.data?.changeId === "string") {

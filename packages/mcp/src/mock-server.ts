@@ -253,7 +253,8 @@ export async function startMockServer(state: MockState = makeState()): Promise<M
       }
       if (rec.method === "POST" && m(/^\/tasks\/([^/]+)\/usage$/)) return send(res, 200, {});
       if (rec.method === "POST" && (mm = m(/^\/tasks\/([^/]+)\/question$/))) {
-        state.events.push({ type: "question", text: (body as { text: string }).text, taskId: mm[1] });
+        const { text, choices } = body as { text: string; choices?: string[] };
+        state.events.push({ type: "question", text, taskId: mm[1], ...(choices && { data: { choices } }) });
         return send(res, 200, { waiting: true });
       }
       if (rec.method === "GET" && path === "/skills") return send(res, 200, { skills: state.skills });

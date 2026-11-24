@@ -40,6 +40,7 @@ const it = partedIt(vitestIt);
 
 /** The message box has its own tests. Here it records what the workspace hands it. */
 type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; aimSlot?(el: HTMLElement | null): void; targetTag?: string; targetTagNote?: string; targetTime?: number; targetIsPoint?: boolean; onClearTarget?(): void; onRestoreTarget?(): boolean;
+  onOpenAsked?(): void; thread?: { question?: { question: string | null } };
   messageClock?: import("../lib/messageTimestamps").MessageClock; pausedAt?: import("../components/agent/Composer").PausedAt; aimTime?: number;
   rewording?: { id: string; text: string; onChange(text: string): void; onSave(text: string, skillIds?: string[]): Promise<void>; onCancel(): void } };
 const composer = vi.hoisted(() => ({ props: undefined as BoxProps | undefined }));
@@ -2223,31 +2224,32 @@ it("answers Scarlet's questions one at a time, in the order asked, and says whic
   useProjectStore.setState({ current: data });
   await show();
   await act(async () => {});
-  /** A request's question under its cut's row: its words, and the link after them when it is the one the box answers. */
+  /** A request under its cut's row: the question's words, which wait over the message box and not here, its dot, and Answer after the dot. */
   const asked = (taskId: string) => {
-    const line = container.querySelector(`.subunit[data-run="${taskId}"] .req-say`);
-    return line ? [[...line.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join(""), line.querySelector("button")?.textContent] : undefined;
+    const sub = container.querySelector(`.subunit[data-run="${taskId}"]`)!;
+    return [sub.querySelector(".req-say")?.textContent, !!sub.querySelector(".subunit-msg .unit-dot"), sub.querySelector(".unit-answer")?.textContent];
   };
-  const links = () => container.querySelectorAll(".req-say .simple-link.is-warn").length;
+  const links = () => container.querySelectorAll(".unit-answer").length;
   // Both questions read under their cuts' rows in the column of edits. A cut whose request stopped to ask is For
   // you's, not Working's: the question is the editor's to answer.
   const under = (taskId: string) => { const row = container.querySelector(`.subunit[data-run="${taskId}"]`)?.closest(".simple-pass-list > li");
     return [row?.closest(".review-rail-list, .review-sec-body")?.getAttribute("aria-label"), row?.querySelector(":scope > button .edit-badge")?.textContent]; };
   expect([under("task_first"), under("task_second"), container.querySelector("#simple-chat .subunit")]).toEqual([["For you", "1"], ["For you", "2"], null]);
-  // Only the first has Answer: it is the one the next message goes to.
-  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, "Answer"], [SECOND, undefined], 1]);
-  // The box is on it, and its tag says which of the two this is.
-  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", "1 of 2"]);
-  // Answer on the first means the same.
+  // Neither question is in the chat: each cut's request has its dot, and the box is on the first, which it says is 1 of 2.
+  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[undefined, true, undefined], [undefined, true, undefined], 0]);
+  expect([boxTag(), composer.props!.targetTagNote, composer.props!.thread?.question?.question]).toEqual(["Answer", "1 of 2", FIRST]);
+  // With the box made a new edit, Answer is after the first's dot alone: it is the one the next answer goes to.
+  await act(async () => composer.props!.onClearTarget!());
+  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[undefined, true, "Answer"], [undefined, true, undefined], 1]);
   await click(buttonIn(container.querySelector('.subunit[data-run="task_first"]')!, "Answer")!);
-  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", "1 of 2"]);
+  expect([boxTag(), composer.props!.targetTagNote, links()]).toEqual(["Answer", "1 of 2", 0]);
   // The first is answered, and Scarlet works on. The second is the one the box answers now, and with one question
   // left the tag has no count.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_first" ? { ...t, state: "running" as const, question: null } : t),
     taskEvents: { ...d.taskEvents, task_first: [...d.taskEvents.task_first!, { type: "answer" as const, at: at(2000), text: "After it." }] } }));
-  // One question waits now and the box is on it: its tag says Answer, so the question needs no link of its own.
-  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, undefined], [SECOND, undefined], 0]);
-  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", undefined]);
+  // One question waits now and the box is on it, with no count.
+  expect([asked("task_second"), links()]).toEqual([[undefined, true, undefined], 0]);
+  expect([boxTag(), composer.props!.targetTagNote, composer.props!.thread?.question?.question]).toEqual(["Answer", undefined, SECOND]);
 });
 
 it("keeps the editor's answer and a note of theirs to two lines, with the whole of it in the title", async () => {
@@ -7086,7 +7088,10 @@ it("plays changed footage while the editor answers the question about that cut",
   useProjectStore.setState({ current: data });
   const listen = vi.spyOn(player, "audition");
   await show();
-  await click(buttonIn(container, "Answer")!);
+  // The question is over the message box, which answers it with nothing open. Open cut there opens the cut it's about.
+  expect([boxTag(), buttonIn(container, "Answer")]).toEqual(["Answer", undefined]);
+  await act(async () => composer.props!.onOpenAsked!());
+  expect(composer.props!.onOpenAsked).toBeUndefined();
   expect(call().textContent).toContain("Needs your answer");
   expect(onVideo()).toBe("Current passage at 0:08");
   expect(listen).toHaveBeenLastCalledWith({ start: 6, end: 12, skips: [] }, expect.any(Number));
@@ -7163,7 +7168,7 @@ it.each([false, true])("answers the carried cut after another part moved and ren
     tasks: d.tasks.map(t => t.id === request.id ? { ...t, state: "waiting_for_user" as const, question: "Keep the pickup?",
       cutConflict: { version: d.project.head!, range: { start: 8, end: 10 }, ...(savedIndex && { changeId: currentPass, index: 2 }) } }
       : t.id === "task_done" ? { ...t, state: "done" as const } : t) }));
-  await click(buttonIn(container, "Answer")!);
+  await act(async () => composer.props!.onOpenAsked!());
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 3");
   expect(call().textContent).toContain(STAGED[1]!.reason);
   expect(onVideo()).toBe("Current passage at 0:08");
@@ -7432,14 +7437,14 @@ it("keeps the chat in view beside the Transcript, and closes the Transcript on E
   const pin = () => container.querySelector<HTMLElement>(".simple-pin")!;
   const transcript = () => container.querySelector(".simple-transcript");
   await openTranscript();
-  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop and its
-  // question, so the message box doesn't say Answer with no question on screen.
+  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop and the dot
+  // of its question, which waits over the message box.
   expect(chat().hidden).toBe(false);
   expect(pin().hidden).toBe(false);
   expect(pin().querySelector(".unit-msg")?.textContent).toContain("Make the logo smaller.");
   expect(pin().querySelector('[aria-label^="Stop this edit"]')).not.toBeNull();
-  expect(pin().querySelector(".req-say")?.textContent).toBe("Smaller by how much?");
-  expect(boxTag()).toBe("Answer");
+  expect([pin().querySelector(".req-say"), !!pin().querySelector(".unit-dot")]).toEqual([null, true]);
+  expect([boxTag(), composer.props!.thread?.question?.question]).toEqual(["Answer", "Smaller by how much?"]);
   // A message that was sent leaves it open: the chat, where it went, is already in view.
   await act(async () => composer.props!.onSent!());
   expect(transcript()).not.toBeNull();
@@ -8451,8 +8456,9 @@ it("keeps a question answerable while project editing is paused", async () => {
   useProjectStore.setState({ current: data });
   await show();
   const unit = whole(container.querySelector(`.unit[data-run="${base.id}"]`)!);
-  // The box is on the question and says Answer, so the question has no link of its own.
-  expect([[...unit.querySelectorAll(".req-say")].map(el => el.textContent), boxTag()]).toEqual([[question], "Answer"]);
+  // The box is on the question, which waits over it and not in the chat: the band has its dot and no Answer of its own.
+  expect([unit.querySelectorAll(".req-say").length, !!unit.querySelector(".unit-dot"), unit.querySelector(".unit-answer"), boxTag(), composer.props!.thread?.question?.question])
+    .toEqual([0, true, null, "Answer", question]);
   // Resume is on the band of the request that asks, beside Stop: the tray has nothing to say.
   expect(container.querySelector(".queue-chat")).toBeNull();
   expect(unit.querySelector(".unit-pause-edit")?.getAttribute("aria-label")).toBe("Resume editing");
@@ -9803,7 +9809,7 @@ it("says where Scarlet's recheck stands once, at the right of its Auto heading, 
   expect(heading().querySelector(":scope > .unit-tokens > .run-work-time")).not.toBeNull();
   expect(under().querySelector(".req .req-right, .req .unit-actions, .req .run-stop")).toBeNull();
   expect([...under().querySelectorAll(".req-row")].map(row => row.className)).toEqual(["req-row req-now"]);
-  // It asks: the heading's dot, the question and Answer say so. No row says "Needs your answer" over them.
+  // It asks: the heading's dot says so, and the question waits over the message box. No row says "Needs your answer".
   const question = "The join lands on a breath now. Cut after it?";
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "waiting_for_user" as const, question } : t),
     taskEvents: { ...d.taskEvents, task_recheck: [{ type: "question" as const, at: at(1000), text: question }] } }));
@@ -9811,7 +9817,7 @@ it("says where Scarlet's recheck stands once, at the right of its Auto heading, 
   part = "For you";
   expect([inPart("Working"), under().closest("li")?.querySelector(":scope > button .simple-pass-label")?.textContent]).toEqual([null, STAGED[0]!.reason]);
   expect(heading().querySelector(":scope > .unit-state > .unit-dot")).not.toBeNull();
-  expect([...under().querySelectorAll(".req-say")].map(p => [p.textContent, p.querySelector("button")?.textContent])).toEqual([[`${question}Answer`, "Answer"]]);
+  expect([under().querySelector(".req-say"), under().textContent!.includes(question)]).toEqual([null, false]);
   expect(under().querySelector(".req-status, .req-row")).toBeNull();
   expect(said("Needs your answer")).toBe(0);
   expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit"]);
@@ -12414,11 +12420,11 @@ it("shows edit actions while working or asking, and a status once the request st
   // The heading of the request Scarlet is working on keeps two lines; any other is one line unless the editor picked it.
   const heading = (id: string) => container.querySelector<HTMLElement>(`.unit[data-run="${id}"] > .unit-msg`)!;
   expect([heading("task_running").classList.contains("is-live"), heading("task_waiting").classList.contains("is-live"), heading("task_done").classList.contains("is-live")]).toEqual([true, false, false]);
-  // A question is that dot and the question, with Answer on the message box's tag: no row under the heading says
-  // "Needs your answer" over it.
+  // A question is that dot, with the question over the message box: nothing under the heading says it again, and no
+  // row says "Needs your answer".
   const asking = whole(container.querySelector<HTMLElement>('.unit[data-run="task_waiting"] .req')!);
   expect(asking.querySelector(".req-status")).toBeNull();
-  expect([...asking.querySelectorAll(".req-say")].map(p => p.textContent)).toEqual([data.tasks.find(t => t.id === "task_waiting")!.question]);
+  expect(asking.querySelectorAll(".req-say").length).toBe(0);
   // A suggestion waiting to be played says so, and its line under the band plays it.
   expect(state("task_done").textContent).toBe("Suggestion");
   expect(container.querySelector('.unit[data-run="task_done"] .simple-suggest')).not.toBeNull();
@@ -12529,7 +12535,7 @@ it("underlines the chat actions, makes edit result links stand out, and keeps am
     expect(foot()).toEqual([["Working0", true, "false", "gray", "gray"], ["Done1", false, "true", "white", "white"]]);
     expect(review.querySelector(".simple-pass-need")).toBeNull();
     expect(container.querySelector(".review-rail-count")).toBeNull();
-    // Answer shows on the question once the box is aimed elsewhere.
+    // Answer shows after the question's dot once the box is aimed elsewhere.
     await act(async () => composer.props!.onClearTarget!());
     expect(look("Answer")).toBe("orange underline orange");
     // The one action of a request that stopped early is a link like the rest, not white.

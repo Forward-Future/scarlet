@@ -406,7 +406,7 @@ it("takes the tag off on Backspace in an empty box, but not on a held Backspace,
   expect(onRestoreTarget).toHaveBeenCalledTimes(2);
 });
 
-it("takes an Answer or a Reply tag off on Backspace in an empty box, as its × does, and puts it back on ⌘Z", async () => {
+it("takes Scarlet's question or a Reply tag off on Backspace in an empty box, as its × does, and puts it back on ⌘Z", async () => {
   const onClearTarget = vi.fn();
   const onRestoreTarget = vi.fn(() => true);
   const asking = buildThreads(current).find(t => t.question)!;
@@ -416,7 +416,8 @@ it("takes an Answer or a Reply tag off on Backspace in an empty box, as its × d
     await act(async () => { container.querySelector("textarea")!.dispatchEvent(event); });
     return event.defaultPrevented;
   };
-  expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Answer");
+  // The question sits on top of the box, which has no Answer tag: the question says who the message goes to.
+  expect([container.querySelector(".composer-ask-text")?.textContent, container.querySelector(".composer-tag")]).toEqual([asking.question!.question, null]);
   // Words in the box are what Backspace deletes, and a held Backspace that just emptied it stops there.
   await type("Yes");
   await press("Backspace");
@@ -427,8 +428,9 @@ it("takes an Answer or a Reply tag off on Backspace in an empty box, as its × d
   expect(onClearTarget).toHaveBeenCalledTimes(1);
   await press("z", { metaKey: true });
   expect(onRestoreTarget).toHaveBeenCalledTimes(1);
-  // The × does the same.
-  await act(async () => container.querySelector<HTMLButtonElement>(".composer-tag-clear")!.click());
+  // The question's × does the same.
+  expect(container.querySelector(".composer-ask-clear")?.getAttribute("aria-label")).toBe("Start a new edit instead of answering Scarlet’s question");
+  await act(async () => container.querySelector<HTMLButtonElement>(".composer-ask-clear")!.click());
   expect(onClearTarget).toHaveBeenCalledTimes(2);
   // A reply to a request comes off the same way.
   await show({ thread: buildThreads(current)[0], targetTag: "Reply", onClearTarget, onRestoreTarget });
@@ -437,19 +439,18 @@ it("takes an Answer or a Reply tag off on Backspace in an empty box, as its × d
   expect(onClearTarget).toHaveBeenCalledTimes(3);
 });
 
-it("says which of several waiting questions an answer is for, after the Answer tag's word", async () => {
+it("says which of several waiting questions an answer is for, in the question over the box", async () => {
   const asking = buildThreads(current).find(t => t.question)!;
   /** The tag's word, the count after it, and what the tag says on hover. */
   const tag = () => [container.querySelector(".composer-tag-name")?.textContent, container.querySelector(".composer-tag-note")?.textContent,
     container.querySelector<HTMLElement>(".composer-tag")?.title];
+  const label = () => container.querySelector(".composer-ask-label")?.textContent;
   // Scarlet asked two questions: the box answers them one at a time, in the order asked, and says which this one is.
   await show({ thread: asking, targetTag: "Answer", targetTagNote: "1 of 2" });
-  expect(tag()).toEqual(["Answer", "1 of 2", "Answering question 1 of 2. The next follows once this is sent."]);
-  // The count follows the word inside the tag, before its ×.
-  expect([...container.querySelector(".composer-tag")!.children].map(el => el.className)).toEqual(["composer-tag-name", "composer-tag-note", "composer-tag-clear"]);
-  // One question waiting: the tag is as it was, with no count.
+  expect([label(), tag()]).toEqual(["Scarlet asks · 1 of 2", [undefined, undefined, undefined]]);
+  // One question waiting: the question says just that Scarlet asks, with no count.
   await show({ thread: asking, targetTag: "Answer" });
-  expect(tag()).toEqual(["Answer", undefined, "Answering Scarlet’s question"]);
+  expect([label(), tag()]).toEqual(["Scarlet asks", [undefined, undefined, undefined]]);
   // A count is an answer's alone. A reply has none, and neither has a cut or an edit the box is aimed at.
   await show({ thread: buildThreads(current)[0], targetTag: "Reply", targetTagNote: "1 of 2" });
   expect(tag()).toEqual(["Reply", undefined, "Replying to this edit"]);
@@ -1305,6 +1306,28 @@ it("shows the Range tag for words chosen in the transcript (Ask about this), and
   expect(aimName()?.textContent).toBe("Cut 1");
 });
 
+it("puts Scarlet's question on top of the box, with the answers it offers to send with one press", async () => {
+  const asking = buildThreads(current).find(t => t.question)!;
+  const placeholder = () => container.querySelector("textarea")!.placeholder;
+  const chips = () => [...container.querySelectorAll<HTMLButtonElement>(".composer-ask-choice")];
+  // A question with no answers to pick: the question alone, and the box asks for an answer.
+  await show({ thread: asking, targetTag: "Answer" });
+  expect([container.querySelector(".composer-ask-label")?.textContent, container.querySelector(".composer-ask-text")?.textContent, chips().length, placeholder()])
+    .toEqual(["Scarlet asks", asking.question!.question, 0, "Answer Scarlet…"]);
+  // Scarlet offered two answers: one press on either sends it as the answer, and the box reads as the other way to answer.
+  const offering = { ...asking, question: { ...asking.question!, questionChoices: ["Keep the cold open", "Cut it"] } };
+  await show({ thread: offering, targetTag: "Answer" });
+  expect([chips().map(b => b.textContent), placeholder()]).toEqual([["Keep the cold open", "Cut it"], "Or type your own answer…"]);
+  await type("Half of it");
+  await act(async () => chips()[1]!.click());
+  expect(vi.mocked(useProjectStore.getState().answerTask).mock.lastCall!.slice(0, 3)).toEqual([asking.question!.id, "Cut it", undefined]);
+  // The words being written aren't sent with it: they stay in the box.
+  expect(useUiStore.getState().agentDraft).toBe("Half of it");
+  // Aimed at a cut or an edit, the box doesn't answer, and the question isn't over it.
+  await show({ thread: offering, targetTag: "Cut at 2:05" });
+  expect([container.querySelector(".composer-ask"), chips().length]).toEqual([null, 0]);
+});
+
 it("answers Scarlet's question with words chosen in the transcript beside Answer, and clears the range before Answer", async () => {
   const asking = buildThreads(current).find(t => t.question)!;
   const words: AgentContext = { version: project.head!, time: 42, end: 51.5, clipIds: [], label: "“three things”" };
@@ -1312,7 +1335,7 @@ it("answers Scarlet's question with words chosen in the transcript beside Answer
   await act(async () => useUiStore.getState().setAgentContext(words));
   await show({ thread: asking, targetTag: "Answer", onClearTarget });
   expect(aimName()?.textContent).toBe("Range 0:42 – 0:51");
-  expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Answer");
+  expect(container.querySelector(".composer-ask-text")?.textContent).toBe(asking.question!.question);
   await type("Yes, this part");
   await submit();
   expect(useProjectStore.getState().answerTask).toHaveBeenLastCalledWith(
@@ -1328,7 +1351,7 @@ it("answers Scarlet's question with words chosen in the transcript beside Answer
   expect(useUiStore.getState().agentContext).toBeNull();
   expect(aimName()).toBeNull();
   expect(onClearTarget).not.toHaveBeenCalled();
-  expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Answer");
+  expect(container.querySelector(".composer-ask-text")?.textContent).toBe(asking.question!.question);
 });
 
 it("keeps a picked moment, and a whole-video choice, through a time typed in the message", async () => {
@@ -1350,11 +1373,11 @@ it("keeps a picked moment, and a whole-video choice, through a time typed in the
   }));
 });
 
-it("answers Scarlet's question with a stretch marked on the ruler beside it, still tagged Answer", async () => {
+it("answers Scarlet's question with a stretch marked on the ruler beside it, the question still over the box", async () => {
   const asking = buildThreads(current).find(t => t.question)!;
   await act(async () => useUiStore.getState().setAgentContext({ time: 42, end: 51.5, clipIds: [], markedRange: { start: 42, end: 51.5 } }));
   await show({ thread: asking, targetTag: "Answer" });
-  expect(container.querySelector(".composer-tag-name")?.textContent).toBe("Answer");
+  expect(container.querySelector(".composer-ask-text")?.textContent).toBe(asking.question!.question);
   await type("Yes, this part");
   await submit();
   // The picker holds a different model than the asking task (Claude vs Codex), so the answer hands off silently to the picked model.

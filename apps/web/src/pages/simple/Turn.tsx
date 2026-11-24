@@ -398,12 +398,9 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       if (autoHeading && e.kind === "system" && e.text === RECHECK_WORDS) return;
       // All of what Scarlet said: folded it keeps to two lines, and a click opens the rest.
       if (e.kind === "agent") { if (!quiet && !(e.onNote && closed)) { told = true; if (!listing) said.push(<Said key={i} className="req-say" text={e.fullText ?? e.text} />); } }
-      // Several questions can wait in one block, one from each cut or edit Scarlet works on. They are answered one at a
-      // time, in the order asked: Answer is on the one the message box will answer, and moves on once that is sent.
-      // While the box is already answering it (its tag says Answer), the link is left out: it comes back whenever the
-      // box is aimed elsewhere.
-      else if (e.kind === "question") said.push(<p key={i} className={e.answered ? "req-say is-quiet" : "req-say"}>{e.text}
-        {!e.answered && (!thread.question || thread.question.id === e.taskId) && actions.answering !== e.taskId && <button type="button" className="simple-link is-warn" onClick={() => actions.reply(thread)}>Answer</button>}</p>);
+      // A question still waiting isn't in the chat: it sits on top of the message box, which answers it, and the band's
+      // dot says it waits (the editor's choice, 2026-11-24). Once answered it stays, quiet, so the history still reads.
+      else if (e.kind === "question") { if (e.answered) said.push(<p key={i} className="req-say is-quiet">{e.text}</p>); }
       // The editor's answer is their message: two lines at most, and a click opens the rest.
       else if (e.kind === "answer") said.push(<Said key={i} className="req-say is-yours" text={e.text} />);
       // An applied change is on the card's last row. A suggestion still says what it is and how to play it. A pass's
@@ -474,6 +471,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const atOnce = actions.atOnce ?? 0;
     const among = !inside && atOnce > 1 && [run, ...(run === owner ? runs.filter(r => nested.has(r.root)) : [])]
       .some(r => aboutOne(r) && isWorking(r.task.state));
+    // A question waiting isn't in the chat: it sits on top of the message box while the box answers it. With the box
+    // aimed elsewhere, Answer after the dot puts it back on the question (and opens the cut a question is about).
+    const answerHere = task.state === "waiting_for_user" && !!task.question && thread.question?.id === task.id && actions.answering !== task.id
+      ? <button type="button" className="simple-link is-warn unit-answer" onClick={() => actions.reply(thread)}>Answer</button> : null;
     const standing = stands ?? (among ? <span className="unit-word is-at-once" title={`Scarlet is working on ${atOnce} cuts or edits at the same time.`}>Working on {atOnce} at once</span> : null);
     const stop = stoppable(run) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
     // A request that edits the video has Stop at the band's right for as long as Scarlet has it, which ends just this
@@ -538,9 +539,9 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // that stays in view, so it never reads as a revision nobody asked for (2026-11-22).
     if (inside) return <div key={run.root} className="subunit" data-run={run.root}>
       {request && <div className="subunit-msg"><span className="simple-who">You</span>
-        <Said lead={<span className="simple-revising">{about ?? "Revision"}</span>} text={request.text} /><span className="unit-state">{standing}</span>{headingEnd}</div>}
+        <Said lead={<span className="simple-revising">{about ?? "Revision"}</span>} text={request.text} /><span className="unit-state">{standing}</span>{answerHere}{headingEnd}</div>}
       {!request && autoHeading && <div className="subunit-msg"><span className="simple-who">Scarlet</span>
-        <Said lead={<span className="simple-revising is-auto" title="Scarlet started this itself">Auto</span>} text={RECHECK_WORDS} /><span className="unit-state">{standing}</span>{headingEnd}</div>}
+        <Said lead={<span className="simple-revising is-auto" title="Scarlet started this itself">Auto</span>} text={RECHECK_WORDS} /><span className="unit-state">{standing}</span>{answerHere}{headingEnd}</div>}
       {bundle}
       {wrong}
     </div>;
@@ -572,6 +573,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
         </div>
         <div className="unit-meta">
           <span className="unit-state">{standing}</span>
+          {answerHere}
           {asksUnder && <span className="unit-state"><span className="unit-dot" aria-hidden /></span>}
           {need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>For you<span className="unit-need-count">{need}</span></span>}
           {headingEnd}</div></div>}

@@ -539,9 +539,9 @@ export class ScarletClient extends ClientTransport {
   postTaskEvent(taskId: string, event: TaskEvent, startedAt?: string) {
     return this.withResource("tasks", taskId, path => this.post<Record<string, never>>(path + "/events", { ...event, startedAt }));
   }
-  /** Hosts add the CLI session that asked (null: none), so the answer can continue it. */
-  async postTaskQuestion(taskId: string, startedAt: string | undefined, text: string, signal?: AbortSignal, host?: { sessionId: string | null }) {
-    const ack = await this.withResource("tasks", taskId, path => this.request<{ waiting?: unknown } | null>("POST", path + "/question", { startedAt, text, ...host }, { signal }));
+  /** Hosts add the CLI session that asked (null: none), so the answer can continue it. `choices` are the short answers the question offers. */
+  async postTaskQuestion(taskId: string, startedAt: string | undefined, text: string, signal?: AbortSignal, host?: { sessionId: string | null }, choices?: readonly string[]) {
+    const ack = await this.withResource("tasks", taskId, path => this.request<{ waiting?: unknown } | null>("POST", path + "/question", { startedAt, text, ...host, ...(choices?.length && { choices }) }, { signal }));
     if (typeof ack?.waiting !== "boolean") throw new Error("The engine did not acknowledge the question.");
     return { waiting: ack.waiting };
   }

@@ -537,6 +537,26 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
   border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); font-size: 12.5px; color: var(--color-muted); }
 .composer-files + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
 .composer-aim-line + .composer-files { border-radius: 0; }
+/* Scarlet's question, while the box answers it: a panel attached to the top of the box, with its answers to press. */
+.composer-ask { min-width: 0; margin-bottom: calc(-1 * var(--model-row-gap, 9px)); padding: 10px 12px 11px; border: 1px solid #4b3f2c; border-bottom: 0;
+  border-radius: 12px 12px 0 0; background: #1b1915; }
+.composer-ask + .composer-box { border-top-left-radius: 0; border-top-right-radius: 0; }
+.composer-ask + :is(.composer-aim-line, .composer-files) { border-radius: 0; }
+.composer-ask-head { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11.5px; color: var(--color-warn); }
+.composer-ask-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--color-warn); }
+.composer-ask-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-ask-count { font-variant-numeric: tabular-nums; }
+.composer-ask-open { flex: none; font-size: 11.5px; }
+.composer-ask-clear { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; margin: -3px -5px -3px 0; padding: 0; border: 0;
+  border-radius: 5px; background: none; color: var(--color-dim); cursor: pointer; }
+.composer-ask-clear:hover:not(:disabled) { background: var(--color-line); color: var(--color-fg); }
+.composer-ask-clear:disabled { opacity: .5; cursor: default; }
+.composer-ask-text { margin: 5px 0 0; font-size: 13px; line-height: 1.45; color: var(--color-fg); overflow-wrap: anywhere; white-space: pre-wrap; }
+.composer-ask-choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.composer-ask-choice { max-width: 100%; padding: 4px 11px; border: 1px solid #4b4b4b; border-radius: 999px; background: #222; color: var(--color-fg);
+  font-size: 12.5px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.composer-ask-choice:hover:not(:disabled) { border-color: var(--color-muted); background: #2a2a2a; }
+.composer-ask-choice:disabled { opacity: .5; cursor: default; }
 /* Where the message goes is a flush context row on top of the box, read as attached-file rows are. */
 .composer-aim-line { position: relative; display: flex; align-items: center; min-width: 0; min-height: 30px; margin-bottom: calc(-1 * var(--model-row-gap, 9px));
   padding: 2px 4px; border: 1px solid var(--color-line); border-bottom: 0; border-radius: 10px 10px 0 0; background: rgba(255, 255, 255, .03); }

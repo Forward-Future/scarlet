@@ -2,6 +2,7 @@ import { basename, join } from "node:path";
 import { z } from "zod/v3";
 import {
   apiPathId,
+  QuestionChoices,
   skillEditTarget,
   skillTaskTarget,
   SuggestLearningRequest,
@@ -234,13 +235,14 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
 
   tool(
     "task_question",
-    "Ask the editor a question when you cannot proceed without their decision (which take, what aspect ratio, whether to cut a section). Posting the question pauses the task; STOP working immediately after calling this and end your turn. Scarlet resumes the task with the editor's answer as your next message. Ask only when needed, and make the question specific with the options you see.",
-    { text: z.string().min(1) },
-    async ({ text: body }) => {
+    "Ask the editor a question when you cannot proceed without their decision (which take, what aspect ratio, whether to cut a section). Posting the question pauses the task; STOP working immediately after calling this and end your turn. Scarlet resumes the task with the editor's answer as your next message. Ask only when needed, and make the question specific with the options you see. When the question has two to four clear answers, also give them as choices: the editor answers with one press, or writes their own.",
+    { text: z.string().min(1),
+      choices: QuestionChoices.optional().describe("Two to four short answers the editor can pick with one press, each a few words in their language (\"Keep the cold open\", \"Cut it\"). Leave out when the answer is open-ended.") },
+    async ({ text: body, choices }) => {
       if (!taskId) {
         return text("Not running as a Scarlet task, so nobody can answer. Make the most reasonable assumption, state it in your summary, and continue.");
       }
-      const { waiting } = await client.postTaskQuestion(taskId, startedAt, body);
+      const { waiting } = await client.postTaskQuestion(taskId, startedAt, body, undefined, undefined, choices);
       return text(
         waiting
           ? "Question posted to the editor. Stop now: do not call any more tools and end your turn with a one-line summary of what you have done so far. Scarlet resumes the task with the editor's answer."

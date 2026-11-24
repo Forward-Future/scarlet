@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- When Scarlet asks you something, the question now sits on top of the message box instead of in the chat, and when it has a few clear answers you can pick one with a single click or type your own.
 - Your messages are grey bubbles on the right of the chat, and Scarlet's replies are plain text on the left.
 - Requests waiting their turn show in the chat as bubbles above the message box, marked Up next or Queued.
 

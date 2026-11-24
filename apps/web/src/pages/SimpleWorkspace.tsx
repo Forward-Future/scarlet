@@ -919,10 +919,8 @@ export function SimpleWorkspace() {
     review: reviewSuggestion,
     revise: reviseChange,
     reply: replyToThread,
-    // The one question that waits, while the box is on it and says Answer. Answer on a question about a cut also opens
-    // that cut, and with several waiting it says which the box is on: those keep their link.
-    answering: replyThread?.question && !replyThread.question.cutConflict?.range && (!agentContext || agentContext === "whole")
-      && tasks.filter(t => t.kind !== "transcribe" && t.state === "waiting_for_user" && !!t.question).length === 1 ? replyThread.question.id : undefined,
+    // The question the box answers now, which sits on top of it: its band needs no Answer. Aimed elsewhere, it has one.
+    answering: replyThread?.question && (!agentContext || agentContext === "whole") ? replyThread.question.id : undefined,
     cutName,
     callNumber: (changeId, cutIndex) => callNumber({ changeId, cutIndex }),
   };
@@ -2319,6 +2317,8 @@ export function SimpleWorkspace() {
     aimSlot={aimMatches && itemThread && aimedAt ? setAimHost : undefined}
     messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime} targetTime={targetTime}
     targetTag={boxTag} targetTagNote={answerNote} onClearTarget={clearTarget} onRestoreTarget={restoreTarget}
+    // A question about a cut opens that cut from the question over the box, as long as it isn't open already.
+    onOpenAsked={replyThread?.question?.cutConflict?.range && pass && !(answeringCut && callCard) ? () => replyToThread(replyThread) : undefined}
     // A queued request's words have the box to themselves: its row in the tray, lit, says which request they are.
     rewording={rewordingItem && { id: rewordingItem.id, text: rewording!.text,
       onChange: text => setRewording(r => r && { ...r, text }),
