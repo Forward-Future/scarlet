@@ -257,7 +257,9 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
   const adrift: Omit<ThreadEdit, "at">[] = [];
   /** Cuts named on a join their save re-made (`resaved`): that save moved a cut already there, and may have taken nothing out. */
   const reshaped = new Set<ThreadEdit>();
-  for (const { version, named, still, resaved, putBack, markerSays: _markerSays, reviewLocation, ...edit } of edits) {
+  /** Places of a save Scarlet named no edit for where the video plays as it did (`quiet`): they finished other edits. */
+  const quietly = new Set<ThreadEdit>();
+  for (const { version, named, still, resaved, putBack, markerSays: _markerSays, reviewLocation, quiet, ...edit } of edits) {
     const map = mapFrom(version);
     if (!map) continue;
     const mappedBack = putBack ? mapRange(map, putBack) : undefined;
@@ -318,6 +320,7 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     // A point has no footage of its own to call added. One named where the save re-made a join is an edit at that join.
     if (placed.at !== undefined && placed.kind === "restore") placed.kind = "other";
     if (resaved) reshaped.add(placed);
+    if (quiet) quietly.add(placed);
     result.push(placed);
   }
   // A cut is in the video while footage it took out is missing from it. A pass can put a cut's footage back with a save
@@ -450,6 +453,51 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     const spot = nearest(cut, spots, cut.at);
     if (spot) moveTo(cut, spot);
   }
+  /**
+   * Where everything `cuts` took out at `spot` plays in the version `into` was cut from, when that version plays it as
+   * one stretch holding what `into` itself took out.
+   */
+  const wholeOut = (into: ThreadEdit, cuts: ThreadEdit[], spot: Spot): TimeRange | undefined => {
+    const source = read(into.beforeCut!.version);
+    if (!source) return;
+    const out = cuts.flatMap(cut => takenBy(cut).flat()).flatMap(piece => spot.gaps.flatMap(gap => {
+      const start = Math.max(piece.start, gap.start), end = Math.min(piece.end, gap.end);
+      return gap.mediaId === piece.mediaId && end - start > 1e-6 ? [{ mediaId: gap.mediaId, start, end }] : [];
+    }));
+    const own = into.beforeCut!.removed;
+    for (const track of piecesOf(source)) {
+      const placed = track.flatMap(piece => out.flatMap(footage => {
+        if (footage.mediaId !== piece.mediaId) return [];
+        const from = Math.max(piece.sourceIn, footage.start), to = Math.min(piece.sourceOut, footage.end);
+        return to - from > 1e-6 ? [{ start: piece.timelineIn + (from - piece.sourceIn) / piece.speed, end: piece.timelineIn + (to - piece.sourceIn) / piece.speed }] : [];
+      })).sort((x, y) => x.start - y.start);
+      if (!placed.length) continue;
+      let reach = placed[0]!.start;
+      if (placed.some(piece => {
+        if (piece.start > reach + 1 / fps) return true;
+        reach = Math.max(reach, piece.end);
+        return false;
+      })) continue;
+      const whole = { start: placed[0]!.start, end: reach };
+      if (whole.start <= own.start + 1 / fps && whole.end >= own.end - 1 / fps) return whole;
+    }
+  };
+  /** `from`'s reason to look, on `into`, kept under `from`'s identity so keeping `into` before doesn't settle it. */
+  const takeDoubt = (into: ThreadEdit, from: ThreadEdit) => {
+    if (!from.check) return;
+    into.check = into.check && into.check !== from.check ? `${into.check}${/[.!?]$/.test(into.check) ? " " : ". "}${from.check}` : from.check;
+    if (from.recheck) into.recheck = from.recheck;
+    if (from.reviewSays) into.reviewSays = from.reviewSays;
+    into.reviewRef = from.reviewRef ?? { changeId: from.changeId, spot: from.spot };
+    into.reviewChangeId = from.reviewChangeId ?? from.changeId;
+  };
+  /** Two cuts at one join said as one: both their reasons, and a reason to look either raised. */
+  const joinWords = (into: ThreadEdit, from: ThreadEdit) => {
+    const reason = into.reason && from.reason && !into.reason.includes(from.reason)
+      ? `${into.reason}${/[.!?]$/.test(into.reason) ? " " : ". "}${from.reason}` : into.reason ?? from.reason;
+    if (reason) into.reason = reason;
+    if (from.check && from.check !== into.check) takeDoubt(into, from);
+  };
   // The cuts at one join share the footage missing there. Each has what the join still skips of its own, the earliest
   // save first and a save that only reshaped a cut already there last. One left with nothing took nothing of its own
   // out: the cut before it takes its sentence and its reason to look.
@@ -481,6 +529,49 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
       }
       last = cut;
     }
+    // Saves that each took footage out at one join made one cut: the join plays once, and the editor keeps or rejects
+    // what it leaves out as one. On Matt's "reimann 2" the first edit left out the talk before a take, a later save
+    // took the first try at its line out beside it, and the list showed nine joins twice, each with half the footage
+    // that went (2026-11-23). The earliest keeps its identity and shows it all, from its own version, when that version
+    // plays it as one stretch.
+    const each = cuts.filter(cut => !folded.has(cut) && !cut.elsewhere).sort((x, y) => order(x) - order(y));
+    const removed = each.length > 1 ? wholeOut(each[0]!, each, spot) : undefined;
+    if (removed) {
+      const [into, ...rest] = each;
+      // Its row says what the cut that took the most out said, which names the larger part of what went.
+      const most = each.reduce((best, cut) => length(cut.beforeCut!.removed) > length(best.beforeCut!.removed) ? cut : best);
+      into!.beforeCut = { ...into!.beforeCut!, removed };
+      for (const cut of rest) {
+        joinWords(into!, cut);
+        folded.add(cut);
+      }
+      if (most.summary) into!.summary = most.summary;
+      else delete into!.summary;
+    }
+  }
+  // A save Scarlet named no edit for, where the video plays as it did (`quietly`), finished the edits round it: on
+  // Matt's "reimann 2" a pass that had cut and placed the interviews then moved their sound to the dialogue track and
+  // eased fourteen joins with two-frame fades, and the list showed nineteen more edits to look at, a frame or two each
+  // at a join or the length of a clip already listed (2026-11-23). Such a place has no row. A doubt Scarlet raised
+  // about it goes to the edit there, a cut whose join it is at before one it lies in or touches, and stays listed
+  // when there is none.
+  const near = 2 / fps;
+  const stretchOf = (edit: ThreadEdit) => edit.at !== undefined ? { start: edit.at, end: edit.at } : edit.range;
+  const others = listed.filter(edit => !folded.has(edit) && !quietly.has(edit) && !edit.rejected);
+  for (const edit of listed) {
+    if (!quietly.has(edit) || folded.has(edit) || edit.marker || edit.elsewhere || edit.previous.length) continue;
+    if (edit.check) {
+      const own = stretchOf(edit), spans = (other: ThreadEdit, slack: number) => {
+        const it = stretchOf(other);
+        return it.start <= own.end + slack && own.start <= it.end + slack;
+      };
+      const into = others.find(other => other.beforeCut && spans(other, near)) ??
+        others.find(other => { const it = stretchOf(other); return it.start <= own.start + near && own.end <= it.end + near; }) ??
+        others.find(other => spans(other, near));
+      if (!into) continue;
+      takeDoubt(into, edit);
+    }
+    folded.add(edit);
   }
   return listed.filter(edit => !folded.has(edit)).sort((a, b) => (a.at ?? a.range.start) - (b.at ?? b.range.start));
 }

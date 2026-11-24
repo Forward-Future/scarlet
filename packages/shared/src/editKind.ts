@@ -379,7 +379,13 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
       // stretch: then it is that edit's. A one-second spot left just after a demo laid over the picture took the
       // demo's B-roll and its card said B-roll, when the spot changed nothing (ant crash, 2026-11-21).
       const overlaps = (a: TimeRange, b: TimeRange) => Math.min(a.end, b.end) - Math.max(a.start, b.start) > TOUCH;
-      const own = here.length ? here : near.filter(f => !ranges.some(other => other !== range && overlaps(other, f.range)));
+      // A to-do left inside another edit is a to-do: the zoom or crop that runs on past it is that other edit's. On
+      // Matt's "reimann 2" the punch-ins ran under the spots Scarlet marked for the sponsor and the closing video, and
+      // both cards said Zoom, with nothing to add (2026-11-23).
+      const elsewhere = (f: Placed & { range: TimeRange }) => (f.range.start < range.start - TOUCH || f.range.end > range.end + TOUCH) &&
+        ranges.some(other => other !== range && overlaps(other, f.range));
+      const marked = here.some(f => f.facet === "marker") ? here.filter(f => f.facet === "marker" || !elsewhere(f)) : here;
+      const own = marked.length ? marked : near.filter(f => !ranges.some(other => other !== range && overlaps(other, f.range)));
       return own.length ? verdict(own) : unplaced;
     });
   }
