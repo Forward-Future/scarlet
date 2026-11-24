@@ -1175,6 +1175,19 @@ describe("render", () => {
       }
     });
 
+    it("holds an AVIF or HEIC photo, which FFmpeg opens as a movie rather than as an image", async (ctx) => {
+      // A phone's photos are HEIC; AVIF is the same container. The image reader's loop option is unknown to it.
+      const encoders = await ffmpeg.ffmpegEncoders();
+      const av1 = ["libsvtav1", "libaom-av1", "librav1e"].find(name => encoders.has(name));
+      if (!av1) return ctx.skip();
+      await runCapture("ffmpeg", [...common, "-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", "-c:v", av1, "-pix_fmt", "yuv420p", path.join(dir, "red.avif")]);
+      const kind = detectMediaKind(await probeMedia(path.join(dir, "red.avif")));
+      expect(kind).toBe("image");
+      stills.media = [{ id: "still", kind, name: "red.avif", path: "red.avif", hasAlpha: false }];
+      const timeline = edit(track([makeMediaClip("still", 0, 20 / 30, 1 / 30)]));
+      expect(centres(await pictures(stills, timeline, { start: 0, end: 1 }, false))).toBe("." + "r".repeat(20) + ".".repeat(9));
+    });
+
     it("draws a caption on its own frames only, so two in a row never share one", async () => {
       const caption = (id: string, from: number, to: number, y: number) =>
         ({ id, kind: "caption" as const, timelineIn: from / 30, timelineOut: to / 30, text: "MMMM", enabled: true, style: { y, fontSize: 0.3, color: "#FFFFFF" } });

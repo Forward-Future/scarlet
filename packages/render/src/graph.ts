@@ -444,9 +444,9 @@ async function writeFilterGraph(
           indexedOriginal = hasIndexedClock(source, asset.fps) && source.rotation === 0 && source.pixFmt === "yuv420p" &&
             source.width === asset.width && source.height === asset.height;
         }
-        // Only the image demuxer repeats a picture at the input. A GIF, or a movie
-        // holding one picture, is read once and repeated in the graph.
-        const held = still && (!isImagePath(file) || /\.gif$/i.test(file));
+        // Only the image demuxer repeats a picture at the input. A GIF, a HEIC or AVIF photo (which FFmpeg opens as a
+        // movie, with no loop option), or a movie holding one picture, is read once and repeated in the graph.
+        const held = still && (!isImagePath(file) || /\.(gif|heic|avif)$/i.test(file));
         const idx = held ? addInput(["-t", fnum(p.vis)], file)
           : still ? addInput(["-loop", "1", "-framerate", fnum(fps), "-t", fnum(p.vis)], file)
           : shared ? open(file, shared.start / fps, true, (shared.end - shared.start) / fps)
