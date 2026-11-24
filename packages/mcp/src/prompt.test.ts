@@ -315,3 +315,35 @@ describe("stripFrontmatter", () => {
     expect(stripFrontmatter("---\nnever closed")).toBe("---\nnever closed");
   });
 });
+
+describe("the chat before a request", () => {
+  const task = { kind: "edit" as const, instruction: "tell me the timestamps", agent: "claude" as const, context: {} };
+
+  it("follows the task with the earlier requests, oldest first, each with what Scarlet told the editor", () => {
+    const prompt = buildSystemPrompt({ project: "", skills: [], task, earlier: [
+      { asked: "find both of those clips", told: ["Kontorovich: https://example.com/a\n\nEllenberg: https://example.com/b"], replied: "Found both. The links are above." },
+      { asked: "even out the levels", answers: [{ question: "Which clip?", answer: "The sponsor read" }], edits: ['"Evened the level" (change chg_1, applied)'], standing: "It hasn’t finished yet." },
+    ] });
+    expect(prompt).toContain([
+      "# Earlier in this chat",
+      "",
+      "The editor reads their requests in this project as one conversation with you, so their words now may refer to an earlier request or to what you told them. These are the latest, oldest first.",
+      "",
+      '1. The editor asked: "find both of those clips"',
+      "   You told them: Kontorovich: https://example.com/a",
+      "   Ellenberg: https://example.com/b",
+      "   You closed with: Found both. The links are above.",
+      '2. The editor asked: "even out the levels"',
+      '   You asked them: "Which clip?"',
+      '   They answered: "The sponsor read"',
+      '   Edits it saved: "Evened the level" (change chg_1, applied)',
+      "   It hasn’t finished yet.",
+    ].join("\n"));
+    expect(prompt.indexOf("# Your task")).toBeLessThan(prompt.indexOf("# Earlier in this chat"));
+  });
+
+  it("adds nothing to a request with no chat before it", () => {
+    expect(buildSystemPrompt({ project: "", skills: [], task, earlier: [] })).toBe(buildSystemPrompt({ project: "", skills: [], task }));
+    expect(buildSystemPrompt({ project: "", skills: [], task })).not.toContain("# Earlier in this chat");
+  });
+});
