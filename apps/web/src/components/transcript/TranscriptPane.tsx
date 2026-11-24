@@ -132,7 +132,8 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
       near = next ? sentence(index) : [];
       for (const node of near) node.setAttribute("data-near", "");
       if (!next || Date.now() - userScrolledAt.current < 2500) return;
-      if (playing) next.scrollIntoView({ block: "center", behavior: "smooth" });
+      const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (playing) next.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
       else if (listRef.current) {
         // Moved by a pick on the timeline or a skip: brought into view if it went out of it.
         const box = listRef.current.getBoundingClientRect(), word = next.getBoundingClientRect();
