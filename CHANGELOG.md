@@ -17,6 +17,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A cut whose clean edge would reach outside the part of the video you selected, or into footage you marked to keep, now always waits for you, even when Scarlet was told to apply joins it isn't sure of.
 - A cut's row in a request's list now quotes the words beside it as the transcript has them, even when the row was first shown while Scarlet was still placing the transcript's words.
 - With OpenAI transcription, a voice message or note that the recorder saved without its length is now transcribed in full, not just its first second.
+- With note cleanup on, a spoken note whose tidied-up version got cut off partway now keeps your own words, instead of sending Scarlet half a request.
 
 ## November 23, 2026
 
