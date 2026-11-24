@@ -2041,8 +2041,9 @@ it("answers Scarlet's question with the next message when nothing is open, until
   expect(useUiStore.getState().draftOwner).toBe(JSON.stringify([PRJ, threadWith("chg_approved_2").id]));
   // The conversation is whole: nothing is hidden to show the question.
   expect(turns().some(t => t.hidden)).toBe(false);
-  // Answer on the question means the same, and the box stays there through a message landing while the question stands.
-  await click(answer());
+  // The tag says Answer once: the question has no Answer link of its own while the box is on it. The box stays there
+  // through a message landing while the question stands.
+  expect(buttonIn(container, "Answer")).toBeUndefined();
   await act(async () => composer.props!.onSent!());
   expect(target()).toContain("Answering");
   // Taking the tag off makes the next message a new edit. The line for screen readers says so, and nothing shows above the box.
@@ -2055,6 +2056,10 @@ it("answers Scarlet's question with the next message when nothing is open, until
   // not A, S, R or K on whatever card is open.
   expect(useUiStore.getState().composerFocus).toBe(1);
   expect(container.querySelector(".simple-target button")).toBeNull();
+  // With the box aimed elsewhere, Answer is back on the question, and puts the box on it again.
+  await click(answer());
+  expect(boxTag()).toBe("Answer");
+  expect(buttonIn(container, "Answer")).toBeUndefined();
 });
 
 it("answers Scarlet's questions one at a time, in the order asked, and says which of them the box is on", async () => {
@@ -2084,11 +2089,12 @@ it("answers Scarlet's questions one at a time, in the order asked, and says whic
   // Answer on the first means the same.
   await click(buttonIn(container.querySelector('.subunit[data-run="task_first"]')!, "Answer")!);
   expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", "1 of 2"]);
-  // The first is answered, and Scarlet works on. The second is the one the box answers now: it has the link, and
-  // with one question left the tag has no count.
+  // The first is answered, and Scarlet works on. The second is the one the box answers now, and with one question
+  // left the tag has no count.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_first" ? { ...t, state: "running" as const, question: null } : t),
     taskEvents: { ...d.taskEvents, task_first: [...d.taskEvents.task_first!, { type: "answer" as const, at: at(2000), text: "After it." }] } }));
-  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, undefined], [SECOND, "Answer"], 1]);
+  // One question waits now and the box is on it: its tag says Answer, so the question needs no link of its own.
+  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, undefined], [SECOND, undefined], 0]);
   expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", undefined]);
 });
 
@@ -6915,13 +6921,13 @@ it("keeps the chat in view beside the Transcript, and closes the Transcript on E
   const pin = () => container.querySelector<HTMLElement>(".simple-pin")!;
   const transcript = () => container.querySelector(".simple-transcript");
   await openTranscript();
-  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop, its question
-  // and Answer, so the message box doesn't say Answer with no question on screen.
+  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop and its
+  // question, so the message box doesn't say Answer with no question on screen.
   expect(chat().hidden).toBe(false);
   expect(pin().hidden).toBe(false);
   expect(pin().querySelector(".unit-msg")?.textContent).toContain("Make the logo smaller.");
   expect(pin().querySelector('[aria-label^="Stop this edit"]')).not.toBeNull();
-  expect(pin().querySelector(".req-say")?.textContent).toBe("Smaller by how much?Answer");
+  expect(pin().querySelector(".req-say")?.textContent).toBe("Smaller by how much?");
   expect(boxTag()).toBe("Answer");
   // A message that was sent leaves it open: the chat, where it went, is already in view.
   await act(async () => composer.props!.onSent!());
@@ -7930,7 +7936,8 @@ it("keeps a question answerable while project editing is paused", async () => {
   useProjectStore.setState({ current: data });
   await show();
   const unit = container.querySelector(`.unit[data-run="${base.id}"]`)!;
-  expect([...unit.querySelectorAll(".req-say")].map(el => el.textContent)).toEqual([`${question}Answer`]);
+  // The box is on the question and says Answer, so the question has no link of its own.
+  expect([[...unit.querySelectorAll(".req-say")].map(el => el.textContent), boxTag()]).toEqual([[question], "Answer"]);
   // Resume is on the band of the request that asks, beside Stop: the tray has nothing to say.
   expect(container.querySelector(".queue-tray")).toBeNull();
   expect(unit.querySelector(".unit-pause-edit")?.getAttribute("aria-label")).toBe("Resume editing");
@@ -11661,10 +11668,14 @@ it("shows edit actions while working or asking, and a status once the request st
   const state = (id: string) => container.querySelector<HTMLElement>(`.unit[data-run="${id}"] > .unit-msg > .unit-state`)!;
   expect([state("task_running").innerHTML, editActionsOf("task_running").getAttribute("aria-label")]).toEqual(["", `Stop this edit: ${requestTextFor("task_running")}`]);
   expect([state("task_waiting").querySelector(".unit-dot")?.getAttribute("aria-hidden"), state("task_waiting").textContent, editActionsOf("task_waiting").getAttribute("aria-label")]).toEqual(["true", "", `Stop this edit: ${requestTextFor("task_waiting")}`]);
-  // A question is that dot, the question and Answer: no row under the heading says "Needs your answer" over it.
+  // The heading of the request Scarlet is working on keeps two lines; any other is one line unless the editor picked it.
+  const heading = (id: string) => container.querySelector<HTMLElement>(`.unit[data-run="${id}"] > .unit-msg`)!;
+  expect([heading("task_running").classList.contains("is-live"), heading("task_waiting").classList.contains("is-live"), heading("task_done").classList.contains("is-live")]).toEqual([true, false, false]);
+  // A question is that dot and the question, with Answer on the message box's tag: no row under the heading says
+  // "Needs your answer" over it.
   const asking = container.querySelector<HTMLElement>('.unit[data-run="task_waiting"] .req')!;
   expect(asking.querySelector(".req-status")).toBeNull();
-  expect([...asking.querySelectorAll(".req-say")].map(p => p.textContent)).toEqual([`${data.tasks.find(t => t.id === "task_waiting")!.question}Answer`]);
+  expect([...asking.querySelectorAll(".req-say")].map(p => p.textContent)).toEqual([data.tasks.find(t => t.id === "task_waiting")!.question]);
   // A suggestion waiting to be played says so, and its line under the band plays it.
   expect(state("task_done").textContent).toBe("Suggestion");
   expect(container.querySelector('.unit[data-run="task_done"] .simple-suggest')).not.toBeNull();
@@ -11727,6 +11738,8 @@ it("underlines the chat actions, makes edit result links stand out, and keeps am
     await click(every);
     expect(styled(every, "color", "border-bottom-color")).toEqual(["white", "white"]);
     expect(styled(needed, "color", "border-bottom-color")).toEqual(["silver", "transparent"]);
+    // Answer shows on the question once the box is aimed elsewhere.
+    await act(async () => composer.props!.onClearTarget!());
     expect(look("Answer")).toBe("orange underline orange");
     // The one action of a request that stopped early is a link like the rest, not white.
     await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));

@@ -593,6 +593,9 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .unit.is-collapsed .unit-fold svg { transform: none; }
 .unit.is-collapsed > :not(.unit-msg) { display: none; }
 .unit.is-collapsed > .unit-msg p, .simple-pin .unit.is-collapsed > .unit-msg p { -webkit-line-clamp: 1; }
+/* A request's heading is one line, the rest on hover, so a few requests don't fill the chat. The one Scarlet is on
+   and the one the editor picked keep two. */
+.unit > .unit-msg:not(.is-live, .is-marked) p, .simple-pin .unit > .unit-msg:not(.is-live, .is-marked) p { -webkit-line-clamp: 1; }
 /* Folded requests next to each other sit together as one list: no gap, one rule between them. An open request keeps
    its space. */
 .simple-chat > .simple-turn:has(> .unit.is-collapsed:last-child) + .simple-turn:has(> .unit.is-collapsed:first-child) { margin-top: -16px; }
@@ -903,6 +906,12 @@ button.queue-head:hover { color: var(--color-fg); }
 .queue-remove, .queue-reword, .queue-start { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: none;
   color: var(--color-dim); cursor: pointer; }
 .queue-row:hover :is(.queue-remove, .queue-reword, .queue-start), :is(.queue-remove, .queue-reword, .queue-start):focus-visible { color: var(--color-muted); }
+/* The pencil and the × show on the row the pointer or the keyboard is on, and while its words are being changed, as
+   the × on the message box's tag does: always where there is no pointer to rest. The mark that starts a held request
+   stays, since it says the request is held. */
+@media (hover: hover) {
+  .queue-row:not(:hover, :focus-within, .is-rewording) :is(.queue-remove, .queue-reword) { opacity: 0; }
+}
 :is(.queue-remove, .queue-reword, .queue-start):hover { background: var(--color-line); color: var(--color-fg); }
 /* A queued request's pencil, or a click on its words, puts them in the message box to change. Its row stays lit
    meanwhile, and so does its pencil, which puts them back. */

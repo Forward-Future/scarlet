@@ -378,8 +378,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       if (e.kind === "agent") { if (!quiet && !(e.onNote && closed)) { told = true; if (!listing) said.push(<Said key={i} className="req-say" text={e.fullText ?? e.text} />); } }
       // Several questions can wait in one block, one from each cut or edit Scarlet works on. They are answered one at a
       // time, in the order asked: Answer is on the one the message box will answer, and moves on once that is sent.
+      // While the box is already answering it (its tag says Answer), the link is left out: it comes back whenever the
+      // box is aimed elsewhere.
       else if (e.kind === "question") said.push(<p key={i} className={e.answered ? "req-say is-quiet" : "req-say"}>{e.text}
-        {!e.answered && (!thread.question || thread.question.id === e.taskId) && <button type="button" className="simple-link is-warn" onClick={() => actions.reply(thread)}>Answer</button>}</p>);
+        {!e.answered && (!thread.question || thread.question.id === e.taskId) && actions.answering !== e.taskId && <button type="button" className="simple-link is-warn" onClick={() => actions.reply(thread)}>Answer</button>}</p>);
       // The editor's answer is their message: two lines at most, and a click opens the rest.
       else if (e.kind === "answer") said.push(<Said key={i} className="req-say is-yours" text={e.text} />);
       // An applied change is on the card's last row. A suggestion still says what it is and how to play it. A pass's
@@ -518,7 +520,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // band stays mounted, so Scarlet's work goes on being read while it is out of sight.
     const shut = !!request && !!actions.collapsed?.has(run.root);
     const block = <div key={run.root} className={`unit${shut ? " is-collapsed" : ""}`} data-run={run.root} data-pinned={isPinned || undefined}>
-      {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}`}
+      {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}${isWorking(task.state) || pauseForNested ? " is-live" : ""}`}
         aria-current={marked || undefined} onClick={pressable ? e => {
           if ((e.target as Element).closest('button, a, input, textarea, [role="menu"]') || window.getSelection()?.toString()) return;
           if (markable) actions.mark!(thread.id);

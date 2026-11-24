@@ -6,6 +6,10 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A request's heading is one line, with the rest on hover; the request Scarlet is working on and the one you picked keep two.
+- With a request's list of edits open, the sentence above it counts the edits instead of naming them a second time.
+- A question no longer has an Answer link under it while the message box is already answering it; the link is back whenever the box is aimed elsewhere.
+- A queued request's pencil and × show when you point at its row.
 - A row in a list of edits is one line, so a long list reads at a glance: the row that's open reads in full, and its card has the whole note.
 - A row ends on one word: an edit sent back says Revising… where its amount was, and one that came back says Revised there in amber, instead of on a second line.
 - A request under a cut's or edit's row is just your words, Stop, and what Scarlet is doing: Scarlet's opening sentence, the time and the tokens no longer repeat there.
