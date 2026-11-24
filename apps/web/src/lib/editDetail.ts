@@ -116,8 +116,14 @@ export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind
       const transform = patch.transform as { scale?: unknown } | undefined;
       const keyframes = Array.isArray(patch.keyframes) ? (patch.keyframes as { transform?: { scale?: unknown } }[])
         .map(k => k.transform?.scale).filter((s): s is number => typeof s === "number") : [];
-      if (keyframes.length > 1 && keyframes[0] !== keyframes.at(-1)) lines.push(`${edit.kind === "zoom" ? "Zooms" : "Scales"} ${percent(keyframes[0]!)} → ${percent(keyframes.at(-1)!)}`);
-      else if (typeof transform?.scale === "number") lines.push(transform.scale > 1.001 ? `Zoom to ${percent(transform.scale)}` : transform.scale < 0.999 ? `Inset at ${percent(transform.scale)}` : undefined);
+      if (keyframes.length > 1 && keyframes[0] !== keyframes.at(-1)) {
+        if (edit.kind !== "reframe" || keyframes.every(s => s <= 1.001)) {
+          lines.push(`${edit.kind === "zoom" ? "Zooms" : "Scales"} ${percent(keyframes[0]!)} → ${percent(keyframes.at(-1)!)}`);
+        }
+      } else if (typeof transform?.scale === "number") {
+        if (transform.scale > 1.001 && edit.kind !== "reframe") lines.push(`Zoom to ${percent(transform.scale)}`);
+        else if (transform.scale < 0.999) lines.push(`Inset at ${percent(transform.scale)}`);
+      }
       if (typeof patch.volume === "number") lines.push(`${name ? `${name} ` : "Sound "}${gain(patch.volume)}`);
       if ("volumeKeyframes" in patch) {
         const volume = typeof patch.volume === "number" ? patch.volume : clip?.kind === "media" ? clip.volume ?? 1 : 1;
