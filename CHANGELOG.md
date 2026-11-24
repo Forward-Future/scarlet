@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- A clip Scarlet takes from another recording, such as one you played on screen, and puts into the video now says Insert instead of Put back.
 - A request that punched in at several spots under the same name now says how many zooms it made, instead of naming the same edit over and over.
 - In Media, “Tell Scarlet what this is” and its Cancel button no longer show an underline.
 - A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.
