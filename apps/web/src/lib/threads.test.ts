@@ -104,6 +104,14 @@ describe("buildThreads", () => {
     expect(threadConversation(thread(), []).entries).toMatchObject([{ kind: "request", text: "Keep the sponsor read." }]);
   });
 
+  it("keeps the links in Scarlet's reply to a request that changed nothing", () => {
+    // Scarlet's answer to "find both of those clips" was two links; the chat left out every sentence holding one (2026-11-23).
+    const summary = "Found both clips in your doc. Kontorovich starts at 8:28: https://www.youtube.com/watch?v=zqzk43bSdDI&t=508s Ellenberg: [Watch from 1:26](https://www.youtube.com/watch?v=zqzk43bSdDI&t=86s)";
+    const asked = task("t_find", "done", { instruction: "find both of those clips i referenced", summary, finishedAt: at(2) });
+    const reply = threadConversation(buildThreads({ tasks: [asked], changes: [], notes: [] })[0]!, []).entries.find(e => e.kind === "agent") as { text: string; fullText?: string };
+    expect(reply.fullText ?? reply.text).toBe(`${summary}.`);
+  });
+
   it("shows a reply to a note once, as Scarlet's, and never as a second message from the editor", () => {
     const tasks = [
       task("ask", "done", { instruction: "Tighten the pause", changeIds: ["c1"], summary: "Cut 0.8 s" }),
