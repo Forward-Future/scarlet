@@ -26,6 +26,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Typing a note in Media with a Japanese, Chinese or Korean keyboard no longer saves it, or closes it, when you press Enter or Esc to finish a word.
 - Moving the end of a marked range with → near the end of the video no longer pushes it past the end, where its handle disappeared and the arrows stopped working.
 - M, or a marking tool, pressed while the video plays now pauses it and starts marking that frame, instead of only pausing.
+- Saving a timeline or captions file while Scarlet's engine restarts is tried again, instead of failing at once with "Export destination expired".
 
 ## November 23, 2026
 
