@@ -491,11 +491,10 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     into.reviewRef = from.reviewRef ?? { changeId: from.changeId, spot: from.spot };
     into.reviewChangeId = from.reviewChangeId ?? from.changeId;
   };
-  /** Two cuts at one join said as one: both their sentences and reasons, and a reason to look either raised. */
+  /** Two cuts at one join said as one: both their reasons, and a reason to look either raised. */
   const joinWords = (into: ThreadEdit, from: ThreadEdit) => {
-    const both = (a?: string, b?: string) => a && b && !a.includes(b) ? `${a}${/[.!?]$/.test(a) ? " " : ". "}${b}` : a ?? b;
-    const summary = both(into.summary, from.summary), reason = both(into.reason, from.reason);
-    if (summary) into.summary = summary;
+    const reason = into.reason && from.reason && !into.reason.includes(from.reason)
+      ? `${into.reason}${/[.!?]$/.test(into.reason) ? " " : ". "}${from.reason}` : into.reason ?? from.reason;
     if (reason) into.reason = reason;
     if (from.check && from.check !== into.check) takeDoubt(into, from);
   };
@@ -539,11 +538,15 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     const removed = each.length > 1 ? wholeOut(each[0]!, each, spot) : undefined;
     if (removed) {
       const [into, ...rest] = each;
+      // Its row says what the cut that took the most out said, which names the larger part of what went.
+      const most = each.reduce((best, cut) => length(cut.beforeCut!.removed) > length(best.beforeCut!.removed) ? cut : best);
       into!.beforeCut = { ...into!.beforeCut!, removed };
       for (const cut of rest) {
         joinWords(into!, cut);
         folded.add(cut);
       }
+      if (most.summary) into!.summary = most.summary;
+      else delete into!.summary;
     }
   }
   // A save Scarlet named no edit for, where the video plays as it did (`quietly`), finished the edits round it: on
