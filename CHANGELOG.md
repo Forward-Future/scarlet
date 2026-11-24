@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 24, 2026
+
+- When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.
+
 ## November 23, 2026
 
 - A request's list no longer shows Scarlet's small finishing touches as edits of their own: a two-frame fade on a join or a voice moved to the dialogue track goes with the edit it finishes, and anything Scarlet wants you to check about it shows on that edit.
