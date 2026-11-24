@@ -29,6 +29,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Saving a timeline or captions file while Scarlet's engine restarts is tried again, instead of failing at once with "Export destination expired".
 - Loudness checks on a recording no longer keep failing after Scarlet was closed while saving one: Scarlet measures it again.
 - A file Scarlet can't read now says so by its own name, without the full path of Scarlet's library folder.
+- A WebM screen or voice recording saved without its length now imports with its real length, so reading its text, faces and sound, and choosing voices in it, work instead of saying it's still being prepared.
 
 ## November 23, 2026
 

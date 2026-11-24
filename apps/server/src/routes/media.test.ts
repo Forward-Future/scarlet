@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { encodeWaveformCache } from "@scarlet/render";
+import { encodeWaveformCache, resolveFfmpeg, runCapture } from "@scarlet/render";
 import { createProject, timelineFromKeepRanges, type Project } from "@scarlet/timeline";
 import { ScarletClient } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
@@ -226,6 +226,19 @@ it("says why a file can't be read without the path of Scarlet's library, and log
   for (const folder of [ctx.paths.media(project.id), realpathSync(directory), directory]) expect(error.message).not.toContain(folder);
   expect(error.message).not.toMatch(/[\\/]ffprobe(\.exe)? exited/);
   expect(lines.some(line => line.includes("probe_failed") && line.includes(ctx.paths.media(project.id)))).toBe(true);
+});
+
+it("imports a WebM recording that leaves its length out with its real length", async () => {
+  const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=3.2",
+    "-f", "lavfi", "-i", "sine=duration=3.2", "-c:v", "libvpx", "-c:a", "libopus", "-f", "webm", "pipe:1"]);
+  const source = join(directory, "Screen recording.webm");
+  writeFileSync(source, stdout);
+  const res = await api("POST", `/projects/${project.id}/media/import`, { path: source });
+  expect(res.status).toBe(201);
+  const { media } = await res.json() as { media: { id: string; duration?: number } };
+  expect(media.duration).toBeCloseTo(3.2, 1);
+  await settle();
+  expect(workspace.ctx.repos.projects.getMedia(media.id)?.duration).toBeCloseTo(3.2, 1);
 });
 
 it("saves which input is the editor's voice only once the recording shows two isolated inputs and their mix", async () => {
