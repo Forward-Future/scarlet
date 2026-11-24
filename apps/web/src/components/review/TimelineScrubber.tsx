@@ -424,8 +424,8 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
         const box = e.currentTarget.getBoundingClientRect();
         const ruler = e.currentTarget.querySelector<HTMLElement>(".timeline-lanes")?.offsetTop ?? 0;
         const onRuler = !!(e.target as Element).closest(".timeline-range-zone") || (ruler > 0 && box.height > 0 && e.clientY - box.top < ruler);
-        // Shift held, a drag anywhere on the timeline marks a stretch as a drag along the ruler does, and a click adds its time.
-        if (onRange && (onRuler || e.shiftKey) && marking.begin(e)) return;
+        // Shift held (when enabled), a drag anywhere on the timeline marks a stretch as a drag along the ruler does, and a click adds its time.
+        if (onRange && (onRuler || (e.shiftKey && !!onAddTime)) && marking.begin(e)) return;
         const hitGap = !onRuler && interactiveGaps.length
           ? (box.width > 0 ? gapAt(interactiveGaps, from, span, box.width, e.clientX - box.left) : undefined) ?? directGap : undefined;
         if (hitGap?.skipped && onGap) {
@@ -479,7 +479,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
       onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}>
       <TimelineRuler start={from} duration={span} width={width} endInset={zoomSpace} />
       {onRange && total > 0 && <div aria-hidden="true" className="timeline-range-zone"
-        title={range ? "Drag to mark a new range · double-click to clear" : "Drag to mark a range for your message (or Shift + drag anywhere)"}
+        title={range ? "Drag to mark a new range · double-click to clear" : onAddTime ? "Drag to mark a range for your message (or Shift + drag anywhere)" : "Drag to mark a range for your message"}
         onDoubleClick={e => {
           if (!range) return;
           e.stopPropagation();

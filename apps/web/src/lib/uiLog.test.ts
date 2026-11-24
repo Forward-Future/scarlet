@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { QueueInChat } from "../components/chat/QueueInChat";
+import { QueueTray } from "../components/chat/QueueTray";
 import { appLog, startAppLog, stopAppLog } from "./appLog";
 import { loggedFetch, readLoggedBody } from "./client";
 import { startUiLog, stopUiLog } from "./uiLog";
@@ -66,12 +66,12 @@ it("keeps a queued request's words out of the log when its row is pressed or rem
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
   const items = [{ id: "a", text: "trim the bit about my salary" }, { id: "b", text: "and the part where I name my boss", target: "Cut at 2:05" }];
-  await act(async () => root.render(createElement(QueueInChat, { items, onRemove() {}, onReword() {} })));
+  await act(async () => root.render(createElement(QueueTray, { items, onRemove() {} })));
   fresh();
-  // Each queued request is a bubble in the chat: its words reword it, and its × is labelled with its request.
-  await act(async () => host.querySelector<HTMLElement>(".queue-row .queue-reword")!.click());
+  // Closed, the tray's one line reads the next request; open, each row's × is labelled with its request.
+  await act(async () => host.querySelector<HTMLElement>(".queue-head .queue-text")!.click());
   await act(async () => host.querySelector<HTMLElement>(".queue-remove")!.click());
-  await act(async () => host.querySelectorAll<HTMLElement>(".queue-row .queue-remove")[1]!.click());
+  await act(async () => host.querySelector<HTMLElement>(".queue-row .queue-text")!.click());
   const log = written().join("\n");
   expect(log.match(/\[action\]/g)).toHaveLength(3);
   expect(log).toContain('in="Queued requests"');

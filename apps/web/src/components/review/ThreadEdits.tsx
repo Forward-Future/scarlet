@@ -170,7 +170,7 @@ export function RejectedMark() {
  * `label` names such a list, and `leaving` picks the rows that are on their way out of it: decided or sent back a
  * moment ago, they fade before they go.
  */
-export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving }: {
+export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
   /** Edits the editor rejected, which are out of the video: each keeps a row where it was, with a × and "Rejected". */
   rejected?: ListedEdit[];
@@ -180,6 +180,8 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   /** The queued request Scarlet will take up next, so its edit's row says "Up next" instead of "Queued". */
   nextQueuedId?: string;
   label?: string; leaving?(edit: ListedEdit): boolean;
+  /** The rows that are in For you's list only while low risk edits are included: they open into it and close out of it. */
+  low?(edit: ListedEdit): boolean;
 }) {
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
@@ -268,7 +270,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
       // sentence for that.
       const revised = edit.check === REVISED_CHECK && !reviewed(edit) && !isRevising;
-      return <Fragment key={editKey(edit)}><li className={leaving?.(edit) ? "is-leaving" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
+      return <Fragment key={editKey(edit)}><li className={leaving?.(edit) ? "is-leaving" : undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
         className={["simple-edit", on && "is-on", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}

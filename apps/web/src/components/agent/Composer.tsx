@@ -17,7 +17,7 @@ import { useSpeech } from "../../lib/speech";
 import type { Thread } from "../../lib/threads";
 import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
-import { draftInserter, editTargetAt, markedRangeOf, pointOf, playheadPoints, spliceDraft, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
+import { editTargetAt, markedRangeOf, pointOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, CONNECTING_REASON, runChoiceDiffers, useAgentAvailability, useModelsConnecting } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
@@ -46,13 +46,11 @@ interface Rewording { id: string; text: string; onChange(text: string): void; on
 export interface PausedAt { time: number; version?: string; mediaId?: string }
 
 interface ComposerProps {
+  /** What sits attached to the top of the message box: the requests queued behind the one Scarlet is on. */
+  tray?: ReactNode;
   /** What the message revises, as a tag inside the box before the text: "Cut at 2:05". Its × takes the target off. */
   targetTag?: string;
-  /**
-   * Which of the questions that wait this answer is for, when Scarlet has asked several: "1 of 2", said in the question
-   * on top of the box. They are answered one at a time, in the order asked. With `targetTag` "Answer" the box shows that
-   * question over itself in place of a tag, with any answers Scarlet offered to send with one press.
-   */
+  /** Which of the questions that wait this answer is for, when Scarlet has asked several: "1 of 2". They are answered one at a time, in the order asked. */
   targetTagNote?: string;
   /** The tag is a moment a new edit is about ("At 18:28"), not something being revised. Its × makes the message about the whole video. */
   targetIsPoint?: boolean;
@@ -63,7 +61,7 @@ interface ComposerProps {
   onRestoreTarget?(): boolean;
   /**
    * The box is changing the words of a request still in the queue instead of writing a message: it shows `text` alone,
-   * across its whole width, and sending saves them. The request's bubble in the chat, lit, says which it is, so the box has no
+   * across its whole width, and sending saves them. The request's row in the tray says which it is, so the box has no
    * tag then. Esc leaves them as they were. A message being written waits meanwhile in the store, and comes back once
    * the box is done with the queued one.
    */
@@ -77,15 +75,9 @@ interface ComposerProps {
   aimTime?: number;
   /** Exact time for a time-based target tag ("Cut at 2:05", "Edit at 0:11"), shown to the millisecond above the box. */
   targetTime?: number;
-  /** While the box talks to the cut or edit that's open, its row draws itself here, in place of the tag's words. */
-  aimSlot?(el: HTMLElement | null): void;
-  /** The video's clock for the times in a message that already has a destination: they read as times and seek there. */
-  chipClock?: { duration: number; seek(time: number): void };
-  /** Opens the cut Scarlet's question is about, from the question over the box, when that cut isn't open. */
-  onOpenAsked?(): void;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, aimSlot, chipClock, onOpenAsked }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -312,23 +304,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     }
   };
 
-  // One of the answers Scarlet offered, pressed over the box: it goes as that answer typed and sent would, with any files
-  // waiting for the message. Words being written in the box stay there.
-  const submitChoice = async (choice: string) => {
-    if (!question || busy || speech.busy) return;
-    setError("");
-    setBusy(true);
-    try {
-      const { files, drawn, done } = await filesFor();
-      done(await send(choice, undefined, displayAnchor, undefined, files, drawn));
-      if (boxIsFree()) onSent?.();
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   // Voice: notes at a moment keep the recording; everything else is just text.
   // A message typed but not sent stays in the box, still aimed where it was, even one typed while the spoken one was on its way.
   const clearVoiceTarget = (anchor: AgentContext | null) => {
@@ -400,7 +375,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const aimsByText = !context || !!typedPoint;
   const inputClock = !replying && !rewording && (!displayAnchor || pointOf(displayAnchor)) ? messageClock : undefined;
   const sameClock = !typedPoint || (typedPoint.version === inputClock?.version && typedPoint.mediaId === inputClock?.mediaId);
-  const duration = inputClock?.duration ?? (rewording ? 0 : chipClock?.duration) ?? 0;
+  const duration = inputClock?.duration ?? 0;
   const times = useMemo(() => messageTimestamps(value, duration), [value, duration]);
   const firstTime = times[0]?.time;
   // A time alone says where but not what: there is nothing to send until words follow it.
@@ -427,18 +402,12 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const marked = rewording ? undefined : markedRangeOf(context);
   const chosenRange = !rewording && !marked && context && context !== "whole" && !context.changeId && context.end !== undefined
     ? { start: context.time, end: context.end } : undefined;
-  // A stretch marked on the timeline is in the words themselves, so the line over the box doesn't say it again.
-  const shownRange = chosenRange;
-  const markedWords = marked ? preciseRange(marked.start, marked.end) : "";
-  const rangeInWords = !!marked && value.includes(markedWords);
+  const shownRange = marked ?? chosenRange;
   const rangeWords = shownRange ? preciseRange(shownRange.start, shownRange.end) : "";
   const rangePrecise = shownRange ? `${playbackClock(shownRange.start)} – ${playbackClock(shownRange.end)}` : "";
-  // The question the box answers sits on top of it, and says itself who the message goes to: no Answer tag in the box.
-  const asked = question && tag === "Answer" ? question : undefined;
-  const choices = asked?.questionChoices?.length ? asked.questionChoices : undefined;
   // "Answer" and "Reply" name who the message goes to. The target label shows the place it is about.
-  const wordTag = asked ? undefined : tag === "Answer" || tag === "Reply" ? tag : undefined;
-  const placeTag = wordTag || asked ? undefined : tag;
+  const wordTag = tag === "Answer" || tag === "Reply" ? tag : undefined;
+  const placeTag = wordTag ? undefined : tag;
   const takeOffTarget = () => {
     if (onClearTarget) onClearTarget(); else setContext("whole");
     inputRef.current?.focus();
@@ -456,12 +425,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   useEffect(() => {
     if (rangeTakenOff.current && rangeTakenOff.current.left !== context) rangeTakenOff.current = undefined;
   }, [context]);
-  // Its times deleted from the words, the stretch is off the message too.
-  const hadRangeInWords = useRef(false);
-  useEffect(() => {
-    if (marked && hadRangeInWords.current && !rangeInWords && !rewording) takeOffRange();
-    hadRangeInWords.current = rangeInWords;
-  }, [rangeInWords, marked]); // eslint-disable-line react-hooks/exhaustive-deps
   const restoreRange = () => {
     const taken = rangeTakenOff.current;
     rangeTakenOff.current = undefined;
@@ -471,7 +434,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   };
   // Paused with a cut or an edit open, the header shows the one time the editor is looking at: where they stopped.
   // Its full name on hover still says which cut or edit the message goes to.
-  const stopped = undefined as string | undefined;
+  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? clock(pausedAt.time) : undefined;
   const exactTime = targetTime !== undefined ? targetTime
     : displayAnchor && placeTag && (placeTag.endsWith(` at ${clock(displayAnchor.time)}`) || placeTag === `At ${clock(displayAnchor.time)}`)
       ? displayAnchor.time : undefined;
@@ -511,10 +474,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   } : placeTag ? {
     key: `target:${placeTag}`,
     name: placeName!,
-    // Keyed, so the row's place is never reused for the tag's own words when the row goes: its copy of the row is
-    // drawn into it from outside, and a reused place would wipe that copy out from under it (a crash on the next
-    // call opened from For you).
-    displayName: aimSlot ? <><span key="aim-row" className="composer-aim-row" ref={aimSlot} /><span key="aim-plain" className="composer-aim-plain">{placeDisplay}</span></> : placeDisplay,
+    displayName: placeDisplay,
     title: `About ${placeName}`,
     clearLabel: targetIsPoint ? `Take “${placeTag}” off: the message is about the whole video` : newEditInstead!,
     onClear: takeOffTarget,
@@ -531,27 +491,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     setRefused(false);
     setDraft(text);
   }
-  // A time picked on the timeline (Shift + click, Shift + drag, N) goes into the words where the cursor is.
-  const caretAfter = useRef<number>(undefined);
-  useEffect(() => {
-    if (rewording) return;
-    const insert = (text: string, replaces?: string) => {
-      const field = inputRef.current, words = useUiStore.getState().agentDraft;
-      const next = spliceDraft(words, field ? field.selectionStart ?? words.length : words.length, text, replaces);
-      if (next.text === words) return;
-      if (text) caretAfter.current = next.caret;
-      changeText(next.text);
-    };
-    draftInserter.insert = insert;
-    return () => { if (draftInserter.insert === insert) draftInserter.insert = undefined; };
-  });
-  useLayoutEffect(() => {
-    const caret = caretAfter.current, field = inputRef.current;
-    caretAfter.current = undefined;
-    if (caret === undefined || !field) return;
-    field.focus();
-    field.setSelectionRange(caret, caret);
-  }, [value]);
   const editor = (
     <div className="composer-input">
       <div className="composer-context-row">
@@ -568,25 +507,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         </div>}
         {modelPicker && <div className="composer-model"><AgentChip threadInput={thread ? question ? "answer" : "reply" : undefined} /></div>}
       </div>
-      {/* Scarlet's question, while the box answers it: attached to the top of the box, with the answers it offers to pick
-          with one press. Its × makes the message a new edit instead, as the Answer tag's did. */}
-      {asked && <div className="composer-ask" role="group" aria-label="Scarlet’s question">
-        <div className="composer-ask-head">
-          <span className="composer-ask-dot" aria-hidden />
-          <span className="composer-ask-label">Scarlet asks{answerNote && <span className="composer-ask-count"> · {answerNote}</span>}</span>
-          {onOpenAsked && <button type="button" className="simple-link composer-ask-open" onClick={onOpenAsked}>Open cut</button>}
-          {/* A spoken message stays where it was said until it is out: aiming the box elsewhere would drop it. */}
-          <button type="button" className="composer-ask-clear" disabled={recording || heard} aria-label={newEditInstead}
-            title={recording || heard ? "Waits until what you’re saying is sent" : "New edit instead"} onClick={takeOffTarget}><Icon name="x" size={11} /></button>
-        </div>
-        <p className="composer-ask-text">{asked.question}</p>
-        {choices && <div className="composer-ask-choices">
-          {choices.map(choice => <button key={choice} type="button" className="composer-ask-choice" disabled={busy || speech.busy || recording || heard}
-            onClick={() => void submitChoice(choice)}>{choice}</button>)}
-        </div>}
-      </div>}
+      {tray}
       {/* Where the message goes (a cut, an edit, a moment, a stretch marked on the ruler) is a flush context header
-          on top of the box, so the box keeps its whole width for the words. */}
+          on top of the box, under the queue's tray, so the box keeps its whole width for the words. */}
       {aimItem && <div className="composer-aim-line">
         <ComposerAim item={aimItem} disabled={recording || heard} disabledReason="Waits until what you’re saying is sent" />
       </div>}
@@ -604,18 +527,14 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
         // Esc or Option/Alt+X in an empty box takes a range off at once, as they do elsewhere on the page. A popover
         // that is open takes its own Esc first.
-        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && (shownRange || marked) && !document.querySelector("[data-escape-owner]")) takeOffRange();
-        if (isAltClearRangeKey(e) && emptyBox && (shownRange || marked) && !document.querySelector("[data-escape-owner]")) {
+        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) takeOffRange();
+        if (isAltClearRangeKey(e) && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) {
           e.preventDefault();
           rangeTakenOff.current = takeOffRange();
         }
-        if (e.key === "Delete" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (shownRange || marked)) {
+        if ((e.key === "Backspace" || (e.key === "Delete" && shownRange)) && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag)) {
           e.preventDefault();
-          if (shownRange && aimItem) aimItem.onClear(); else rangeTakenOff.current = takeOffRange();
-        }
-        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag || asked)) {
-          e.preventDefault();
-          // "Answer" and "Reply", and the question over the box, come off as their own × takes them off.
+          // "Answer" and "Reply" come off as their own × takes them off.
           if (aimItem) aimItem.onClear(); else takeOffTarget();
         }
         if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && emptyBox && !rewording && (restoreRange() || onRestoreTarget?.())) {
@@ -644,8 +563,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
               title={recording || heard ? "Waits until what you’re saying is sent" : "New edit instead"} onClick={takeOffTarget}><Icon name="x" size={10} /></button>
           </span>}
           <SkillCommandInput key={owner} id={inputId} inputRef={inputRef} value={value} skills={skills}
-            placeholder={rewording ? "What should it ask instead?" : choices ? "Or type your own answer…" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? (stopped ? "What should change at this frame?" : placeTag ? "What should change here?" : "What should change?") : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
-            timestamps={sameClock ? times : undefined} onTimestamp={inputClock?.seek ?? chipClock?.seek} onChange={changeText} onSubmit={() => void submitText()} />
+            placeholder={rewording ? "What should it ask instead?" : question ? "Answer Scarlet…" : displayAnchor?.changeId && context ? (stopped ? "What should change at this frame?" : placeTag ? "What should change here?" : "What should change?") : replying ? "Write a follow-up…" : NEW_EDIT_HINT}
+            timestamps={sameClock ? times : undefined} onTimestamp={inputClock?.seek} onChange={changeText} onSubmit={() => void submitText()} />
           {/* The reason is only for a mic with no agent to talk to. While a message sends or is written down the spinner says why. */}
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {
             dismissFirstEditHint();

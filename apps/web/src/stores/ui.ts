@@ -95,6 +95,7 @@ export function pointOf(context: AgentContext | "whole" | null | undefined) {
 
 const AGENT_KEY = "scarlet.agent";
 const RUN_TOKENS_KEY = "scarlet.runTokens";
+const NEW_LAYOUT_KEY = "scarlet.newLayout";
 const FIRST_EDIT_HINT_KEY = "scarlet.firstEditHint";
 const SIGN_IN_LATER_KEY = "scarlet.signInLater";
 
@@ -183,6 +184,10 @@ interface UiState {
   /** Show each agent run's token count in edit threads. Off unless turned on in Settings → Usage. */
   showRunTokens: boolean;
   setShowRunTokens(v: boolean): void;
+
+  /** Try the new three-column workspace layout (Beta). Off by default unless turned on in Settings → General. */
+  newLayout: boolean;
+  setNewLayout(v: boolean): void;
 
   /** Context pinned to the next agent instruction (from transcript span, note popover, etc). */
   draftOwner: string | null;
@@ -304,6 +309,15 @@ export const useUiStore = create<UiState>((set, get) => ({
       else localStorage.setItem(RUN_TOKENS_KEY, "hidden");
     } catch { /* Keep the choice for this session. */ }
     set({ showRunTokens: v });
+  },
+
+  newLayout: (() => { try { return localStorage.getItem(NEW_LAYOUT_KEY) === "1"; } catch { return false; } })(),
+  setNewLayout: (v) => {
+    try {
+      if (v) localStorage.setItem(NEW_LAYOUT_KEY, "1");
+      else localStorage.removeItem(NEW_LAYOUT_KEY);
+    } catch { /* Keep the choice for this session. */ }
+    set({ newLayout: v });
   },
 
   draftOwner: null,
