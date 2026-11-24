@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { api } from "./client";
+import { api, connectDesktopEngine } from "./client";
 import { hoverTimes, useHoverFrames } from "./hoverFrames";
 
 let root: Root;
@@ -53,6 +53,40 @@ it("flips through the poster's video while the pointer rests on the card, and go
   expect(hook.frame).toBe("/frame/med_b/24.8");
   await act(async () => { hook.onPointerLeave(); });
   expect(hook.frame).toBeUndefined();
+});
+
+it("flips through a video that was still importing at the first rest once its length is known", async () => {
+  const media = vi.spyOn(api, "media").mockResolvedValue({ media: [{ id: "med_b", kind: "video" }] } as never);
+  vi.spyOn(api, "frameUrl").mockImplementation((id: string, time: number) => `/frame/${id}/${time.toFixed(1)}`);
+  await act(async () => root.render(<Probe id="prj_importing" />));
+  await act(async () => { hook.onPointerEnter(); });
+  await act(async () => { vi.advanceTimersByTime(2000); });
+  expect(hook.frame).toBeUndefined();
+  await act(async () => { hook.onPointerLeave(); });
+  // The import finished: the next rest reads the video again and flips through it.
+  media.mockResolvedValue({ media: [{ id: "med_b", kind: "video", duration: 100 }] } as never);
+  await act(async () => { hook.onPointerEnter(); });
+  await act(async () => { vi.advanceTimersByTime(300); });
+  await act(async () => { vi.advanceTimersByTime(550); });
+  expect(hook.frame).toBe("/frame/med_b/8.0");
+});
+
+it("reads a card's frames from the engine that is running now, after it came back at another address", async () => {
+  vi.spyOn(api, "media").mockResolvedValue({ media: [{ id: "med_b", kind: "video", duration: 100 }] } as never);
+  vi.spyOn(api, "frameUrl").mockImplementation((id: string, time: number) => `http://old/frame/${id}/${time.toFixed(1)}`);
+  await act(async () => root.render(<Probe id="prj_moved" />));
+  await act(async () => { hook.onPointerEnter(); });
+  await act(async () => { vi.advanceTimersByTime(300); });
+  await act(async () => { vi.advanceTimersByTime(550); });
+  expect(hook.frame).toBe("http://old/frame/med_b/8.0");
+  await act(async () => { hook.onPointerLeave(); });
+  connectDesktopEngine("http://127.0.0.1:5999", "token");
+  vi.spyOn(api, "media").mockResolvedValue({ media: [{ id: "med_b", kind: "video", duration: 100 }] } as never);
+  vi.spyOn(api, "frameUrl").mockImplementation((id: string, time: number) => `http://new/frame/${id}/${time.toFixed(1)}`);
+  await act(async () => { hook.onPointerEnter(); });
+  await act(async () => { vi.advanceTimersByTime(300); });
+  await act(async () => { vi.advanceTimersByTime(550); });
+  expect(hook.frame).toBe("http://new/frame/med_b/8.0");
 });
 
 it("keeps the poster for a card with no video", async () => {

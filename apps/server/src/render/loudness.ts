@@ -68,8 +68,9 @@ export function measuredLoudness(ctx: Ctx, file: string, identity: unknown[],
   const saved = projectId ? join(ctx.paths.waveforms(projectId), `loudness-${createHash("sha256").update(key).digest("hex").slice(0, 32)}.json`) : undefined;
   return cache.get(key, async work => {
     if (saved) {
-      const kept = await readFile(saved, "utf8").then(text => JSON.parse(text) as Loudness, () => undefined);
-      if (kept && "integratedLufs" in kept) return kept;
+      // A kept figure cut short or damaged (a crash mid-write, a full disk) is measured again, as a missing one is.
+      const kept = await readFile(saved, "utf8").then(text => JSON.parse(text) as Loudness | null).catch(() => undefined);
+      if (kept && typeof kept === "object" && "integratedLufs" in kept) return kept;
     }
     const measured = await ctx.track(measureLoudness(file, from, to, stop ? AbortSignal.any([work, stop]) : work, audio), projectId);
     if (saved) {

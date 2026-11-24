@@ -187,13 +187,13 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
     opts.env.extend(opts.mcp.env.clone());
     let bin = match opts.resolve_bin("codex") {
         Ok(b) => b,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
     let tmp_dir = opts.cwd.join(".scarlet");
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
     let built = build_codex_command(opts.model.as_deref(), opts.effort.as_deref(), opts.service_tier.as_deref(), &opts.system_prompt, &opts.instruction, opts.plan, opts.workspace.as_ref(), &opts.mcp, &opts.cwd, &bin, &tmp_dir);
     if let Err(e) = write_files(&built.cmd.files).await {
-        return RunResult::failed(e.to_string());
+        return RunResult::failed(format!("{e:#}"));
     }
     match isolated_codex_home(&opts) {
         Ok(home) => {
@@ -236,7 +236,7 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
     .await
     {
         Ok(o) => o,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
     let s = st.lock().unwrap().clone();
     let mut last = s.last_message.clone();

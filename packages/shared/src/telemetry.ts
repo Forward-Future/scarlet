@@ -19,6 +19,7 @@ export type TelemetryChannel = (typeof TELEMETRY_CHANNELS)[number];
 export const FAILURE_REASONS = [
   "agent_not_installed",
   "agent_not_signed_in",
+  "agent_incompatible",
   "rate_limited",
   "model_unavailable",
   "provider_error",

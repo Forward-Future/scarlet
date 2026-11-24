@@ -87,17 +87,21 @@ export function makeMediaClip(
   };
 }
 
-/** Build a detached audio copy of a media clip for a dialogue audio track. */
+/**
+ * Build a detached audio copy of a media clip for a dialogue audio track. The copy plays the same sound: the clip's
+ * audio stream, and its level changes on the same footage, timed from the copy's own start.
+ */
 export function detachedAudioClip(
   clip: MediaClip,
   id: string,
   overrides: Partial<Pick<MediaClip, "sourceIn" | "sourceOut" | "timelineIn" | "audioFadeIn" | "audioFadeOut">> = {},
 ): MediaClip {
+  const timelineIn = overrides.timelineIn ?? clip.timelineIn;
   return makeMediaClip(
     clip.mediaId,
     overrides.sourceIn ?? clip.sourceIn,
     overrides.sourceOut ?? clip.sourceOut,
-    overrides.timelineIn ?? clip.timelineIn,
+    timelineIn,
     {
       id,
       label: clip.label,
@@ -106,6 +110,8 @@ export function detachedAudioClip(
       volume: clip.volume,
       audioFadeIn: overrides.audioFadeIn ?? clip.audioFadeIn,
       audioFadeOut: overrides.audioFadeOut ?? clip.audioFadeOut,
+      ...(clip.audioTrack !== undefined && { audioTrack: clip.audioTrack }),
+      ...(clip.volumeKeyframes?.length && { volumeKeyframes: clip.volumeKeyframes.map(k => ({ ...k, time: k.time + clip.timelineIn - timelineIn })) }),
     },
   );
 }

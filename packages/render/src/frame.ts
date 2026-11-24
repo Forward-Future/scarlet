@@ -5,7 +5,7 @@ import { FILMSTRIP_SEEK_BATCH, sparseFilmstrip, type Project, type Timeline, typ
 import { buildFilterGraph, type GraphOptions } from "./graph.js";
 import { FFMPEG_BASE_ARGS, INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, failureReason, ffSeconds, requireDrawtext, resolveFfmpeg, runCapture, withStreamInfoFallback } from "./exec.js";
 import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
-import { withDecoderFallback } from "./probe.js";
+import { isImagePath, withDecoderFallback } from "./probe.js";
 import { toneMapFilters, type HdrTransfer } from "./hdr.js";
 import { drawtextFontArg } from "./fonts.js";
 
@@ -87,7 +87,9 @@ export async function extractFrame(file: string, tSeconds: number, opts: FrameOp
 }
 
 async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Promise<Buffer> {
-  const t = Math.max(0, tSeconds);
+  // A still has one picture, shown for as long as its clip is (a GIF's first, as the render holds it). Its file ends
+  // after one frame, so a later time would find nothing.
+  const t = isImagePath(file) ? 0 : Math.max(0, tSeconds);
   const width = Math.max(2, Math.round(opts.width ?? 320));
   // An area or a grid is drawn on the CPU, where the picture is in memory.
   // So is an HDR picture's tone-mapping, which has no GPU filter in the bundled builds.

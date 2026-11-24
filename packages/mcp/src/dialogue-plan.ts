@@ -264,7 +264,9 @@ async function appendGateEvidence(
         const speed = clip.speed ?? 1, inClip = side === "out" ? clip.timelineIn + clipDuration(clip) - at : at - clip.timelineIn;
         const gap = soundBesideEdge(edgePages, clip.mediaId, stream, timelineToSource(clip, at), side, Math.min(near, d.end - d.start, inClip) * speed);
         if (gap === undefined) continue;
-        close.push(side === "out" ? `the removed sound starts ${gap.toFixed(2)} s after the cut` : `the removed sound ends ${gap.toFixed(2)} s before the join`);
+        // The gap is in the recording's seconds: said as it plays in the video.
+        const seen = (gap / speed).toFixed(2);
+        close.push(side === "out" ? `the removed sound starts ${seen} s after the cut` : `the removed sound ends ${seen} s before the join`);
         break;
       }
     }
