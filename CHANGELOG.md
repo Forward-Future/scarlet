@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 23, 2026
 
+- An edit Scarlet touched up afterwards, such as an inserted segment it then trimmed a black frame from, now stays in the chat with its See edit link instead of disappearing.
 - Collapsing the request above the message box now hides its list of edits too, instead of only turning the arrow.
 - A request's heading is one line, with the rest on hover; the request Scarlet is working on and the one you picked keep two.
 - With a request's list of edits open, the sentence above it counts the edits instead of naming them a second time.
