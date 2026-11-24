@@ -41,6 +41,15 @@ describe("voice cleanup", () => {
   });
 });
 
+describe("eq bands", () => {
+  it("keep a band's frequency to what FFmpeg takes, so a stray value can't fail the render", async () => {
+    const ctx = { mediaRoot: os.tmpdir(), warn: () => {} };
+    const filters = effectFilters([{ type: "eq", params: { bands: [{ frequency: -120, gain: 3 }, { frequency: 2_000_000, gain: -3 }] }, enabled: true }], "audio", ctx);
+    expect(filters).toEqual(["equalizer=f=1:t=q:w=1:g=3", "equalizer=f=20000:t=q:w=1:g=-3"]);
+    await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=d=0.1:sample_rate=48000", "-af", filters.join(","), "-f", "null", "-"]);
+  });
+});
+
 describe("rendering moving levels and a cleaned voice", () => {
   let dir: string;
   beforeAll(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), "scarlet-levels-")); });
