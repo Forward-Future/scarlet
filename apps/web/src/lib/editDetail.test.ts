@@ -103,6 +103,20 @@ describe("editDetail", () => {
     ]);
     expect(editDetail(save, { kind: "reframe", range: { start: 0, end: 10 } }, { timeline: framed, media })).toBe("Inset at 30%");
     expect(editDetail(save, { kind: "zoom", range: { start: 10, end: 20 } }, { timeline: framed, media })).toBe("Zoom to 130%");
+    // A reframe edit never prints "Zoom to ..." or scale-up keyframes from another clip overlapping its range.
+    const overlapped = change([
+      { op: "updateClip", clipId: "a", patch: { transform: { scale: 1.15 } } },
+      { op: "updateClip", clipId: "inset", patch: { transform: { scale: 1, cropLeft: 0.2, cropRight: 0.2 } } },
+    ]);
+    expect(editDetail(overlapped, { kind: "reframe", range: { start: 0, end: 10 } }, { timeline: framed, media })).toBeUndefined();
+    const scaleUpKeys = change([
+      { op: "updateClip", clipId: "a", patch: { keyframes: [{ transform: { scale: 1 } }, { transform: { scale: 1.2 } }] } },
+    ]);
+    expect(editDetail(scaleUpKeys, { kind: "reframe", range: { start: 0, end: 10 } }, { timeline: framed, media })).toBeUndefined();
+    const scaleDownKeys = change([
+      { op: "updateClip", clipId: "inset", patch: { keyframes: [{ transform: { scale: 1 } }, { transform: { scale: 0.4 } }] } },
+    ]);
+    expect(editDetail(scaleDownKeys, { kind: "reframe", range: { start: 0, end: 10 } }, { timeline: framed, media })).toBe("Scales 100% → 40%");
   });
 
   it("names a transition and a speed", () => {

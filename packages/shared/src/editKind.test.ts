@@ -51,6 +51,23 @@ describe("telling what an applied edit did", () => {
       { time: 0, transform: { scale: 1 } }, { time: 1, transform: { scale: 1.3 } }] } }]), [one], { before: base })).toEqual(["zoom"]);
     expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { transform: { scale: 0.3, x: 0.35, y: 0.35 } } }]), [one],
       { before: base })).toEqual(["reframe"]);
+    // A zoom on one clip does not turn a separate crop/reframe in the same change into a zoom.
+    const two = after(t => {
+      t.tracks.find(x => x.kind === "video")!.clips = [
+        { ...shot, id: "a", timelineIn: 0, timelineOut: 30, sourceIn: 0, sourceOut: 30 },
+        { ...shot, id: "b", timelineIn: 30, timelineOut: 60, sourceIn: 30, sourceOut: 60 },
+      ];
+    });
+    const mixed = change([
+      { op: "updateClip", clipId: "a", patch: { transform: { scale: 1.15 } } },
+      { op: "updateClip", clipId: "b", patch: { transform: { scale: 1, cropLeft: 0.2, cropRight: 0.2 } } },
+    ]);
+    expect(editKinds(mixed, [{ start: 0, end: 30 }, { start: 30, end: 60 }], { before: two, after: two })).toEqual(["zoom", "reframe"]);
+    // A single edit with both a crop and a scale-up keyframe stays a zoom.
+    const both = change([
+      { op: "updateClip", clipId: "a", patch: { transform: { scale: 1, cropLeft: 0.1 }, keyframes: [{ time: 0, transform: { scale: 1 } }, { time: 2, transform: { scale: 1.2 } }] } },
+    ]);
+    expect(editKinds(both, [{ start: 0, end: 30 }], { before: two, after: two })).toEqual(["zoom"]);
   });
 
   it("names a title text, and b-roll, a graphic or a color card laid over the picture an overlay", () => {

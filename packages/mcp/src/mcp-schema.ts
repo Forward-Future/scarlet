@@ -75,7 +75,7 @@ export const timelineEditsInput = z.array(z.object({
   reason: editReasonInput.describe("One short, simple sentence for the card saying why you made this edit, in plain everyday words. Supply one for every item; for a To do marker, keep it brief and don't repeat the marker's text."),
   check: z.string().trim().min(1).max(120).optional().describe("A few words naming a doubt the editor must settle by listening or looking. Marks the edit as needing the editor until they keep it. The card plays the edit's range: for a doubt about a few seconds of a longer edit, flag those seconds with edit_flag once it is saved instead."),
   replaces: z.object({ changeId: z.string(), spot: z.number().int().nonnegative() }).optional(),
-})).optional().describe("List each distinct edit this save makes and its exact playback range in the resulting timeline. A passage it leaves as it was is not an edit, even one you checked. Keep overlapping edits separate. For a revision set replaces to the original change ID and zero-based edit index, and give the full updated range and reason.");
+})).optional().describe("List each individual edit this save makes and its exact playback range in the resulting timeline — never bundle separate edits across untouched stretches into one spanning range (only edits acting on the same time range share a range). Give each edit its own specific title. A passage it leaves as it was is not an edit, even one you checked. Keep overlapping edits separate. For a revision set replaces to the original change ID and zero-based edit index, and give the full updated range and reason.");
 
 export function makeIntentInput(hasTaskId: boolean) {
   const intent = z.enum(["requested", "suggestion", "alternative"]);
