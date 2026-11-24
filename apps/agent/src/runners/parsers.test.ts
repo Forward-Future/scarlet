@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
 import { buildCodexCommand, tomlInlineTable, tomlString } from "./codex.js";
 import { newCodexState, parseCodexLine } from "./codexParse.js";
-import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
+import { acpMcpServer, buildGeminiCommand, geminiDir, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
 import { quoteForCmd, spawnLines, spawnSpec } from "./spawn.js";
 import { briefInput, isQuestionTool, prettyToolName, workspaceEnv, type RunnerEvent } from "./types.js";
 import { holdQuestion, settleQuestion, type QuestionCallState } from "./questionCalls.js";
@@ -469,6 +469,9 @@ describe("gemini ACP parser", () => {
     expect(permissionOutcome({ options: [] }, false)).toEqual({ outcome: "cancelled" });
 
     expect(buildGeminiCommand("agy")).toEqual({ file: "agy", args: ["acp", "--sandbox", "--disable-telemetry"] });
+    // The run's own Gemini folder keeps the user's personal GEMINI.md and plugin rules out.
+    expect(geminiDir("/w/tasks-v2/tsk_1/")).toBe("/w/tasks-v2/tsk_1.gemini");
+    expect(buildGeminiCommand("agy", "/w/tasks-v2/tsk_1.gemini").args).toEqual(["acp", "--sandbox", "--disable-telemetry", "--gemini-dir", "/w/tasks-v2/tsk_1.gemini"]);
     expect(acpMcpServer(mcp)).toEqual({
       name: "scarlet",
       command: mcp.command,

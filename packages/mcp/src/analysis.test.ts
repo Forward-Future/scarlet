@@ -5,6 +5,7 @@ import { flattenWords, searchTranscript } from "@scarlet/shared";
 import {
   colorEvidence,
   summarizeProject,
+  addedAfterRequest,
   summarizeTimeline,
   summarizeTimelinePage,
   captionWordMapper,
@@ -205,6 +206,28 @@ describe("colorEvidence", () => {
     const lines = summarizeProject(project, null).split("\n");
     expect(lines.find(line => line.includes("phone"))).toContain("HDR PQ, shown, read and exported tone-mapped to SDR BT.709");
     expect(lines.find(line => line.includes("Cam.mp4"))).not.toMatch(/HDR|Log|colour/);
+  });
+});
+
+describe("the editor's word on a file", () => {
+  it("gives the editor's note on a file and says which files came in after the request, and nothing for any other file", () => {
+    const project = {
+      id: "prj", name: "Talk", head: null, settings: { width: 1920, height: 1080, aspect: "16:9", fps: 30, sampleRate: 48000 },
+      media: [
+        { id: "cam", kind: "video", name: "Cam.mp4", path: "cam.mp4", duration: 3000, addedAt: "2026-11-23T20:00:24.000Z" },
+        { id: "sponsor", kind: "video", name: "Integration.mp4", path: "sponsor.mp4", duration: 94, addedAt: "2026-11-23T21:10:00.000Z",
+          editorNote: "Finished sponsor read.\nInsert it whole after the intro." },
+      ],
+    } as unknown as Parameters<typeof summarizeProject>[0];
+    const lines = summarizeProject(project, null, { most: 40, requestedAt: "2026-11-23T20:19:38.414Z" }).split("\n");
+    const sponsor = lines.find(line => line.includes("Integration.mp4"))!;
+    expect(sponsor).toContain(`the editor's note on this file: "Finished sponsor read. Insert it whole after the intro."`);
+    expect(sponsor).toContain("added after this request was sent, so not part of it unless the editor's words name it");
+    expect(lines.find(line => line.includes("Cam.mp4"))).not.toMatch(/note|added after/);
+    // Without a request, or for files that were there when it was sent, the list reads as it always has.
+    expect(summarizeProject(project, null)).not.toContain("added after");
+    expect(addedAfterRequest({ addedAt: "2026-11-23T20:00:24.000Z" }, "2026-11-23T20:19:38.414Z")).toBe(false);
+    expect(addedAfterRequest({}, "2026-11-23T20:19:38.414Z")).toBe(false);
   });
 });
 

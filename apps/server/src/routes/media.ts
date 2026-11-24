@@ -106,6 +106,20 @@ export function mediaRoutes(ctx: Ctx) {
     return c.json({ media });
   });
 
+  // The editor's note on a file: what it is and how to use it. An empty note takes it off.
+  r.put("/media/:mediaId/note", async c => {
+    const { note } = await jsonBody(c, z.object({ note: z.string().max(2000) }));
+    const text = note.trim();
+    const media = ctx.db.transaction(() => {
+      const current = requireMedia(ctx, c.req.param("mediaId"));
+      const { status, error, projectId, editorNote: _old, ...rest } = current;
+      const saved = ctx.repos.projects.putMedia(projectId, { ...rest, ...(text && { editorNote: text }) }, status, error);
+      ctx.bus.publish({ type: "media.updated", projectId, media: saved });
+      return saved;
+    }, "immediate")();
+    return c.json({ media });
+  });
+
   r.put("/media/:mediaId/audio-track", async c => {
     const source = requireMedia(ctx, c.req.param("mediaId"));
     requireAudio(source);

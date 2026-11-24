@@ -295,7 +295,7 @@ export function summarizeTimelinePage(
   return render(starts[best]!);
 }
 
-export function summarizeProject(project: Project, timeline: Timeline | null, brief?: { most: number; near?: TimeRange }): string {
+export function summarizeProject(project: Project, timeline: Timeline | null, brief?: { most: number; near?: TimeRange; requestedAt?: string }): string {
   const s = project.settings;
   const lines = [
     `Project "${project.name}" (${project.id}) — ${s.width}x${s.height} ${s.aspect} @ ${s.fps} fps, head version ${project.head ?? "none"}`,
@@ -313,12 +313,23 @@ export function summarizeProject(project: Project, timeline: Timeline | null, br
     ]
       .filter(Boolean)
       .join(", ");
-    lines.push(`  ${m.id} ${m.kind} "${m.name}" ${dur}${extra ? ` (${extra})` : ""}`);
+    lines.push(`  ${m.id} ${m.kind} "${m.name}" ${dur}${extra ? ` (${extra})` : ""}${mediaWords(m, brief?.requestedAt)}`);
   }
   if (timeline) lines.push(summarizeTimeline(timeline, s.fps, brief));
   // The empty timeline's tracks are stated: three passes in three began by adding a video track "v1" and were refused.
   else lines.push("No timeline yet. The first edit starts from an empty one that already has a video track v1 and an audio track a1.");
   return lines.join("\n");
+}
+
+/** Added after the request was sent: a file the editor brought in while Scarlet worked, or while the request waited. */
+export function addedAfterRequest(m: Pick<MediaAsset, "addedAt">, requestedAt: string | undefined): boolean {
+  return !!(requestedAt && m.addedAt && Date.parse(m.addedAt) > Date.parse(requestedAt));
+}
+
+/** The editor's own words on a file, and whether it came in after the request, as the media list says them. */
+function mediaWords(m: MediaAsset, requestedAt: string | undefined): string {
+  return (m.editorNote ? `; the editor's note on this file: "${m.editorNote.replace(/\s+/g, " ")}"` : "") +
+    (addedAfterRequest(m, requestedAt) ? "; added after this request was sent, so not part of it unless the editor's words name it" : "");
 }
 
 /**

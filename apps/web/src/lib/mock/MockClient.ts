@@ -38,7 +38,7 @@ import { bootBackgroundActivity } from "./background";
 import { reviewCuts } from "./cutReview";
 import type { Emitter } from "./emitter";
 import { captionDataUrl, handoffFiles, otioDataUrl } from "./exportFiles";
-import { addImportedMedia, removeMedia, setMediaAudioTrack, transcribe, uploadMedia } from "./media";
+import { addImportedMedia, removeMedia, setMediaAudioTrack, setMediaNote, transcribe, uploadMedia } from "./media";
 import { releaseRender, renders, requestRender } from "./renderJobs";
 import { createNote, rejectChange, reopenChange, reviseChange, unapproveChange } from "./review";
 import { applyChange, retryAttempt, runRetry, stopTask } from "./runs";
@@ -265,6 +265,10 @@ export class MockClient implements ScarletApi {
   async removeMedia(projectId: string, mediaId: string): Promise<Record<string, never>> {
     this.requireAuth();
     return this.latency(removeMedia(this.store, projectId, mediaId));
+  }
+  async setMediaNote(mediaId: string, note: string): Promise<{ media: MediaAsset }> {
+    this.requireAuth();
+    return this.latency(setMediaNote(this.store, mediaId, note));
   }
   async setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection): Promise<{ media: MediaAsset }> {
     this.requireAuth();
@@ -546,9 +550,9 @@ export class MockClient implements ScarletApi {
     runRetry(this.store, retry);
     return { task: retry };
   }
-  async answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice): Promise<{ task: Task }> {
+  async answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice, files?: Parameters<typeof answerTask>[5]): Promise<{ task: Task }> {
     this.requireAuth();
-    return this.latency(answerTask(this.store, taskId, text, skillIds, runWith));
+    return this.latency(answerTask(this.store, taskId, text, skillIds, runWith, files));
   }
 
   // --- hosts / skills / settings ---------------------------------------------------------

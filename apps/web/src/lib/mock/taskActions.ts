@@ -1,9 +1,11 @@
-import { dialogueCommand, AGENT_LABEL, ScarletApiError, isProjectEditTask, sameRun, type RunChoice, type CreateTaskRequest, type Task } from "@scarlet/shared";
+import { dialogueCommand, AGENT_LABEL, ScarletApiError, isProjectEditTask, sameRun, type PictureMarks, type RunChoice, type CreateTaskRequest, type Task, type TaskAttachment } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import { markRenderDone } from "./renders";
 import { runTask, retryAttempt, runRetry, stopTask } from "./runs";
 import type { MockStore } from "./store";
 import { now, sleep } from "./util";
+
+type AnswerFiles = { attachments: TaskAttachment[]; pictureMarks?: PictureMarks };
 
 export function createTask(store: MockStore, projectId: string, body: CreateTaskRequest) {
   store.projectById(projectId);
@@ -101,10 +103,16 @@ export function rewordTask(store: MockStore, taskId: string, text: string, skill
   return { task };
 }
 
-export function answerTask(store: MockStore, taskId: string, text: string, skillIds?: string[], runWith?: RunChoice) {
+export function answerTask(store: MockStore, taskId: string, text: string, skillIds?: string[], runWith?: RunChoice, files?: AnswerFiles) {
   const task = store.taskById(taskId);
   if (task.state !== "waiting_for_user") throw new ScarletApiError(409, "not_waiting", "This request isn’t waiting for an answer.");
   if (skillIds?.length) task.context.skillIds = [...new Set([...(task.context.skillIds ?? []), ...skillIds])];
+  // Files sent with the answer are kept with the request, as its own are.
+  if (files?.attachments.length) {
+    const kept = task.context.attachments ?? [];
+    task.context = { ...task.context, attachments: [...kept, ...files.attachments.filter(a => !kept.some(k => k.id === a.id))],
+      ...(files.pictureMarks && !task.context.pictureMarks && { pictureMarks: files.pictureMarks }) };
+  }
   const operation = dialogueCommand(text, store.db.skills);
   if (operation && operation !== task.context.dialogueOperation) {
     task.context = { ...task.context, dialogueOperation: operation, dialogueRange: undefined };

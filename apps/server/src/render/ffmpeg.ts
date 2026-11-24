@@ -19,6 +19,8 @@ export interface RunOptions {
   maxStdout?: number;
   /** Called with each complete stderr line, such as whisper-cli's `-pp` progress. */
   onStderrLine?: (line: string) => void;
+  /** The program's environment, in place of the engine's own. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export class FfmpegError extends Error {
@@ -36,7 +38,7 @@ export class FfmpegError extends Error {
 export function run(bin: string, args: string[], opts: RunOptions = {}): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     opts.signal?.throwIfAborted();
-    const child = spawn(bin, args, { windowsHide: true, stdio: opts.onMessage ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, { windowsHide: true, stdio: opts.onMessage ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"], ...(opts.env && { env: opts.env }) });
     editorFirst.adoptChild(child);
     if (opts.onMessage) child.on("message", opts.onMessage);
     const out: Buffer[] = [];

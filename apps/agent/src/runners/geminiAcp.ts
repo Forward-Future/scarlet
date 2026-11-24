@@ -346,8 +346,19 @@ export interface GeminiCommand {
  * agy reads Scarlet's prompt from the session's own system prompt (`systemPromptMeta`), not a `GEMINI.md`: it cuts a
  * rule file off at 24,000 bytes, and a pass's prompt with the editor's skill runs past that.
  */
-export function buildGeminiCommand(bin: string): GeminiCommand {
-  return { file: bin, args: ["acp", "--sandbox", "--disable-telemetry"] };
+export function buildGeminiCommand(bin: string, geminiDir?: string): GeminiCommand {
+  return { file: bin, args: ["acp", "--sandbox", "--disable-telemetry", ...(geminiDir ? ["--gemini-dir", geminiDir] : [])] };
+}
+
+/**
+ * The run's own folder for agy's settings, rules, plugins and sessions (`--gemini-dir`), beside its task folder: outside
+ * the folder the agent may write to, and the same for every attempt at the task, so a resumed session is still there.
+ * It keeps the editor's personal `~/.gemini/GEMINI.md` and plugin rules, written for their own chats with Gemini, out
+ * of Scarlet's runs, as they are kept out of Claude Code's (`--restricted`) and Codex's (its own `CODEX_HOME`). The
+ * sign-in stays: agy keeps it in the system keychain.
+ */
+export function geminiDir(cwd: string): string {
+  return `${cwd.replace(/[\\/]+$/, "")}.gemini`;
 }
 
 /** `session/new` and `session/resume` meta that appends Scarlet's prompt to agy's system prompt. */

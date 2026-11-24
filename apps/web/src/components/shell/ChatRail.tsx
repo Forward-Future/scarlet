@@ -1,6 +1,8 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 const MIN_WIDTH = 250;
+/** Under this a rail's header no longer has room for everything at full length. */
+const NARROW = 360;
 
 type RailProps = {
   compact: boolean;
@@ -49,7 +51,8 @@ export function ChatRail({ compact, children, id = "edit-chat", className = "wor
     localStorage.setItem(storageKey, String(value));
   }
 
-  return <aside ref={rail} id={id} className={className} aria-label={label} style={compact ? undefined : { width }}>
+  // Dragged near its narrowest, a rail says so, so its header can give the room it has to what matters most there.
+  return <aside ref={rail} id={id} className={className} aria-label={label} style={compact ? undefined : { width }} data-narrow={!compact && width < NARROW ? "" : undefined}>
     {children}
     {!compact && <div role="separator" className={side === "left" ? "chat-divider" : "chat-divider is-left"} tabIndex={0}
       aria-label={`Resize ${resizes}`} title={`Drag to resize ${resizes}`}

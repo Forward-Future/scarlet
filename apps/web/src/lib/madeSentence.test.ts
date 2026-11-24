@@ -97,3 +97,26 @@ it("says footage put back as what was done to it, never as something made", () =
   expect(say([cut(0, 60), cut(100, 171), back, { ...back, label: "Restored the pause" }])).toBe("Took out 2:11 in 2 cuts and put back 2 passages.");
   expect(say([back, ...["A", "B", "C", "D"].map(label => ({ label, kind: "zoom" as const }))])).toBe("Put back 1 passage and made 4 zooms.");
 });
+
+it("counts clips from another file put into the video as inserts, not as footage put back", () => {
+  const clip = (label: string) => ({ label, kind: "insert" as const });
+  expect(say([cut(0, 60), cut(100, 171), clip("Kontorovich clip"), clip("Ellenberg clip"), { label: "Sponsor spot", kind: "other" as const, marker: true as const }]))
+    .toBe("Took out 2:11 in 2 cuts, and made 2 inserts, and marked 1 spot for you.");
+});
+
+it("leaves the edits' names to the rows while the open list has one for each of them", () => {
+  const edits = [{ label: "music bed", kind: "audio" as const }, { label: "captions", kind: "text" as const }, { label: "wrap" }];
+  const open = (list: Parameters<typeof madeSentence>[0]) => sentenceText(madeSentence(list, length, false, true));
+  expect(open(edits)).toBe("Made 3 edits.");
+  expect(open([...edits.slice(0, 1), { label: "B-roll here", marker: true }, { label: "A chart here", marker: true }])).toBe("Made 1 edit, and marked 2 spots for you.");
+  // The one edit a request made is still said in Scarlet's words: its link opens it, and no list repeats it.
+  expect(open([{ label: "wrap", summary: "Tightened the wrap" }])).toBe("Tightened the wrap.");
+});
+
+it("counts each zoom/punch-in separately even when they share a label", () => {
+  const punch = { label: "Punch in", kind: "zoom" as const };
+  expect(say([punch, punch])).toBe("Made 2 zooms.");
+  expect(say([cut(0, 60), punch, punch, punch])).toBe("Took out 1:00 in 1 cut, and made 3 zooms.");
+  expect(say([{ label: "Punch in on Matt", kind: "zoom" as const }, { label: "Punch in on the demo", kind: "zoom" as const }]))
+    .toBe("Made 2 edits: Punch in on Matt, Punch in on the demo.");
+});

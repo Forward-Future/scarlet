@@ -269,9 +269,15 @@ ${OPS_DOC}`,
               // Only a measured word split refuses the edit. A recording with nothing to measure goes ahead as asked; one
               // still being prepared is measured when the model calls again.
               const inside = await measureTimeline(on, [op.start, op.end])
-                .then(() => joinAudio(on, project, op, joinPages()).filter(e => e.sound === "sound" && e.transcriptSplitsWord))
+                .then(() => joinAudio(on, project, op, joinPages(), { onTimeline: true }).filter(e => e.sound === "sound" && e.transcriptSplitsWord))
                 .catch(withoutUnlessPreparing(`failed to measure the edges of ripple ${i}`, []));
-              split.push(...inside.map(e => `ops[${i}] ${e.edge} at ${(e.edge === "start" ? op.start : op.end).toFixed(2)} s falls inside “${e.transcriptSplitsWord}”, which is sounding there`));
+              // Where the recording is quiet either side, in the timeline seconds the op is given in, and the levels: named
+              // only the word, a pass measured the edge again with its own scripts before each new try (2026-11-23).
+              const quiet = (e: (typeof inside)[number]) => {
+                const at = [e.quietBeforeOnTimeline, e.quietAfterOnTimeline].filter((q): q is number => q !== undefined).map(q => `${q.toFixed(2)} s`);
+                return (at.length ? ` (the recording is quiet at ${at.join(" and at ")})` : "") + (e.levels ? ` [dBFS in 20 ms steps: ${e.levels}]` : "");
+              };
+              split.push(...inside.map(e => `ops[${i}] ${e.edge} at ${(e.edge === "start" ? op.start : op.end).toFixed(2)} s falls inside “${e.transcriptSplitsWord}”, which is sounding there${quiet(e)}`));
             }
             on = applyOps(on, [op]);
           }
@@ -305,7 +311,7 @@ ${OPS_DOC}`,
 
   tool(
     "edit_flag",
-    "Flag an edit already in the video, this request's or an earlier one's, for a doubt the editor must settle by looking or listening. The request lists that edit as needing them and shows check on its card until they keep, revise or undo it. Give range for the exact passage they should inspect, even when you identify the edit explicitly with changeId and spot: the few seconds the doubt is about, not the whole edit. The card shows that passage's times on the video as it is then and plays it, so leave times out of check. With range alone on the current version, the edit covering most of the range is flagged and alsoThere names the others. For an edit you are saving now, give check in timeline_propose's timelineEdits instead. A problem no edit made has nothing to flag: say so in your reply.",
+    "Flag an edit already in the video, this request's or an earlier one's, for a doubt the editor must settle by looking or listening. The request lists that edit as needing them and shows check on its card until they keep, revise or undo it. Give range for the exact passage they should inspect, even when you identify the edit explicitly with changeId and spot: the few seconds the doubt is about, not the whole edit. The card shows that passage's times on the video as it is then and plays it, so leave times out of check. With range alone on the current version, the applied edit matching that range is flagged and alsoThere names any others; to flag a short passage inside a much longer edit, pass changeId and spot explicitly. For an edit you are saving now, give check in timeline_propose's timelineEdits instead. A problem no edit made has nothing to flag: say so in your reply.",
     {
       check: z.string().trim().min(1).max(120).describe("A few words naming the doubt the editor must settle, as the edit's card shows it, without times"),
       range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().nonnegative() }).optional()

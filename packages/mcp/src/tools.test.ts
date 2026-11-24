@@ -138,6 +138,49 @@ describe("audio_sync", () => {
     } finally { await c.close(); }
   });
 
+  // A pass judged a screen recording from thirty frames, left it out and made a To do of every quote read off it (2026-11-23).
+  describe("words said on the other recording's screen", () => {
+    const said: Transcript = { id: "t1", mediaId: "m1", segments: [{ id: "s1", start: 0, end: 30, text: "", words: [
+      { text: "Here's", start: 4, end: 4.3 }, { text: "Elon:", start: 4.4, end: 4.8 },
+      ...["superintelligence", "has", "arrived,", "welcome", "to", "the", "singularity."].map((text, i) => ({ text, start: 10 + i * .5, end: 10.4 + i * .5 })),
+      { text: "Anyway,", start: 20, end: 20.4 }, { text: "moving", start: 20.5, end: 20.9 }, { text: "on.", start: 21, end: 21.3 }] }] };
+    // The screen rolled 2.5 s after the camera, and its sound is the mic's: the tweet is up from its 6 s to 12 s.
+    const tweet = { start: 6, end: 12, text: "Superintelligence has arrived. Welcome to the singularity.", box: [0.3, 0.4, 0.7, 0.45] };
+    beforeEach(() => {
+      mock.state.project.media = [...mock.state.project.media, { id: "scr", kind: "video", name: "screen.mp4", path: "screen.mp4", duration: 27.5, width: 3840, height: 2160, hasAudio: true }];
+      levels.scr = mic;
+      mock.state.transcripts = { m1: said };
+      mock.state.extra = (req, res) => req.path === "/projects/prj_test/media/scr/screen-text"
+        ? reply(res, { from: 0, to: 27.5, readSeconds: 27.5, done: true, spans: [tweet, { start: 0, end: 27.5, text: "Here's my outline of the talk", box: [0, 0, 0.2, 0.05] }] }) : false;
+    });
+    afterEach(() => { mock.state.extra = undefined; mock.state.transcripts = {}; delete levels.scr; });
+
+    it("lists where they are, in the speech's seconds and the picture's, whichever is the reference", async () => {
+      const c = await connect();
+      try {
+        const forward = JSON.parse(textOf(await ok(c, "audio_sync", { referenceId: "m1", secondaryId: "scr" })));
+        expect(forward.secondaryStartRelativeToReference).toBe(2.5);
+        expect(forward.saidOnScreen).toEqual({ speech: "m1", picture: "scr", readings: 1,
+          list: [{ from: 10, to: 13.4, pictureAt: [7.5, 10.9], said: "superintelligence has arrived, welcome to the singularity." }] });
+        const back = JSON.parse(textOf(await ok(c, "audio_sync", { referenceId: "scr", secondaryId: "m1" })));
+        expect(back.saidOnScreen.list).toEqual(forward.saidOnScreen.list);
+        // Only the screen's text is read, never the camera's.
+        expect(mock.requests.filter(r => r.path.endsWith("/screen-text")).map(r => r.path)).toEqual(Array(2).fill("/projects/prj_test/media/scr/screen-text"));
+      } finally { await c.close(); }
+    });
+
+    it("says how far a screen's text is read, and adds nothing beside a recording with no picture", async () => {
+      mock.state.extra = (req, res) => req.path === "/projects/prj_test/media/scr/screen-text"
+        ? reply(res, { from: 0, to: 27.5, readSeconds: 8, done: false, spans: [] }) : false;
+      const c = await connect();
+      try {
+        const partial = JSON.parse(textOf(await ok(c, "audio_sync", { referenceId: "m1", secondaryId: "scr" })));
+        expect(partial.saidOnScreen).toMatchObject({ readings: 0, list: [], textRead: "8 of 28 s of scr's text read so far: call audio_sync again for the rest" });
+        expect(JSON.parse(textOf(await ok(c, "audio_sync", { referenceId: "m1", secondaryId: "m2" }))).saidOnScreen).toBeUndefined();
+      } finally { await c.close(); }
+    });
+  });
+
   it("says what to do about the same recording twice, an unknown one, and levels that stop short", async () => {
     const c = await connect();
     try {
@@ -961,13 +1004,14 @@ describe("tool annotations", () => {
 
   it("marks exactly the tools that change something as writes, and nothing as destructive", () => {
     expect(every.filter(name => !toolAnnotations(name).readOnlyHint).sort()).toEqual([...writes].sort());
-    for (const name of every.filter(n => n !== "web_capture")) {
+    for (const name of every.filter(n => n !== "web_capture" && n !== "web_video")) {
       const a = toolAnnotations(name);
       // A read may be repeated; a write may not, and every edit stays reversible.
       expect(a).toMatchObject({ idempotentHint: a.readOnlyHint, destructiveHint: false, openWorldHint: false });
     }
     // A page from the web changes nothing in the project, and reads the open web, which may say something else next time.
     expect(toolAnnotations("web_capture")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+    expect(toolAnnotations("web_video")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
     // A name Scarlet doesn't know is never taken for a read.
     expect(toolAnnotations("timeline_delete_everything").readOnlyHint).toBe(false);
   });
