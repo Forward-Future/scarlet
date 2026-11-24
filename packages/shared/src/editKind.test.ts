@@ -18,6 +18,22 @@ describe("telling what an applied edit did", () => {
       { op: "updateClip", clipId: shot.id, patch: { sourceIn: 3, timelineIn: 10 } }]), [one])).toEqual(["restore"]);
   });
 
+  it("names footage from another file put into the main picture an insert, and the recording's own footage put back", () => {
+    const joined = timelineFromKeepRanges("project", "interview", [{ start: 0, end: 10 }, { start: 30, end: 120 }]);
+    const main = joined.tracks.find(t => t.kind === "video")!.id;
+    const fill = (mediaId: string, sourceIn: number) => [{ op: "rippleInsertGap", at: 10, duration: 5 },
+      { op: "addClip", trackId: main, clip: makeMediaClip(mediaId, sourceIn, sourceIn + 5, 10, { id: `fill-${mediaId}` }) }];
+    const clocks = (ops: Record<string, unknown>[]) => ({ before: joined, after: applyOps(joined, ops as never) });
+    const spot = [{ start: 10, end: 15 }];
+    const clip = fill("screen", 2401);
+    expect(editKinds(change(clip), spot, clocks(clip))).toEqual(["insert"]);
+    const back = fill("interview", 10);
+    expect(editKinds(change(back), spot, clocks(back))).toEqual(["restore"]);
+    // Without the finished picture, a file the main picture never played is still new to it.
+    expect(editKinds(change(clip), spot, { before: joined })).toEqual(["insert"]);
+    expect(editKinds(change(back), spot, { before: joined })).toEqual(["restore"]);
+  });
+
   it("names level changes and room tone on an audio track audio, and a cut that smooths its join still a cut", () => {
     const tone = change([{ op: "addTrack", track: makeTrack("audio", "Room tone", "tone") },
       { op: "addClip", trackId: "tone", clip: makeMediaClip("m", 40, 50, 10) },
@@ -30,6 +46,9 @@ describe("telling what an applied edit did", () => {
   it("names a level that moves over a clip a dip, and voice cleanup a voice cleanup, on the camera's own sound too", () => {
     const dip = [{ time: 0, db: 0, ease: "easeInOut" }, { time: 0.3, db: -18, ease: "linear" }];
     expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { volumeKeyframes: dip } }]), [one], { before: base })).toEqual(["dip"]);
+    // Keys that only even a clip's level out, a little down here and a little up there, are a level change.
+    const evened = [{ time: 0, db: -1.5, ease: "linear" }, { time: 12, db: -1.5, ease: "linear" }, { time: 16, db: 0, ease: "linear" }, { time: 82, db: 0.9, ease: "linear" }];
+    expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { volumeKeyframes: evened } }]), [one], { before: base })).toEqual(["audio"]);
     // A music bed added already dipped, or added and then dipped, is a dip.
     const bed = makeMediaClip("music", 0, 60, 0, { id: "bed" });
     expect(editKinds(change([{ op: "addTrack", track: makeTrack("audio", "Music", "music") }, { op: "addClip", trackId: "music", clip: bed },
@@ -48,6 +67,23 @@ describe("telling what an applied edit did", () => {
       { time: 0, transform: { scale: 1 } }, { time: 1, transform: { scale: 1.3 } }] } }]), [one], { before: base })).toEqual(["zoom"]);
     expect(editKinds(change([{ op: "updateClip", clipId: shot.id, patch: { transform: { scale: 0.3, x: 0.35, y: 0.35 } } }]), [one],
       { before: base })).toEqual(["reframe"]);
+    // A zoom on one clip does not turn a separate crop/reframe in the same change into a zoom.
+    const two = after(t => {
+      t.tracks.find(x => x.kind === "video")!.clips = [
+        { ...shot, id: "a", timelineIn: 0, timelineOut: 30, sourceIn: 0, sourceOut: 30 },
+        { ...shot, id: "b", timelineIn: 30, timelineOut: 60, sourceIn: 30, sourceOut: 60 },
+      ];
+    });
+    const mixed = change([
+      { op: "updateClip", clipId: "a", patch: { transform: { scale: 1.15 } } },
+      { op: "updateClip", clipId: "b", patch: { transform: { scale: 1, cropLeft: 0.2, cropRight: 0.2 } } },
+    ]);
+    expect(editKinds(mixed, [{ start: 0, end: 30 }, { start: 30, end: 60 }], { before: two, after: two })).toEqual(["zoom", "reframe"]);
+    // A single edit with both a crop and a scale-up keyframe stays a zoom.
+    const both = change([
+      { op: "updateClip", clipId: "a", patch: { transform: { scale: 1, cropLeft: 0.1 }, keyframes: [{ time: 0, transform: { scale: 1 } }, { time: 2, transform: { scale: 1.2 } }] } },
+    ]);
+    expect(editKinds(both, [{ start: 0, end: 30 }], { before: two, after: two })).toEqual(["zoom"]);
   });
 
   it("names a title text, and b-roll, a graphic or a color card laid over the picture an overlay", () => {

@@ -19,7 +19,7 @@ import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
 import { editTargetAt, markedRangeOf, pointOf, playheadPoints, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
-import { AgentChip, runChoiceDiffers, useAgentAvailability } from "./AgentChip";
+import { AgentChip, CONNECTING_REASON, runChoiceDiffers, useAgentAvailability, useModelsConnecting } from "./AgentChip";
 import { SkillCommandInput } from "./SkillCommandInput";
 import { MicButton } from "./MicButton";
 import { AimTimecode, ComposerAim, type AimItem } from "./ComposerAim";
@@ -50,6 +50,8 @@ interface ComposerProps {
   tray?: ReactNode;
   /** What the message revises, as a tag inside the box before the text: "Cut at 2:05". Its × takes the target off. */
   targetTag?: string;
+  /** Which of the questions that wait this answer is for, when Scarlet has asked several: "1 of 2". They are answered one at a time, in the order asked. */
+  targetTagNote?: string;
   /** The tag is a moment a new edit is about ("At 18:28"), not something being revised. Its × makes the message about the whole video. */
   targetIsPoint?: boolean;
   messageClock?: MessageClock;
@@ -75,7 +77,7 @@ interface ComposerProps {
   targetTime?: number;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -95,7 +97,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const [error, setError] = useState("");
   // Enter was pressed with no agent or model to send to. The line under the box says why for as long as that is so.
   const [refused, setRefused] = useState(false);
-  const { effective, none, unavailableReason } = useAgentAvailability();
+  const availability = useAgentAvailability();
+  const { effective, none } = availability;
+  // While Scarlet is still finding its models the header says "Connecting…", and the box says the same, not "Sign in".
+  const unavailableReason = useModelsConnecting(availability) ? CONNECTING_REASON : availability.unavailableReason;
   const [busy, setBusy] = useState(false);
   const voiceAnchor = useRef<AgentContext | null | undefined>(undefined);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -189,21 +194,23 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   };
 
   /** Continue the focused thread, start a note at a moment, or start a new request. */
-  /** Sends the message, and says whether the files attached to it went with it. An answer to Scarlet's question can't carry any: they wait for the next message. */
+  /** Sends the message, and says whether the files attached to it went with it. An answer to Scarlet's question carries them as any other message does. */
   const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[], files?: TaskAttachment[], drawn?: PictureMarks): Promise<boolean> => {
     const attachments = files?.length ? files : undefined;
     const carried = attachments && { attachments, ...(drawn && { pictureMarks: drawn }) };
     if (question) {
       const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
-        : anchor ? `At ${anchor.markedRange ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
-      if (effective && runChoiceDiffers(question, effective)) await answerTask(question.id, answer, skillIds, effective);
+        : anchor ? `At ${anchor.markedRange || anchor.end !== undefined ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
+      const runWith = effective && runChoiceDiffers(question, effective) ? effective : undefined;
+      if (carried) await answerTask(question.id, answer, skillIds, runWith, carried);
+      else if (runWith) await answerTask(question.id, answer, skillIds, runWith);
       else await answerTask(question.id, answer, skillIds);
-      return false;
+      return true;
     }
     if (!effective) throw new Error(unavailableReason);
     let context: Parameters<typeof createTask>[1]["context"];
     if (replying) {
-      if (anchor?.changeId && ![...thread.changes, ...thread.flagged ?? []].some(c => c.id === anchor.changeId)) throw new Error("This suggestion is unavailable. Select the edit again.");
+      if (anchor?.changeId && ![...thread.changes, ...thread.flagged ?? []].some(c => c.id === anchor.changeId)) throw new Error("That cut or edit isn’t there any more. Open it again and resend.");
       const position = anchor && { ...requestPosition(anchor), ...stoppedAt() };
       // A revision takes no files, so one that carries some is a request in the thread, as a reply is.
       if (revising && !attachments) {
@@ -249,7 +256,11 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     const frame = usePictureMarksStore.getState().byProject[project.id];
     const drawing = frame?.marks.length ? frame : undefined;
     if (!useAttachmentsStore.getState().byProject[project.id]?.length && !drawing) return { files: undefined, drawn: undefined, done: () => {} };
+    const adding = (useAttachmentsStore.getState().byProject[project.id] ?? []).filter(a => a.state === "adding").map(a => a.key);
     const ready = await useAttachmentsStore.getState().settled(project.id);
+    // A file the message waited for that couldn't be added stops the send: the words stay in the box, and its row too.
+    const failed = useAttachmentsStore.getState().byProject[project.id]?.find(a => a.state === "failed" && adding.includes(a.key));
+    if (failed) throw new Error(failed.error ?? "Couldn’t add it");
     const files = ready.flatMap(a => a.attachment ?? []);
     const drawn = drawing && await sendMarks(project.id, drawing);
     if (drawn) files.push(drawn.attachment);
@@ -302,9 +313,14 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (boxIsFree()) onSent?.();
   };
   const speech = useSpeech(async (text) => {
-    // Said while the box held a queued request's words: what was said takes their place. Words the editor put back
-    // meanwhile stay as they were, and what was said for them is not sent as a new request.
-    if (voiceReword.current) return saveWords(voiceReword.current, text);
+    // Said while the box held a queued request's words: what was said takes their place in the box, and waits there
+    // as typed words do. The tick saves it and Esc leaves the request as it was. Words the editor put back meanwhile
+    // stay as they were, and what was said for them is not sent as a new request.
+    if (voiceReword.current) {
+      voiceReword.current.request?.onChange(text);
+      inputRef.current?.focus();
+      return;
+    }
     const anchor = voiceAnchor.current === undefined ? displayAnchor : voiceAnchor.current;
     try {
       const { files, drawn, done } = await filesFor();
@@ -375,21 +391,46 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   }, [value, firstTime, inputClock, typedPoint, sameClock, rewording, replying, aimsByText, setContext]);
   const tagWords = targetTag && lowerFirst(targetTag);
   // What the tag's message does, for its hover note: a cut or an edit is revised, a question answered, an edit replied to.
-  const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? "Answering Scarlet’s question"
+  const answerNote = question && targetTag === "Answer" ? targetTagNote : undefined;
+  const tagAct = !targetTag ? undefined : question && targetTag === "Answer" ? answerNote ? `Answering question ${answerNote}. The next follows once this is sent.` : "Answering Scarlet’s question"
     : thread && targetTag === "Reply" ? "Replying to this edit" : `Revising ${tagWords === "whole edit" ? "the whole edit" : tagWords}`;
   // What taking the tag off says it does instead.
   const newEditInstead = tagAct && `Start a new edit instead of ${lowerFirst(tagAct)}`;
   const tag = rewording ? undefined : targetTag;
   // A stretch marked on the timeline's ruler rides with the message, beside the tag of the cut or edit it is aimed at.
+  // Words chosen in the transcript ("Ask about this") for a new edit show the same Range tag so the box names them and can take them off.
   const marked = rewording ? undefined : markedRangeOf(context);
-  const markedWords = marked ? preciseRange(marked.start, marked.end) : "";
-  const markedPrecise = marked ? `${playbackClock(marked.start)} – ${playbackClock(marked.end)}` : "";
+  const chosenRange = !rewording && !marked && context && context !== "whole" && !context.changeId && context.end !== undefined
+    ? { start: context.time, end: context.end } : undefined;
+  const shownRange = marked ?? chosenRange;
+  const rangeWords = shownRange ? preciseRange(shownRange.start, shownRange.end) : "";
+  const rangePrecise = shownRange ? `${playbackClock(shownRange.start)} – ${playbackClock(shownRange.end)}` : "";
   // "Answer" and "Reply" name who the message goes to. The target label shows the place it is about.
   const wordTag = tag === "Answer" || tag === "Reply" ? tag : undefined;
   const placeTag = wordTag ? undefined : tag;
   const takeOffTarget = () => {
     if (onClearTarget) onClearTarget(); else setContext("whole");
     inputRef.current?.focus();
+  };
+  // The marked or transcript range Backspace or its × just took off the box, and what that left the box aimed at. ⌘Z in the empty box
+  // puts the range back, until the box is aimed again, written in or spoken into.
+  const rangeTakenOff = useRef<{ was: AgentContext; left: AgentContext | null }>(undefined);
+  /** Takes the marked or transcript range off the message, and says what the box was aimed at and what that leaves. */
+  const takeOffRange = () => {
+    const was = context && context !== "whole" ? context : undefined;
+    const left = withMarkedRange(context, undefined);
+    setContext(left, was?.changeId ? was : undefined);
+    return was && { was, left };
+  };
+  useEffect(() => {
+    if (rangeTakenOff.current && rangeTakenOff.current.left !== context) rangeTakenOff.current = undefined;
+  }, [context]);
+  const restoreRange = () => {
+    const taken = rangeTakenOff.current;
+    rangeTakenOff.current = undefined;
+    if (!taken) return false;
+    setContext(taken.was);
+    return true;
   };
   // Paused with a cut or an edit open, the header shows the one time the editor is looking at: where they stopped.
   // Its full name on hover still says which cut or edit the message goes to.
@@ -421,14 +462,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const placeName = placeTag
     ? targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag
     : undefined;
-  const aimItem: AimItem | undefined = marked ? {
-    key: `range:${marked.start}/${marked.end}`,
-    name: `Range ${markedWords}`,
-    displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode key={`range:${marked.start}/${marked.end}`} value={markedWords} precise={markedPrecise} /></>,
-    clearLabel: `Take the marked range ${markedWords} off the message`,
+  const aimItem: AimItem | undefined = shownRange ? {
+    key: `range:${shownRange.start}/${shownRange.end}`,
+    name: `Range ${rangeWords}`,
+    displayName: <><span className="composer-aim-verb">Range</span> <AimTimecode key={`range:${shownRange.start}/${shownRange.end}`} value={rangeWords} precise={rangePrecise} /></>,
+    clearLabel: marked ? `Take the marked range ${rangeWords} off the message` : `Take the range ${rangeWords} off the message`,
     onClear: () => {
-      const was = context && context !== "whole" ? context : undefined;
-      setContext(withMarkedRange(context, undefined), was?.changeId ? was : undefined);
+      rangeTakenOff.current = takeOffRange();
       inputRef.current?.focus();
     },
   } : placeTag ? {
@@ -444,8 +484,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     dismissFirstEditHint();
     setError("");
     if (rewording) return rewording.onChange(text);
-    if (text.trim()) captureTarget();
-    else if (context && context !== "whole" && playheadPoints.has(context)) setContext(null);
+    if (text.trim()) {
+      rangeTakenOff.current = undefined;
+      captureTarget();
+    } else if (context && context !== "whole" && playheadPoints.has(context)) setContext(null);
     setRefused(false);
     setDraft(text);
   }
@@ -483,11 +525,15 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       <div className={firstEditHint ? "composer-box first-edit-hint" : "composer-box"} onKeyDown={e => {
         if (rewording && e.key === "Escape" && !e.defaultPrevented && !isComposing(e)) rewording.onCancel();
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
-        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && aimItem) {
+        // Esc in an empty box takes a range off at once, as Esc anywhere else on the page does. A popover that is
+        // open takes its own Esc first.
+        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) takeOffRange();
+        if (e.key === "Backspace" && !e.repeat && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && emptyBox && (aimItem || wordTag)) {
           e.preventDefault();
-          aimItem.onClear();
+          // "Answer" and "Reply" come off as their own × takes them off.
+          if (aimItem) aimItem.onClear(); else takeOffTarget();
         }
-        if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && emptyBox && !rewording && onRestoreTarget?.()) {
+        if (e.key.toLowerCase() === "z" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && emptyBox && !rewording && (restoreRange() || onRestoreTarget?.())) {
           e.preventDefault();
         }
       }}
@@ -506,6 +552,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         <div className="composer-row">
           {wordTag && <span className="composer-tag" title={tagAct}>
             <span className="composer-tag-name">{wordTag}</span>
+            {wordTag === "Answer" && answerNote && <span className="composer-tag-note">{answerNote}</span>}
             {/* A spoken message stays where it was said until it is out: aiming the box elsewhere would drop it. */}
             <button type="button" className="composer-tag-clear" disabled={recording || heard}
               aria-label={newEditInstead}
@@ -518,6 +565,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
           <MicButton onResult={(r) => void onVoice(r)} onStart={() => {
             dismissFirstEditHint();
             setError("");
+            rangeTakenOff.current = undefined;
             voiceReword.current = rewording ? rewordSession : undefined;
             if (!voiceReword.current) voiceAnchor.current = captureTarget();
           }} onRecording={setRecording} onError={setError} followHold disabled={unavailable || busy || speech.busy} disabledReason={unavailable ? unavailableReason : undefined} label="Talk to Scarlet" />

@@ -64,6 +64,8 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+    /* The chat gives these words a colour of their own in rules that load later; the fill is what lets the sweep show through them. */
+    -webkit-text-fill-color: transparent;
     animation: working-text-sweep 2s linear infinite;
   }
   @keyframes working-text-sweep { to { background-position: 0% 0; } }
@@ -71,6 +73,15 @@
 .activity-progress { display: block; appearance: none; width: 100%; height: 3px; margin-top: 6px; border: 0; border-radius: 2px; overflow: hidden; background: var(--color-raised); }
 .activity-progress::-webkit-progress-bar { background: var(--color-raised); }
 .activity-progress::-webkit-progress-value { background: var(--color-muted); border-radius: 2px; }
+/* Work an earlier render already did, at the bar's start: striped, so a head start doesn't read as fast work. */
+.activity-progress-track { position: relative; margin-top: 6px; }
+.activity-progress-track > .activity-progress { margin-top: 0; }
+.activity-progress-reused, .activity-progress-swatch {
+  background: repeating-linear-gradient(135deg, var(--color-muted) 0 2px, transparent 2px 4px), var(--color-raised);
+}
+.activity-progress-reused { position: absolute; inset: 0 auto 0 0; border-radius: 2px 0 0 2px; pointer-events: none; }
+.activity-progress-swatch { display: inline-block; width: 10px; height: 6px; margin-right: 5px; border-radius: 1px; vertical-align: middle; }
+.activity-progress-swatch.is-new { background: var(--color-muted); }
 .activity-progress:indeterminate {
   background: linear-gradient(90deg, var(--color-raised) 35%, var(--color-muted) 50%, var(--color-raised) 65%) 50% / 220% 100%;
 }
@@ -113,6 +124,8 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .timeline-range.is-lit { box-shadow: 0 0 0 2px rgba(244, 241, 233, .4); }
 .simple-timeline-band.is-lit { box-shadow: 0 0 0 2px rgba(255, 160, 156, .55); }
 .composer-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Which of several questions the answer is for: "1 of 2", quieter than the tag's word. */
+.composer-tag-note { flex: none; margin-left: 1px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .composer-tag-clear { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--color-dim); cursor: pointer; }
 .composer-tag-clear:hover:not(:disabled) { background: var(--color-raised); color: var(--color-fg); }
 .composer-tag-clear:disabled { opacity: .5; cursor: default; }
@@ -374,8 +387,14 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .timeline-message-time { position: absolute; z-index: 2; top: 0; bottom: 0; border-left: 1px dashed #d8d5ce; pointer-events: none; }
 .timeline-message-time::before { content: ""; position: absolute; top: 0; left: -3px; width: 5px; height: 5px;
   border-radius: 50%; background: #e2dfd9; box-shadow: 0 0 0 1px #222; }
+/* Own compositing layer sized around the cap and line with margin, so WebKit's dirty-rect repaint doesn't leave
+   1px subpixel trails from the cap's clip-path along the ruler as the playhead moves. */
 .timeline-playhead {
-  position: absolute; z-index: 1; inset-block: calc(var(--ruler-height) - 6px) -2px; width: 1.5px; transform: translateX(-50%); pointer-events: none;
+  position: absolute; z-index: 1; inset-block: calc(var(--ruler-height) - 12px) -2px; width: 12px;
+  transform: translate3d(-50%, 0, 0); will-change: left, transform; pointer-events: none;
+}
+.timeline-playhead::after {
+  content: ""; position: absolute; inset: 6px 0 0; width: 1.5px; margin-inline: auto;
   background: #f4f1e9; box-shadow: 0 0 0 .5px rgb(0 0 0 / 45%); border-radius: 1px;
 }
 /* A jump glides: the playhead and its time slide to the new place (GLIDE_MS in TimelineScrubber). */
@@ -451,7 +470,7 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .timeline-range-loupe-hint { justify-self: center; color: #8d8981; font-size: 11px; }
 .timeline-playhead.is-gliding, .timeline-playhead-time.is-gliding { transition: left .26s cubic-bezier(.3, .7, .3, 1), transform .26s cubic-bezier(.3, .7, .3, 1); }
 .timeline-playhead::before {
-  content: ""; position: absolute; left: 50%; top: -5px; transform: translateX(-50%);
+  content: ""; position: absolute; z-index: 1; left: 1.5px; top: 1px;
   width: 9px; height: 9px; background: #f4f1e9; clip-path: polygon(0 0, 100% 0, 100% 54%, 50% 100%, 0 54%);
 }
 .edit-card-icon { display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none;

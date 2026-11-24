@@ -42,7 +42,7 @@ export async function singleCutDraft(changeId: string, index: number, count: num
     }
     throw err;
   });
-  if (!draft || ontoVersion !== head || removed?.length !== 1) throw new Error("This cut could not be previewed on the current edit.");
+  if (!draft || ontoVersion !== head || removed?.length !== 1) throw new Error("This cut couldn’t be played on the video as it is now.");
   signal.throwIfAborted();
   const preview = { draft, range: removed[0]! };
   if (cache) {

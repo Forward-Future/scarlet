@@ -18,17 +18,19 @@ import { player } from "../lib/player";
 import { captureProjectPlace } from "../lib/updatePlace";
 import { useHostsStore } from "../stores/hosts";
 import { usePlayerStore } from "../stores/player";
+import { usePictureMarksStore } from "../stores/pictureMarks";
 import { useShownCutStore } from "../stores/shownCut";
 import { useProjectStore, type ProjectData } from "../stores/project";
 import { useSkillsStore } from "../stores/skills";
 import { useUiStore, type AgentContext } from "../stores/ui";
 import { SimpleWorkspace } from "./SimpleWorkspace";
-import { callGoesTo, cutOnWorkingCut, keepGoesTo } from "../lib/passCalls";
+import { cutOnWorkingCut, keepGoesTo } from "../lib/passCalls";
 import { cutAudition } from "../lib/cutAudition";
 import { lengthLabel } from "../lib/format";
 import * as watch from "./WatchPage";
 import { madeSentence, sentenceText } from "../lib/madeSentence";
 import { QueueTray } from "../components/chat/QueueTray";
+import { ChatRail } from "../components/shell/ChatRail";
 import { cutSource } from "../components/review/retakeLookup";
 import { enqueueImports } from "../components/media/UploadDropzone";
 
@@ -37,7 +39,7 @@ import { selectOption } from "../../test/selectOption";
 const it = partedIt(vitestIt);
 
 /** The message box has its own tests. Here it records what the workspace hands it, and draws the tray it is given. */
-type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; tray?: React.ReactNode; targetTag?: string; targetTime?: number; targetIsPoint?: boolean; onClearTarget?(): void; onRestoreTarget?(): boolean;
+type BoxProps = { onCreated?(task: { id: string }): void; onSent?(): void; tray?: React.ReactNode; targetTag?: string; targetTagNote?: string; targetTime?: number; targetIsPoint?: boolean; onClearTarget?(): void; onRestoreTarget?(): boolean;
   messageClock?: import("../lib/messageTimestamps").MessageClock; pausedAt?: import("../components/agent/Composer").PausedAt; aimTime?: number;
   rewording?: { id: string; text: string; onChange(text: string): void; onSave(text: string, skillIds?: string[]): Promise<void>; onCancel(): void } };
 const composer = vi.hoisted(() => ({ props: undefined as BoxProps | undefined }));
@@ -109,14 +111,32 @@ afterEach(async () => {
 });
 
 const click = (element: Element) => act(async () => (element as HTMLElement).click());
-const seeAll = (scope: Element) => scope.querySelector<HTMLButtonElement>(".simple-review-tab:not(.simple-pass-need), .simple-pass-toggle");
+/** What opens the rest of a request's edits: See all where it has one list, or the "N optional" line under For you's rows. */
+const seeAll = (scope: Element) => scope.querySelector<HTMLButtonElement>(".simple-review-rest, .simple-review-tab:only-child, .simple-pass-toggle");
+/**
+ * A request's edit rows. Under the tabs, with For you's optional line open, they are two lists, the rows that wait
+ * first: there the rows go by their numbers, as the timeline has them, so a test picks an edit and not its place.
+ */
+const editRowsIn = (scope: ParentNode) => {
+  const rows = [...scope.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
+  if (scope.querySelectorAll(".simple-edits").length < 2) return rows;
+  const no = (row: Element) => parseInt(row.querySelector(".edit-badge")?.textContent ?? "") || Infinity;
+  return rows.sort((a, b) => no(a) - no(b));
+};
+/** The three tabs over a request's rows once it has something to review, as `reviewModes` reads them, with the one shown. */
+const tabs = (shown: "For you" | "Working" | "Done" = "For you") => ["For you", "Working", "Done"].map(tab => [tab, String(tab === shown)]);
+const tabNamed = (scope: Element, name: "For you" | "Working" | "Done") => scope.querySelector<HTMLButtonElement>(`.simple-review-tab[aria-label="${name}"]`)!;
+/** The line under For you's rows that counts the edits Scarlet didn't flag and opens them: its words, and whether it is open. */
+const optionalLine = (scope: Element) => { const line = scope.querySelector(".simple-review-rest"); return line ? [line.textContent, line.getAttribute("aria-expanded")] : null; };
+/** Each list a request shows, top to bottom: its name and its rows' words. */
+const editLists = (scope: Element) => [...scope.querySelectorAll(".simple-edits")].map(list => [list.getAttribute("aria-label"), [...list.querySelectorAll(":scope > li > .simple-edit .simple-edit-title")].map(t => t.textContent)]);
 const reviewModes = (scope: Element) => [...scope.querySelectorAll(".simple-review-tabs > .simple-review-tab")].map(button => [
   button.getAttribute("aria-label") ?? button.textContent,
   button.getAttribute("aria-pressed"),
 ]);
 /** Most tests work on the rows. Expand list disclosures without previewing a finished request's single edit. */
 const openEdits = async () => {
-  for (const toggle of container.querySelectorAll<HTMLElement>('[aria-label="Edits"] :is(.simple-pass-toggle[aria-expanded="false"], .simple-review-tab:not(.simple-pass-need)[aria-pressed="false"])')) await click(toggle);
+  for (const toggle of container.querySelectorAll<HTMLElement>('[aria-label="Edits"] :is(.simple-pass-toggle[aria-expanded="false"], .simple-review-tab:only-child[aria-pressed="false"], .simple-review-rest[aria-expanded="false"])')) await click(toggle);
 };
 const showFolded = () => act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
 const show = async () => { await showFolded(); await openEdits(); };
@@ -294,7 +314,7 @@ it("turns the Before clip's play button while its stream waits for a section, an
   const monitor = container.querySelector(".watch-monitor")!;
   const play = () => monitor.querySelector(".monitor-playback > button")!;
   const holds = () => [play().getAttribute("aria-label"), play().querySelector("svg") ? "icon" : play().querySelector(".animate-spin") ? "spinner" : "empty"];
-  const rows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")];
+  const rows = () => [...editRowsIn(turnFor("chg_approved_2"))];
   await click(rows()[0]!);
   await act(async () => {});
   vi.useFakeTimers();
@@ -422,6 +442,31 @@ it("counts an earlier request's edit this request found a doubt about as one tha
   localStorage.clear();
 });
 
+it("keeps the list a request had open across a restart, so a request about one edit stays under its row", async () => {
+  appliedEdits();
+  await showFolded();
+  const restart = async () => {
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await showFolded();
+    await act(async () => {});
+  };
+  expect([reviewModes(turnFor("chg_approved_2")), optionalLine(turnFor("chg_approved_2"))]).toEqual([tabs(), ["2 optional", "false"]]);
+  await openEdits();
+  expect([reviewModes(turnFor("chg_approved_2")), optionalLine(turnFor("chg_approved_2"))]).toEqual([tabs(), ["2 optional", "true"]]);
+  // Scarlet restarts: the chat is drawn again from nothing, and For you's optional line is still open.
+  await restart();
+  expect([reviewModes(turnFor("chg_approved_2")), optionalLine(turnFor("chg_approved_2"))]).toEqual([tabs(), ["2 optional", "true"]]);
+  // On Done, a restart leaves it there.
+  await click(tabNamed(turnFor("chg_approved_2"), "Done"));
+  await restart();
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual(tabs("Done"));
+  // Back on For you, a restart leaves it there, its optional line closed.
+  await click(turnFor("chg_approved_2").querySelector(".simple-pass-need")!);
+  await restart();
+  expect([reviewModes(turnFor("chg_approved_2")), optionalLine(turnFor("chg_approved_2"))]).toEqual([tabs(), ["2 optional", "false"]]);
+});
+
 it("lists a thread's edits once, numbered, and opens one with its decisions under the player", async () => {
   const edits = appliedEdits();
   await showFolded();
@@ -430,17 +475,23 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   expect(turn.querySelector(".simple-made")?.textContent).toBe("Made 3 edits: music bed, captions, wrap.");
   expect([...turn.querySelectorAll(".simple-made b")].map(b => b.textContent)).toEqual(["3"]);
   expect(turn.querySelector(".simple-made-line button")).toBeNull();
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
+  // For you, Working and Done sit above the list. For you is shown, with the flagged edit and its amber count, and
+  // under its row one quiet line counts the edits Scarlet didn't flag. Nothing is Working's or Done's yet.
+  expect(reviewModes(turn)).toEqual(tabs());
   expect(turn.querySelector(".simple-review-tab-count")?.textContent).toBe("1");
+  expect(turn.querySelector(".simple-review-tab-tally")).toBeNull();
   expect(turn.querySelector(".simple-review-tabs + .simple-edits")).not.toBeNull();
-  expect([...turn.querySelectorAll(".simple-edits .simple-edit-title")].map(r => r.textContent)).toEqual(["wrap"]);
+  expect([editLists(turn), optionalLine(turn)]).toEqual([[["Edits that need you", ["wrap"]]], ["2 optional", "false"]]);
   await openEdits();
-  const rows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
-  // The reply carries no Play, Revise or Undo of its own. The thread's edits are listed once, at its end, numbered as on the timeline.
+  const rows = () => [...editRowsIn(turn)];
+  // The reply carries no Play, Revise or Undo of its own. Opened, the line lists the optional edits under it, each
+  // once and numbered as on the timeline.
+  expect([editLists(turn), optionalLine(turn)]).toEqual([[["Edits that need you", ["wrap"]], ["Optional edits", ["music bed", "captions"]]], ["2 optional", "true"]]);
+  expect(turn.querySelector(".simple-edits + .simple-review-rest + .simple-edits")).not.toBeNull();
   expect(rows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["music bed", "captions", "wrap"]);
   expect(rows().map(r => r.querySelector(".edit-badge")?.textContent)).toEqual(["1", "2", "3"]);
   expect(turn.querySelector(".simple-suggest")).toBeNull();
-  expect(reviewModes(turn)).toEqual([["For you", "false"], ["See all", "true"]]);
+  expect(reviewModes(turn)).toEqual(tabs());
 
   await click(rows()[1]!);
   await act(async () => {});
@@ -492,10 +543,13 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   const note = () => editPanel()!.querySelector<HTMLElement>(".edit-card-title")!;
   expect([note().className, note().getAttribute("aria-expanded")]).toEqual(["edit-card-title", null]);
 
-  // ↓ steps to the next edit, which opens in its place. A flagged edit's note is Scarlet's summary of it, like any other's.
+  // ↑ steps to the edit above, which opens in its place: the other optional one, then the flagged edit that leads For
+  // you. A flagged edit's note is Scarlet's summary of it, like any other's.
   // A note longer than two lines opens in full on a click and folds on the next. There's no button, only the pointer.
+  await press("ArrowUp");
+  expect(openTitle()).toBe("music bed");
   const tooLong = vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(900);
-  await press("ArrowDown");
+  await press("ArrowUp");
   tooLong.mockRestore();
   expect(openTitle()).toBe("wrap");
   // A flagged edit says its place among the ones still to check.
@@ -513,14 +567,20 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   expect(editPanel()!.querySelector(".edit-card-bar")!.textContent).not.toContain("Check");
   expect(rows()[2]!.querySelector(".edit-badge")?.classList.contains("is-check")).toBe(true);
 
-  // Keep records the review and, on See all, moves on to the next unkept edit in the list (wrapping to music bed).
+  // Keep records the review. Nothing else waits on the editor, so the card closes, also with the optional line open:
+  // those are theirs to open. The edit is Done's now, ticked, and For you's count is gone.
   await click(buttonIn(editPanel()!, "Keep")!);
-  expect(openTitle()).toBe("music bed");
-  expect(rows()[2]!.querySelector(".edit-badge")?.classList.contains("is-kept")).toBe(true);
-  expect(rows()[2]!.querySelector(".edit-badge svg")).not.toBeNull();
-  expect(rows()[2]!.querySelector(".edit-badge")?.textContent).toBe("3");
-  expect(reviewModes(turn)).toEqual([["For you", "false"], ["See all", "true"]]);
+  expect(editPanel()).toBeNull();
+  expect(reviewModes(turn)).toEqual(tabs());
   expect(turn.querySelector(".simple-pass-need")?.getAttribute("title")).toBeNull();
+  expect([turn.querySelector(".simple-review-tab-count"), tabNamed(turn, "Done").querySelector(".simple-review-tab-tally")?.textContent]).toEqual([null, "1"]);
+  await click(tabNamed(turn, "Done"));
+  expect(editLists(turn)).toEqual([["Decided", ["wrap"]]]);
+  expect(rows()[0]!.querySelector(".edit-badge")?.classList.contains("is-kept")).toBe(true);
+  expect(rows()[0]!.querySelector(".edit-badge svg")).not.toBeNull();
+  expect(rows()[0]!.querySelector(".edit-badge")?.textContent).toBe("3");
+  await click(tabNamed(turn, "For you"));
+  await click(seeAll(turn)!);
 
   // Clicking the open row plays it again and leaves it open, with the timeline still on it. Esc closes it and goes
   // back to the whole timeline.
@@ -558,6 +618,8 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(dots[2]!.style.left) * 10 })); });
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
+  // Opened from the timeline, it shows the tab that holds it: it was kept, so Done.
+  expect(reviewModes(turn)).toEqual(tabs("Done"));
   // The open edit's dot is lit at the start of its band. The timeline is zoomed to it, with the request's other edits
   // out of view. Zoomed out to the whole video (0) they keep their dots, there to see and to press.
   const numbers = () => [...container.querySelectorAll(".simple-timeline-mark.is-numbered .simple-timeline-number")].map(n => n.textContent);
@@ -568,7 +630,9 @@ it("lists a thread's edits once, numbered, and opens one with its decisions unde
   expect(container.querySelector(".simple-timeline-band")).not.toBeNull();
   expect(numbers()).toEqual(["1", "2", "3"]);
   // An edit that runs most of the video has no band to draw: its dot stays, lit, among the others.
-  await click(turn.querySelector<HTMLElement>(".simple-edits .simple-edit")!);
+  await click(tabNamed(turn, "For you"));
+  await click(seeAll(turn)!);
+  await click(rows()[0]!);
   await act(async () => {});
   expect([openTitle(), container.querySelector(".simple-timeline-band")]).toEqual(["music bed", null]);
   expect(numbers()).toEqual(["1", "2", "3"]);
@@ -615,46 +679,55 @@ it("steps between a request's edits with the arrow keys, sideways or up and down
   appliedEdits();
   await show();
   const turn = turnFor("chg_approved_2");
-  const rows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
+  const rows = () => [...editRowsIn(turn)];
   await click(rows()[0]!);
   await act(async () => {});
   expect(openTitle()).toBe("music bed");
-  // ↑ and ↓ step. ← and → are the player's, so they leave the open edit where it is.
+  // ↑ and ↓ step through the rows of the tab shown, top to bottom: For you's flagged edit, then, with the optional
+  // line open, the edits under it. ← and → are the player's, so they leave the open edit where it is.
   await press("ArrowDown");
   expect(openTitle()).toBe("captions");
   await press("ArrowRight");
   expect(openTitle()).toBe("captions");
+  // The last row: there is nothing under it to step to.
   await press("ArrowDown");
-  expect(openTitle()).toBe("wrap");
-  await press("ArrowUp");
-  expect(openTitle()).toBe("captions");
-  await press("ArrowLeft");
   expect(openTitle()).toBe("captions");
   await press("ArrowUp");
   expect(openTitle()).toBe("music bed");
-  // The request's "needs you" lists just the flagged edit, with the number it has in the whole list, and opens it.
+  await press("ArrowLeft");
+  expect(openTitle()).toBe("music bed");
+  await press("ArrowUp");
+  expect(openTitle()).toBe("wrap");
+  await press("ArrowDown");
+  expect(openTitle()).toBe("music bed");
+  // With the optional line closed, For you lists just the flagged edit, with the number it has in the whole list,
+  // and a press on the tab opens it.
   const need = () => turn.querySelector<HTMLElement>(".simple-pass-need");
+  await click(seeAll(turn)!);
   await click(need()!);
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   expect(turn.querySelector(".simple-edits")?.getAttribute("aria-label")).toBe("Edits that need you");
   expect(rows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".simple-edit-title")?.textContent])).toEqual([["3", "wrap"]]);
-  // The link beside it still lists every edit, and "needs you" brings back just the one.
+  // With one row there, ↑ and ↓ have nowhere to go.
+  await press("ArrowDown");
+  expect(openTitle()).toBe("wrap");
+  // The line under it still lists the others, For you still the tab shown, and pressed again it puts them away.
   await click(seeAll(turn)!);
-  expect([rows().length, need()!.getAttribute("aria-pressed")]).toEqual([3, "false"]);
-  await click(need()!);
+  expect([rows().length, need()!.getAttribute("aria-pressed")]).toEqual([3, "true"]);
+  await click(seeAll(turn)!);
   expect(rows().length).toBe(1);
-  // K keeps the edit on screen. That was the only one to check, so the card closes while wrap stays in For you,
-  // clearly marked as handled.
+  // K keeps the edit on screen. That was the only one to check, so the card closes and wrap is Done's, ticked and
+  // marked Kept.
   await press("k");
   expect(editPanel()).toBeNull();
   expect(need()?.getAttribute("title")).toBeNull();
+  await click(tabNamed(turn, "Done"));
   expect(rows().map(r => [r.querySelector(".simple-edit-title")?.textContent, r.classList.contains("is-decided"), r.querySelector(".edit-badge")?.classList.contains("is-kept"), r.querySelector(".simple-edit-value")?.textContent]))
     .toEqual([["wrap", true, true, "Kept"]]);
-  // In the whole list it is ticked.
-  await click(seeAll(turn)!);
-  expect(rows()[2]!.querySelector(".edit-badge")?.classList.contains("is-kept")).toBe(true);
   // Esc closes the card.
+  await click(need()!);
+  await click(seeAll(turn)!);
   await click(rows()[1]!);
   await act(async () => {});
   expect(openTitle()).toBe("captions");
@@ -710,7 +783,7 @@ const beforeClipReady = () => {
   vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
   useProjectStore.setState({ requestRender: vi.fn().mockResolvedValue({ ...data.renders[0]!, id: "rnd_before", kind: "segment", state: "done" }) });
 };
-const appliedRows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
+const appliedRows = () => [...editRowsIn(turnFor("chg_approved_2"))];
 /** Which side the open edit's switch shows. */
 const sideShown = () => compareButton(editPanel()!).getAttribute("aria-pressed") === "true" ? "Before" : "After";
 const beforeClip = () => container.querySelector<HTMLVideoElement>('.watch-monitor video[aria-label="Before"]')!;
@@ -793,9 +866,9 @@ it("keeps an edit that isn't a cut on Before through a skip or a press inside it
   await press("\\");
   expect(beforeIcon(editPanel()!)).toEqual(["BeforeAfter\\", "Before", "true", "Back to After (\\)"]);
   // The next edit opens on After, and so does this one when the editor comes back to it.
-  await press("ArrowDown");
-  expect([openTitle(), sideShown()]).toEqual(["wrap", "After"]);
   await press("ArrowUp");
+  expect([openTitle(), sideShown()]).toEqual(["music bed", "After"]);
+  await press("ArrowDown");
   expect([openTitle(), sideShown()]).toEqual(["captions", "After"]);
 });
 
@@ -942,7 +1015,7 @@ const twoFlagged = () => appliedEdits().mockImplementation(async (_project, thre
   ] }));
 const cardCount = () => editPanel()?.querySelector(".edit-card-count")?.textContent;
 
-it("steps ↑ and ↓ among the flagged edits from one that still waits, and through every edit while the chat lists them all", async () => {
+it("steps ↑ and ↓ among the flagged edits from one that still waits, and on through the optional ones while their line is open", async () => {
   twoFlagged();
   await showFolded();
   const turn = turnFor("chg_approved_2");
@@ -958,19 +1031,22 @@ it("steps ↑ and ↓ among the flagged edits from one that still waits, and thr
   expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
   await press("ArrowUp");
   expect([openTitle(), cardCount()]).toEqual(["music bed", "1 of 2"]);
-  // With every edit listed the arrows step through them all, the settled one too.
+  // With the optional line open the arrows go on from the last one that waits to the edits under the line, the
+  // settled one, as the chat lists them: the two that wait, then that one.
   await click(seeAll(turn)!);
-  expect(turn.querySelector(".simple-edits")?.getAttribute("aria-label")).toBe("Edits in this thread");
+  expect(editLists(turn)).toEqual([["Edits that need you", ["music bed", "wrap"]], ["Optional edits", ["captions"]]]);
+  await press("ArrowDown");
+  expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
   await press("ArrowDown");
   expect([openTitle(), cardCount()]).toEqual(["captions", undefined]);
   await press("ArrowDown");
-  expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
-  await press("ArrowUp");
   expect(openTitle()).toBe("captions");
+  await press("ArrowUp");
+  expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
 });
 
-it("counts and steps through a flagged edit made in several places as one edit, as its list does, and keeps it in all of them", async () => {
-  // The captions went on in two places, and Scarlet flagged both. The wrap asks for a look too.
+it("keeps a flagged edit made in separate places as separate rows, steps through each, and keeps only the open one", async () => {
+  // The captions went on in two separate places, and Scarlet flagged both. The wrap asks for a look too.
   appliedEdits().mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
       { changeId: "chg_approved_2", spot: 0, label: "captions", range: { start: 0.2, end: 2.4 }, previous: [], check: "The first line runs long" },
@@ -981,23 +1057,26 @@ it("counts and steps through a flagged edit made in several places as one edit, 
   await showFolded();
   const turn = turnFor("chg_approved_2");
   const need = () => turn.querySelector(".simple-pass-need")?.getAttribute("title");
-  // Two edits need the editor, on two rows: the captions, in both places, and the wrap.
-  expect(need()).toBe("2 need you");
+  // Three separate edits need the editor, on three rows: both caption spots and the wrap.
+  expect(need()).toBe("3 need you");
   await click(turn.querySelector(".simple-pass-need")!);
   await act(async () => {});
-  expect([...turn.querySelectorAll(".simple-edits .simple-edit-title")].map(t => t.textContent)).toEqual(["captions", "wrap"]);
-  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 2"]);
-  // ↓ goes to the next edit, not to the captions' other place, and ↑ comes back.
+  expect([...turn.querySelectorAll(".simple-edits .simple-edit-title")].map(t => t.textContent)).toEqual(["captions", "captions", "wrap"]);
+  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 3"]);
+  // ↓ steps to the second caption spot, then to the wrap, and ↑ comes back.
   await press("ArrowDown");
-  expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
+  expect([openTitle(), cardCount()]).toEqual(["captions", "2 of 3"]);
+  await press("ArrowDown");
+  expect([openTitle(), cardCount()]).toEqual(["wrap", "3 of 3"]);
   await press("ArrowUp");
-  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 2"]);
-  // Keep keeps the captions in both places and moves on to the wrap, the one edit still waiting.
+  await press("ArrowUp");
+  expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 3"]);
+  // Keep keeps only the first caption spot and moves on to the second.
   expect(api.recordEditReview).not.toHaveBeenCalled();
   await press("k");
   expect(vi.mocked(api.recordEditReview).mock.calls).toEqual([[PRJ, { changeId: "chg_approved_2", spot: 0, decision: "keep" }]]);
   await act(async () => {});
-  expect([openTitle(), cardCount(), need()]).toEqual(["wrap", "1 of 1", "1 needs you"]);
+  expect([openTitle(), cardCount(), need()]).toEqual(["captions", "1 of 2", "2 need you"]);
 });
 
 it("takes back the last Keep with ⌘Z, then the one before, with no undo display in the timeline's bottom row", async () => {
@@ -1050,19 +1129,71 @@ it("takes back the last Keep with ⌘Z, then the one before, with no undo displa
   expect(undoDisplay()).toBeNull();
 });
 
+it("leaves ⌘Z to a message box the editor has just emptied, so the words deleted come back before a Keep is taken back", async () => {
+  appliedEdits().mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "captions", range: { start: 0.2, end: 2.4 }, previous: [], check: "The first line runs long" },
+      { changeId: "chg_approved_2", spot: 2, label: "wrap", range: { start: 11.5, end: 16 }, previous: [], check: CHECK, summary: SUMMARY },
+    ] }));
+  vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
+  await showFolded();
+  const turn = turnFor("chg_approved_2");
+  const need = () => turn.querySelector(".simple-pass-need")?.getAttribute("title");
+  await click(turn.querySelector(".simple-pass-need")!);
+  await act(async () => {});
+  await press("k");
+  await act(async () => {});
+  expect(need()).toBe("1 needs you");
+  // The message box, as the page draws it.
+  const box = document.createElement("div");
+  box.className = "composer-box";
+  const field = box.appendChild(document.createElement("textarea"));
+  container.append(box);
+  const write = (value: string, inputType: string) => act(async () => {
+    field.value = value;
+    field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType }));
+  });
+  const undoKey = async () => {
+    const key = new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true });
+    await act(async () => { field.dispatchEvent(key); });
+    await act(async () => {});
+    return key.defaultPrevented;
+  };
+  // The editor writes, then deletes it all. ⌘Z is the box's own: it brings the words back, and the Keep stays.
+  await write("Lower the music", "insertText");
+  await write("", "deleteContentBackward");
+  expect(await undoKey()).toBe(false);
+  expect(need()).toBe("1 needs you");
+  // Its own ⌘Z put the words back and then ran back to the empty box: nothing of the box's is left to bring back.
+  await write("Lower the music", "historyUndo");
+  await write("", "historyUndo");
+  expect(await undoKey()).toBe(true);
+  expect(need()).toBe("2 need you");
+  // A box a send emptied has no words to bring back either: ⌘Z goes on to the Keep.
+  await press("k");
+  await act(async () => {});
+  expect(need()).toBe("1 needs you");
+  await write("Lower the music", "insertText");
+  field.value = "";
+  expect(await undoKey()).toBe(true);
+  expect(need()).toBe("2 need you");
+  box.remove();
+});
+
 it("steps ↓ from a flagged edit sent back for revision to the next one that waits, not to the settled edit beside it", async () => {
   twoFlagged();
   await showFolded();
   await click(turnFor("chg_approved_2").querySelector(".simple-pass-need")!);
   await act(async () => {});
   expect([openTitle(), cardCount()]).toEqual(["music bed", "1 of 2"]);
-  // The editor sends the first one back. It stays open with no card, and its row stays in the list of what needs them.
+  // The editor sends the first one back. It stays open with no card, and its row is Working's now.
   const base = buildDb().tasks.find(t => t.id === "task_done")!;
   const now = new Date().toISOString();
   await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_revise_bed", state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined, summary: null, changeIds: [],
     context: { changeId: "chg_approved_2", editIndex: 0, threadId: threadWith("chg_approved_2").id, message: "Lower the bed" } }] }));
   await act(async () => {});
   expect(editPanel()).toBeNull();
+  expect([...turnFor("chg_approved_2").querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you1", "Working1", "Done"]);
   // ↓ goes on to the other one that waits, over the settled edit between them.
   await press("ArrowDown");
   expect([openTitle(), cardCount()]).toEqual(["wrap", "1 of 1"]);
@@ -1089,14 +1220,17 @@ it("steps among a pass's flagged cuts with its lists closed, where the timeline 
   expect(pass.querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Edits that need you");
   await press("ArrowUp");
   expect([editPanel()?.querySelector(".edit-card-title")?.textContent, cardCount()]).toEqual(["music bed. The bed may sit too loud under the intro", "1 of 2"]);
-  // Every edit listed: the arrows go through them all.
+  // With the optional line open the arrows go on from the last cut that waits to the edits under the line.
   await click(seeAll(pass)!);
   await act(async () => {});
+  expect([...pass.querySelectorAll(".simple-pass-list")].map(list => list.getAttribute("aria-label"))).toEqual(["Edits that need you", "Optional edits"]);
+  await press("ArrowDown");
+  expect([pass.querySelector(".simple-pass-list [aria-current='true'] .simple-pass-label")?.textContent, cardCount()]).toEqual(["wrap", "2 of 2"]);
   await press("ArrowDown");
   expect([pass.querySelector(".simple-pass-list [aria-current='true'] .simple-pass-label")?.textContent, cardCount()]).toEqual(["captions", undefined]);
 });
 
-it("lists what needs the editor for a flagged edit opened from the timeline, so ↓ goes on to the next one that waits, and every edit for any other", async () => {
+it("lists what needs the editor for a flagged edit opened from the timeline, so ↓ goes on to the next one that waits, and opens the optional line for one Scarlet didn't flag", async () => {
   twoFlagged();
   // The latest request's edits are the ones marked on the timeline.
   const thread = threadWith("chg_approved_2");
@@ -1121,18 +1255,20 @@ it("lists what needs the editor for a flagged edit opened from the timeline, so 
   expect([openTitle(), cardCount(), listed(), turn.querySelector(".simple-pass-need")?.getAttribute("title")]).toEqual(["music bed", "1 of 2", "Edits that need you", "2 need you"]);
   await press("ArrowDown");
   expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
-  // The card closed, the list of what needs the editor stays, and an edit that needs nothing opens with every edit listed.
+  // The card closed, the list of what needs the editor stays. An edit Scarlet didn't flag is behind For you's
+  // optional line, closed until now: opened from the timeline, it opens the line, with its row lit under it.
   await press("Escape");
-  expect([editPanel(), listed()]).toEqual([null, "Edits that need you"]);
+  expect([editPanel(), listed(), optionalLine(turn)]).toEqual([null, "Edits that need you", ["1 optional", "false"]]);
   await pressDot("2");
-  expect([openTitle(), cardCount(), listed()]).toEqual(["captions", undefined, "Edits in this thread"]);
+  expect([openTitle(), cardCount(), reviewModes(turn), optionalLine(turn)]).toEqual(["captions", undefined, tabs(), ["1 optional", "true"]]);
+  expect(editLists(turn)).toEqual([["Edits that need you", ["music bed", "wrap"]], ["Optional edits", ["captions"]]]);
 });
 
 it("keeps the edit open and zoomed when the timeline is clicked outside the passage it plays", async () => {
   appliedEdits();
   await show();
   const turn = turnFor("chg_approved_2");
-  await click(turn.querySelectorAll(".simple-edits .simple-edit")[2]!);
+  await click(editRowsIn(turn)[2]!);
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   const band = () => container.querySelector(".simple-timeline-band");
@@ -1148,7 +1284,7 @@ it("keeps the edit open and zoomed when the timeline is clicked outside the pass
   // Closed, the stretch goes with it: the next edit opened plays its own passage, not the stretched one.
   await press("Escape");
   const played = vi.spyOn(player, "previewRange");
-  await click(turn.querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turn)[1]!);
   await act(async () => {});
   expect(openTitle()).toBe("captions");
   expect(played).toHaveBeenCalled();
@@ -1160,7 +1296,7 @@ it("keeps a flagged edit's row to its amber number and its name: the reason is o
   await show();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  const row = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")][2]!;
+  const row = () => [...editRowsIn(turn)][2]!;
   // No line under the row says why it asks for a look. Hovering the row does, as on a pass's row.
   expect([row().querySelector(".edit-badge")?.className, row().textContent, row().title]).toEqual(["edit-badge is-check", "3wrapEdit", CHECK]);
   expect(turn.querySelector(".simple-edits")!.textContent).not.toContain(CHECK);
@@ -1168,12 +1304,14 @@ it("keeps a flagged edit's row to its amber number and its name: the reason is o
   await click(row());
   await act(async () => {});
   expect(editPanel()!.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
-  // Kept, the badge fills, and the row is still one line.
+  // Kept, it is Done's: the badge fills, the row ends on Kept, and it is still one line.
   await press("k");
-  expect([row().querySelector(".edit-badge")?.className, row().textContent, row().title]).toEqual(["edit-badge is-kept", "3wrapEdit", CHECK]);
+  await click(tabNamed(turn, "Done"));
+  const kept = editRowsIn(turn)[0]!;
+  expect([kept.querySelector(".edit-badge")?.className, kept.textContent, kept.title]).toEqual(["edit-badge is-kept", "3wrapKept", CHECK]);
 });
 
-it("reviews only the edits Scarlet flagged, then keeps them in For you marked as handled", async () => {
+it("reviews only the edits Scarlet flagged, then lists them under Done marked as handled", async () => {
   appliedEdits();
   await show();
   const turn = turnFor("chg_approved_2");
@@ -1184,9 +1322,12 @@ it("reviews only the edits Scarlet flagged, then keeps them in For you marked as
   expect(editPanel()).toBeNull();
   expect(turn.querySelector(".simple-pass-need")?.getAttribute("title")).toBeNull();
   expect(turn.querySelector(".simple-review-tab-count")).toBeNull();
+  await click(tabNamed(turn, "Done"));
+  expect(editLists(turn)).toEqual([["Decided", ["wrap"]]]);
   const row = turn.querySelector<HTMLButtonElement>(".simple-edits .simple-edit")!;
   expect([row.classList.contains("is-decided"), row.querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Kept"]);
-  expect(buttonIn(turn, "Done")).toBeUndefined();
+  // The thread has no action of its own to press once they are reviewed.
+  expect(turn.querySelector(".simple-action-main")).toBeNull();
 });
 
 it("gives the timeline to the latest request when its edit lands, though the editor looked at an earlier one while Scarlet worked", async () => {
@@ -1203,6 +1344,16 @@ it("gives the timeline to the latest request when its edit lands, though the edi
     summary: null, changeIds: [], question: null, instruction: "Fade the outro", context: { message: "Fade the outro" } }] }));
   await act(async () => {});
   expect(numbered()).toEqual([["3", "check"]]);
+  // The request in hand is the one picked, so its band is violet while it runs, before it has applied anything.
+  const pinned = () => container.querySelector<HTMLElement>(".simple-pin .unit-msg")!;
+  expect(pinned().classList.contains("is-marked")).toBe(true);
+  // Pressed, it lets go as any marked band does, and a second press picks it again.
+  await click(pinned());
+  await act(async () => {});
+  expect(pinned().classList.contains("is-marked")).toBe(false);
+  await click(pinned());
+  await act(async () => {});
+  expect(pinned().classList.contains("is-marked")).toBe(true);
   // While it works they look at the earlier request's flagged edit and close it without keeping it.
   await click(turnFor("chg_approved_2").querySelector(".simple-pass-need")!);
   await act(async () => {});
@@ -1423,10 +1574,9 @@ it("asks again for markers that failed to load when the editor opens an edit the
   expect(openTitle()).toBe("wrap");
   await press("Escape");
   expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
-  // With the markers in, opening an edit there doesn't ask the engine again. "Needs you" listed just the flagged
-  // edit, so the whole list is opened for another.
+  // With the markers in, opening an edit there doesn't ask the engine again. The optional line under For you's flagged
+  // edit is open, so another edit is a row to press.
   const asked = vi.mocked(api.threadEdits).mock.calls.length;
-  await click(seeAll(turnFor("chg_approved_2"))!);
   await click(editRows("chg_approved_2")[1]!);
   await act(async () => {});
   expect(openTitle()).toBe("captions");
@@ -1455,7 +1605,10 @@ it("stops asking for a look at a flagged edit once its revision is queued", asyn
   await show();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  const wrap = turn.querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[2]!;
+  // Sent back, it is Working's: For you has nothing that waits, and counts nothing.
+  expect([...turn.querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you", "Working1", "Done"]);
+  await click(tabNamed(turn, "Working"));
+  const wrap = editRowsIn(turn)[0]!;
   expect(wrap.querySelector(".edit-badge")?.classList.contains("is-check")).toBe(false);
   expect(wrap.querySelector(".simple-edit-check")?.textContent).toBe("Up next");
   expect(wrap.getAttribute("aria-label")).toBe("Edit 3: wrap, up next");
@@ -1478,8 +1631,9 @@ it("says Revising… on the row of an edit the editor had kept while Scarlet rev
   await show();
   await act(async () => {});
   // The version they kept is on its way out: its row says so, as any edit's does while it is revised (2026-11-10: a kept
-  // edit's row went on reading as kept, with its amount, while Scarlet revised it).
-  const wrap = [...container.querySelectorAll<HTMLElement>(".simple-edits .simple-edit")].find(r => r.getAttribute("aria-label")?.startsWith("Edit 3: wrap"))!;
+  // edit's row went on reading as kept, with its amount, while Scarlet revised it). It is Working's, not Done's.
+  await click(tabNamed(container, "Working"));
+  const wrap = [...editRowsIn(container)].find(r => r.getAttribute("aria-label")?.startsWith("Edit 3: wrap"))!;
   expect([wrap.getAttribute("aria-label"), wrap.querySelector(".simple-edit-check")?.textContent]).toEqual(["Edit 3: wrap, revising", "Revising…"]);
 });
 
@@ -1488,7 +1642,7 @@ it("takes the card off an edit sent back for revision until its new version land
   await show();
   await act(async () => {});
   // The request's block is in the chat, and above the message box while Scarlet is on its edit.
-  const wrap = () => [...container.querySelectorAll<HTMLElement>(".simple-edits .simple-edit")].find(r => r.getAttribute("aria-label")?.startsWith("Edit 3: wrap"))!;
+  const wrap = () => [...editRowsIn(container)].find(r => r.getAttribute("aria-label")?.startsWith("Edit 3: wrap"))!;
   await click(wrap());
   await act(async () => {});
   expect(editPanel()!.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
@@ -1704,7 +1858,7 @@ const earlierRequestOnly = (flagged = true) => {
   if (!flagged) data = { ...data, changes: data.changes.map(c => c.id !== "chg_approved_2" ? c : { ...c, timelineEdits: c.timelineEdits!.map(({ check: _check, ...e }) => e) }) };
   useProjectStore.setState({ current: data });
 };
-const editRows = (changeId: string) => [...turnFor(changeId).querySelectorAll<HTMLElement>(".simple-edits .simple-edit")];
+const editRows = (changeId: string) => editRowsIn(turnFor(changeId));
 
 it("shows unresolved flags from older requests on the default full timeline and opens the right edit", async () => {
   earlierRequestOnly();
@@ -1833,7 +1987,7 @@ it("marks a new request's edits when it arrives, wherever the editor had been be
   await show();
   await act(async () => {});
   // The editor looks at one edit and closes it. That request still has an edit to check, so the timeline stays with it.
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   expect(openTitle()).toBe("captions");
   await press("Escape");
@@ -1858,7 +2012,7 @@ it("goes back to the latest request once the request the editor went to has noth
   // Looking at an edit of the earlier request brings that request onto the timeline. It still has "wrap" to check,
   // so its flag stays marked after the edit closes.
   const earlier = turnFor("chg_approved_2");
-  await click(earlier.querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(earlier)[1]!);
   await act(async () => {});
   await press("Escape");
   expect(numbered()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
@@ -1875,7 +2029,7 @@ it("goes back to the latest request once the request the editor went to has noth
 it("keeps the message box aimed at an edit while Scarlet works in that request, until the message is sent", async () => {
   appliedEdits();
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   await click(buttonIn(editPanel()!, "Revise")!);
   const target = () => container.querySelector(".simple-target")?.textContent;
@@ -1896,9 +2050,10 @@ it("keeps the message box aimed at an edit while Scarlet works in that request, 
   expect(threadWith("chg_approved_2").question?.id).toBe("task_resumed");
   expect(target()).toContain("Revising “captions” at 0:00");
   expect(useUiStore.getState().agentDraft).toBe("Make the captions smaller");
-  // Once the message is sent, the box follows what's open again: the edit still is, so it stays aimed at it.
+  // Once the message is sent, the card goes on as Keep does, to the next edit under For you's optional line, and the
+  // box follows what's open.
   await act(async () => { useUiStore.getState().setAgentDraft(""); composer.props!.onSent!(); });
-  expect(target()).toContain("Revising “captions” at 0:00");
+  expect(target()).toContain("Revising “music bed” at 0:00");
   // Closing the edit leaves the question Scarlet asked first as what the next message answers.
   await press("Escape");
   expect(target()).toContain("Answering");
@@ -1919,7 +2074,7 @@ it("keeps the box on Answer when a revision sent before it lands", async () => {
     summary: null, changeIds: [], question: "Smaller by how much?", context: { changeId: "chg_approved_2", message: "Carry on" } }] };
   useProjectStore.setState({ current: data });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   await click(buttonIn(editPanel()!, "Revise")!);
   const target = () => container.querySelector(".simple-target")?.textContent;
@@ -1952,11 +2107,14 @@ it("answers Scarlet's question with the next message when nothing is open, until
   // With no cut or edit open, the box is already on the question, and its tag says so.
   expect(target()).toBe("Answering “" + threadWith("chg_approved_2").title + "”");
   expect(boxTag()).toBe("Answer");
+  // One question waits, so the tag has no count of them.
+  expect(composer.props!.targetTagNote).toBeUndefined();
   expect(useUiStore.getState().draftOwner).toBe(JSON.stringify([PRJ, threadWith("chg_approved_2").id]));
   // The conversation is whole: nothing is hidden to show the question.
   expect(turns().some(t => t.hidden)).toBe(false);
-  // Answer on the question means the same, and the box stays there through a message landing while the question stands.
-  await click(answer());
+  // The tag says Answer once: the question has no Answer link of its own while the box is on it. The box stays there
+  // through a message landing while the question stands.
+  expect(buttonIn(container, "Answer")).toBeUndefined();
   await act(async () => composer.props!.onSent!());
   expect(target()).toContain("Answering");
   // Taking the tag off makes the next message a new edit. The line for screen readers says so, and nothing shows above the box.
@@ -1969,6 +2127,46 @@ it("answers Scarlet's question with the next message when nothing is open, until
   // not A, S, R or K on whatever card is open.
   expect(useUiStore.getState().composerFocus).toBe(1);
   expect(container.querySelector(".simple-target button")).toBeNull();
+  // With the box aimed elsewhere, Answer is back on the question, and puts the box on it again.
+  await click(answer());
+  expect(boxTag()).toBe("Answer");
+  expect(buttonIn(container, "Answer")).toBeUndefined();
+});
+
+it("answers Scarlet's questions one at a time, in the order asked, and says which of them the box is on", async () => {
+  finishedPass();
+  idle();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  // Scarlet revises two cuts of the pass at once, and asks about each. They are the only questions in the project.
+  const FIRST = "Cut after the breath, or before it?", SECOND = "Keep the price in?";
+  const first = callRequest("task_first", 0, { kind: "revise" as const, state: "waiting_for_user" as const, question: FIRST, createdAt: at(0), startedAt: at(0) });
+  const second = callRequest("task_second", 1, { kind: "revise" as const, state: "waiting_for_user" as const, question: SECOND, createdAt: at(1000), startedAt: at(1000) });
+  data = { ...data, tasks: [...data.tasks, first, second],
+    taskEvents: { ...data.taskEvents, task_first: [{ type: "question" as const, at: at(500), text: FIRST }], task_second: [{ type: "question" as const, at: at(1500), text: SECOND }] } };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  /** A request's question under its cut's row: its words, and the link after them when it is the one the box answers. */
+  const asked = (taskId: string) => {
+    const line = container.querySelector(`.subunit[data-run="${taskId}"] .req-say`);
+    return line ? [[...line.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent).join(""), line.querySelector("button")?.textContent] : undefined;
+  };
+  const links = () => container.querySelectorAll(".req-say .simple-link.is-warn").length;
+  // Both questions read under their cuts. Only the first has Answer: it is the one the next message goes to.
+  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, "Answer"], [SECOND, undefined], 1]);
+  // The box is on it, and its tag says which of the two this is.
+  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", "1 of 2"]);
+  // Answer on the first means the same.
+  await click(buttonIn(container.querySelector('.subunit[data-run="task_first"]')!, "Answer")!);
+  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", "1 of 2"]);
+  // The first is answered, and Scarlet works on. The second is the one the box answers now, and with one question
+  // left the tag has no count.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_first" ? { ...t, state: "running" as const, question: null } : t),
+    taskEvents: { ...d.taskEvents, task_first: [...d.taskEvents.task_first!, { type: "answer" as const, at: at(2000), text: "After it." }] } }));
+  // One question waits now and the box is on it: its tag says Answer, so the question needs no link of its own.
+  expect([asked("task_first"), asked("task_second"), links()]).toEqual([[FIRST, undefined], [SECOND, undefined], 0]);
+  expect([boxTag(), composer.props!.targetTagNote]).toEqual(["Answer", undefined]);
 });
 
 it("keeps the editor's answer and a note of theirs to two lines, with the whole of it in the title", async () => {
@@ -2016,7 +2214,7 @@ it("keeps the editor's answer and a note of theirs to two lines, with the whole 
 it("stops aiming the message box at a request that is no longer in the project", async () => {
   appliedEdits();
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   await click(buttonIn(editPanel()!, "Revise")!);
   expect(container.querySelector(".simple-target")?.textContent).toContain("Revising “captions” at 0:00");
@@ -2035,7 +2233,7 @@ it("leaves the message box where it is now aimed when an earlier message lands",
   useProjectStore.setState({ current: data });
   await show();
   await act(async () => {});
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   await click(buttonIn(editPanel()!, "Revise")!);
   const target = () => container.querySelector(".simple-target")?.textContent;
@@ -2059,7 +2257,7 @@ it("rejects one applied edit with the × after Keep, asking Scarlet to put back 
   const createTask = vi.fn(() => new Promise(resolve => { sent = () => resolve({ id: "task_reject" }); }));
   useProjectStore.setState({ createTask: createTask as never });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   expect(openTitle()).toBe("captions");
   expect([rejectIcon().textContent, rejectIcon().title]).toEqual(["", "Reject edit (X)"]);
@@ -2076,8 +2274,8 @@ it("rejects one applied edit with the × after Keep, asking Scarlet to put back 
   }));
   await act(async () => { sent(); });
   expect(vi.mocked(api.recordEditReview).mock.calls).toEqual([[PRJ, { changeId: "chg_approved_2", spot: 1, decision: "undo" }]]);
-  // It goes on as Keep would: to the next edit that still waits on the editor.
-  expect(openTitle()).toBe("wrap");
+  // It goes on as Keep would: an edit Scarlet didn't flag, to the other one under For you's optional line.
+  expect(openTitle()).toBe("music bed");
   expect(localStorage.getItem(`scarlet.kept-edits.v1/${PRJ}/${threadWith("chg_approved_2").id}`) ?? "").not.toContain("chg_approved_2/1");
   // ⌘Z takes the rejection back as it would a revision: the request stops, and the card goes back to the edit.
   expect(container.querySelector(".timeline-foot .timeline-undo")).toBeNull();
@@ -2096,7 +2294,7 @@ it("leaves the edit the editor stepped to open when a rejection sent from the ed
   const createTask = vi.fn(() => new Promise(resolve => { landing.push(() => resolve({ id: "task_reject" })); }));
   useProjectStore.setState({ createTask: createTask as never });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[0]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
   await act(async () => {});
   expect(openTitle()).toBe("music bed");
   await click(rejectIcon());
@@ -2143,7 +2341,7 @@ it("puts a rejected cut back on the engine at once, with no request to Scarlet, 
   const historyEdit = vi.fn().mockResolvedValue(undefined);
   useProjectStore.setState({ createTask, rejectEdits: rejectEdits as never, historyEdit });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   expect(leavingBand()).toBeNull();
   await click(rejectIcon());
@@ -2184,7 +2382,7 @@ it("opens a rejected edit as the video plays it now when the editor presses play
   });
   useProjectStore.setState({ createTask: vi.fn(), rejectEdits: rejectEdits as never });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   await click(rejectIcon());
   await act(async () => {});
@@ -2203,7 +2401,7 @@ it("leaves the edit the editor went to open when they step on from one just reje
   const rejectEdits = vi.fn(async () => { landVersion("ver_back"); return "ver_back"; });
   useProjectStore.setState({ createTask: vi.fn(), rejectEdits: rejectEdits as never });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   await click(rejectIcon());
   await act(async () => {});
@@ -2248,7 +2446,7 @@ it("asks Scarlet to put a rejected cut back when the engine can't", async () => 
   const rejectEdits = vi.fn().mockRejectedValue(new ScarletApiError(409, "needs_scarlet", "This edit can’t be put back as it was."));
   useProjectStore.setState({ createTask, rejectEdits });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   await click(rejectIcon());
   await act(async () => {});
@@ -2256,42 +2454,134 @@ it("asks Scarlet to put a rejected cut back when the engine can't", async () => 
   expect(createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({ context: expect.objectContaining({ changeId: "chg_approved_2", editIndex: 1, message: "Reject edit" }) }));
 });
 
-it("keeps a rejected edit's row in the list with a × and Rejected, counts it nowhere, and shows it again on a press", async () => {
+it("keeps a rejected edit's row under Done with a × and Rejected, counts it nowhere, and shows it again on a press", async () => {
   appliedEdits();
   withCut({ rejected: true, beforeCut: undefined, at: undefined, kind: "restore" as const, range: { start: 2, end: 2.4 } });
   await show();
-  const rows = [...turnFor("chg_approved_2").querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
-  // In the video's order, between the edits either side: no number, a ×, its own words, and Rejected where its amount was.
-  expect(rows.map(row => [row.querySelector(".edit-badge")!.textContent, row.querySelector(".simple-edit-title")!.textContent,
-    row.querySelector(".simple-edit-value")?.textContent ?? "", row.disabled]))
-    .toEqual([["1", "music bed", expect.any(String), false], ["", "captions", "Rejected", false], ["2", "wrap", expect.any(String), false]]);
-  expect(rows[1]!.matches(".is-rejected")).toBe(true);
-  expect(rows[1]!.getAttribute("aria-label")).toBe("captions, rejected");
-  expect(rows[1]!.querySelector(".edit-badge.is-rejected svg")).not.toBeNull();
-  // ↓ from the first edit goes past it to the next edit.
-  await click(rows[0]!);
+  const turn = turnFor("chg_approved_2");
+  const read = (row: HTMLButtonElement) => [row.querySelector(".edit-badge")!.textContent, row.querySelector(".simple-edit-title")!.textContent,
+    row.querySelector(".simple-edit-value")?.textContent ?? "", row.disabled];
+  // It is decided, so it is Done's: For you has the edit that waits and, under its line, the one Scarlet didn't flag.
+  expect([...turn.querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you1", "Working", "Done1"]);
+  expect(editLists(turn)).toEqual([["Edits that need you", ["wrap"]], ["Optional edits", ["music bed"]]]);
+  // Every edit keeps the number it had: wrap is still 3, in the list and on the timeline.
+  expect(editRowsIn(turn).map(read)).toEqual([["1", "music bed", expect.any(String), false], ["3", "wrap", expect.any(String), false]]);
+  expect(numbered()).toEqual([["3", "check"]]);
+  // ↑ from the edit under the line goes to the row above it, the one that waits: the rejected edit is no row here.
+  await click(editRowsIn(turn)[0]!);
   await act(async () => {});
-  await press("ArrowDown");
+  await press("ArrowUp");
   expect(openTitle()).toBe("wrap");
+  // Kept, wrap is Done's too. There the rejected row is in the video's order: no number, a ×, its own words, and
+  // Rejected where its amount was.
+  await press("k");
+  await click(tabNamed(turn, "Done"));
+  expect(editLists(turn)).toEqual([["Decided", ["captions", "wrap"]]]);
+  const gone = () => editRowsIn(turn)[0]!;
+  expect(read(gone())).toEqual(["", "captions", "Rejected", false]);
+  expect(gone().matches(".is-rejected")).toBe(true);
+  expect(gone().getAttribute("aria-label")).toBe("captions, rejected");
+  expect(gone().querySelector(".edit-badge.is-rejected svg")).not.toBeNull();
   // A press on its row shows it again: its own card, which says Rejected and has nothing to decide, and a band where it
   // was on the timeline. It is still no edit of the list: no number, no dot of its own.
-  const gone = () => turnFor("chg_approved_2").querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")[1]!;
   await click(gone());
   await act(async () => {});
   expect([gone().getAttribute("aria-current"), openTitle(), editPanel()]).toEqual(["true", "captions", null]);
   expect([rejectedSays(), rejectedCard()!.textContent]).toEqual([["Rejected", 0], expect.stringContaining("captions")]);
   expect(container.querySelector(".simple-timeline-band, .simple-timeline-cut")?.textContent).toBe("Rejected");
-  // ↑ and ↓ step from where it was to the edits either side, and Esc closes it.
+  expect(reviewModes(turn)).toEqual(tabs("Done"));
+  // ↓ steps from where it was to the row under it, ↑ has none above, and Esc closes it.
   await press("ArrowDown");
   expect(openTitle()).toBe("wrap");
   await click(gone());
   await act(async () => {});
   await press("ArrowUp");
-  expect(openTitle()).toBe("music bed");
-  await click(gone());
-  await act(async () => {});
+  expect(openTitle()).toBe("captions");
   await press("Escape");
   expect([container.querySelector('[aria-label="Rejected edit"]'), openTitle()]).toEqual([null, undefined]);
+});
+
+/** A request's list as the engine has it once "captions" was rejected: the put-back's row stands where the edit was. */
+const captionsRejected = (live: { spot: number; label: string; range: { start: number; end: number } }[]) =>
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      ...live.map(e => ({ changeId: "chg_approved_2", previous: [], ...e })),
+      { changeId: "chg_back", spot: 0, label: "captions", range: { start: 0, end: 2.4 }, previous: [{ changeId: "chg_approved_2", spot: 1 }], rejected: true as const },
+    ].sort((a, b) => a.range.start - b.range.start) }));
+
+it("keeps every edit's number when one is rejected, in the list and on the timeline, and words the link for the rows it opens", async () => {
+  // Music bed and captions both start at 0:00, as they did before captions was rejected.
+  captionsRejected([{ spot: 0, label: "music bed", range: { start: 0, end: 16 } }, { spot: 2, label: "wrap", range: { start: 11.5, end: 16 } }]);
+  await showFolded();
+  await act(async () => {});
+  const turn = turnFor("chg_approved_2");
+  // The sentence counts the edits in the video. The link opens three rows, so it says See all, not See both.
+  expect([turn.querySelector(".simple-made")?.textContent, seeAll(turn)?.textContent]).toEqual(["Made 2 edits: music bed, wrap.", "See all"]);
+  await click(seeAll(turn)!);
+  const rows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
+  // 1, ×, 3: wrap was edit 3 and still is, and the rejected row shows no number.
+  expect(rows().map(row => [row.querySelector(".edit-badge")!.textContent, row.querySelector(".simple-edit-title")!.textContent])).toEqual([["1", "music bed"], ["", "captions"], ["3", "wrap"]]);
+  expect(reviewModes(turn)).toEqual([["See all", "true"]]);
+  // The timeline's dots have the same numbers.
+  await click(rows()[0]!);
+  await act(async () => {});
+  expect(numbered().map(([n]) => n)).toEqual(["1", "3"]);
+});
+
+it("keeps the × row of a request's only edit once it is rejected, under Scarlet's line, with no tab and a press that shows it again", async () => {
+  captionsRejected([]);
+  await showFolded();
+  await act(async () => {});
+  const turn = turnFor("chg_approved_2");
+  const rows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
+  // The same row a rejected edit has anywhere else: a ×, its words and Rejected. Nothing says the request made an edit,
+  // and there is no link or tab over the one row.
+  expect(rows().map(row => [row.matches(".is-rejected"), row.querySelector(".edit-badge.is-rejected svg") !== null, row.querySelector(".simple-edit-title")!.textContent,
+    row.querySelector(".simple-edit-value")!.textContent, row.disabled])).toEqual([[true, true, "captions", "Rejected", false]]);
+  expect([turn.querySelector(".simple-made"), turn.querySelector(".simple-review-tabs"), turn.querySelector(".simple-pass-toggle"), turn.querySelector(".simple-pass-need")]).toEqual([null, null, null, null]);
+  // A press shows it again, as any rejected row does, and Esc closes it. The row stays.
+  await click(rows()[0]!);
+  await act(async () => {});
+  expect([rows()[0]!.getAttribute("aria-current"), rejectedSays(), container.querySelector(".simple-timeline-band, .simple-timeline-cut")?.textContent]).toEqual(["true", ["Rejected", 0], "Rejected"]);
+  await press("Escape");
+  expect([rejectedCard(), rows().length]).toEqual([null, 1]);
+});
+
+it("keeps the × row when Scarlet put a request's only edit back, with its finished request out of the chat", async () => {
+  earlierRequestOnly(false);
+  captionsRejected([]);
+  const base = buildDb().tasks.find(t => t.id === "task_done")!;
+  const now = new Date().toISOString();
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_made", kind: "edit" as const, instruction: "Add captions.", context: { message: "Add captions." }, changeIds: ["chg_approved_2"] }] };
+  const thread = threadWith("chg_approved_2");
+  // The × asked Scarlet to put it back, and Scarlet has: its change is the put-back, and its request is done.
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_reject", state: "done" as const, instruction: "The editor rejected edit 2, “captions”. Put back exactly what it changed and leave every other edit as it is.",
+    summary: null, changeIds: ["chg_back"], createdAt: now, startedAt: now, finishedAt: now,
+    context: { threadId: thread.id, changeId: "chg_approved_2", editIndex: 1, time: 0, message: "Reject edit" } }],
+    changes: [...data.changes, { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_back", taskId: "task_reject", threadId: thread.id, createdAt: now,
+      description: "Restored the captions passage", timelineEdits: [{ label: "captions", range: { start: 0, end: 2.4 }, replaces: { changeId: "chg_approved_2", spot: 1 } }] }] };
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  const rows = [...container.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
+  expect(rows.map(row => [row.matches(".is-rejected"), row.querySelector(".simple-edit-title")!.textContent, row.querySelector(".simple-edit-value")!.textContent])).toEqual([[true, "captions", "Rejected"]]);
+  expect(rows[0]!.closest(".unit")?.getAttribute("data-run")).toBe("task_made");
+  expect([container.querySelector('[data-run="task_reject"]'), container.querySelector(".simple-review-tabs")]).toEqual([null, null]);
+});
+
+it("keeps the × row of a pass's only edit once it is rejected, with no count of cuts and no tab", async () => {
+  const { lists } = appliedPass(false);
+  lists[threadWith("chg_approved_2").id] = [{ changeId: "chg_back", spot: 0, label: "captions", range: { start: 0, end: 2.4 }, previous: [{ changeId: "chg_approved_2", spot: 1 }], rejected: true }];
+  await showFolded();
+  await act(async () => {});
+  const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
+  const rows = () => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
+  expect(rows().map(row => [row.matches(".is-rejected"), row.querySelector(".simple-pass-words")?.textContent, row.querySelector(".simple-pass-value")?.textContent, row.disabled]))
+    .toEqual([[true, "captions", "Rejected", false]]);
+  expect([pass.querySelector(".simple-made"), pass.querySelector(".simple-review-tabs"), pass.querySelector(".simple-pass-toggle")]).toEqual([null, null, null]);
+  await click(rows()[0]!);
+  await act(async () => {});
+  expect([rows()[0]!.getAttribute("aria-current"), rejectedSays()]).toEqual(["true", ["Rejected", 0]]);
 });
 
 it("says on the edit's card why Reject edit couldn't be sent, and leaves the edit open", async () => {
@@ -2299,7 +2589,7 @@ it("says on the edit's card why Reject edit couldn't be sent, and leaves the edi
   const createTask = vi.fn().mockRejectedValueOnce(new Error("Scarlet can’t take requests right now.")).mockResolvedValue({ id: "task_reject" });
   useProjectStore.setState({ createTask });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   await click(rejectIcon());
   expect(createTask).toHaveBeenCalledTimes(1);
@@ -2322,7 +2612,7 @@ it("names a graphic's card Graphic, with Revise, Keep and Reject edit and nothin
   const createTask = vi.fn();
   useProjectStore.setState({ createTask });
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   const panel = editPanel()!;
   expect(panel.querySelector(".edit-card-length.is-kind")?.textContent).toBe("Graphic");
@@ -2354,7 +2644,7 @@ it("names B-roll from the web B-roll, and opens where it came from behind the ca
     ] }));
   const opened = vi.spyOn(desktop, "openUrl").mockResolvedValue(undefined);
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   const panel = editPanel()!;
   expect(panel.querySelector(".edit-card-length.is-kind")?.textContent).toBe("B-roll");
@@ -2375,6 +2665,13 @@ it("names B-roll from the web B-roll, and opens where it came from behind the ca
   // The address opens the page.
   await click(row.querySelector(".edit-source-url")!);
   expect(opened).toHaveBeenCalledWith(url);
+  // A clip of a video on the web says which part of that video it is, beside a picture from the clip.
+  const clipOf = { ...article, kind: "video" as const, name: "demo.mp4", duration: 6.5,
+    source: { url: "https://www.youtube.com/watch?v=agents", capturedAt: "2026-11-23T12:00:00.000Z", capture: "sources/demo.jpg", clip: { start: 31, end: 37.5 } } };
+  await act(async () => useProjectStore.setState({ current: { ...data, media: data.media.map(m => m.id === article.id ? clipOf : m) } }));
+  expect([row.querySelector(".edit-source-capture i"), row.querySelector(".edit-source-url")!.textContent, row.querySelector(".edit-source-said")!.textContent])
+    .toEqual([null, "https://www.youtube.com/watch?v=agents", "Captured Nov 23, 2026. Taken from 0:31 – 0:37."]);
+  await act(async () => useProjectStore.setState({ current: data }));
   // The next edit laid nothing from the web: no icon, and the row is folded.
   await press("ArrowDown");
   expect(openTitle()).toBe("wrap");
@@ -2384,7 +2681,7 @@ it("names B-roll from the web B-roll, and opens where it came from behind the ca
   expect([openTitle(), editPanel()!.querySelector(".edit-source"), sourceIcon()?.getAttribute("aria-expanded")]).toEqual(["The Ledger’s article", null, "false"]);
 });
 
-it("opens a marker Scarlet left for the editor as a to-do: what to add first, nothing to compare or undo, and Done", async () => {
+it("opens a marker Scarlet left for the editor as a to-do: what to add first, nothing to compare or keep, and Add, Revise and the × that rejects it", async () => {
   appliedEdits();
   vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -2396,7 +2693,7 @@ it("opens a marker Scarlet left for the editor as a to-do: what to add first, no
   useProjectStore.setState({ createTask });
   const timeline = vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   const panel = editPanel()!;
   expect(panel.querySelector(".edit-card-title")?.textContent)
@@ -2405,19 +2702,76 @@ it("opens a marker Scarlet left for the editor as a to-do: what to add first, no
   const earlier = data.changes.find(c => c.id === "chg_approved_2")!.fromVersion;
   expect(timeline.mock.calls.filter(([, version]) => version === earlier)).toEqual([]);
   expect(panel.querySelector(".edit-card-length.is-kind")?.textContent).toBe("To do");
-  // Nothing in the video changed there, so there's no Before to play and nothing to reject.
-  expect(panel.querySelector(".review-compare, .edit-card-before, .edit-card-reject")).toBeNull();
+  // Nothing in the video changed there, so there's no Before to play and nothing to keep.
+  expect(panel.querySelector(".review-compare, .edit-card-before")).toBeNull();
   expect([...panel.querySelectorAll(".edit-card-acts button")].map(b => [b.textContent, b.getAttribute("title")]))
-    .toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
+    .toEqual([["Add", "Have Scarlet add it (A)"], ["Revise", "Revise (R)"], ["", "Reject edit (X)"]]);
+  // There is no Later, Done or Keep: L, D and K record nothing.
+  await press("l");
+  await press("d");
+  await press("k");
+  await act(async () => {});
+  expect(localStorage.getItem(`scarlet.kept-edits.v1/${PRJ}/${threadWith("chg_approved_2").id}`) ?? "").not.toContain("chg_approved_2/1");
+  expect(editPanel()).not.toBeNull();
+  // Revise (R) aims the message box at the to-do, so what's typed next changes what it proposes. Nothing is sent yet.
   const focusBefore = useUiStore.getState().composerFocus;
   await press("r");
-  expect(useUiStore.getState().composerFocus).toBe(focusBefore);
-  await press("u");
+  expect(useUiStore.getState().composerFocus).not.toBe(focusBefore);
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2" });
   expect(createTask).not.toHaveBeenCalled();
-  // Done records it as Keep does, so it no longer waits on the editor.
-  await press("d");
+});
+
+it("rejects a to-do with its ×: the engine takes its marker off with no request to Scarlet, and the card says Rejected", async () => {
+  appliedEdits();
+  vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "Boat comparison footage", at: 9.2, range: { start: 7.7, end: 10.7 }, previous: [], kind: "other" as const,
+        marker: true as const, check: "Add the other boat renders", todo: "Add the other boat renders" },
+    ] }));
+  const head = data.project.head!;
+  const rejectEdits = vi.fn(async (..._request: unknown[]) => "ver_back");
+  const createTask = vi.fn();
+  useProjectStore.setState({ createTask, rejectEdits: rejectEdits as never });
+  await show();
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
-  expect(localStorage.getItem(`scarlet.kept-edits.v1/${PRJ}/${threadWith("chg_approved_2").id}`)).toContain("chg_approved_2/1");
+  await press("x");
+  await act(async () => {});
+  expect(rejectEdits.mock.calls).toEqual([[threadWith("chg_approved_2").id, head,
+    [{ changeId: "chg_approved_2", spot: 1, label: "Boat comparison footage", range: { start: 7.7, end: 10.7 }, marker: true }]]]);
+  expect(createTask).not.toHaveBeenCalled();
+});
+
+it("has Scarlet add what a to-do asks for with Add (A): one request about that to-do, which reads Add it, and the card goes on", async () => {
+  appliedEdits();
+  vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "Boat comparison footage", at: 9.2, range: { start: 7.7, end: 10.7 }, previous: [], kind: "other" as const,
+        marker: true as const, check: "Add the other boat renders", todo: "Add the other boat renders" },
+    ] }));
+  let sent!: () => void;
+  const createTask = vi.fn((..._request: unknown[]) => new Promise(resolve => { sent = () => resolve({ id: "task_add" }); }));
+  useProjectStore.setState({ createTask: createTask as never });
+  await show();
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
+  await act(async () => {});
+  const add = () => editPanel()!.querySelector<HTMLButtonElement>('.edit-card-acts button[data-key="A"]')!;
+  expect([add().textContent, add().title]).toEqual(["Add", "Have Scarlet add it (A)"]);
+  await press("a");
+  // On its way: another press sends nothing more.
+  expect(add().disabled).toBe(true);
+  await press("a");
+  expect(createTask).toHaveBeenCalledTimes(1);
+  const [, request] = createTask.mock.calls[0]! as unknown as [string, { kind: string; instruction: string; context: Record<string, unknown> }];
+  expect(request.kind).toBe("edit");
+  // The editor wrote nothing: the chat says Add it, and Scarlet is told what the to-do asks for.
+  expect(request.context).toMatchObject({ changeId: "chg_approved_2", editIndex: 1, threadId: threadWith("chg_approved_2").id, message: "Add it" });
+  expect(request.instruction).toContain("“Add the other boat renders”");
+  await act(async () => { sent(); });
+  // The card goes on as it does after Keep: nothing else waits on the editor, so it closes.
+  expect([openTitle(), editPanel()]).toEqual([undefined, null]);
 });
 
 it("has no menu on a request for now: Undo these edits and File this thread aren't in the chat", async () => {
@@ -2452,7 +2806,7 @@ it("counts an edit decided cut by cut as reviewed, in a long list", async () => 
   await show();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  expect(turn.querySelectorAll(".simple-edits .simple-edit")).toHaveLength(12);
+  expect(editRowsIn(turn)).toHaveLength(12);
   expect([...turn.querySelectorAll(".simple-edits .edit-badge")].every(b => b.classList.contains("is-kept"))).toBe(true);
   expect(turn.querySelector(".simple-pass-need")).toBeNull();
 });
@@ -2465,9 +2819,16 @@ it("lists every edit of a long list from its one link, with no second link to th
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
   const rows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
-  // "See all" opens all twelve: the list is its rows and nothing else, with no fold after the first few. It is a tab
-  // under the sentence, where For you and See all sit when something waits on the editor.
-  expect([seeAll(turn)?.textContent, seeAll(turn)?.className, turn.querySelector(".simple-pass-toggle")]).toEqual(["See all", "simple-review-tab", null]);
+  // "See all" opens all twelve: the list is its rows and nothing else, with no fold after the first few. Closed, it
+  // is a link on the sentence's own line, as See edit is, with no tab row and no rule under it.
+  expect([seeAll(turn)?.textContent, seeAll(turn)?.className, seeAll(turn)?.getAttribute("aria-expanded"), seeAll(turn)?.parentElement?.className, turn.querySelector(".simple-review-tabs")])
+    .toEqual(["See all", "simple-pass-toggle", "false", "simple-made-line", null]);
+  await click(seeAll(turn)!);
+  // Open, the list is under its tab, where For you, Working and Done sit when there is something to review: the link has
+  // left the sentence, and the tab pressed again closes the list and puts the link back.
+  expect([reviewModes(turn), turn.querySelector(".simple-pass-toggle"), turn.querySelector(".simple-review-tabs + .simple-edits") !== null]).toEqual([[["See all", "true"]], null, true]);
+  await click(seeAll(turn)!);
+  expect([rows().length, seeAll(turn)?.className, turn.querySelector(".simple-review-tabs")]).toEqual([0, "simple-pass-toggle", null]);
   await click(seeAll(turn)!);
   expect(rows().map(r => r.querySelector(".edit-badge")?.textContent)).toEqual(many.map((_, i) => String(i + 1)));
   expect(turn.querySelectorAll(".simple-edits > *")).toHaveLength(12);
@@ -2783,18 +3144,22 @@ it("sums a dialogue pass up on one card, and makes its calls in the card on the 
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
   expect(boxTag()).toBe("Cut 2");
   expect(transcriptLink().getAttribute("aria-expanded")).toBe("false");
-  // The count goes down. The decided call keeps its place while the list is open, ticked, with how it was decided.
+  // The count goes down at once. The decided call stays where it was for a moment, with how it was decided, before
+  // it leaves For you: it is Done's.
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
+  expect([...passCard().querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you1", "Working", "Done1"]);
   expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-check"), r.querySelector(".simple-pass-value")?.textContent]))
     .toEqual([["1", false, "Kept"], ["2", true, expect.stringMatching(/^−/)]]);
   expect(approve).not.toHaveBeenCalled();
-  // "1 needs you" leaves the call that's open where it is. A decided call's row opens it again.
+  // "1 needs you" leaves the call that's open where it is. A decided call's row opens it again, under Done, where it
+  // is the only row, and For you goes back to the one that waits.
   await click(passCard().querySelector(".simple-pass-need")!);
   expect(passRows().map(r => r.getAttribute("aria-current"))).toEqual([null, "true"]);
   await click(passRows()[0]!);
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 3:50 · 1 of 2 · After");
   expect(buttonIn(call(), "Keep")?.getAttribute("aria-pressed")).toBe("true");
-  await press("ArrowDown");
+  expect([reviewModes(passCard()), passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.getAttribute("aria-current")])]).toEqual([tabs("Done"), [["1", "true"]]]);
+  await click(passCard().querySelector(".simple-pass-need")!);
   await press("\\");
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 9:58 · 2 of 2 · Before");
 
@@ -2883,13 +3248,13 @@ it("numbers an applied pass's cuts on the timeline while it has the timeline, as
   const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
   expect(marks().map(m => [m.textContent, m.dataset.state])).toEqual([["3", "check"]]);
-  // Its open list brings the pass's cuts onto the timeline, numbered, the flagged one amber.
+  // For you's optional line, opened, brings the pass's cuts onto the timeline, numbered, the flagged one amber.
   await click(seeAll(pass)!);
   await act(async () => {});
   const drawn = () => marks().map(m => [m.textContent, m.dataset.state]);
   expect(drawn()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
   // The row under the pointer lights its dot.
-  const row = pass.querySelector(".simple-pass-list button")!;
+  const row = pass.querySelector('.simple-pass-list[aria-label="Optional edits"] button')!;
   await act(async () => { row.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })); });
   expect(marks()[0]!.classList.contains("is-hot")).toBe(true);
   expect(marks()[0]!.querySelector(".simple-timeline-number")?.textContent).toBe("1");
@@ -2911,11 +3276,9 @@ it("numbers an applied pass's cuts on the timeline while it has the timeline, as
   expect(drawn()).toEqual([["1", undefined], ["2", undefined], ["3", "check"]]);
 });
 
-it("lists an edit a pass made in many places as one row with its count, and counts it once", async () => {
-  // A fade on every dialogue join of Matt's talking head was 101 rows that all read "Softened every dialogue join",
-  // and the sentence said "102 sound fixes" (2026-11-23). One name, one row: a cut and a flagged edit stay one each.
-  const fades = Array.from({ length: 5 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
-    range: { start: 2 + i * 2, end: 4 + i * 2 }, kind: "audio" as const, previous: [] }));
+it("keeps a pass's non-overlapping edits as separate rows even when they share a name, and counts each", async () => {
+  const fades = Array.from({ length: 3 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 4, end: 4 + i * 4 }, kind: "audio" as const, previous: [] }));
   const cuts = [3, 9].map((at, i) => ({ changeId: "chg_approved_2", spot: 20 + i, label: "Cut", kind: "cut" as const, at, range: { start: at, end: at },
     beforeCut: { version: "v_before", removed: { start: at, end: at + 30 } }, previous: [] }));
   const flagged = { changeId: "chg_approved_2", spot: 30, label: "Softened every dialogue join", range: { start: 13, end: 14 }, kind: "audio" as const,
@@ -2928,19 +3291,83 @@ it("lists an edit a pass made in many places as one row with its count, and coun
   await show();
   await act(async () => {});
   const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
-  expect(pass.querySelector(".simple-made")?.textContent).toBe("Took out 1:00 in 2 cuts, and made 2 sound fixes.");
+  expect(pass.querySelector(".simple-made")?.textContent).toBe("Took out 1:00 in 2 cuts, and made 4 sound fixes.");
   await click(seeAll(pass)!);
   await act(async () => {});
   const rows = () => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
+  // The flagged one leads For you; under its line, the rest in the video's order.
   expect(rows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.querySelector(".simple-pass-value")?.textContent])).toEqual([
-    ["Softened every dialogue join", "5 places"], ["Cut", "−30 s"], ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"]]);
-  // Its row opens its first place, and is lit while any of its places is open.
-  await click(rows()[0]!);
+    ["Softened every dialogue join", "Audio"], ["Softened every dialogue join", "Audio"], ["Cut", "−30 s"],
+    ["Softened every dialogue join", "Audio"], ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"]]);
+  // Opening one fade lights only its own row, not other non-overlapping places with the same name.
+  await click(rows()[1]!);
   await act(async () => {});
-  expect(rows().map(r => r.getAttribute("aria-current"))).toEqual(["true", null, null, null]);
+  expect(rows().map(r => r.getAttribute("aria-current"))).toEqual([null, "true", null, null, null, null]);
 });
 
-it("switches an applied pass between For you and See all, with its cuts numbered on the timeline", async () => {
+it("keeps a cut and a partially overlapping ranged edit separate, and keeps only the open place on Keep", async () => {
+  const fades = Array.from({ length: 2 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 6, end: 4 + i * 6 }, kind: "audio" as const, previous: [] }));
+  const cuts = [3, 9].map((at, i) => ({ changeId: "chg_approved_2", spot: 20 + i, label: "Cut", kind: "cut" as const, at, range: { start: at, end: at },
+    beforeCut: { version: "v_before", removed: { start: at, end: at + 30 } }, previous: [] }));
+  data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
+    instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] }] };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [...cuts, ...fades] }));
+  const keep = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined as never);
+  await show();
+  await act(async () => {});
+  const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
+  await click(seeAll(pass)!);
+  await act(async () => {});
+  const rows = () => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
+  const lit = () => rows().map(r => r.getAttribute("aria-current") ? r.querySelector(".simple-pass-value")?.textContent : null);
+  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["Audio", "−30 s", "Audio", "−30 s"]);
+  // The cut at 3 s inside the 2–4 s fade does not overlap it exactly, so it opens alone.
+  await click(rows()[1]!);
+  await act(async () => {});
+  expect(lit()).toEqual([null, "−30 s", null, null]);
+  expect(editPanel()?.querySelector(".edit-card-length")?.textContent ?? "").not.toMatch(/edits$/);
+  // ↑ goes to the first fade, and Keep keeps only that fade — never the second place at 8–10 s.
+  await press("ArrowUp");
+  await act(async () => {});
+  expect(lit()).toEqual(["Audio", null, null, null]);
+  await press("k");
+  await act(async () => {});
+  expect(keep.mock.calls.flatMap(([, body]) => body.edits.map(e => e.spot))).toEqual([10]);
+  expect(rows()[0]!.className).toBe("is-decided");
+  expect(rows()[2]!.className).toBe("");
+});
+
+it("puts a request about one place of a repeated pass edit under that place's own row, leaving the others alone", async () => {
+  const fades = Array.from({ length: 3 }, (_, i) => ({ changeId: "chg_approved_2", spot: 10 + i, label: "Softened every dialogue join",
+    range: { start: 2 + i * 4, end: 4 + i * 4 }, kind: "audio" as const, previous: [] }));
+  const thread = threadWith("chg_approved_2");
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const now = new Date().toISOString();
+  // The editor sent the second fade (spot 11) back.
+  data = { ...data, tasks: [...data.tasks,
+    { ...base, id: "task_pass", kind: "edit" as const, instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] },
+    { ...base, id: "task_revise_fade", state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined, summary: null, changeIds: [],
+      context: { changeId: "chg_approved_2", editIndex: 11, threadId: thread.id, message: "Make this one shorter" } }] };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== thread.id ? [] : [...fades, { changeId: "chg_approved_2", spot: 20, label: "Cut", kind: "cut" as const, at: 13, range: { start: 13, end: 13 },
+      beforeCut: { version: "v_before", removed: { start: 13, end: 43 } }, previous: [] }] }));
+  await show();
+  await act(async () => {});
+  const pass = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
+  await click(seeAll(pass())!);
+  await act(async () => {});
+  const items = [...pass().querySelectorAll<HTMLElement>(".simple-pass-list > li")];
+  expect(items.map(li => [li.querySelector(".simple-pass-value")?.textContent, li.querySelector(".simple-pass-check")?.textContent])).toEqual([
+    ["Audio", undefined], [undefined, "Revising…"], ["Audio", undefined], ["−30 s", undefined]]);
+  expect(wordsOf(items[1]!.querySelector(".subunit .subunit-msg > p"))).toBe("Make this one shorter");
+  expect(pass().querySelectorAll(".subunit")).toHaveLength(1);
+});
+
+it("lists an applied pass under For you, Working and Done, with its cuts numbered on the timeline while the optional line is open", async () => {
   appliedEdits();
   data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
     instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] }] };
@@ -2949,53 +3376,53 @@ it("switches an applied pass between For you and See all, with its cuts numbered
   await act(async () => {});
   const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
   const list = () => pass.querySelector(".simple-pass-list");
+  const lists = () => [...pass.querySelectorAll(".simple-pass-list")].map(l => [l.getAttribute("aria-label"), l.querySelectorAll(":scope > li").length]);
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
   expect(pass.querySelector(".simple-made")?.textContent).toBe("Made 3 edits: music bed, captions, wrap.");
   expect(pass.querySelector(".simple-made-line button")).toBeNull();
-  expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
-  expect([pass.querySelector(".simple-review-tabs + .simple-pass-list"), list()?.getAttribute("aria-label"), list()?.querySelectorAll("li").length])
-    .toEqual([list(), "Edits that need you", 1]);
+  // The three tabs sit above the rows. For you is shown: the edit that waits, then one line for the two Scarlet didn't flag.
+  expect([reviewModes(pass), optionalLine(pass)]).toEqual([tabs(), ["2 optional", "false"]]);
+  expect([pass.querySelector(".simple-review-tabs + .simple-pass-list"), lists()]).toEqual([list(), [["Edits that need you", 1]]]);
+  expect(pass.querySelector(".simple-pass-list + .simple-review-rest.is-pass")).not.toBeNull();
   const need = () => pass.querySelector<HTMLElement>(".simple-pass-need")!;
   expect(need().getAttribute("title")).toBe("1 needs you");
   await click(need());
   await act(async () => {});
-  expect([list()?.getAttribute("aria-label"), list()?.className, list()?.querySelectorAll("li").length]).toEqual(["Edits that need you", "simple-pass-list", 1]);
+  expect([list()?.className, lists()]).toEqual(["simple-pass-list", [["Edits that need you", 1]]]);
   // The row that needs the editor has its time in amber, and no dot before its words.
   expect([list()?.querySelector(".simple-pass-label")?.textContent, list()?.querySelector(".simple-pass-time")?.className, list()?.querySelector("button")?.getAttribute("aria-current")]).toEqual(["wrap", "simple-pass-time is-need", "true"]);
   expect(editPanel()).not.toBeNull();
   await click(need());
-  expect([list()?.querySelectorAll("li").length, !!editPanel()]).toEqual([1, true]);
-  // Both controls stay above the rows. Pressing the selected See all keeps the full list open.
+  expect([lists(), !!editPanel()]).toEqual([[["Edits that need you", 1]], true]);
+  // The line opens the optional edits under For you's row, For you still the tab shown, and pressed again puts them away.
   await click(seeAll(pass)!);
-  expect(reviewModes(pass)).toEqual([["For you", "false"], ["See all", "true"]]);
-  expect(list()?.querySelectorAll("li").length).toBe(3);
+  expect([reviewModes(pass), optionalLine(pass), lists()]).toEqual([tabs(), ["2 optional", "true"], [["Edits that need you", 1], ["Optional edits", 2]]]);
   await click(seeAll(pass)!);
-  expect(list()?.querySelectorAll("li").length).toBe(3);
-  await click(need());
-  expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
-  expect(list()?.querySelectorAll("li").length).toBe(1);
-  // Kept, nothing waits on the editor, so the card closes while wrap stays in For you, clearly marked as handled.
+  expect([optionalLine(pass), lists()]).toEqual([["2 optional", "false"], [["Edits that need you", 1]]]);
+  // Kept, nothing waits on the editor, so the card closes. Wrap is Done's, ticked and marked Kept.
   await press("k");
   await act(async () => {});
   expect(editPanel()).toBeNull();
-  expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
+  expect(reviewModes(pass)).toEqual(tabs());
   expect(need()?.getAttribute("title")).toBeNull();
-  expect(list()?.querySelectorAll("li")).toHaveLength(1);
+  expect([...pass.querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you", "Working", "Done1"]);
+  await click(tabNamed(pass, "Working"));
+  expect([reviewModes(pass), lists(), pass.querySelector(".simple-review-empty")?.textContent]).toEqual([tabs("Working"), [], "Nothing in the works."]);
+  await click(tabNamed(pass, "Done"));
+  expect([reviewModes(pass), lists()]).toEqual([tabs("Done"), [["Decided", 1]]]);
   const kept = list()!.querySelector<HTMLButtonElement>("button")!;
   expect([kept.classList.contains("is-decided"), kept.querySelector(".simple-pass-value")?.textContent]).toEqual([true, "Kept"]);
+  // Back on For you, the optional line open puts every cut on the timeline, numbered.
+  await click(need());
   await click(seeAll(pass)!);
   await act(async () => {});
-  expect(list()?.getAttribute("aria-label")).toBe("Every edit");
-  expect(list()?.querySelectorAll("li")).toHaveLength(3);
   expect(marks().map(m => m.textContent)).toEqual(["1", "2", "3"]);
   // The row under the pointer lights its dot.
-  await act(async () => { list()!.querySelector("button")!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })); });
+  await act(async () => { pass.querySelector('.simple-pass-list[aria-label="Optional edits"] button')!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })); });
   expect(marks()[0]!.classList.contains("is-hot")).toBe(true);
-  // Switching back to For you leaves the full-list dots behind and still shows the handled item.
-  expect(reviewModes(pass)).toEqual([["For you", "false"], ["See all", "true"]]);
-  await click(need());
-  expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
-  expect(list()?.querySelectorAll("li")).toHaveLength(1);
+  // The line closed leaves those dots behind.
+  await click(seeAll(pass)!);
+  expect([reviewModes(pass), optionalLine(pass)]).toEqual([tabs(), ["2 optional", "false"]]);
   expect(marks()).toEqual([]);
 });
 
@@ -3019,27 +3446,28 @@ it("shows what changed in chat and why on the edit card", async () => {
   expect(turn.textContent).not.toContain(CHECK);
 });
 
-it("leaves out the link that opens every edit while each of them needs the editor", async () => {
+it("has no optional line while every edit needs the editor", async () => {
   onlyFlagged();
   await showFolded();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
   const need = () => turn.querySelector<HTMLElement>(".simple-pass-need");
-  const rows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
-  // For you opens the only result. Both modes would show the same edit.
+  const rows = () => [...editRowsIn(turn)];
+  // For you opens the only result, and nothing is left to put behind a line.
   expect([need()?.getAttribute("title"), rows().length, seeAll(turn)]).toEqual(["1 needs you", 1, null]);
-  expect(reviewModes(turn)).toEqual([["For you", "true"]]);
+  expect(reviewModes(turn)).toEqual(tabs());
   await click(need()!);
   await act(async () => {});
   expect([rows().length, !!editPanel(), seeAll(turn)]).toEqual([1, true, null]);
-  // Kept, nothing needs the editor, and the edit stays right in For you, clearly marked as handled, where it can be opened again.
+  // Kept, nothing needs the editor. The edit is Done's, clearly marked as handled, where it can be opened again.
   await press("k");
   await act(async () => {});
-  expect([need()?.getAttribute("title"), rows().length, seeAll(turn)]).toEqual([null, 1, null]);
-  expect([rows()[0]!.classList.contains("is-decided"), rows()[0]!.querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Kept"]);
+  expect([need()?.getAttribute("title"), seeAll(turn)]).toEqual([null, null]);
+  await click(tabNamed(turn, "Done"));
+  expect([rows().length, rows()[0]!.classList.contains("is-decided"), rows()[0]!.querySelector(".simple-edit-value")?.textContent]).toEqual([1, true, "Kept"]);
   await click(rows()[0]!);
   expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
-  expect(rows()[0]?.getAttribute("aria-current")).toBe("true");
+  expect([rows()[0]?.getAttribute("aria-current"), reviewModes(turn)]).toEqual(["true", tabs("Done")]);
   await press("Escape");
   expect([editPanel(), rows().length]).toEqual([null, 1]);
 });
@@ -3117,6 +3545,23 @@ const passToggle = () => seeAll(turnFor("chg_approved_2"))!;
 const passForYou = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass-need")!;
 const ticks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(m => m.dataset.state ?? "dot");
 
+it("puts a pass's closed See all on the sentence's line, and its list under its tab once open", async () => {
+  appliedPass(false);
+  await show();
+  await act(async () => {});
+  const turn = () => turnFor("chg_approved_2");
+  // Closed, See all follows the sentence on the same line, as See edit does: no tab row.
+  expect([passToggle().className, passToggle().parentElement?.className, turn().querySelector(".simple-review-tabs")])
+    .toEqual(["simple-pass-toggle", "simple-made-line", null]);
+  // Open, the list is under its tab, and the tab pressed again puts the link back on the sentence's line.
+  await click(passToggle());
+  await act(async () => {});
+  expect([listRows().map(rowText), reviewModes(turn())]).toEqual([["music bed", "captions", "wrap"], [["See all", "true"]]]);
+  await click(passToggle());
+  await act(async () => {});
+  expect([listRows(), passToggle().className, passToggle().parentElement?.className]).toEqual([[], "simple-pass-toggle", "simple-made-line"]);
+});
+
 it("numbers a settled pass's cuts while it has the timeline, and gives a request that arrives under its open list the timeline once it closes", async () => {
   const later = appliedPass(false);
   await show();
@@ -3144,18 +3589,19 @@ it("widens the times of a pass's list once one of its rows is past an hour, so a
     await act(async () => {});
     await click(passToggle());
     await act(async () => {});
-    const list = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass-list")!;
-    const rows = () => [...list().querySelectorAll<HTMLElement>(":scope > li > button")];
-    expect(rows().map(row => row.querySelector(".simple-pass-time")!.firstChild!.textContent)).toEqual(["0:00", "0:11", "1:02:07"]);
-    // "1:02:07" is two characters longer than "12:34", about 48px of the time's type against 34px. Every row of the list
-    // takes the wider column, so that time, and its amber tint on a row that needs the editor, stay clear of the words,
-    // and the words keep one edge down the list.
-    expect([list().className, ...rows().map(row => styled(row, "grid-template-columns")[0])])
-      .toEqual(["simple-pass-list has-hours", ...Array(3).fill("52px minmax(0, 1fr) auto")]);
-    // The list of just the edit that needs the editor has no time past the hour, and keeps the narrow column.
-    await click(passForYou());
+    const lists = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-pass-list")];
+    const rows = () => lists().flatMap(list => [...list.querySelectorAll<HTMLElement>(":scope > li > button")]);
+    // The edit that waits, then the two under For you's optional line.
+    expect(rows().map(row => row.querySelector(".simple-pass-time")!.firstChild!.textContent)).toEqual(["0:11", "0:00", "1:02:07"]);
+    // "1:02:07" is two characters longer than "12:34", about 48px of the time's type against 34px. Every row on screen
+    // takes the wider column, in both lists, so that time, and its amber tint on a row that needs the editor, stay clear
+    // of the words, and the words keep one edge down the block.
+    expect([...lists().map(list => list.className), ...rows().map(row => styled(row, "grid-template-columns")[0])])
+      .toEqual(["simple-pass-list has-hours", "simple-pass-list has-hours", ...Array(3).fill("52px minmax(0, 1fr) auto")]);
+    // With the line closed, the edit that needs the editor has no time past the hour beside it, and keeps the narrow column.
+    await click(passToggle());
     await act(async () => {});
-    expect([list().className, rows().length, styled(rows()[0]!, "grid-template-columns")[0]]).toEqual(["simple-pass-list", 1, "38px minmax(0, 1fr) auto"]);
+    expect([lists().map(list => list.className), rows().length, styled(rows()[0]!, "grid-template-columns")[0]]).toEqual([["simple-pass-list"], 1, "38px minmax(0, 1fr) auto"]);
   });
 });
 
@@ -3181,9 +3627,8 @@ it("gives the timeline back to a pass's open list when another request's edit cl
   await event(d => ({ ...d, changes: [...d.changes, third] }));
   await act(async () => {});
   expect(ticks()).toEqual(["dot", "dot", "check"]);
-  // Back to what needs the editor, which opens the pass's flagged cut; closed, the timeline is on the latest request.
-  await click(passForYou());
-  await press("Escape");
+  // The optional line closed, the timeline is on the latest request.
+  await click(passToggle());
   await act(async () => {});
   expect(numbered()).toEqual([["1", "check"], ["3", "check"], ["1", "check"]]);
   expect(container.querySelector(".simple-timeline-mark.is-numbered")?.getAttribute("style")).toContain("31.25%");
@@ -3306,20 +3751,20 @@ it("keeps a call whose save is still on its way when an earlier save fails, and 
   // The first save fails after the second went out. The second carries both calls and may still land: they stay made.
   await act(async () => saves[0]!.fail("The engine is busy."));
   expect(need()).toBe("1 needs you");
-  // The failure is said on the pass's line and on the open call's card.
-  expect(passCard().querySelector(".simple-error")?.textContent).toBe("The engine is busy.");
-  expect(call().querySelector('[role="alert"]')?.textContent).toBe("The engine is busy.");
+  // The failure is said on the pass's line and on the open call's card: what wasn't saved, why, and what to do.
+  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Couldn’t save this call: The engine is busy. Press Keep or Reject edit again.");
+  expect(call().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t save this call: The engine is busy. Press Keep or Reject edit again.");
   // A save that fails with none sent since gives its calls back to the editor: nothing was saved.
   await act(async () => saves[1]!.fail("Still busy."));
   expect(need()).toBe("3 need you");
-  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Still busy.");
+  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Couldn’t save this call: Still busy. Press Keep or Reject edit again.");
   // Made again, the first save fails once more, and this time the second lands with both calls. Nothing was lost,
   // so the line that said a save failed goes.
   await press("k");
   await press("k");
   expect(saves).toHaveLength(4);
   await act(async () => saves[2]!.fail("Busy again."));
-  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Busy again.");
+  expect(passCard().querySelector(".simple-error")?.textContent).toBe("Couldn’t save this call: Busy again. Press Keep or Reject edit again.");
   await act(async () => saves[3]!.land());
   expect(need()).toBe("1 needs you");
   expect(passCard().querySelector(".simple-error")).toBeNull();
@@ -3533,10 +3978,11 @@ it.each(["saved", "another call", "unchecked part", "failed"] as const)("uses th
   expect(save).toHaveBeenCalledWith("chg_ready", expect.objectContaining({ choices: [{ index: 0, choice: "keep" }] }));
   expect(approve).not.toHaveBeenCalled();
   if (outcome === "failed") {
-    await act(async () => fail(new Error("Couldn’t save this call.")));
+    // The engine gave no reason of its own, so the line has none: never a status line or a code.
+    await act(async () => fail(new ScarletApiError(500, "http_error", "Internal Server Error")));
     expect(approve).not.toHaveBeenCalled();
     expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
-    expect(passCard().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t save this call.");
+    expect(passCard().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t save this call. Press Keep or Reject edit again.");
     return;
   }
   // The call just skipped is now the third. The engine also preserved a different skip on the first cut.
@@ -3574,21 +4020,42 @@ it("keeps the last call's decision made while the pass's cut list loads, and app
   expect(approve.mock.calls).toEqual([["chg_ready", undefined, [0]]]);
 });
 
+it("says how many cuts a pass has ready while they go in, when it made no call for the editor", async () => {
+  flagged();
+  // Scarlet settled every staged cut itself. The pass goes in by itself; until it has, its line counts the cuts.
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: c.cutAssessments!.map(a => ({ ...a, verdict: "cut" as const })) } : c) };
+  useProjectStore.setState({ current: data, approve: vi.fn(() => new Promise<never>(() => {})) });
+  await show();
+  await act(async () => {});
+  expect(passCard().querySelector(".simple-made")?.textContent).toBe("3 cuts ready.");
+});
+
+it("doesn't ask for a call to be made again when its save was refused because the pass has moved on", async () => {
+  const { save } = finishedPass();
+  useProjectStore.setState({ approve: vi.fn().mockResolvedValue({ outcome: "applied" }) });
+  save.mockRejectedValueOnce(new ScarletApiError(409, "cut_review_stale", "This pass isn’t waiting on your calls any more."));
+  await show();
+  await reviewCalls();
+  await press("x");
+  expect(passCard().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t save this call: This pass isn’t waiting on your calls any more.");
+});
+
 it("keeps saying a call's save failed while that call is undecided, though a later call's save lands", async () => {
   const { save } = finishedPass();
   const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
   useProjectStore.setState({ approve });
-  save.mockRejectedValueOnce(new Error("Couldn’t save this call."));
+  save.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+  const NOT_SAVED = "Couldn’t save this call: Scarlet can’t reach its engine right now. Press Keep or Reject edit again.";
   await show();
   await reviewCalls();
   const alert = () => passCard().querySelector('[role="alert"]')?.textContent;
   await press("x");
-  expect(alert()).toBe("Couldn’t save this call.");
+  expect(alert()).toBe(NOT_SAVED);
   // The editor goes on to the next call, and its save lands. The skip that didn't reach the engine is back with the
   // editor, and the line saying why stays: the decision doesn't vanish without a word.
   await press("k");
   expect(save.mock.lastCall![1].choices).toEqual([{ index: 1, choice: "cut" }]);
-  expect(alert()).toBe("Couldn’t save this call.");
+  expect(alert()).toBe(NOT_SAVED);
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("2 need you");
   expect(approve).not.toHaveBeenCalled();
   // Made again and saved, the line goes.
@@ -3705,6 +4172,8 @@ it("keeps the other calls' dots on the timeline while a call is open, so one pre
   // has a dashed edge while it still waits on the editor's decision.
   await openCall("Breath before the price.");
   expect(container.querySelector(".simple-timeline-band")?.classList.contains("is-proposed")).toBe(true);
+  // Its footage isn't out of the video yet, so the band says what the cut takes out, not what it took.
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Takes out · 1.0 s");
   expect(numbers()).toEqual(["1", "2", "3"]);
   expect(dots().map(d => [d.dataset.state, d.classList.contains("is-on")])).toEqual([["check", false], ["check", true], ["check", false]]);
   // A press on one opens that call in the card, and the timeline zooms to it.
@@ -3760,6 +4229,8 @@ it("shows the cuts already in the video around an open call as grey gaps, After 
   await openCall("Breath before the price.");
   await act(async () => {});
   expect(gaps().map(gap => [gap.textContent, gap.classList.contains("is-skipped")])).toEqual([["Cut at 0:07", true]]);
+  // The call's own band says what it takes out: unlike the grey cuts beside it, its footage is still in the video.
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Takes out · 1.0 s");
   expect(onVideo()).toBe("Showing cut at 0:06 · 2 of 3 · After");
   expect([...container.querySelectorAll(".simple-timeline-mark.is-numbered")].map(d => d.textContent)).toEqual(["1", "2", "3"]);
   // After plays as the video runs now: over the call's footage, then over the cut's.
@@ -4002,7 +4473,7 @@ const workingCutMoves = async (start: number, end: number) => {
 const callWords = async () => {
   vi.mocked(api.retakes).mockClear();
   await click(call().querySelector(".edit-card-words")!);
-  if (!call().querySelector('[aria-label="Words this cut removes"]')) return undefined;
+  if (!call().querySelector('[aria-label="Words this cut takes out"]')) return undefined;
   const [, mediaId, start, end] = vi.mocked(api.retakes).mock.lastCall!;
   return { mediaId, start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000 };
 };
@@ -4060,14 +4531,15 @@ it("warms the call ↑ goes back to, also one the editor already decided", async
   const prepare = vi.mocked(api.preparePlayback);
   runningPass();
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready"
-    ? { ...c, cutChoices: [{ index: 1, start: STAGED[1]!.start, end: STAGED[1]!.end, choice: "keep" }] } : c) }));
+    ? { ...c, cutChoices: [1, 2].map(index => ({ index, start: STAGED[index]!.start, end: STAGED[index]!.end, choice: "keep" })) } : c) }));
   await show();
-  // Cut 2's lead-in starts at four seconds. It has a decision, so nothing waits on it.
+  // Cut 2's lead-in starts at four seconds. It has a decision, so nothing waits on it: it is Done's, with Cut 3.
   const warmed = () => prepare.mock.calls.some(([, version, times]) => version === data.timeline!.version && times[0] === 4);
   expect(warmed()).toBe(false);
+  await click(tabNamed(passCard(), "Done"));
   await press("ArrowUp");
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 3");
-  // Once Cut 3 plays, the one before it is prepared.
+  // Once Cut 3 plays, the one before it in that list is prepared.
   await act(async () => usePlayerStore.setState({ playing: true, playbackReady: true }));
   await vi.waitFor(() => expect(warmed()).toBe(true));
 });
@@ -4377,7 +4849,7 @@ it("offers Retry transcript on a call's words when the pass's version can't be l
   await click(buttonIn(passage(), "Retry transcript")!);
   for (let i = 0; i < 4; i++) await act(async () => {});
   expect(version).toHaveBeenCalledTimes(3);
-  expect([passage().querySelector('[title="The engine is restarting."]'), !!passage().querySelector('[aria-label="Words this cut removes"]')]).toEqual([null, true]);
+  expect([passage().querySelector('[title="The engine is restarting."]'), !!passage().querySelector('[aria-label="Words this cut takes out"]')]).toEqual([null, true]);
   expect(container.querySelector(".simple-timeline-band")).not.toBeNull();
 });
 
@@ -4456,9 +4928,10 @@ it("marks the right call Revising… when its revision named an earlier part who
   await act(async () => {});
   await nextPart({ cutReasons: [...PAIR, STAGED[1]!, STAGED[2]!, { start: 14, end: 15, reason: "A cough." }] });
   await act(async () => {});
-  await click(passCard().querySelector(".simple-pass-need")!);
-  expect(passRows().find(r => r.textContent?.includes("Repeated aside."))!.querySelector(".simple-pass-value")?.textContent).toBe("Up next");
+  // The call that waits is For you's, and the one sent back is Working's.
   expect(passRows().find(r => r.textContent?.includes("Breath before the price."))!.querySelector(".simple-pass-value")?.textContent).toBe("−1.0 s");
+  await click(tabNamed(passCard(), "Working"));
+  expect(passRows().map(r => [r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent])).toEqual([["Repeated aside.", "Up next"]]);
 });
 
 it("leaves a revision aimed at an applied pass's cut where it is when the request stages another pass", async () => {
@@ -4674,6 +5147,58 @@ it("starts the request the calls hold back from its row in the tray, without the
   expect(marks()).toEqual([undefined, undefined]);
 });
 
+it.each([
+  // Resume carries a stopped request on, and the new attempt names the one it began as.
+  ["Resume", { state: "cancelled" as const }, { resumeRootId: "task_lower" }],
+  // Retry starts a request that failed with nothing saved over, and only the failed attempt names the new one.
+  ["Retry", { state: "failed" as const, error: "unexpected status 500" }, {}],
+])("says in its own block what holds back a request picked up again with %s, and starts it before the calls from there", async (_how, ended, pickedUp) => {
+  finishedPass();
+  idle();
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  // A request about the whole video that ended early before the pass was made. With the pass waiting on its calls the
+  // editor picks it up: the request is in line again under a new attempt, which the calls hold back.
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const stopped = { ...base, id: "task_lower", kind: "edit" as const, instruction: "Add a lower third with my name.", changeIds: [], summary: null,
+    context: { threadId: "task_lower", message: "Add a lower third with my name." }, createdAt: at(-1_200_000), startedAt: at(-1_190_000), finishedAt: at(-1_180_000), retryTaskId: "task_lower_again", ...ended };
+  const again = { ...stopped, id: "task_lower_again", state: "queued" as const, error: undefined, retryTaskId: undefined, createdAt: at(0), startedAt: undefined, finishedAt: undefined, ...pickedUp };
+  data = { ...data, tasks: [...data.tasks, stopped, again] };
+  // The engine marks the request as started before the calls, and they hold it no longer.
+  const startBeforeCalls = vi.fn().mockImplementation(async (id: string) => {
+    await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === id ? { ...t, startsBeforeCalls: true } : t) }));
+  });
+  useProjectStore.setState({ current: data, startBeforeCalls });
+  await show();
+  await act(async () => {});
+  expect(container.querySelector(".simple-pin .simple-pass-need")?.getAttribute("title")).toBe("3 need you");
+  // The tray lists requests that haven't begun, and this one has: it is in the chat, in the block it began in.
+  expect(container.querySelector('[aria-label="Queued requests"]')).toBeNull();
+  const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_lower"]')!;
+  const mark = () => block().querySelector<HTMLButtonElement>(".req-status .req-right > button.queue-start");
+  /** Its row's words, whether they are amber, and the name of the play mark at the row's right. */
+  const row = () => {
+    const status = block().querySelector<HTMLElement>(".req-status [role=status]");
+    return [status?.textContent, status?.classList.contains("req-ask"), mark()?.title];
+  };
+  // So its row says what the tray would: it waits for the calls, in amber, with the tray's mark to start it without them.
+  expect(row()).toEqual(["Waits for your calls", true, "Start now, before your calls"]);
+  expect(mark()!.getAttribute("aria-label")).toBe("Start now");
+  // With editing paused nothing starts until Resume: its band says Paused, and the row and its mark go.
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: true } }));
+  expect([block().querySelector(".unit-msg .unit-word")?.textContent, block().querySelector(".req-status, .queue-start")]).toEqual(["Paused", null]);
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: false } }));
+  expect(row()).toEqual(["Waits for your calls", true, "Start now, before your calls"]);
+  // The mark starts this attempt, the one in line, without the calls. Nothing of the editor's holds it then: Queued.
+  await click(mark()!);
+  expect(startBeforeCalls).toHaveBeenCalledExactlyOnceWith("task_lower_again");
+  expect(row()).toEqual(["Queued", false, undefined]);
+  expect(container.querySelector(".simple-pin .simple-pass-need")?.getAttribute("title")).toBe("3 need you");
+  // Scarlet's question in another request holds it next: the row says so, with no mark, since an answer isn't theirs to waive.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_waiting" ? { ...t, state: "waiting_for_user" as const, question: "Purple or white?" } : t) }));
+  expect(row()).toEqual(["Waits for your answer", true, undefined]);
+  expect(startBeforeCalls).toHaveBeenCalledOnce();
+});
+
 it("shows a pass's calls, and the suggestion its run left after them, while they hold the next request", async () => {
   // The engine holds the next request until the calls are made (2026-11-08: the calls weren't shown, so it never started).
   passLeftSuggestion();
@@ -4836,7 +5361,7 @@ it("keeps a second call Revising… when the first revised cut comes back, and d
   expect(approve).not.toHaveBeenCalled();
 });
 
-it("shows Scarlet on two calls at once: each row has its own actions, alongside project Stop", async () => {
+it("shows Scarlet on two calls at once: each row has its own Stop, and Pause is on a band, once", async () => {
   finishedPass();
   const cancelTask = vi.fn().mockResolvedValue(undefined);
   useProjectStore.setState({ cancelTask });
@@ -4852,13 +5377,26 @@ it("shows Scarlet on two calls at once: each row has its own actions, alongside 
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_aside", 2, { kind: "edit" as const, instruction: "Keep the aside.", ...started() })] }));
   await act(async () => {});
   expect(document.querySelector(".queue-row")).toBeNull();
-  // Pause sits with Stop at the right of each request Scarlet has. Nothing sits over the message box.
+  // Pause holds all editing, so the chat has it once. Another request works too, above the message box, and its band
+  // has a Stop of its own: Pause is there, and neither on the pass's band nor under its rows. Each request under a row
+  // has Stop alone, and neither its time and tokens nor Scarlet's opening sentence: those show on hover. Nothing sits
+  // over the message box.
   expect(container.querySelector(".queue-tray")).toBeNull();
-  expect([...container.querySelectorAll(".subunit .unit-pause-edit")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing", "Pause editing"]);
+  expect(container.querySelector(".subunit .unit-pause-edit")).toBeNull();
+  const pinnedBand = container.querySelector<HTMLElement>(".simple-pin > .unit > .unit-msg")!;
+  expect([pinnedBand.closest(".unit") !== block(), [...pinnedBand.querySelectorAll(".unit-actions button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))]).toEqual([true, ["Pause editing", "Stop this edit"]]);
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => b.closest(".unit-msg"))).toEqual([pinnedBand]);
+  expect(block().querySelector(":scope > .unit-msg .unit-actions")).toBeNull();
+  expect([...container.querySelectorAll(".subunit .unit-actions")].map(a => [...a.querySelectorAll("button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))))
+    .toEqual([["Stop this edit"], ["Stop this edit"]]);
+  expect([...container.querySelectorAll(".subunit .unit-tokens")].every(t => t.classList.contains("is-quiet"))).toBe(true);
+  expect(container.querySelector(".subunit .req-lead")).toBeNull();
   // The pass's heading says how many Scarlet is on, beside what still needs the editor.
   const word = block().querySelector(".unit-msg .unit-word")!;
   expect(word.textContent).toBe("Working on 2 at once");
   expect(word.getAttribute("title")).toBe("Scarlet is working on 2 cuts or edits at the same time.");
+  // It is marked as that word, so a narrow chat can give it the room of the time and tokens beside it.
+  expect(word.className).toBe("unit-word is-at-once");
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
   // Each call has its own menu under its row.
   const working = [...passCard().querySelectorAll(".simple-pass-value.working-text")];
@@ -4872,6 +5410,27 @@ it("shows Scarlet on two calls at once: each row has its own actions, alongside 
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_aside" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
   await act(async () => {});
   expect([...block().querySelectorAll(".unit-msg .unit-word")].map(el => el.textContent)).not.toContain("Working on 2 at once");
+  // An ordinary word, such as the stopped request's, isn't marked that way.
+  const stopped = container.querySelector('.subunit[data-run="task_aside"] .subunit-msg .unit-word')!;
+  expect([stopped.textContent, stopped.className]).toEqual(["Stopped", "unit-word"]);
+  // The other requests finish, and no band has a Stop of its own. Pause holds all editing, so the block has it once, on
+  // its band, for as long as Scarlet works under its rows. The request under the row still has Stop alone.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running" || t.id === "task_waiting" ? { ...t, state: "done" as const, question: null, finishedAt: new Date().toISOString() } : t) }));
+  await act(async () => {});
+  // The pass's block holds the place above the message box now, as the one Scarlet is working in.
+  const held = container.querySelector<HTMLElement>('.subunit[data-run="task_revise"]')!.closest<HTMLElement>(".unit")!;
+  expect([held.dataset.run, held.closest(".simple-pin") !== null]).toEqual(["task_done", true]);
+  expect(container.querySelector(".subunit .unit-pause-edit")).toBeNull();
+  expect([...held.querySelectorAll(":scope > .unit-msg .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing"]);
+  expect([...container.querySelectorAll(".unit-pause-edit")]).toHaveLength(1);
+  expect([...container.querySelectorAll(".subunit .unit-actions")].map(a => [...a.querySelectorAll("button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))))
+    .toEqual([["Stop this edit"]]);
+  // Paused, the block's band still holds the one control, now Resume, and the request under the row keeps Stop alone.
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: true }, tasks: d.tasks.map(t => t.id === "task_revise" ? { ...t, state: "queued" as const } : t) }));
+  await act(async () => {});
+  const paused = container.querySelector<HTMLElement>('.subunit[data-run="task_revise"]')!.closest<HTMLElement>(".unit")!;
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg") === paused.querySelector(":scope > .unit-msg")])).toEqual([["Resume editing", true]]);
+  expect([...container.querySelectorAll(".subunit .unit-actions button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))).toEqual(["Stop this edit"]);
 });
 
 it("keeps a call Revising… when it comes back revised while a second note on it still waits", async () => {
@@ -4972,11 +5531,12 @@ it("keeps the right call Revising… when a part gave it a new number before a w
   await revisedCut("task_note1", "chg_ready_part2", 3, { start: 11.2, end: 12 }, "The aside, from the breath.");
   await runPasses("task_note1", "task_note2");
   await act(async () => {});
-  await click(passCard().querySelector(".simple-pass-need")!);
-  const aside = passRows().find(r => r.textContent?.includes("The aside, from the breath."))!;
+  // The other call waits in For you; the aside is Working's.
   const other = passRows().find(r => r.textContent?.includes("A second try at the line."))!;
-  expect([aside.querySelector(".simple-pass-value")?.textContent, aside.disabled]).toEqual(["Revising…", true]);
   expect([other.querySelector(".simple-pass-value")?.textContent ?? null, other.disabled]).toEqual(["−1.0 s", false]);
+  await click(tabNamed(passCard(), "Working"));
+  const aside = passRows().find(r => r.textContent?.includes("The aside, from the breath."))!;
+  expect([aside.querySelector(".simple-pass-value")?.textContent, aside.disabled]).toEqual(["Revising…", true]);
 });
 
 it("keeps a request about a cut on the cut that takes in most of its footage when a part decides that footage again", async () => {
@@ -4993,9 +5553,12 @@ it("keeps a request about a cut on the cut that takes in most of its footage whe
   await nextPart({ cutReasons: cuts });
   await act(async () => {});
   await passEnds("chg_ready_part2", cuts, "task_note1");
-  await click(passCard().querySelector(".simple-pass-need")!);
   const marked = (reason: string) => { const row = passRows().find(r => r.textContent?.includes(reason))!; return [row.querySelector(".simple-pass-value")?.textContent ?? null, row.disabled]; };
+  // The cut the note is about is Working's; the ones either side wait in For you.
+  await click(tabNamed(passCard(), "Working"));
+  expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(["Only the aside itself."]);
   expect(marked("Only the aside itself.")).toEqual(["Revising…", true]);
+  await click(passCard().querySelector(".simple-pass-need")!);
   expect(marked("The breath.")).toEqual(["−0.1 s", false]);
   expect(marked("The click after it.")).toEqual(["−0.2 s", false]);
   // The calls that are the editor's don't apply the pass over the note.
@@ -5094,7 +5657,7 @@ it("keeps a call Revising… when its revision named an earlier part and a later
   await nextPart({ cutReasons: [STAGED[0]!, { ...STAGED[1]!, start: 4.5, end: 5.5 }, { ...STAGED[2]!, start: 9.5, end: 10.5 }] }, [{ start: 4, end: 5.5, reason: "Dead air." }]);
   await act(async () => {});
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("2 need you");
-  await click(passCard().querySelector(".simple-pass-need")!);
+  await click(tabNamed(passCard(), "Working"));
   const row = passRows().find(r => r.textContent?.includes("Repeated aside."))!;
   expect(row.querySelector(".simple-pass-value")?.textContent).toBe("Up next");
   expect(row.querySelector(".simple-pass-time.is-need")).toBeNull();
@@ -5162,7 +5725,7 @@ it("keeps a call Up next and its number when its revision named the part before 
   // The aside is the fourth call now. It still waits on Scarlet, not the editor, and can't be opened from the list.
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("3 need you");
   expect(tag()).toBe("Cut 4");
-  await click(passCard().querySelector(".simple-pass-need")!);
+  await click(tabNamed(passCard(), "Working"));
   const row = passRows().find(r => r.textContent?.includes("Repeated aside."))!;
   expect([row.querySelector(".simple-pass-value")?.textContent, row.disabled]).toEqual(["Up next", true]);
 });
@@ -5253,6 +5816,36 @@ it("changes a queued revision's words in the message box, holding it from starti
   await click(tray().querySelector(".queue-reword")!);
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_queued_revision" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
   expect(composer.props?.rewording).toBeUndefined();
+});
+
+it("leaves the box as it is while a queued request's words are in it, and follows what opened once they are done with", async () => {
+  appliedEdits();
+  // Nothing runs and nothing is asked. One new edit waits its turn.
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  data = { ...data, tasks: [...data.tasks.map(t => ["queued", "claimed", "running", "waiting_for_user"].includes(t.state) ? { ...t, state: "done" as const, question: null } : t),
+    { ...base, id: "task_lower", kind: "edit" as const, state: "queued" as const, instruction: "Add a lower third with my name.", changeIds: [], summary: null,
+      context: { threadId: "task_lower", message: "Add a lower third with my name." }, createdAt: new Date().toISOString(), startedAt: undefined, finishedAt: undefined }] };
+  useProjectStore.setState({ current: data, holdForRewording: vi.fn().mockResolvedValue(undefined), rewordTask: vi.fn() });
+  await show();
+  await act(async () => {});
+  // Which request the box is on. When that changes the box is built again, which drops its caret.
+  const boxOn = () => useUiStore.getState().draftOwner;
+  const newEdit = JSON.stringify([PRJ, null]);
+  expect(boxOn()).toEqual(newEdit);
+  await click(container.querySelector('[aria-label="Queued requests"] .queue-reword')!);
+  await act(async () => composer.props!.rewording!.onChange("Add a lower third with my name and title."));
+  // The editor opens an edit while the words are in the box. The box isn't built again for it: the words keep the box,
+  // and no caret is pulled back into it for the next Esc to throw them away.
+  await click(editRowsIn(turnFor("chg_approved_2"))[2]!);
+  await act(async () => {});
+  expect(editPanel()).not.toBeNull();
+  expect(composer.props?.rewording?.text).toBe("Add a lower third with my name and title.");
+  expect(boxOn()).toEqual(newEdit);
+  // Once the words are done with, the box talks to the edit that's open, as an empty box does.
+  await act(async () => composer.props!.rewording!.onCancel());
+  expect(composer.props?.rewording).toBeUndefined();
+  expect(boxOn()).toEqual(JSON.stringify([PRJ, threadWith("chg_approved_2").id]));
+  expect(boxTag()).toBe("Edit at 0:11");
 });
 
 it("keeps a queued request's new words when holding it fails for another reason, and asks for the hold again", async () => {
@@ -5444,8 +6037,11 @@ it("keeps a pass's other calls open while Scarlet revises one of them, and waits
   useProjectStore.setState({ current: data, approve });
   await show();
   await act(async () => {});
-  // The cut under revision leaves the calls. The other one stays open.
+  // The cut under revision leaves For you for Working. The other one stays open.
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
+  expect([...passCard().querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you1", "Working1", "Done"]);
+  expect(passRows().map(r => r.querySelector(".edit-badge")?.textContent)).toEqual(["2"]);
+  await click(tabNamed(passCard(), "Working"));
   // The revision sits directly under the call it revises, named by that call's number among the pass's calls, with
   // the editor's words and Scarlet at work on it. It is no block of its own in the conversation.
   const under = passRows()[0]!.closest("li")!.querySelector<HTMLElement>(".subunit")!;
@@ -5627,13 +6223,13 @@ it("draws a pass's rows and any other request's rows as one row, and a revised e
   }
 });
 
-/** A pass whose list has a moment: three edits on the cube's reveal that play as one change, between two of their own. */
+/** A pass whose list has a moment: three edits on the cube's reveal that overlap on the timeline exactly, between two of their own. */
 const passWithMoment = (flagged: boolean) => {
   const later = appliedPass(flagged);
   (later.lists[later.earlier] as object[]).splice(0, 1,
-    { changeId: "chg_approved_2", spot: 3, label: "Cube reveal", range: { start: 4, end: 7 }, previous: [], kind: "zoom" },
+    { changeId: "chg_approved_2", spot: 3, label: "Cube reveal", range: { start: 4, end: 7.98 }, previous: [], kind: "zoom" },
     { changeId: "chg_approved_2", spot: 4, label: "Cube inset", range: { start: 4, end: 8 }, previous: [], kind: "reframe" },
-    { changeId: "chg_approved_2", spot: 5, label: "First cube turn", range: { start: 4.5, end: 6.5 }, previous: [], kind: "zoom" });
+    { changeId: "chg_approved_2", spot: 5, label: "First cube turn", range: { start: 4.02, end: 7.98 }, previous: [], kind: "zoom" });
   return later;
 };
 const listRows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-pass-list:not(.is-moment) > li > button")];
@@ -5690,6 +6286,35 @@ it("lists a pass's edits that overlap as one moment, with its own edits under it
   expect(listRows()[1]!.querySelector(".simple-pass-tick")).not.toBeNull();
 });
 
+it("says Needs your answer on a moment's row, and on its own edit's, while the request about one of its edits asks the editor", async () => {
+  passWithMoment(false);
+  const base = buildDb().tasks.find(t => t.id === "task_done")!;
+  const now = new Date().toISOString();
+  const ask = (state: "running" | "waiting_for_user") => ({ ...base, id: "task_turn", state, question: state === "running" ? null : "Only on the first turn?",
+    createdAt: now, startedAt: now, finishedAt: undefined, summary: null, changeIds: [],
+    context: { changeId: "chg_approved_2", editIndex: 5, threadId: threadWith("chg_approved_2").id, message: "Slower" } });
+  await show();
+  await act(async () => {});
+  await click(passToggle());
+  await act(async () => {});
+  // Scarlet takes up a request about one of the moment's edits: the block is above the message box while it works.
+  await event(d => ({ ...d, tasks: [...d.tasks, ask("running")] }));
+  await act(async () => {});
+  const pass = () => container.querySelector<HTMLElement>('[aria-label="Dialogue pass"]')!;
+  const listRows = () => [...pass().querySelectorAll<HTMLElement>(".simple-pass-list:not(.is-moment) > li > button")];
+  const momentRows = () => [...pass().querySelectorAll<HTMLElement>(".simple-pass-list.is-moment > li > button")];
+  const word = (row: HTMLElement | undefined) => [row?.querySelector(".simple-pass-check")?.textContent, row?.querySelector(".simple-pass-check")?.className];
+  const moment = () => listRows().find(row => row.querySelector(".simple-pass-more"));
+  expect([rowText(moment()!), word(moment())]).toEqual(["Cube inset", ["Revising…", "simple-pass-check is-kept working-text"]]);
+  // Scarlet stops to ask: the moment's row says it is the editor's turn, in amber and still, and so does the edit's own row.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_turn" ? ask("waiting_for_user") : t) }));
+  await act(async () => {});
+  expect(word(moment())).toEqual(["Needs your answer", "simple-pass-check"]);
+  if (!momentRows().length) await click(moment()!.querySelector<HTMLElement>(".simple-pass-more")!);
+  expect(momentRows().map(row => [rowText(row), row.querySelector(".simple-pass-check")?.textContent ?? null, row.querySelector(".simple-pass-check")?.className ?? null]))
+    .toEqual([["Cube reveal", null, null], ["Cube inset", null, null], ["First cube turn", "Needs your answer", "simple-pass-check"]]);
+});
+
 it("opens a moment whole from Keep on the row before it, when the edit it is named for is kept already", async () => {
   passWithMoment(false);
   // The editor kept "Cube inset", the edit the moment is named for, on its own earlier.
@@ -5711,24 +6336,52 @@ it("opens a moment whole from Keep on the row before it, when the edit it is nam
   expect([listRows()[1]!.className, openPassRow()]).toEqual(["is-decided", "wrap"]);
 });
 
+it("takes back a moment's Keep with ⌘Z and leaves the edit of it the editor had kept on its own kept", async () => {
+  passWithMoment(false);
+  const thread = threadWith("chg_approved_2").id;
+  const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
+  // The editor kept "First cube turn", one of the moment's three edits, on its own earlier.
+  keepEdits(PRJ, thread, [{ changeId: "chg_approved_2", spot: 5 }]);
+  await show();
+  await act(async () => {});
+  await click(passToggle());
+  await act(async () => {});
+  // Keep on the moment's row keeps the other two, and the row is ticked.
+  await click(listRows()[1]!);
+  await act(async () => {});
+  await press("k");
+  await act(async () => {});
+  expect(listRows()[1]!.className).toBe("is-decided");
+  // ⌘Z takes back that Keep and no other: the two it kept wait again, and the one kept before it stays kept.
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+  await act(async () => {});
+  expect(unkeep.mock.calls.map(([, body]) => body.edits.map(e => e.spot).sort())).toEqual([[3, 4]]);
+  expect([openPassRow(), editPanel()?.querySelector(".edit-card-length")?.textContent]).toEqual(["Cube inset", "3 edits"]);
+  await click(listRows()[1]!.querySelector<HTMLElement>(".simple-pass-more")!);
+  expect(momentRows().map(row => [rowText(row), row.className])).toEqual([["Cube reveal", ""], ["Cube inset", ""], ["First cube turn", "is-decided"]]);
+});
+
 it("keeps a moment the video plays through while the pass's list is open, and never an edit that asks for a look", async () => {
   passWithMoment(true);
   await show();
   await act(async () => {});
   await click(passToggle());
   await act(async () => {});
-  expect(listRows().map(rowText)).toEqual(["captions", "Cube inset", "wrap"]);
+  // The edit that asks for a look leads For you; the rest are under its optional line, open.
+  expect(listRows().map(rowText)).toEqual(["wrap", "captions", "Cube inset"]);
   // The video plays from 3 s to the end, past the moment and "wrap", which asks for a look.
   const plays = (time: number, playing = true) => act(async () => { usePlayerStore.setState({ time, playing }); });
   await plays(3, false);
   for (let t = 3; t <= 16; t += 0.5) await plays(t);
   await act(async () => {});
-  expect(listRows().map(row => [rowText(row), row.className])).toEqual([["captions", ""], ["Cube inset", "is-decided"], ["wrap", ""]]);
+  // The moment is kept, so it is Done's: it stays a moment where it was, marked, before it leaves.
+  expect(listRows().map(row => [rowText(row), row.className])).toEqual([["wrap", ""], ["captions", ""], ["Cube inset", "is-decided"]]);
+  expect([...turnFor("chg_approved_2").querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you1", "Working", "Done1"]);
   // A jump over a moment isn't watching it.
   await plays(0, false);
   await plays(0.1);
   await plays(3);
-  expect(listRows()[0]!.className).toBe("");
+  expect(listRows()[1]!.className).toBe("");
 });
 
 it("does not keep an unflagged cut skipped with ArrowRight while playing", async () => {
@@ -5756,6 +6409,36 @@ it("does not keep an unflagged cut skipped with ArrowRight while playing", async
   expect(listRows().map(row => [rowText(row), row.className])).toEqual([["First pause", ""], ["Second pause", "is-decided"], ["Third pause", ""]]);
 });
 
+it("does not keep a cut the editor closed without deciding when play starts on its join", async () => {
+  const later = appliedPass(false);
+  (later.lists[later.earlier] as object[]).splice(0, Infinity,
+    { changeId: "chg_approved_2", spot: 0, label: "First pause", range: { start: 2.5, end: 5.5 }, at: 4, beforeCut: { version: "ver_1", removed: { start: 4, end: 5 } }, previous: [], kind: "cut" },
+    { changeId: "chg_approved_2", spot: 1, label: "Second pause", range: { start: 7.5, end: 10.5 }, at: 9, beforeCut: { version: "ver_1", removed: { start: 10, end: 11 } }, previous: [], kind: "cut" });
+  const kept = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined as never);
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
+  await show();
+  await act(async () => {});
+  await click(passToggle());
+  await act(async () => {});
+  // The editor opens the first cut and closes its card with Esc, undecided. The playhead is left on its join.
+  await click(listRows()[0]!);
+  await act(async () => {});
+  expect(openPassRow()).toBe("First pause");
+  await press("Escape");
+  await act(async () => {});
+  expect([editPanel(), usePlayerStore.getState().time]).toEqual([null, 4]);
+  // Play from there starts on the join: the cut wasn't watched, so it isn't ticked and the engine isn't told.
+  const plays = (time: number, playing = true) => act(async () => { usePlayerStore.setState({ time, playing, duration: 17 }); });
+  for (let t = 4; t <= 5; t += 0.25) await plays(t);
+  await act(async () => {});
+  expect(listRows().map(row => [rowText(row), row.className])).toEqual([["First pause", ""], ["Second pause", ""]]);
+  expect(kept).not.toHaveBeenCalled();
+  // Played on through the next cut, from well before it, that one is kept.
+  for (let t = 5.25; t <= 9.5; t += 0.25) await plays(t);
+  await act(async () => {});
+  expect(listRows().map(row => [rowText(row), row.className])).toEqual([["First pause", ""], ["Second pause", "is-decided"]]);
+});
+
 it("says on a pass's row when its cut is being revised, kept or not, and that it came back revised until it is kept", async () => {
   const later = appliedPass(true);
   const thread = threadWith("chg_approved_2");
@@ -5779,12 +6462,14 @@ it("says on a pass's row when its cut is being revised, kept or not, and that it
     .find(b => b.querySelector(".simple-pass-label")?.textContent?.startsWith(label))!;
   // The row of the cut being revised says so, though the editor had kept it. The one that came back revised says it
   // did, as a row in any other request's list does, until the editor keeps it (2026-11-10: the pass's rows said neither).
-  // Each keeps the figure at its end, and the word follows it, as in that list.
+  // Each ends on that word alone, where its figure was: quiet while Scarlet is on it, amber once it is back.
   const stands = (label: string) => [...row(label).children].slice(-2).map(el => [el.className, el.textContent]);
-  expect(stands("captions")).toEqual([["simple-pass-value", "Audio"], ["simple-pass-check is-kept working-text", "Revising…"]]);
-  expect(stands("wrap")).toEqual([["simple-pass-value", "Audio"], ["simple-pass-check", "Revised"]]);
+  expect(stands("wrap")).toEqual([["simple-pass-label", "wrapv2"], ["simple-pass-check", "Revised"]]);
   expect(row("wrap").querySelector(".simple-pass-label small")?.textContent).toBe("v2");
   expect(row("music bed").querySelector(".simple-pass-check")).toBeNull();
+  // The cut that is with Scarlet is Working's row.
+  await click(tabNamed(pass(), "Working"));
+  expect(stands("captions")).toEqual([["simple-pass-label", "captions"], ["simple-pass-check is-kept working-text", "Revising…"]]);
 });
 
 it("says Up next for the first queued revision, Queued for later ones, and Revising… once Scarlet starts on it", async () => {
@@ -5804,7 +6489,8 @@ it("says Up next for the first queued revision, Queued for later ones, and Revis
   await show();
   await act(async () => {});
   const pass = () => container.querySelector<HTMLElement>(".simple-pin .simple-pass")!;
-  await click(seeAll(pass())!);
+  // Both cuts are with Scarlet, so they are Working's rows.
+  await click(tabNamed(pass(), "Working"));
   await act(async () => {});
   const check = (label: string) => {
     const row = [...pass().querySelectorAll<HTMLElement>(".simple-pass-list > li > button")]
@@ -5820,6 +6506,22 @@ it("says Up next for the first queued revision, Queued for later ones, and Revis
   await act(async () => {});
   expect(check("captions")).toEqual(["Revising…", true]);
   expect(check("wrap")).toEqual(["Up next", false]);
+  // Scarlet stops to ask the editor something about it: the row is For you's, and says Needs your answer, in amber and
+  // still, with its time amber as a row that waits. Answered, it is Working's again, and Revising….
+  const asks = (label: string) => {
+    const row = [...pass().querySelectorAll<HTMLElement>(".simple-pass-list > li > button")].find(b => b.querySelector(".simple-pass-label")?.textContent?.startsWith(label))!;
+    return [row.querySelector(".simple-pass-check")?.textContent, row.querySelector(".simple-pass-check")?.className, row.querySelector(".simple-pass-time")?.className];
+  };
+  expect(asks("captions")).toEqual(["Revising…", "simple-pass-check is-kept working-text", "simple-pass-time"]);
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_q1" ? { ...t, state: "waiting_for_user" as const, question: "Bigger on every line?" } : t) }));
+  await act(async () => {});
+  expect([...pass().querySelectorAll(".simple-pass-list > li > button .simple-pass-label")].map(l => l.textContent)).toEqual(["wrap"]);
+  await click(tabNamed(pass(), "For you"));
+  expect(asks("captions")).toEqual(["Needs your answer", "simple-pass-check", "simple-pass-time is-need"]);
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_q1" ? { ...t, state: "running" as const, question: null } : t) }));
+  await act(async () => {});
+  await click(tabNamed(pass(), "Working"));
+  expect(asks("captions")).toEqual(["Revising…", "simple-pass-check is-kept working-text", "simple-pass-time"]);
 });
 
 it("marks a call v2 when the request that revised it waited its turn behind the running pass", async () => {
@@ -5975,17 +6677,22 @@ it("starts ↓ on the first call still waiting when nothing is open, and ↑ on 
   await press("ArrowDown");
   expect(onVideo()).toBe("Showing cut at 9:58 · 2 of 2 · After");
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
-  // From a call, the arrows still reach the one beside it, decided or not.
+  // ↑ and ↓ step through the tab shown. For you has only this call: the one already decided is Done's.
+  await press("ArrowUp");
+  expect(onVideo()).toBe("Showing cut at 9:58 · 2 of 2 · After");
+  // Done has it, and from the call that's open ↑ reaches it there.
+  await click(tabNamed(passCard(), "Done"));
   await press("ArrowUp");
   expect(onVideo()).toBe("Showing cut at 3:50 · 1 of 2 · After");
   expect(buttonIn(call(), "Keep")?.getAttribute("aria-pressed")).toBe("true");
   // ↑ from nothing starts on the last call still waiting.
   await press("Escape");
+  await click(tabNamed(passCard(), "For you"));
   await press("ArrowUp");
   expect(onVideo()).toBe("Showing cut at 9:58 · 2 of 2 · After");
 });
 
-it("starts ↓ on the first call when every call is made and the pass hasn't applied yet", async () => {
+it("starts ↓ on Done's first call when every call is made and the pass hasn't applied yet", async () => {
   flagged();
   // Both calls were made in an earlier visit, and the pass waits for Apply.
   data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutChoices: [
@@ -5993,11 +6700,87 @@ it("starts ↓ on the first call when every call is made and the pass hasn't app
   useProjectStore.setState({ current: data });
   await show();
   await act(async () => {});
+  // Nothing waits, so For you has no row for ↓ to start on. Both calls are Done's rows, and there ↓ starts on the first.
+  await press("ArrowDown");
+  expect(onVideo()).toBeUndefined();
+  await click(tabNamed(passCard(), "Done"));
   await press("ArrowDown");
   expect(onVideo()).toBe("Showing cut at 3:50 · 1 of 2 · After");
   await press("Escape");
   await press("ArrowUp");
   expect(onVideo()).toBe("Showing cut at 9:58 · 2 of 2 · After");
+});
+
+it("takes back a call's Keep with ⌘Z, not the Keep made before it, and opens the call again where it waits", async () => {
+  appliedEdits();
+  const save = flagged();
+  const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
+  useProjectStore.setState({ current: data, approve });
+  const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
+  const undoKey = () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+  await showFolded();
+  await act(async () => {});
+  // The editor keeps a flagged edit of an earlier request, then goes to the pass's calls and keeps the first.
+  await click(turnFor("chg_approved_2").querySelector(".simple-pass-need")!);
+  await act(async () => {});
+  await press("k");
+  await act(async () => {});
+  const need = () => passCard().querySelector(".simple-pass-need")?.getAttribute("title");
+  const onCard = () => [call()?.querySelector(".edit-card-count")?.textContent, need()];
+  await click(passCard().querySelector(".simple-pass-need")!);
+  expect(onCard()).toEqual(["Cut 1", "2 need you"]);
+  await press("k");
+  expect(onCard()).toEqual(["Cut 2", "1 needs you"]);
+  // ⌘Z takes back that call, not the edit kept before it: the call is open again and waits on the editor.
+  await undoKey();
+  await act(async () => {});
+  expect(unkeep).not.toHaveBeenCalled();
+  expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ choices: [], applyWhenDone: false }));
+  expect(onCard()).toEqual(["Cut 1", "2 need you"]);
+  expect(buttonIn(call(), "Keep")?.getAttribute("aria-pressed")).toBe("false");
+  // A decision changed is taken back to what it was: Keep, then Reject edit, then ⌘Z is Keep again.
+  await press("k");
+  // The call just kept is Done's, and still in For you for its moment: its row opens it.
+  await click(passCard().querySelector(".simple-pass-list > li > button")!);
+  await click(call().querySelector('[aria-label="Reject edit"]')!);
+  expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ choices: [{ index: 1, choice: "keep" }] }));
+  await undoKey();
+  await act(async () => {});
+  expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ choices: [{ index: 1, choice: "cut" }] }));
+  expect([...onCard(), buttonIn(call(), "Keep")?.getAttribute("aria-pressed")]).toEqual(["Cut 1", "1 needs you", "true"]);
+  expect(approve).not.toHaveBeenCalled();
+});
+
+it("says why ⌘Z can't take back a call once its pass has gone in, and leaves the Keep made before it alone", async () => {
+  appliedEdits();
+  flagged();
+  const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
+  useProjectStore.setState({ current: data, approve });
+  const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
+  const undoKey = () => act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+  await showFolded();
+  await act(async () => {});
+  await click(turnFor("chg_approved_2").querySelector(".simple-pass-need")!);
+  await act(async () => {});
+  await press("k");
+  await act(async () => {});
+  // Both calls are made, and the last one applies the pass.
+  await click(passCard().querySelector(".simple-pass-need")!);
+  await press("k");
+  await press("k");
+  await act(async () => {});
+  expect(approve).toHaveBeenCalledWith("chg_ready", undefined, []);
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "approved" as const, appliedVersion: c.toVersion } : c) }));
+  // The pass is in the video with every cut of it: ⌘Z says so in the timeline's bottom row, and takes nothing else back.
+  await undoKey();
+  await act(async () => {});
+  expect(container.querySelector(".timeline-foot .timeline-undo-error")?.textContent).toBe("Couldn’t undo Keep: its pass has been applied since.");
+  expect(unkeep).not.toHaveBeenCalled();
+  // It says so once for the whole pass, not once a call: the next ⌘Z goes on to the Keep made before the calls.
+  await undoKey();
+  await act(async () => {});
+  expect(container.querySelector(".timeline-foot .timeline-undo-error")).toBeNull();
+  expect(unkeep.mock.calls).toEqual([[PRJ, { threadId: threadWith("chg_approved_2").id, edits: [{ changeId: "chg_approved_2", spot: 2 }] }]]);
 });
 
 it("labels a length in seconds under a minute, as minutes and seconds above and with its hours from an hour, carrying a rounded 60", () => {
@@ -6180,11 +6963,11 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   const bar = editPanel()!;
   expect(buttonIn(bar, "Apply")).toBeUndefined();
   expect(turnFor("chg_approved_2").querySelector(".simple-edit.is-on .simple-edit-value")?.textContent).toBe("−2.4 s");
-  expect(container.textContent).toContain("Removed · 2.4 s");
+  expect(container.textContent).toContain("Took out · 2.4 s");
   // It quotes what the cut took out, struck through, and plays on the version before it: the timeline shades what came out
   // and After steps over it.
   expect(beforeTimeline).toHaveBeenCalledWith(PRJ, "v_before");
-  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Removed · 2.4 s");
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Took out · 2.4 s");
   // The timeline is on the version before the cut, where the waiting pass's times don't hold: its calls draw no dot here.
   expect(container.querySelector(".simple-timeline-mark")).toBeNull();
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing “Keep the image test” · After");
@@ -6207,7 +6990,7 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   await click(transcriptLink());
   expect(openHead()!.querySelector(".edit-passage")).toBeNull();
   expect(container.querySelector(".simple-timeline-bracket")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // After steps over the shaded passage, so a click inside it plays it in Before from that point, and the icon lights
   // by itself, with a flash. Without layout the click lands on the passage's first frame.
   const band = () => container.querySelector<HTMLElement>(".simple-timeline-band")!;
@@ -6225,7 +7008,7 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   await press("\\");
   expect(beforeIcon(bar)).toEqual(["BeforeAfter\\", "Before", "false", "Play Before (\\)"]);
   expect(bar.querySelector(".edit-card-before.is-flash")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // \\ switches to Before, which plays straight through the cut.
   await press("\\");
   expect(beforeIcon(bar)).toEqual(["BeforeAfter\\", "Before", "true", "Back to After (\\)"]);
@@ -6271,6 +7054,45 @@ it("drags the divider to resize the chat against the player, and remembers the w
     await act(async () => root.render(null));
     await show();
     expect(container.querySelector<HTMLElement>("#simple-chat")!.style.width).toBe("800px");
+  } finally { localStorage.removeItem("scarlet.simpleChatWidth"); }
+});
+
+it("says when the chat is dragged near its narrowest, so its header can give its room to what matters most", async () => {
+  vi.stubGlobal("innerWidth", 2000);
+  // The editor left the chat at its narrowest.
+  localStorage.setItem("scarlet.simpleChatWidth", "320");
+  try {
+    await show();
+    const rail = () => container.querySelector<HTMLElement>("#simple-chat")!;
+    const divider = () => container.querySelector<HTMLElement>('[role="separator"][aria-label="Resize chat"]')!;
+    /** How wide the chat is, and what it says of being narrow: an empty mark, or nothing at all. */
+    const narrow = () => [rail().style.width, rail().getAttribute("data-narrow")];
+    expect(narrow()).toEqual(["320px", ""]);
+    divider().setPointerCapture = vi.fn();
+    const pointer = (type: string, clientX: number) => new PointerEvent(type, { bubbles: true, button: 0, isPrimary: true, pointerId: 1, clientX });
+    // Dragged wider it stops saying so from 360px, and says it again under that.
+    await act(() => divider().dispatchEvent(pointer("pointerdown", 320)));
+    await act(() => divider().dispatchEvent(pointer("pointermove", 380)));
+    expect(narrow()).toEqual(["380px", null]);
+    await act(() => divider().dispatchEvent(pointer("pointermove", 360)));
+    expect(narrow()).toEqual(["360px", null]);
+    await act(() => divider().dispatchEvent(pointer("pointermove", 359)));
+    expect(narrow()).toEqual(["359px", ""]);
+    await act(() => divider().dispatchEvent(pointer("pointerup", 380)));
+    expect(narrow()).toEqual(["380px", null]);
+    // Left there, it opens that way.
+    await act(async () => root.render(null));
+    await show();
+    expect(narrow()).toEqual(["380px", null]);
+    // A window too small for the chat beside the player lays it out another way, at no width of its own: it never says so.
+    await act(async () => root.render(null));
+    const lone = (compact: boolean) => act(async () => root.render(<ChatRail compact={compact} id="lone-chat" storageKey="scarlet.simpleChatWidth" minWidth={320}>Chat</ChatRail>));
+    const loneRail = () => container.querySelector<HTMLElement>("#lone-chat")!;
+    localStorage.setItem("scarlet.simpleChatWidth", "320");
+    await lone(false);
+    expect([loneRail().style.width, loneRail().getAttribute("data-narrow")]).toEqual(["320px", ""]);
+    await lone(true);
+    expect([loneRail().style.width, loneRail().hasAttribute("data-narrow")]).toEqual(["", false]);
   } finally { localStorage.removeItem("scarlet.simpleChatWidth"); }
 });
 
@@ -6381,13 +7203,13 @@ it("keeps the chat in view beside the Transcript, and closes the Transcript on E
   const pin = () => container.querySelector<HTMLElement>(".simple-pin")!;
   const transcript = () => container.querySelector(".simple-transcript");
   await openTranscript();
-  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop, its question
-  // and Answer, so the message box doesn't say Answer with no question on screen.
+  // The transcript is beside the player: the chat and the request Scarlet is on stay in view, with its Stop and its
+  // question, so the message box doesn't say Answer with no question on screen.
   expect(chat().hidden).toBe(false);
   expect(pin().hidden).toBe(false);
   expect(pin().querySelector(".unit-msg")?.textContent).toContain("Make the logo smaller.");
   expect(pin().querySelector('[aria-label^="Stop this edit"]')).not.toBeNull();
-  expect(pin().querySelector(".req-say")?.textContent).toBe("Smaller by how much?Answer");
+  expect(pin().querySelector(".req-say")?.textContent).toBe("Smaller by how much?");
   expect(boxTag()).toBe("Answer");
   // A message that was sent leaves it open: the chat, where it went, is already in view.
   await act(async () => composer.props!.onSent!());
@@ -6396,11 +7218,40 @@ it("keeps the chat in view beside the Transcript, and closes the Transcript on E
   await press("Escape");
   expect(transcript()).toBeNull();
   // An edit that's open takes Esc first, then the Transcript.
-  await click(turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   expect(editPanel()).not.toBeNull();
   await openTranscript();
   await press("Escape");
+  expect([!!editPanel(), !!transcript()]).toEqual([false, true]);
+  await press("Escape");
+  expect(transcript()).toBeNull();
+});
+
+it("closes the Transcript on one Esc from its search field once the field is empty, after Esc has cleared a search", async () => {
+  appliedEdits();
+  await show();
+  const transcript = () => container.querySelector(".simple-transcript");
+  const field = () => container.querySelector<HTMLInputElement>('.simple-transcript input[type="search"]')!;
+  const esc = () => act(async () => { field().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  await openTranscript();
+  // With words in the field, Esc clears the search and the Transcript stays.
+  await act(async () => {
+    field().focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field(), "the");
+    field().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await esc();
+  expect([field().value, !!transcript()]).toEqual(["", true]);
+  // Empty, the field has nothing of its own for Esc: one Esc closes the Transcript, as its × says.
+  await esc();
+  expect(transcript()).toBeNull();
+  // An edit that's open still takes that Esc first, then the Transcript.
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
+  await act(async () => {});
+  await openTranscript();
+  await act(async () => field().focus());
+  await esc();
   expect([!!editPanel(), !!transcript()]).toEqual([false, true]);
   await press("Escape");
   expect(transcript()).toBeNull();
@@ -6552,7 +7403,9 @@ it("shows cache progress on the Media button and offers Pause from More", async 
   expect(mediaButton().getAttribute("aria-description")).toBe("Caching 30%");
   expect(mediaButton().textContent).toBe("Media");
   await openMenu();
-  await click(menuItem("Pause"));
+  // The menu's row says what it pauses: the chat's own Pause, on a request's band, is for editing.
+  expect(menuItem("Pause")).toBeUndefined();
+  await click(menuItem("Pause media processing"));
   expect(updateProject).toHaveBeenCalledWith({ mediaPaused: true }, PRJ);
   expect(container.querySelector('[role="menu"]')).toBeNull();
 });
@@ -6636,7 +7489,8 @@ it("offers Resume from the Media hover card and More while media processing is p
   expect(mediaButton().getAttribute("aria-description")).toBe("Media processing is paused");
   expect(buttonIn(container.querySelector(".media-hover-card")!, "Resume")).toBeTruthy();
   await openMenu();
-  await click(menuItem("Resume"));
+  expect(menuItem("Resume")).toBeUndefined();
+  await click(menuItem("Resume media processing"));
   expect(updateProject).toHaveBeenCalledExactlyOnceWith({ mediaPaused: false }, PRJ);
 });
 
@@ -6938,9 +7792,10 @@ it("shows a rule learned from the editor's decisions as one line that unfolds in
   ] };
   useProjectStore.setState({ current: data });
   await show();
-  // The chat's line says what it was learned from before the skill it is for.
+  // The chat's line is one line: the skill and the rule, whole on hover. What it was learned from is said in Learnings.
   const lines = [...container.querySelectorAll<HTMLElement>(".simple-learned")].map(l => l.textContent);
-  expect(lines).toEqual(["Learned from 3 cuts you rejected, for dialogue-pass: “Leave a pause between sentences under about a second.” Review Decline",
+  expect(container.querySelector(".simple-learned .simple-learned-rule")?.getAttribute("title")).toBe("Leave a pause between sentences under about a second.");
+  expect(lines).toEqual(["Learned for dialogue-pass: “Leave a pause between sentences under about a second.” Review Decline",
     "Learned for dialogue-pass: “Keep a laugh in.” Review Decline"]);
   await openMenu();
   await click(menuRow("Learnings"));
@@ -7014,7 +7869,7 @@ it("declines a rule from Decline on its line in the chat, and says why when that
     .toEqual([["Review", "simple-learned-review"], ["Decline", "simple-learned-decline"]]);
   await click(buttonIn(line()!, "Decline")!);
   expect(declineLearning).toHaveBeenCalledWith("lrn_a");
-  expect(line()!.querySelector('[role="alert"]')?.textContent).toBe(" Couldn't decline. Scarlet is offline.");
+  expect(line()!.querySelector('[role="alert"]')?.textContent).toBe("Couldn't decline. Scarlet is offline.");
   await click(buttonIn(line()!, "Decline")!);
   expect(line()!.querySelector('[role="alert"]')).toBeNull();
   // Declined, the line leaves the chat.
@@ -7339,6 +8194,22 @@ it("pauses project editing from the band beside Stop, keeps the paused request i
   expect(tray().querySelector(".queue-text")?.textContent).toBe("Add a title.");
 });
 
+it("gives Space back to the player after Pause is clicked on a request's band, so it can't resume the editing just paused", async () => {
+  const stopEditing = vi.fn().mockImplementation(async () => { await event(d => ({ ...d, project: { ...d.project, editingPaused: true } })); });
+  const resumeEditing = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ stopEditing, resumeEditing });
+  await show();
+  const control = () => runOf("task_running").closest(".unit")!.querySelector<HTMLButtonElement>(".unit-msg .unit-actions .unit-pause-edit")!;
+  const pause = control();
+  await pointerClick(pause);
+  expect(stopEditing).toHaveBeenCalledExactlyOnceWith(PRJ);
+  // The same control is Resume now. Clicked, it let go of the focus, so Space is the player's and presses nothing.
+  expect([control(), control().getAttribute("aria-label")]).toEqual([pause, "Resume editing"]);
+  expect(document.activeElement).not.toBe(pause);
+  expect(await spaceWhilePaused()).toBe(true);
+  expect(resumeEditing).not.toHaveBeenCalled();
+});
+
 it("keeps a question answerable while project editing is paused", async () => {
   idle();
   const base = data.tasks.find(t => t.id === "task_running")!;
@@ -7350,7 +8221,8 @@ it("keeps a question answerable while project editing is paused", async () => {
   useProjectStore.setState({ current: data });
   await show();
   const unit = container.querySelector(`.unit[data-run="${base.id}"]`)!;
-  expect([...unit.querySelectorAll(".req-say")].map(el => el.textContent)).toEqual([`${question}Answer`]);
+  // The box is on the question and says Answer, so the question has no link of its own.
+  expect([[...unit.querySelectorAll(".req-say")].map(el => el.textContent), boxTag()]).toEqual([[question], "Answer"]);
   // Resume is on the band of the request that asks, beside Stop: the tray has nothing to say.
   expect(container.querySelector(".queue-tray")).toBeNull();
   expect(unit.querySelector(".unit-pause-edit")?.getAttribute("aria-label")).toBe("Resume editing");
@@ -7377,12 +8249,44 @@ it("says what a run picked up again is doing while a request sent in its thread 
   expect(runOf("task_zoom_again").querySelector('.req-now [role="status"]')?.textContent).toBe("Looking at the timeline");
 });
 
+it("keeps the sentence Scarlet opened a request with when the request is picked up again after a restart or a pause", async () => {
+  idle();
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const asked = new Date(Date.now() - 60_000).toISOString(), now = new Date().toISOString();
+  const OPENED = "I’ll zoom into the browser window and hold there while you read the page.";
+  const interrupted = { ...base, id: "task_zoom", kind: "edit" as const, state: "failed" as const, interrupted: true, summary: null, changeIds: [], retryTaskId: "task_zoom_again",
+    instruction: "Zoom into the browser window.", createdAt: asked, startedAt: asked, finishedAt: asked, context: { message: "Zoom into the browser window." } };
+  const resumed = { ...interrupted, id: "task_zoom_again", state: "running" as const, interrupted: undefined, retryTaskId: undefined, resumeRootId: "task_zoom",
+    createdAt: now, startedAt: now, finishedAt: undefined, context: { threadId: "task_zoom", message: "Zoom into the browser window." } };
+  const first = [{ type: "log" as const, at: asked, text: OPENED }, { type: "tool" as const, at: asked, text: "timeline_get", data: { tool: "timeline_get", input: {} } },
+    { type: "log" as const, at: asked, text: "The window is at the left of the frame.", data: { kind: "editor_progress" } }];
+  // After a restart only what was said in the first attempt is here: its later update, which is no opening sentence.
+  data = { ...data, tasks: [...data.tasks, interrupted, resumed], taskEvents: { ...data.taskEvents, task_zoom: [first[2]!], task_zoom_again: [] },
+    taskEventScopes: { task_zoom: "conversation" as const } };
+  const loadTaskEvents = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ current: data, loadTaskEvents });
+  await show();
+  await act(async () => {});
+  const said = () => { const run = runOf("task_zoom_again"); return [run.querySelector(".req-lead")?.textContent, run.querySelector('.req-now [role="status"]')?.textContent]; };
+  expect(said()).toEqual([undefined, "Picking up where it left off"]);
+  // The whole of it is asked for, and once it is here the sentence is back as it was written.
+  expect(loadTaskEvents).toHaveBeenCalledWith("task_zoom", "all");
+  await event(d => ({ ...d, taskEvents: { ...d.taskEvents, task_zoom: first }, taskEventScopes: { ...d.taskEventScopes, task_zoom: "all" as const } }));
+  expect(said()).toEqual([OPENED, "Picking up where it left off"]);
+  // What the new attempt says as it begins doesn't take its place.
+  await event(d => ({ ...d, taskEvents: { ...d.taskEvents, task_zoom_again: [{ type: "log" as const, at: now, text: "I’ll carry on with the zoom." }] } }));
+  expect(said()).toEqual([OPENED, "Picking up where it left off"]);
+  await event(d => ({ ...d, taskEvents: { ...d.taskEvents, task_zoom_again: [...d.taskEvents.task_zoom_again!,
+    { type: "tool" as const, at: now, text: "timeline_get", data: { tool: "timeline_get", input: {} } }] } }));
+  expect(said()).toEqual([OPENED, "Looking at the timeline"]);
+});
+
 it("leaves a finished request as its heading with active time and what it made", async () => {
   await show();
   const run = runOf("task_done");
   const unit = run.closest<HTMLElement>(".unit")!;
   // The heading is the editor's words, with no name or number: "Edit 14" anywhere is an edit Scarlet made.
-  expect(unit.querySelector(".unit-msg > :not(.simple-who, p, .unit-state, .unit-stop, .unit-tokens)")).toBeNull();
+  expect(unit.querySelector(".unit-msg > :not(.unit-fold, .simple-who, p, .unit-state, .unit-stop, .unit-tokens)")).toBeNull();
   expect(unit.querySelector(".unit-msg > .unit-tokens > .run-work-time")?.textContent).toMatch(/^\d+m \d+s$/);
   const words = unit.querySelector(".unit-msg p")!;
   expect(words.lastChild?.textContent).toBe(requestTextFor("task_done"));
@@ -7425,7 +8329,7 @@ it("plays an applied cut's After from the version the cut made, so the join soun
   await click(buttonIn(turnFor("chg_approved_2"), "See edit")!);
   await act(async () => {});
   // The timeline stays on the version before, shading what came out, and the listen is in its clock.
-  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Removed · 2.4 s");
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Took out · 2.4 s");
   expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
   // The picture and sound come from the working cut, where the join is inside the rendered media.
   expect(player.mediaTime(9)).toBe(9);
@@ -7712,7 +8616,7 @@ it("opens a cut on the version before an earlier batch's cut beside it, so that 
   ] });
   vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === "v_before" ? before : version === "v_batch" ? batch : working }));
   await show();
-  const row = [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")].find(r => r.textContent?.includes("Drop the long pause"))!;
+  const row = [...editRowsIn(turnFor("chg_approved_2"))].find(r => r.textContent?.includes("Drop the long pause"))!;
   await click(row);
   await act(async () => {});
   // Its own version no longer has the first batch's footage: the earlier one does, so both cuts are on the timeline.
@@ -7840,10 +8744,9 @@ it("gives the timeline to a request that arrived under a pass's open list once t
   await press("Escape");
   await act(async () => {});
   expect(ticks()).toEqual(["dot", "dot", "check"]);
-  // The list closes, opening the pass's flagged cut, and then the card. Only the flagged edit from the older pass stays
+  // The optional line closes, and with it the list of every edit. Only the flagged edit from the older pass stays
   // beside the latest request's marker.
-  await click(passForYou());
-  await press("Escape");
+  await click(passToggle());
   await act(async () => {});
   expect(turnFor("chg_later").querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
   expect(numbered()).toEqual([["3", "check"], ["1", "check"]]);
@@ -7954,15 +8857,18 @@ it("opens a call that's with Scarlet: its card says so, and its revision is at w
   useProjectStore.setState({ current: data });
   await show();
   await act(async () => {});
-  // The pass counts only what still waits on the editor. Its list keeps the cut being revised, marked Revising….
+  // The pass counts only what still waits on the editor, and For you lists only that. The cut being revised is
+  // Working's row, marked Revising….
+  const rows = () => passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-check"), r.querySelector(".simple-pass-value")?.textContent]);
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
   await click(passCard().querySelector(".simple-pass-need")!);
-  expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-check"), r.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([["1", false, "Revising…"], ["2", true, expect.stringMatching(/^−/)]]);
-  // ↑ steps to it from the call beside it. The card keeps Scarlet's note and Before/After, and says Revising… where the
-  // decisions were. It isn't waiting on the editor, so it has no place among the ones that are.
+  expect(rows()).toEqual([["2", true, expect.stringMatching(/^−/)]]);
   // "1 needs you" opened the one call still waiting.
   expect(passRow("The corrected image-input take belongs here.").getAttribute("aria-current")).toBe("true");
+  await click(tabNamed(passCard(), "Working"));
+  expect(rows()).toEqual([["1", false, "Revising…"]]);
+  // ↑ steps to it from the call that's open. The card keeps Scarlet's note and Before/After, and says Revising… where
+  // the decisions were. It isn't waiting on the editor, so it has no place among the ones that are.
   await press("ArrowUp");
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 3:50 · 1 of 2 · After");
   expect(call().querySelector(".edit-card-title")?.textContent).toBe("Breath before the price.");
@@ -7986,7 +8892,8 @@ it("opens a call that's with Scarlet: its card says so, and its revision is at w
   save.mockClear();
   await press("k");
   expect(save).not.toHaveBeenCalled();
-  // The other call still has its decisions, the only one waiting.
+  // The other call still has its decisions, the only one waiting: ↓ reaches it from here once For you is shown.
+  await click(tabNamed(passCard(), "For you"));
   await press("ArrowDown");
   expect(buttonIn(call(), "Keep")).toBeDefined();
   expect([call().querySelector(".edit-card-count")?.textContent, call().querySelector(".edit-card-count")?.getAttribute("title")]).toEqual(["Cut 2", expect.stringMatching(/^Cut at \d+:\d\d$/)]);
@@ -8018,7 +8925,7 @@ it("leaves a message being written aimed where it was, and offers nothing above 
   data = { ...data, tasks: data.tasks.map(t => t.state === "waiting_for_user" ? { ...t, state: "done" as const, question: null } : t) };
   useProjectStore.setState({ current: data });
   await show();
-  const edits = () => turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit");
+  const edits = () => editRowsIn(turnFor("chg_approved_2"));
   await click(edits()[1]!);
   await act(async () => {});
   // The box is on the edit that's open, and its tag says so. The line that names it is for screen readers.
@@ -8051,7 +8958,7 @@ it("puts the tag taken off an empty box back on ⌘Z, until the box is aimed aga
   data = { ...data, tasks: data.tasks.map(t => t.state === "waiting_for_user" ? { ...t, state: "done" as const, question: null } : t) };
   useProjectStore.setState({ current: data });
   await show();
-  const edits = () => turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit");
+  const edits = () => editRowsIn(turnFor("chg_approved_2"));
   await click(edits()[2]!);
   await act(async () => {});
   expect(boxTag()).toBe("Edit at 0:11");
@@ -8098,7 +9005,7 @@ it("keeps the box where it was while the editor speaks into it, and follows what
   expect([boxTag(), useUiStore.getState().draftOwner]).toEqual([undefined, newEdit]);
   expect(aimLine()).toBe("Starting a new edit");
   // Opening an edit while they speak leaves it there too, as it does a message being typed.
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   expect(editPanel()).not.toBeNull();
   expect([boxTag(), useUiStore.getState().draftOwner]).toEqual([undefined, newEdit]);
@@ -8122,7 +9029,7 @@ it("leaves a spoken message where it was said: the tag's × and words typed and 
   useProjectStore.setState({ current: data });
   await show();
   const onEdit = JSON.stringify([PRJ, threadWith("chg_approved_2").id]), newEdit = JSON.stringify([PRJ, null]);
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   expect([boxTag(), useUiStore.getState().draftOwner]).toEqual(["Edit at 0:00", onEdit]);
   // The editor speaks into the box about the edit, and closes it meanwhile. The box stays on the edit.
@@ -8172,7 +9079,7 @@ it("takes the box off a suggestion when its card closes after Revise, as off a c
 it("lets a box that holds only a space follow the edit that opens, as an empty box does", async () => {
   appliedEdits();
   await show();
-  const edits = () => turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit");
+  const edits = () => editRowsIn(turnFor("chg_approved_2"));
   await click(edits()[1]!);
   await act(async () => {});
   expect(boxTag()).toBe("Edit at 0:00");
@@ -8212,7 +9119,7 @@ it("brings a message kept for a request back aimed as it was, not at what's open
   useProjectStore.setState({ current: data, createTask });
   await show();
   await act(async () => {});
-  const edits = () => turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit");
+  const edits = () => editRowsIn(turnFor("chg_approved_2"));
   await click(edits()[1]!);
   await act(async () => {});
   await act(async () => useUiStore.getState().setAgentDraft("Make the captions smaller"));
@@ -8239,23 +9146,22 @@ it("says Queued on the card of a cut sent back until Scarlet starts on it, and s
   // Only the second cut still waits on the editor. The other two are with Scarlet.
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
   await click(passCard().querySelector(".simple-pass-need")!);
-  expect(passRows().map(r => [r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([["A clean retake.", "Revising…"], ["Breath before the price.", expect.stringMatching(/^−/)], ["Repeated aside.", "Up next"]]);
+  // The two that have just gone to Scarlet are Working's, and stay in For you for their moment with their new word.
   // Each call has its number among all three, amber only on the one that still waits.
-  expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-check")])).toEqual([["1", false], ["2", true], ["3", false]]);
-  // ↓ steps from the call still waiting to the one that waits its turn. Its card says it's queued, and its number is
-  // its place among all three.
+  const rows = () => passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-check"), r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent]);
+  expect(rows()).toEqual([["1", false, "A clean retake.", "Revising…"], ["2", true, "Breath before the price.", expect.stringMatching(/^−/)], ["3", false, "Repeated aside.", "Up next"]]);
   // "1 needs you" opened the call still waiting.
   expect(passRow("Breath before the price.").getAttribute("aria-current")).toBe("true");
+  await click(tabNamed(passCard(), "Working"));
+  expect(rows()).toEqual([["1", false, "A clean retake.", "Revising…"], ["3", false, "Repeated aside.", "Up next"]]);
+  // On Working, ↓ steps from the call that's open to the one after it, which waits its turn. Its card says it's
+  // queued, and its number is its place among all three.
   await press("ArrowDown");
   expect([onVideo(), call().querySelector(".edit-card-status")?.textContent]).toEqual(["Showing cut at 0:11 · 3 of 3 · After", "Queued"]);
-  // ↑ steps back through every call, the one Scarlet is revising too.
-  await press("ArrowUp");
-  expect([onVideo(), !!buttonIn(call(), "Keep")]).toEqual(["Showing cut at 0:06 · 2 of 3 · After", true]);
+  // ↑ steps back through Working's rows, to the one Scarlet is revising.
   await press("ArrowUp");
   expect([onVideo(), call().querySelector(".edit-card-status")?.textContent]).toEqual(["Showing cut at 0:02 · 1 of 3 · After", "Revising…"]);
   // Scarlet starts on the note about the aside. It wasn't sent as a revision, but its card says Scarlet is on it.
-  await press("ArrowDown");
   await press("ArrowDown");
   expect(call().querySelector(".edit-card-status")?.textContent).toBe("Queued");
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_second" ? { ...t, state: "running" as const, startedAt: started } : t) }));
@@ -8455,7 +9361,7 @@ it("leaves the flagged edit open and playing when the last call applies the pass
   expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
 });
 
-it("keeps the flagged edits listed in the chat once the last call applies the pass", async () => {
+it("keeps the flagged edit in For you and the decided calls in Done once the last call applies the pass", async () => {
   finishedPass();
   flaggedPart();
   await show();
@@ -8467,13 +9373,15 @@ it("keeps the flagged edits listed in the chat once the last call applies the pa
   expect(passRows().some(r => r.textContent?.includes("wrap"))).toBe(true);
   await press("x");
   await act(async () => {});
-  // The pass goes in: its decided calls stay in For you marked Kept/Rejected alongside the edit that still waits, which is open.
+  // The pass goes in: the edit that still waits is For you's one row, and open. The decided calls are Done's, marked Kept or Rejected.
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "approved" as const, appliedVersion: c.toVersion } : c) }));
   await act(async () => {});
   expect(needYou()).toBe("1 needs you");
-  const rows = [...passCard().querySelectorAll<HTMLButtonElement>('[aria-label="Edits that need you"] > li > button')];
-  expect(rows.map(r => [r.textContent?.includes("wrap"), r.getAttribute("aria-current"), r.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([[false, null, "Kept"], [false, null, "Kept"], [false, null, "Rejected"], [true, "true", "Edit"]]);
+  const rows = () => [...passCard().querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")].map(r => [r.textContent?.includes("wrap"), r.getAttribute("aria-current"), r.querySelector(".simple-pass-value")?.textContent]);
+  expect(rows()).toEqual([[true, "true", "Edit"]]);
+  expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
+  await click(tabNamed(passCard(), "Done"));
+  expect(rows()).toEqual([[false, null, "Kept"], [false, null, "Kept"], [false, null, "Rejected"]]);
   expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
 });
 
@@ -8611,6 +9519,54 @@ it("shows Scarlet's recheck of an approved cut under that call, with why and non
   expect(under!.textContent).not.toMatch(/keep|Kept the original delivery|The video changed|Recheck this cut/);
 });
 
+it("says where Scarlet's recheck stands once, at the right of its Auto heading, with Stop there while it runs and Pause on a band", async () => {
+  finishedPass();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const recheck = callRequest("task_recheck", 0, { kind: "revise" as const, state: "running" as const, createdAt: at(0), startedAt: at(0),
+    createdBy: { type: "scarlet" as const, name: "Scarlet" }, cutConflict: { version: "v_head", approved: true as const },
+    instruction: "The editor approved this cut. The passage changed before it could apply.", context: { ...callRequest("x", 0, {}).context, message: "Recheck this cut" } });
+  await event(d => ({ ...d, tasks: [...d.tasks, recheck] }));
+  const under = () => container.querySelector<HTMLElement>('.subunit[data-run="task_recheck"]')!;
+  const heading = () => under().querySelector<HTMLElement>(":scope > .subunit-msg")!;
+  const said = (words: string) => under().textContent!.split(words).length - 1;
+  expect(heading().querySelector(".simple-revising.is-auto")?.textContent).toBe("Auto");
+  // While it runs its heading ends on Stop, as any request under a row does, and its active time shows on hover. Pause
+  // is on a band, once: here on that of the request above the message box, which has a Stop of its own. No row under
+  // the recheck holds them.
+  expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit"]);
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Pause editing", container.querySelector(".simple-pin > .unit > .unit-msg")]]);
+  expect(heading().lastElementChild?.className).toBe("unit-actions");
+  expect(heading().querySelector(":scope > .unit-tokens > .run-work-time")).not.toBeNull();
+  expect(under().querySelector(".req .req-right, .req .unit-actions, .req .run-stop")).toBeNull();
+  expect([...under().querySelectorAll(".req-row")].map(row => row.className)).toEqual(["req-row req-now"]);
+  // It asks: the heading's dot, the question and Answer say so. No row says "Needs your answer" over them.
+  const question = "The join lands on a breath now. Cut after it?";
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "waiting_for_user" as const, question } : t),
+    taskEvents: { ...d.taskEvents, task_recheck: [{ type: "question" as const, at: at(1000), text: question }] } }));
+  expect(heading().querySelector(":scope > .unit-state > .unit-dot")).not.toBeNull();
+  expect([...under().querySelectorAll(".req-say")].map(p => [p.textContent, p.querySelector("button")?.textContent])).toEqual([[`${question}Answer`, "Answer"]]);
+  expect(under().querySelector(".req-status, .req-row")).toBeNull();
+  expect(said("Needs your answer")).toBe(0);
+  expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit"]);
+  // It was stopped: the heading says so, once. No row says it again, and its one action is still there, after what it saved.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "cancelled" as const, question: null, finishedAt: at(2000) } : t) }));
+  expect(heading().querySelector(":scope > .unit-state")?.textContent).toBe("Stopped");
+  expect(said("Stopped")).toBe(1);
+  expect(under().querySelector(".req-status, .req-state, .unit-actions")).toBeNull();
+  expect([...under().querySelectorAll(".req-row")].map(row => [row.className, row.textContent, row.querySelector("button")?.textContent])).toEqual([["req-row req-result", "Nothing savedResume", "Resume"]]);
+  // It couldn't finish: the same, in those words.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_recheck" ? { ...t, state: "failed" as const, error: "unexpected status 500" } : t) }));
+  expect(heading().querySelector(":scope > .unit-state")?.textContent).toBe("Couldn’t finish");
+  expect(said("Couldn’t finish")).toBe(1);
+  expect(under().querySelector(".req-status, .req-state")).toBeNull();
+  // Its reason heads it throughout, and is never said again under its work.
+  expect(said("The footage changed after you approved it.")).toBe(1);
+});
+
 it("keeps a request about one cut in the conversation while it's stopped early, and takes it out once it's done", async () => {
   finishedPass();
   // The pass saves why it proposed each cut, which is how a request about one of them finds it again.
@@ -8639,7 +9595,53 @@ it("keeps a request about one cut in the conversation while it's stopped early, 
   expect(container.textContent).not.toContain("Start it later.");
 });
 
-it("keeps a request about one cut in the conversation while it's paused for a transcript, with or without its cut revised", async () => {
+it("takes a request about one cut out once it's done when it was paused after revising the cut, and says what it saved if it stops instead", async () => {
+  finishedPass();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  // The request revised its cut, and the pass came back with it. Then editing was paused, which ends that attempt, and
+  // Resume picked the request up under a new one, which starts with no change of its own.
+  const first = callRequest("task_about", 0, { kind: "revise" as const, state: "cancelled" as const, startedAt: at(0), finishedAt: at(1000), changeIds: ["chg_revised"], retryTaskId: "task_again" });
+  const again = callRequest("task_again", 0, { kind: "revise" as const, state: "running" as const, createdAt: at(2000), startedAt: at(2000), resumeRootId: "task_about" });
+  await event(d => ({ ...d, tasks: [...d.tasks, first, again],
+    changes: [...d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "rejected" as const, replacedBy: "chg_revised" } : c),
+      { ...d.changes.find(c => c.id === "chg_ready")!, id: "chg_revised", taskId: "task_about", createdAt: at(500) }] }));
+  const about = () => container.querySelector<HTMLElement>('.subunit[data-run="task_about"]');
+  expect(about()?.querySelector(".req-now")).not.toBeNull();
+  // It stops before finishing. Its cut's row above is what it saved, so no row under it says "Nothing saved".
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_again" ? { ...t, state: "cancelled" as const, finishedAt: at(3000) } : t) }));
+  expect(about()?.querySelector(".subunit-msg > .unit-state")?.textContent).toBe("Stopped");
+  expect([...about()!.querySelectorAll(".req-row")].map(row => [row.className, row.textContent])).toEqual([["req-row req-act", "Resume"]]);
+  // Done, with nothing more to change: what it did is on its cut, and the request leaves the conversation.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_again" ? { ...t, state: "done" as const } : t) }));
+  expect(about()).toBeNull();
+  expect(container.textContent).not.toContain("Start it later.");
+});
+
+it("takes out a request about one cut that was picked up again and then changed nothing and said nothing", async () => {
+  finishedPass();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const about = () => container.querySelector<HTMLElement>('.subunit[data-run="task_about"]');
+  // Scarlet restarted mid-request, or editing was paused: either ends the attempt, and the request carries on under a new one.
+  for (const ended of [{ state: "cancelled" as const }, { state: "failed" as const, interrupted: true }]) {
+    const first = callRequest("task_about", 0, { kind: "revise" as const, ...ended, startedAt: at(0), finishedAt: at(1000), retryTaskId: "task_again" });
+    const again = callRequest("task_again", 0, { kind: "revise" as const, state: "running" as const, createdAt: at(2000), startedAt: at(2000), resumeRootId: "task_about" });
+    await event(d => ({ ...d, tasks: [...d.tasks.filter(t => t.id !== "task_about" && t.id !== "task_again"), first, again] }));
+    expect(about()).not.toBeNull();
+    // That it stopped and was picked up is nothing Scarlet said: done with no change and no words, it has nothing to stay for.
+    await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_again" ? { ...t, state: "done" as const, finishedAt: at(3000) } : t) }));
+    expect(about()).toBeNull();
+  }
+});
+
+it("keeps a request about one cut in the conversation while it waits for a transcript, with or without its cut revised", async () => {
   finishedPass();
   await show();
   await act(async () => {});
@@ -8647,17 +9649,40 @@ it("keeps a request about one cut in the conversation while it's paused for a tr
   const waited = data.media.find(m => m.kind === "audio" && !m.transcriptId)!;
   const now = new Date().toISOString();
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_about", 0, { kind: "revise" as const, state: "done" as const, startedAt: now, finishedAt: now, needsTranscripts: [waited.id] })] }));
-  // Paused is stopped early: it stays under its call, says so at the right of the editor's words, and has its one action.
+  // Waiting for a transcript is stopped early: it stays under its call, says what it needs at the right of the editor's
+  // words, and has its one action. It doesn't say Paused: that is editing the editor paused, which Resume picks up.
   // No transcript is being made for it, so that action is the one that starts it.
   const about = () => container.querySelector<HTMLElement>('.subunit[data-run="task_about"]');
   const stands = () => [about()?.closest("li")?.querySelector(":scope > button .simple-pass-label")?.textContent,
     about()?.querySelector(".subunit-msg > .unit-state")?.textContent, about()?.querySelector(".run-wait button")?.textContent];
-  expect(stands()).toEqual([STAGED[0]!.reason, "Paused", "Transcribe"]);
-  // Paused with the cut already revised: the pass comes back with it, and the request is still there to finish.
+  expect(stands()).toEqual([STAGED[0]!.reason, "Needs transcript", "Transcribe"]);
+  // Waiting with the cut already revised: the pass comes back with it, and the request is still there to finish.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_about" ? { ...t, changeIds: ["chg_revised"] } : t),
     changes: [...d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "rejected" as const, replacedBy: "chg_revised" } : c),
       { ...d.changes.find(c => c.id === "chg_ready")!, id: "chg_revised", taskId: "task_about", createdAt: new Date().toISOString() }] }));
-  expect(stands()).toEqual([STAGED[0]!.reason, "Paused", "Transcribe"]);
+  expect(stands()).toEqual([STAGED[0]!.reason, "Needs transcript", "Transcribe"]);
+});
+
+it("keeps the way to finish a request about one cut that is paused for a transcript, through later requests in the pass", async () => {
+  finishedPass();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
+  const continueWhenReady = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ current: data, continueWhenReady });
+  await show();
+  await act(async () => {});
+  const waited = data.media.find(m => m.kind === "audio" && !m.transcriptId)!;
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_about", 0, { kind: "revise" as const, state: "done" as const, startedAt: at(0), finishedAt: at(0), needsTranscripts: [waited.id] })] }));
+  const action = () => container.querySelector<HTMLElement>('.subunit[data-run="task_about"] .run-wait button');
+  expect(action()?.textContent).toBe("Transcribe");
+  // The editor asks about another call. While Scarlet has that one, this one has no action, as with Resume.
+  await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_other", 1, { kind: "revise" as const, state: "running" as const, createdAt: at(1000), startedAt: at(1000) })] }));
+  expect(action()).toBeNull();
+  // That one ended. This one is no longer the last thing asked in the pass, and can still be finished.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_other" ? { ...t, state: "cancelled" as const, finishedAt: at(2000) } : t) }));
+  expect(action()?.textContent).toBe("Transcribe");
+  await click(action()!);
+  expect(continueWhenReady).toHaveBeenCalledWith("task_about", true);
 });
 
 it("keeps a pass finished when its closing check couldn't run, with Retry after the line that says so", async () => {
@@ -8881,12 +9906,13 @@ it("keeps a call open on its new version when its revision lands", async () => {
   await act(async () => {});
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_revise", 0, { kind: "revise" as const, state: "running" as const, startedAt: new Date().toISOString(), expectedSeconds: undefined })] }));
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "revising" as const } : c) }));
-  // ↑ from the first call still waiting steps to the one being revised.
+  // The call being revised is Working's row. On Working, ↑ from the first call still waiting steps to it.
   await reviewCalls();
+  await click(tabNamed(passCard(), "Working"));
   await press("ArrowUp");
   expect(call().querySelector(".edit-card-status")?.textContent).toBe("Revising…");
-  // Scarlet saves a draft revision, then changes it again. The row keeps the note the editor sent back while the
-  // other two calls remain available, until Scarlet finishes the requested revision.
+  // Scarlet saves a draft revision, then changes it again. The row keeps the note the editor sent back until Scarlet
+  // finishes the requested revision.
   windows.mockClear();
   vi.mocked(api.cutReview).mockClear();
   await revisedCut("task_revise", "chg_ready", 0, { start: 1.5, end: 3 }, "Starts in the pause.");
@@ -8895,7 +9921,7 @@ it("keeps a call open on its new version when its revision lands", async () => {
   expect(api.cutReview).toHaveBeenCalledWith("chg_ready");
   expect(windows.mock.calls.map(([, version, range]) => [version, range.start])).toEqual(expect.arrayContaining([["ver_revised", expect.any(Number)]]));
   expect(windows.mock.calls.some(([, version, range]) => version === "ver_revised" && range.start === 0)).toBe(false);
-  expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(STAGED.map(r => r.reason));
+  expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual([STAGED[0]!.reason]);
   expect(call().querySelector(".edit-card-title")?.textContent).toBe(STAGED[0]!.reason);
   expect(call().querySelector(".edit-card-status")?.textContent).toBe("Revising…");
   expect(buttonIn(call(), "Keep")).toBeUndefined();
@@ -8932,17 +9958,20 @@ it("opens a finished request's edits from the review controls, with no chevron, 
   await showFolded();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  const listOpen = () => !!turn.querySelector('.simple-edits[aria-label="Edits in this thread"]');
+  const listOpen = () => !!turn.querySelector('.simple-edits[aria-label="Optional edits"]');
   expect(listOpen()).toBe(false);
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
+  expect(reviewModes(turn)).toEqual(tabs());
   expect(turn.querySelector(".simple-pass-chevron, .run-chevron")).toBeNull();
   // Scarlet's updates along the way aren't kept in the finished request.
   expect(turn.querySelector(".req-time, .req-step, .req-steps")).toBeNull();
   expect(turn.textContent).not.toContain("Laying the music under the whole edit.");
+  // The edits Scarlet didn't flag are behind one line under For you's rows. It opens them, and closes them again.
   await click(seeAll(turn)!);
   expect(listOpen()).toBe(true);
-  expect(reviewModes(turn)).toEqual([["For you", "false"], ["See all", "true"]]);
+  expect(reviewModes(turn)).toEqual(tabs());
   await click(turn.querySelector(".simple-pass-need")!);
+  expect(listOpen()).toBe(true);
+  await click(seeAll(turn)!);
   expect(listOpen()).toBe(false);
 });
 
@@ -9026,6 +10055,32 @@ it("keeps the chat anchored while scrolling a pass's edits, including when a rev
   });
 });
 
+it("keeps Scarlet's put-back of an edit under that edit's row once the edit reads Rejected, while it still checks its joins", async () => {
+  const { lists } = appliedPass(true);
+  const threadId = threadWith("chg_approved_2").id;
+  // Scarlet has saved the put-back: the engine lists the edit as rejected, while the request is still at work.
+  lists[threadId] = Array.from({ length: 3 }, (_, spot) => ({
+    changeId: "chg_approved_2", spot, label: `Edit ${spot + 1}`, range: { start: spot, end: spot + 1 }, previous: [],
+    ...spot === 0 ? { rejected: true as const, wasCheck: true as const } : { check: CHECK },
+  }));
+  const base = data.tasks.find(t => t.id === "task_pass")!;
+  const now = new Date().toISOString();
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_reject", state: "running" as const, instruction: "The editor rejected edit 1. Put back exactly what it changed.",
+    summary: null, changeIds: [], createdAt: now, startedAt: now, finishedAt: undefined,
+    context: { threadId, changeId: "chg_approved_2", editIndex: 0, time: 0, message: "Reject edit" } }] };
+  useProjectStore.setState({ current: data });
+  await show();
+  await act(async () => {});
+  // It sits in the pass's block under the edit's row, never in a block of its own with a band. A rejected edit is
+  // Done's row.
+  expect(container.querySelector('.unit[data-run="task_reject"]')).toBeNull();
+  const pass = container.querySelector<HTMLElement>('.unit[data-run="task_pass"]')!;
+  await click(tabNamed(pass, "Done"));
+  const under = container.querySelector<HTMLElement>('.subunit[data-run="task_reject"]');
+  expect(under?.closest('.unit')?.getAttribute("data-run")).toBe("task_pass");
+  expect(wordsOf(under!.querySelector(".subunit-msg p"))).toBe("Reject edit");
+});
+
 it("moves on to the next edit when one Scarlet didn't flag is kept, and closes after the last", async () => {
   laterRequest("chg_later", false);
   await show();
@@ -9090,6 +10145,54 @@ it("keeps the open cut's row in view while the arrows step through a pass's list
     if (scroll) Object.defineProperty(Element.prototype, "scrollIntoView", scroll);
     else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   }
+});
+
+it("keeps the selected edit row in view when stepping with Keep and doesn't let change.updated yank the chat to the bottom", async () => {
+  laterRequest("chg_later", false);
+  await scrolledIntoView(async scrolled => {
+    await show();
+    await act(async () => {});
+    const chat = container.querySelector<HTMLElement>(".simple-chat")!;
+    Object.defineProperty(chat, "scrollHeight", { configurable: true, value: 1200 });
+    Object.defineProperty(chat, "clientHeight", { configurable: true, value: 400 });
+    const rows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edit")];
+    await click(rows()[0]!);
+    expect(scrolled.at(-1)?.textContent).toContain("music bed");
+    chat.scrollTop = 120;
+    await press("k");
+    expect(openTitle()).toBe("captions");
+    expect(scrolled.at(-1)?.textContent).toContain("captions");
+    // keepEdits bumps the change's updatedAt on the server: that activity update must not yank .simple-chat to scrollHeight.
+    const later = new Date(Date.now() + 60_000).toISOString();
+    await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_later" ? { ...c, updatedAt: later } : c) }));
+    expect(chat.scrollTop).toBe(120);
+    await press("k");
+    expect(openTitle()).toBe("wrap");
+    expect(scrolled.at(-1)?.textContent).toContain("wrap");
+  });
+});
+
+it("keeps the selected pass row in view across Keep, and selected when the optional line opens", async () => {
+  const { lists } = appliedPass(true);
+  lists[threadWith("chg_approved_2").id] = [
+    { changeId: "chg_approved_2", spot: 0, label: "Cut 1", range: { start: 1, end: 2 }, previous: [], check: CHECK },
+    { changeId: "chg_approved_2", spot: 1, label: "Unflagged", range: { start: 3, end: 4 }, previous: [] },
+    { changeId: "chg_approved_2", spot: 2, label: "Cut 2", range: { start: 5, end: 6 }, previous: [], check: CHECK },
+    { changeId: "chg_approved_2", spot: 3, label: "Cut 3", range: { start: 7, end: 8 }, previous: [], check: CHECK },
+  ];
+  await scrolledIntoView(async scrolled => {
+    await showFolded();
+    await act(async () => {});
+    const pass = turnFor("chg_approved_2").querySelector(".simple-pass")!;
+    await click(pass.querySelector(".simple-pass-need")!);
+    expect(scrolled.at(-1)?.textContent).toContain("Cut 1");
+    await press("k");
+    expect(scrolled.at(-1)?.textContent).toContain("Cut 2");
+    // Opening the optional line leaves Cut 2 selected where it is, over the optional rows.
+    await click(seeAll(pass)!);
+    expect(pass.querySelector('.simple-pass-list > li > button[aria-current="true"]')?.textContent).toContain("Cut 2");
+    expect(scrolled.at(-1)?.textContent).toContain("Cut 2");
+  });
 });
 
 it("keeps a request's line as it was while the list for a change that just landed loads", async () => {
@@ -9517,10 +10620,30 @@ it("aims an empty box at the paused time in its tag without writing into the inp
   expect(useUiStore.getState().agentContext).toMatchObject({ time: 10 });
 });
 
+it("tags the box with a time typed in the message, as a picked moment's, and its × makes the message about the whole video", async () => {
+  idle();
+  await show();
+  const clock = composer.props!.messageClock!;
+  // The box aims a message at the first time written in it. It stands in here, so the aim is set as it sets it.
+  await act(async () => {
+    useUiStore.getState().setAgentContext({ time: 8, version: clock.version, clipIds: [], fromMessage: true });
+    useUiStore.getState().setAgentDraft("Make it 0:08 long");
+  });
+  // The same tag a picked moment has, so the aim can be seen and taken off.
+  expect(pointTag()).toEqual(["At 0:08", true]);
+  // Looking around the timeline keeps the message where it is aimed.
+  await press("ArrowRight");
+  expect(pointTag()).toEqual(["At 0:08", true]);
+  // The ×: the message is about the whole video, with its words as they were.
+  await act(async () => composer.props!.onClearTarget!());
+  expect(boxNow()).toEqual(["Make it 0:08 long", "whole", JSON.stringify([PRJ, null])]);
+  expect(pointTag()).toEqual([undefined, false]);
+});
+
 it("shows the time the editor pauses on in an open edit's tag, and the message stays the edit's", async () => {
   appliedEdits();
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[0]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
   await act(async () => {});
   const tag = boxTag();
   const aim = useUiStore.getState().agentContext;
@@ -9551,6 +10674,82 @@ it("shows the time the editor pauses on in an open edit's tag, and the message s
   await press(" ");
   await act(async () => usePlayerStore.setState({ playing: false }));
   expect(box()).toEqual(["trim this", tag, aim, 9]);
+});
+
+it("takes the frame under the playhead with N on an open edit, as a pause does: the tag's time moves and the message stays the edit's", async () => {
+  appliedEdits();
+  await show();
+  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[0]!);
+  await act(async () => {});
+  const tag = boxTag();
+  const aim = useUiStore.getState().agentContext;
+  expect(aim).toMatchObject({ changeId: "chg_approved_2" });
+  let playing = true;
+  vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => !playing);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { playing = false; });
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => { playing = true; });
+  useUiStore.setState({ composerFocus: 0 });
+  const box = () => [useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext, composer.props!.pausedAt?.time, useUiStore.getState().composerFocus];
+  await act(async () => usePlayerStore.setState({ playing: true, time: 7 }));
+  expect(box()).toEqual(["", tag, aim, undefined, 0]);
+  // N stops the video away from the edit and puts the cursor in the box: the tag takes the frame's time, as after
+  // Space, nothing is written, and the message is still the edit's.
+  await press("n");
+  await act(async () => usePlayerStore.setState({ playing: false }));
+  expect(box()).toEqual(["", tag, aim, 7, 1]);
+  // A seek moves it, and playing on with nothing written takes it off, back to the edit's own time.
+  await press("ArrowLeft");
+  expect(box()).toEqual(["", tag, aim, 6, 1]);
+  await press(" ");
+  await act(async () => usePlayerStore.setState({ playing: true, time: 9 }));
+  expect(box()).toEqual(["", tag, aim, undefined, 1]);
+  // On a video already stopped, N takes the frame it rests on.
+  await press(" ");
+  await act(async () => usePlayerStore.setState({ playing: false, time: 9 }));
+  await press(" ");
+  await act(async () => usePlayerStore.setState({ playing: true, time: 10 }));
+  await act(async () => { player.pause(); usePlayerStore.setState({ playing: false, time: 11 }); });
+  expect(box()).toEqual(["", tag, aim, undefined, 1]);
+  await press("n");
+  expect(box()).toEqual(["", tag, aim, 11, 2]);
+  // Words written keep the frame they were written about: N only brings the cursor back.
+  await act(async () => useUiStore.getState().setAgentDraft("trim this"));
+  await act(async () => usePlayerStore.setState({ time: 14 }));
+  await press("n");
+  expect(box()).toEqual(["trim this", tag, aim, 11, 3]);
+});
+
+it("takes the paused time off an open edit's tag when the words written are erased while the video plays", async () => {
+  appliedEdits();
+  await show();
+  await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
+  await act(async () => {});
+  const tag = boxTag();
+  const aim = useUiStore.getState().agentContext;
+  let playing = true;
+  vi.spyOn(HTMLMediaElement.prototype, "paused", "get").mockImplementation(() => !playing);
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => { playing = false; });
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(async () => { playing = true; });
+  const box = () => [useUiStore.getState().agentDraft, boxTag(), useUiStore.getState().agentContext, composer.props!.pausedAt?.time];
+  await act(async () => usePlayerStore.setState({ playing: true, time: 7 }));
+  await press(" ");
+  await act(async () => usePlayerStore.setState({ playing: false }));
+  expect(box()).toEqual(["", tag, aim, 7]);
+  // Words erased while the video is still stopped there leave the frame the editor is on.
+  await act(async () => useUiStore.getState().setAgentDraft("trim this"));
+  await act(async () => useUiStore.getState().setAgentDraft(""));
+  expect(box()).toEqual(["", tag, aim, 7]);
+  // Words written keep it through playing on.
+  await act(async () => useUiStore.getState().setAgentDraft("trim this"));
+  await press(" ");
+  await act(async () => usePlayerStore.setState({ playing: true, time: 12 }));
+  expect(box()).toEqual(["trim this", tag, aim, 7]);
+  // Erased while it plays, nothing is written and the video has moved on: the tag is the edit's own time again, and
+  // the next message carries no frame the editor has left.
+  await act(async () => useUiStore.getState().setAgentDraft(""));
+  expect(box()).toEqual(["", tag, aim, undefined]);
+  await act(async () => useUiStore.getState().setAgentDraft("make it shorter"));
+  expect(box()).toEqual(["make it shorter", tag, aim, undefined]);
 });
 
 it("moves an empty box's point to the next manual seek, and releases it on playback", async () => {
@@ -9598,15 +10797,18 @@ it("gives the message box the cursor on N, about the moment the playhead is on, 
   await act(async () => useUiStore.getState().setAgentDraft(""));
   await press("n");
   expect([cursor(), pointTag()]).toEqual([3, ["At 0:12", true]]);
-  // With an edit open the box revises that edit, and N gives it the cursor as it is.
+  // With an edit open the box revises that edit. N gives it the cursor, still aimed at the edit, and takes the frame
+  // the playhead is on for the tag's time, as a pause does.
   appliedEdits();
   await act(async () => root.render(null));
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
+  expect(composer.props!.pausedAt).toBeUndefined();
   await press("n");
   expect([cursor(), boxTag()]).toEqual([4, "Edit at 0:00"]);
   expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2", editIndex: 1 });
+  expect(composer.props!.pausedAt?.time).toBe(usePlayerStore.getState().time);
 });
 
 it("leaves a box aimed at an edit or at Scarlet's question as it is when a point is picked", async () => {
@@ -9618,7 +10820,7 @@ it("leaves a box aimed at an edit or at Scarlet's question as it is when a point
   // With an edit open the box revises that edit, wherever the playhead goes.
   appliedEdits();
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[1]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[1]!);
   await act(async () => {});
   expect(boxTag()).toBe("Edit at 0:00");
   await press("ArrowRight");
@@ -9650,7 +10852,7 @@ it("doesn't bring back a point picked in an earlier visit on an empty box, and k
   expect(boxTag()).toBe("At 0:07");
 });
 
-/** Words chosen in the transcript, as its "Ask about this" aims the message box at them. Nothing in the box names them. */
+/** Words chosen in the transcript, as its "Ask about this" aims the message box at them (Composer shows them in its Range tag). */
 const chosenWords = () => ({ version: data.project.head!, time: 4.2, end: 6.8, clipIds: [], label: "“three things”" });
 
 it("keeps explicitly chosen transcript words through timeline seeks before and while writing", async () => {
@@ -10034,6 +11236,47 @@ it("keeps a pass's calls where they are, the made ones in their place, when Scar
   expect(pass().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
 });
 
+it("says Needs your answer on the row of a call whose revision stopped to ask the editor, amber and counted in For you, until they answer", async () => {
+  flagged();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, intent: "suggestion" as const, taskId: "task_done",
+    cutAssessments: c.cutAssessments!.map(a => ({ ...a, verdict: "ask" as const })),
+    cutReasons: [0, 1, 2].map(i => ({ start: i, end: i + 1, reason: `Cut ${i + 1}.` })) } : c) };
+  idle();
+  await show();
+  await act(async () => {});
+  const pass = () => container.querySelector<HTMLElement>('[aria-label="Dialogue pass"]')!;
+  // The editor sends the last call back, and Scarlet starts on it.
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const revision = { ...base, id: "task_revise", kind: "revise" as const, state: "running" as const, finishedAt: undefined, changeIds: [], expectedSeconds: undefined,
+    instruction: "Start it later.", createdAt: new Date().toISOString(), startedAt: new Date().toISOString(),
+    context: { threadId: threadWith("chg_ready").id, changeId: "chg_ready", cutIndex: 2, time: 598, end: 602.5, message: "Start it later." } };
+  await event(d => ({ ...d, tasks: [...d.tasks, revision], changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "revising" as const } : c) }));
+  const last = () => [...pass().querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")].at(-1)!;
+  const stands = () => [last().querySelector(".edit-badge")?.className, last().querySelector(".simple-pass-value")?.textContent, last().querySelector(".simple-pass-value")?.className,
+    last().classList.contains("is-asking"), pass().querySelector(".simple-review-tab-count")?.textContent, pass().querySelector(".simple-pass-need")?.getAttribute("title")];
+  // While Scarlet works on it the row is quiet and its word moves: two calls wait.
+  expect(stands()).toEqual(["edit-badge", "Revising…", "simple-pass-value working-text", false, "2", "2 need you"]);
+  // Scarlet stops to ask something. The row says whose turn it is, in the words its card uses: amber, still, its number
+  // amber as a call that waits, and For you counts it.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_revise" ? { ...t, state: "waiting_for_user" as const, question: "Keep the new pickup?" } : t) }));
+  await act(async () => {});
+  expect(stands()).toEqual(["edit-badge is-check", "Needs your answer", "simple-pass-value is-need", true, "3", "3 need you"]);
+  // It is drawn as a row that waits, not dimmed as one that can't be pressed.
+  const colours = document.createElement("style");
+  colours.textContent = ":root { --color-fg: white; --color-muted: silver; --color-dim: gray; --color-line: black; --color-warn: orange; }";
+  document.head.append(colours);
+  try {
+    await withSimpleSheet(async () => {
+      expect([last().disabled, styled(last(), "color"), styled(last().querySelector(".edit-badge")!, "color", "border-color"), styled(last().querySelector(".simple-pass-value")!, "color")])
+        .toEqual([true, ["white"], ["orange", "orange"], ["orange"]]);
+    });
+  } finally { colours.remove(); }
+  // Answered, Scarlet is on it again.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_revise" ? { ...t, state: "running" as const, question: null } : t) }));
+  await act(async () => {});
+  expect(stands()).toEqual(["edit-badge", "Revising…", "simple-pass-value working-text", false, "2", "2 need you"]);
+});
+
 it("lists a pass staged again by its calls, with none of them open, after the pass before it was thrown away", async () => {
   flagged();
   data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, intent: "suggestion" as const, taskId: "task_done" } : c) };
@@ -10148,9 +11391,10 @@ it("opens the edits so far and keeps the selected cut open when a running pass s
   await act(async () => {});
   expect(numbered()).toEqual([["1", undefined], ["2", undefined]]);
   expect(approve).not.toHaveBeenCalled();
-  // Done: the sentence says what the pass made, and See all, under it in the tabs' place, no longer says "so far".
+  // Done: the sentence says what the pass made, and See both, on its line, no longer says "so far". There is no tab
+  // row while the list is closed.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_done" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString() } : t) }));
-  expect([link(), reviewModes(pass())]).toEqual([null, [["See both", "false"]]]);
+  expect([link().textContent, link().dataset.soFar, link().parentElement?.className, reviewModes(pass())]).toEqual(["See both", undefined, "simple-made-line", []]);
 });
 
 it("shows no scheduled status line on a pass scheduled while Scarlet still works", async () => {
@@ -10177,7 +11421,7 @@ it("shows no scheduled status line on a pass scheduled while Scarlet still works
     const pass = container.querySelector<HTMLElement>('[aria-label="Dialogue pass"]')!;
     const line = pass.querySelector<HTMLElement>(".simple-pass-line")!;
     // The decided call stays in For you with its tabs above it, and nothing extra renders on the line below.
-    expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
+    expect(reviewModes(pass)).toEqual(tabs());
     expect([...line.children].map(part => part.textContent)).toEqual([""]);
     expect(pass.querySelector(".simple-pass-ok")).toBeNull();
   });
@@ -10199,16 +11443,16 @@ it("leaves another request's edit open when a pass with its full list open leave
   await show();
   await act(async () => {});
   const pass = () => container.querySelector<HTMLElement>('[aria-label="Dialogue pass"]')!;
-  const list = () => pass().querySelector(".simple-pass-list")?.getAttribute("aria-label");
+  const lists = () => [...pass().querySelectorAll(".simple-pass-list")].map(list => list.getAttribute("aria-label"));
   expect(pass().closest(".simple-pin")).not.toBeNull();
   // The link is worded for the rows it opens: the applied cut and the pass's two calls, which are listed among its
   // edits. So it isn't "See it".
-  expect(reviewModes(pass())).toEqual([["For you", "true"], ["See all", "false"]]);
-  // Its full list is open. While it waits on the editor only its calls and flagged edits are marked: its applied cut
-  // isn't, and neither is a call this staged pass can't place on the working cut.
+  expect(reviewModes(pass())).toEqual(tabs());
+  // Its optional line is open, so every edit is listed. While it waits on the editor only its calls and flagged edits
+  // are marked: its applied cut isn't, and neither is a call this staged pass can't place on the working cut.
   await click(seeAll(pass())!);
   await act(async () => {});
-  expect(list()).toBe("Every edit");
+  expect(lists()).toEqual(["Calls that need you", "Optional edits"]);
   expect(pass().querySelectorAll(".simple-pass-list > li")).toHaveLength(3);
   expect(ticks()).toEqual([]);
   // The editor opens an edit of the other request, with the list still open.
@@ -10216,7 +11460,7 @@ it("leaves another request's edit open when a pass with its full list open leave
   await act(async () => {});
   expect(openTitle()).toBe("music bed");
   // Scarlet starts on a call sent back earlier, and that request takes the place above the box. The pass's line is
-  // mounted anew in the conversation with its list still open: the same list, so the open edit stays open.
+  // mounted anew in the conversation with its optional line still open: the same list, so the open edit stays open.
   const base = data.tasks.find(t => t.id === "task_done")!;
   const revision = { ...base, id: "task_revise", kind: "revise" as const, state: "running" as const, finishedAt: undefined, changeIds: [], expectedSeconds: undefined,
     instruction: "Start it later.", createdAt: new Date().toISOString(), startedAt: new Date().toISOString(),
@@ -10224,7 +11468,8 @@ it("leaves another request's edit open when a pass with its full list open leave
   await event(d => ({ ...d, tasks: [...d.tasks, revision], changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "revising" as const } : c) }));
   await act(async () => {});
   expect(pass().closest(".simple-pin")).toBeNull();
-  expect(list()).toBe("Every edit");
+  // While its call is revised nothing of the pass waits on the editor, so it has the one list of every edit, open.
+  expect(lists()).toEqual(["Every edit"]);
   expect(openTitle()).toBe("music bed");
   expect(editPanel()).not.toBeNull();
   // Closed, the timeline goes back to the pass's open list. While its call is revised nothing of it waits on the
@@ -10264,23 +11509,28 @@ it("says a stopped pass's cut wasn't checked, lists a skipped call as Skipped, a
   expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ choices: [{ index: 0, choice: "cut" }, { index: 2, choice: "keep" }], applyWhenDone: false }));
   expect(note().textContent).toBe("Breath before the price.");
   expect(note().querySelector(".edit-card-unchecked")).toBeNull();
-  // Every call of the pass is listed, in timeline order, the one made before the pass stopped included. The skipped
-  // call keeps its place, its number no longer amber, and says how it was decided. A call's number is its place among
-  // all three of the pass's calls.
+  // For you lists the calls that wait. The skipped call stays there for its moment, its number no longer amber, and
+  // says how it was decided; the one made before the pass stopped is Done's. A call's number is its place among all
+  // three of the pass's calls.
   expect(passCard().querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Calls that need you");
   expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-check"),
     r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([["1", false, "A clean retake.", "Kept"], ["3", false, "Repeated aside.", "Rejected"], ["2", true, "Breath before the price.", expect.stringMatching(/^−/)]]);
+    .toEqual([["3", false, "Repeated aside.", "Rejected"], ["2", true, "Breath before the price.", expect.stringMatching(/^−/)]]);
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
   expect(buttonIn(call(), "Keep")?.getAttribute("aria-pressed")).toBe("false");
   // The last call applies the pass, leaving in what was skipped. The working cut had moved on, so the engine refused
   // it: the card closes and the pass's line says why.
-  const said = () => passCard().querySelector('.simple-error[role="alert"]')?.textContent;
+  const alert = () => passCard().querySelector('.simple-error[role="alert"]');
+  const said = () => alert()?.firstChild?.textContent ?? undefined;
   await press("x");
   await act(async () => {});
   expect(approve).toHaveBeenLastCalledWith("chg_ready", undefined, [1, 2]);
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
   expect(said()).toBe(MOVED);
+  // Retry is under the reason, after its words, while the list of calls is the one on screen: nothing above it offers it.
+  expect([...alert()!.childNodes].map(node => node.textContent)).toEqual([MOVED, "Retry"]);
+  expect(passCard().querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Calls that need you");
+  expect([...passCard().querySelectorAll("button")].filter(b => b.textContent === "Retry")).toEqual([alert()!.querySelector("button")]);
   // Every call is made, so the pass would go in by itself, but an apply that failed isn't tried again unasked: the line
   // offers Retry. A failure there says the engine's reason, in place of the last one.
   expect(approve).toHaveBeenCalledTimes(1);
@@ -10349,6 +11599,54 @@ it("says in the banner why a queued request couldn't be taken out, until one is"
   expect(banner()).toBeUndefined();
 });
 
+it("puts a removed queued request's words in the empty message box, and only removes it when the box holds a draft or Scarlet made the request", async () => {
+  idle();
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const waiting = (id: string, words: string, ms: number) => ({ ...base, id, kind: "edit" as const, state: "queued" as const, instruction: words, changeIds: [], summary: null, hostId: null,
+    context: { threadId: id, message: words }, createdAt: at(ms), startedAt: undefined, finishedAt: undefined });
+  data = { ...data, tasks: [...data.tasks, waiting("task_frame", "/frame-screen", 1000), waiting("task_lower", "Add a lower third with my name.", 2000),
+    waiting("task_music", "Lower the music.", 3000), { ...waiting("task_own", "Check the joins again.", 4000), createdBy: { type: "scarlet" as const, name: "Scarlet" } }] };
+  const cancelTask = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ current: data, cancelTask, holdForRewording: vi.fn().mockResolvedValue(undefined) });
+  await show();
+  await act(async () => {});
+  const tray = () => container.querySelector<HTMLElement>('[aria-label="Queued requests"]')!;
+  await click(tray().querySelector(".queue-head")!);
+  const row = (words: string) => [...tray().querySelectorAll<HTMLElement>(".queue-row")].find(r => r.querySelector(".queue-text")?.textContent === words)!;
+  const remove = (words: string) => click(row(words).querySelector(".queue-remove")!);
+  useUiStore.setState({ composerFocus: 0 });
+  const box = () => { const ui = useUiStore.getState(); return [ui.agentDraft, ui.agentContext, ui.composerFocus]; };
+  expect(box()).toEqual(["", null, 0]);
+  // The × takes the request out, and its words land in the empty box with the cursor: to send again, change or clear.
+  // No tag comes with them: the box is aimed as it was.
+  await remove("Add a lower third with my name.");
+  expect(cancelTask).toHaveBeenLastCalledWith("task_lower", true);
+  expect(box()).toEqual(["Add a lower third with my name.", null, 1]);
+  // The box holds a draft now: the next request removed is only removed.
+  await remove("Lower the music.");
+  expect(cancelTask).toHaveBeenLastCalledWith("task_music", true);
+  expect(box()).toEqual(["Add a lower third with my name.", null, 1]);
+  // A request Scarlet made itself has no words of the editor's: it has no pencil, and its × only removes it.
+  await act(async () => useUiStore.getState().setAgentDraft(""));
+  expect(row("Check the joins again.").querySelector(".queue-reword")).toBeNull();
+  await remove("Check the joins again.");
+  expect(cancelTask).toHaveBeenLastCalledWith("task_own", true);
+  expect(box()).toEqual(["", null, 1]);
+  // One the engine wouldn't take out is still in the queue, so its words stay there.
+  cancelTask.mockRejectedValueOnce(new Error("Scarlet has already started on it."));
+  await remove("/frame-screen");
+  expect(box()).toEqual(["", null, 1]);
+  // Removed while its words are in the box being changed, they stay in the box as they stood there.
+  await click(row("/frame-screen").querySelector(".queue-reword")!);
+  await act(async () => composer.props!.rewording!.onChange("/frame-screen on the demo only"));
+  await remove("/frame-screen");
+  expect(cancelTask).toHaveBeenLastCalledWith("task_frame", true);
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_frame" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
+  expect(composer.props?.rewording).toBeUndefined();
+  expect(box()).toEqual(["/frame-screen on the demo only", null, 2]);
+});
+
 it("takes the banner about a queued request away once that request moves on, with nothing left in the tray to press", async () => {
   const base = data.tasks.find(t => t.id === "task_done")!;
   const queued = { ...base, id: "task_waiting", kind: "edit" as const, state: "queued" as const, startedAt: undefined, finishedAt: undefined, hostId: null, summary: null, changeIds: [],
@@ -10379,7 +11677,8 @@ const loggedActions = async (during: () => Promise<void>) => {
 it("logs which edit a shortcut kept or stepped to, where the key alone says only that it was pressed", async () => {
   appliedEdits();
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit")[0]!);
+  // The list goes from the edit that waits ("wrap", edit 3) to the two optional ones under it.
+  await click(editRowsIn(turnFor("chg_approved_2"))[2]!);
   await act(async () => {});
   const lines = await loggedActions(async () => {
     await press("ArrowDown");
@@ -10389,9 +11688,9 @@ it("logs which edit a shortcut kept or stepped to, where the key alone says only
     await press("k");
   });
   expect(lines).toEqual([
+    "[action] step to=edit edit=1 of=3 change=chg_approved_2",
     "[action] step to=edit edit=2 of=3 change=chg_approved_2",
-    "[action] step to=edit edit=3 of=3 change=chg_approved_2",
-    "[action] keep-edit edit=3 of=3 change=chg_approved_2 flagged=true",
+    "[action] keep-edit edit=2 of=3 change=chg_approved_2",
   ]);
 });
 
@@ -10434,7 +11733,7 @@ it("says the pass's cuts couldn't be loaded instead of applying without them, an
   // Without the list nothing would be put back, so the skipped cut would apply with the rest. It says why it didn't
   // apply, and asks for the list again, so Retry works.
   expect(approve).not.toHaveBeenCalled();
-  expect(passCard().querySelector('[role="alert"]')?.textContent).toBe("Couldn’t load this pass’s cuts: The engine is restarting.");
+  expect([...passCard().querySelector('[role="alert"]')!.childNodes].map(node => node.textContent)).toEqual(["Couldn’t load this pass’s cuts: The engine is restarting.", "Retry"]);
   expect(cuts).toHaveBeenCalledTimes(2);
   await click(buttonIn(passCard(), "Retry")!);
   expect(approve).toHaveBeenCalledWith("chg_ready", undefined, [2]);
@@ -10472,8 +11771,8 @@ it("says under a suggestion's decisions why it couldn't be applied, and leaves i
 });
 
 /** Scarlet's line under a suggestion it is to make again: while the redo waits its turn, then once Scarlet is on it. */
-const REDO_WAITS = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
-const REDOING = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
+const REDO_WAITS = "The video changed while this suggestion was waiting. Scarlet will redo it on the video as it is now.";
+const REDOING = "The video changed while this suggestion was waiting. Scarlet is redoing it on the video as it is now.";
 /** The engine's own task for a suggestion it sent back, as `sendBack` makes it: authored by Scarlet, and about the suggestion alone. */
 const redoTask = (changeId: string, over: Partial<ProjectData["tasks"][number]> = {}) => ({ ...data.tasks.find(t => t.id === "task_done")!, id: "task_redo", kind: "revise" as const,
   state: "queued" as const, createdBy: { type: "scarlet" as const, name: "Scarlet" }, changeIds: [], summary: null, question: null,
@@ -10582,7 +11881,7 @@ it("redoes a suggestion a pass left under the pass's own request, as any request
   expect([unit().dataset.run, unit().querySelector('[aria-label^="Stop this edit"]')?.getAttribute("aria-label")]).toEqual(["task_done", `Stop this edit: ${requestTextFor("task_done")}`]);
   expect(units().filter(u => u.dataset.run === "task_redo")).toEqual([]);
   expect(unit().querySelector('.req-stages[aria-label="Stages"]')).toBeNull();
-  expect([...unit().querySelectorAll(".req-say")].map(p => p.textContent)).toEqual(["The video changed while this suggestion was waiting. I’m redoing it on the video as it is now."]);
+  expect([...unit().querySelectorAll(".req-say")].map(p => p.textContent)).toEqual([REDOING]);
   expect(unit().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("3 need you");
   expect(container.querySelector(".simple-thread")!.textContent).not.toMatch(/Redo on the current edit|Sent back/);
 });
@@ -10824,10 +12123,14 @@ it("shows edit actions while working or asking, and a status once the request st
   const state = (id: string) => container.querySelector<HTMLElement>(`.unit[data-run="${id}"] > .unit-msg > .unit-state`)!;
   expect([state("task_running").innerHTML, editActionsOf("task_running").getAttribute("aria-label")]).toEqual(["", `Stop this edit: ${requestTextFor("task_running")}`]);
   expect([state("task_waiting").querySelector(".unit-dot")?.getAttribute("aria-hidden"), state("task_waiting").textContent, editActionsOf("task_waiting").getAttribute("aria-label")]).toEqual(["true", "", `Stop this edit: ${requestTextFor("task_waiting")}`]);
-  // A question is that dot, the question and Answer: no row under the heading says "Needs your answer" over it.
+  // The heading of the request Scarlet is working on keeps two lines; any other is one line unless the editor picked it.
+  const heading = (id: string) => container.querySelector<HTMLElement>(`.unit[data-run="${id}"] > .unit-msg`)!;
+  expect([heading("task_running").classList.contains("is-live"), heading("task_waiting").classList.contains("is-live"), heading("task_done").classList.contains("is-live")]).toEqual([true, false, false]);
+  // A question is that dot and the question, with Answer on the message box's tag: no row under the heading says
+  // "Needs your answer" over it.
   const asking = container.querySelector<HTMLElement>('.unit[data-run="task_waiting"] .req')!;
   expect(asking.querySelector(".req-status")).toBeNull();
-  expect([...asking.querySelectorAll(".req-say")].map(p => p.textContent)).toEqual([`${data.tasks.find(t => t.id === "task_waiting")!.question}Answer`]);
+  expect([...asking.querySelectorAll(".req-say")].map(p => p.textContent)).toEqual([data.tasks.find(t => t.id === "task_waiting")!.question]);
   // A suggestion waiting to be played says so, and its line under the band plays it.
   expect(state("task_done").textContent).toBe("Suggestion");
   expect(container.querySelector('.unit[data-run="task_done"] .simple-suggest')).not.toBeNull();
@@ -10841,6 +12144,35 @@ it("shows edit actions while working or asking, and a status once the request st
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "approved" as const } : c) }));
   expect(state("task_done").innerHTML).toBe("");
   expect(container.querySelector('.unit[data-run="task_done"] .simple-action-more')).toBeNull();
+});
+
+it("draws Pause once in the chat, on the request above the message box or else the lowest band, and Stop on every request", async () => {
+  const stopEditing = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ stopEditing });
+  await show();
+  const pauses = () => [...container.querySelectorAll<HTMLElement>(".unit-pause-edit")];
+  const held = () => [...container.querySelectorAll<HTMLElement>(".unit > .unit-msg")].filter(band => band.querySelector(".unit-stop-edit"));
+  const runsOf = (bands: HTMLElement[]) => bands.map(band => band.closest<HTMLElement>(".unit")!.dataset.run).sort();
+  // Scarlet works on one request and asks about another. Each has its own Stop.
+  expect(runsOf(held())).toEqual(["task_running", "task_waiting"]);
+  // Pause holds all editing in the project, so the chat has one: on the request fixed above the message box.
+  const pinned = container.querySelector<HTMLElement>(".simple-pin > .unit > .unit-msg")!;
+  expect(held()).toContain(pinned);
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Pause editing", pinned]]);
+  await click(pauses()[0]!);
+  expect(stopEditing).toHaveBeenCalledExactlyOnceWith(PRJ);
+  // Paused, both wait for Resume and neither is above the message box: Resume is on the lowest of their bands, once.
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: true },
+    tasks: d.tasks.map(t => t.id === "task_running" || t.id === "task_waiting" ? { ...t, state: "queued" as const, question: null } : t) }));
+  await act(async () => {});
+  const inChat = [...container.querySelectorAll<HTMLElement>(".simple-chat .unit > .unit-msg")].filter(band => band.querySelector(".unit-stop-edit"));
+  expect([runsOf(held()), inChat.length]).toEqual([["task_running", "task_waiting"], 2]);
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Resume editing", inChat.at(-1)]]);
+  // The one that had it stopped: the other takes it, so there is always one while any request could hold it.
+  const last = inChat.at(-1)!.closest<HTMLElement>(".unit")!.dataset.run!;
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === last ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
+  await act(async () => {});
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Resume editing", inChat[0]]]);
 });
 
 it("keeps where a request stands on the first line of its band's words, level with \"N need you\", however many lines they take", async () => {
@@ -10882,14 +12214,16 @@ it("underlines the chat actions, makes edit result links stand out, and keeps am
     expect(look("Finish when ready")).toBe("silver underline gray");
     const review = turnFor("chg_approved_2");
     const needed = review.querySelector(".simple-pass-need")!;
-    const every = seeAll(review)!;
-    // The active choice is underlined, with amber for the review count and its selected mode.
+    const other = tabNamed(review, "Done");
+    // The tab shown is underlined, with amber for the review count and for For you while it is the one shown.
     expect(styled(needed, "color", "border-bottom-color")).toEqual(["white", "orange"]);
-    expect(styled(every, "color", "border-bottom-color")).toEqual(["silver", "transparent"]);
+    expect(styled(other, "color", "border-bottom-color")).toEqual(["silver", "transparent"]);
     expect(styled(needed.querySelector(".simple-review-tab-count")!, "color")).toEqual(["orange"]);
-    await click(every);
-    expect(styled(every, "color", "border-bottom-color")).toEqual(["white", "white"]);
+    await click(other);
+    expect(styled(other, "color", "border-bottom-color")).toEqual(["white", "white"]);
     expect(styled(needed, "color", "border-bottom-color")).toEqual(["silver", "transparent"]);
+    // Answer shows on the question once the box is aimed elsewhere.
+    await act(async () => composer.props!.onClearTarget!());
     expect(look("Answer")).toBe("orange underline orange");
     // The one action of a request that stopped early is a link like the rest, not white.
     await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running" ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
@@ -10899,7 +12233,7 @@ it("underlines the chat actions, makes edit result links stand out, and keeps am
   }
 });
 
-it("draws a revision of one applied edit under that edit's row, at work, and under the sentence while the list is closed", async () => {
+it("draws a revision of one applied edit under that edit's row in Working, at work", async () => {
   appliedEdits();
   idle();
   const base = data.tasks.find(t => t.id === "task_done")!;
@@ -10916,23 +12250,29 @@ it("draws a revision of one applied edit under that edit's row, at work, and und
   await showFolded();
   await act(async () => {});
   const sub = () => container.querySelector<HTMLElement>('.subunit[data-run="task_fix"]')!;
-  const owner = () => sub().closest<HTMLElement>(".unit")!;
+  const owner = () => container.querySelector<HTMLElement>(".simple-pin .unit")!;
   // It is no block of its own: it is inside the request that made the edit, which holds the place above the message
   // box while Scarlet is on it.
   expect(container.querySelector('.unit[data-run="task_fix"]')).toBeNull();
-  expect(owner().closest(".simple-pin")).not.toBeNull();
+  expect(owner().getAttribute("data-run")).toBe("task_made");
   expect(owner().querySelector(":scope > .unit-msg .simple-revising")).toBeNull();
-  // While only the edit that needs the editor is listed it sits under what the request made: named for its edit, with
-  // the editor's words and Scarlet at work.
+  // For you lists only the edit that needs the editor. The edit being revised is Working's row, with its request
+  // directly under it: the editor's words and Scarlet at work.
   expect(owner().querySelector(".simple-edits")?.getAttribute("aria-label")).toBe("Edits that need you");
-  expect(sub().parentElement?.classList.contains("simple-pass")).toBe(true);
-  expect([tagIn(sub()), wordsOf(sub().querySelector(".subunit-msg p"))]).toEqual(["Edit at 0:00", "Make the captions bigger."]);
+  expect(sub()).toBeNull();
+  await click(tabNamed(owner(), "Working"));
+  expect(owner().querySelector(".simple-edits")?.getAttribute("aria-label")).toBe("With Scarlet");
+  expect(wordsOf(sub().querySelector(".subunit-msg p"))).toBe("Make the captions bigger.");
   expect(sub().querySelector('[aria-label="Scarlet’s work"] .working-text')).not.toBeNull();
   // Its Stop is its own heading's last word, and the request that holds it has none: Scarlet isn't on that one.
   expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
   expect(owner().querySelector(":scope > .unit-msg > .unit-stop")).toBeNull();
-  // Opened, the list has it directly under the row it revises, and that row's word moves while Scarlet works.
-  await click(seeAll(owner())!);
+  // No band in the chat has a Stop of its own, so the block's band holds Pause while Scarlet works under its row: there
+  // is still one, and only one. The request under the row never has it: its heading ends on Stop alone.
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Pause editing", owner().querySelector(":scope > .unit-msg")]]);
+  expect([...owner().querySelectorAll(":scope > .unit-msg .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing"]);
+  expect([...sub().querySelectorAll(".subunit-msg > .unit-actions button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))).toEqual(["Stop this edit"]);
+  // It is directly under the row it revises, and that row's word moves while Scarlet works.
   const row = sub().previousElementSibling as HTMLElement;
   expect([row.className, row.querySelector(".simple-edit-title")?.textContent]).toEqual(["simple-edit", "captions"]);
   expect([row.querySelector(".simple-edit-check")?.textContent, row.querySelector(".simple-edit-check")?.classList.contains("working-text")]).toEqual(["Revising…", true]);
@@ -10967,14 +12307,18 @@ it("draws a revision of an edit under its row while the request that made it sti
   // One block, above the message box: the request at work, with the revision inside it rather than in the queue.
   expect(container.querySelector('.unit[data-run="task_fix"]')).toBeNull();
   expect(container.querySelector(".queue-tray")).toBeNull();
+  // The edit sent back is Working's row, and the revision is under it.
+  await click(tabNamed(owner(), "Working"));
   expect(sub().closest('.unit[data-run="task_made"]')).toBe(owner());
   expect(owner().closest(".simple-pin")).not.toBeNull();
   // Each has its own Stop: the request's in its band, the revision's on its own heading.
   expect(owner().querySelector(':scope > .unit-msg [aria-label^="Stop this edit"]')).not.toBeNull();
   expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
+  // Pause is the project's: one, on the band, and none under the row.
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => b.closest(".unit-msg"))).toEqual([owner().querySelector(":scope > .unit-msg")]);
+  expect([...sub().querySelectorAll(".subunit-msg > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit: Make the captions bigger."]);
   expect(sub().querySelector('[aria-label="Scarlet’s work"] .working-text')).not.toBeNull();
-  // Opened, the edit's row says it is being revised while the request goes on.
-  await click(seeAll(owner())!);
+  // The edit's row says it is being revised while the request goes on.
   const row = sub().previousElementSibling as HTMLElement;
   expect([row.querySelector(".simple-edit-title")?.textContent, row.querySelector(".simple-edit-check")?.textContent]).toEqual(["captions", "Revising…"]);
   // The revision lands and leaves; the request is still at work, above the message box.
@@ -10997,7 +12341,7 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
   await act(async () => {});
   const owner = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   const list = () => owner().querySelector<HTMLElement>(".simple-edits");
-  const rows = () => [...owner().querySelectorAll<HTMLElement>(".simple-edits .simple-edit")].map(r => [r.querySelector(".simple-edit-title")?.textContent, r.querySelector(".simple-edit-check")?.textContent]);
+  const rows = () => [...editRowsIn(owner())].map(r => [r.querySelector(".simple-edit-title")?.textContent, r.querySelector(".simple-edit-check")?.textContent]);
   // "1 needs you" lists the flagged edit alone and opens it. Its row has no line under it: the reason is on its card.
   await click(owner().querySelector(".simple-pass-need")!);
   await act(async () => {});
@@ -11009,12 +12353,24 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
     context: { threadId: thread.id, changeId: "chg_approved_2", editIndex: 2, time: 11.5, end: 16, message: "Keep the last word." } }] }));
   await act(async () => {});
   expect(owner().closest(".simple-pin")).not.toBeNull();
-  // The list is still just that edit, now Revising…, with the request directly under its row. The count disappears
-  // while Scarlet works on it, and See all remains available.
+  // The edit is Working's now, and stays in For you for its moment: still the one row, now Revising…, with the request
+  // directly under it. The count disappears while Scarlet works on it.
   expect([list()?.getAttribute("aria-label"), rows()]).toEqual(["Edits that need you", [["wrap", "Revising…"]]]);
   expect(container.querySelector('.subunit[data-run="task_fix"]')!.previousElementSibling?.querySelector(".simple-edit-title")?.textContent).toBe("wrap");
-  expect(reviewModes(owner())).toEqual([["For you", "true"], ["See all", "false"]]);
+  expect(reviewModes(owner())).toEqual(tabs());
   expect(owner().querySelector(".simple-review-tab-count")).toBeNull();
+  // Scarlet stops to ask the editor something about it. It is their turn again: the row says so in the card's words,
+  // in amber and still, its number amber, and For you counts it. Answered, it reads Revising… again.
+  const wrapRow = () => owner().querySelector<HTMLElement>(".simple-edits .simple-edit")!;
+  const stands = () => [wrapRow().querySelector(".simple-edit-check")?.textContent, wrapRow().querySelector(".simple-edit-check")?.className, wrapRow().querySelector(".edit-badge")?.className,
+    owner().querySelector(".simple-review-tab-count")?.textContent ?? null, owner().querySelector(".simple-pass-need")?.getAttribute("title") ?? null];
+  expect(stands()).toEqual(["Revising…", "simple-edit-check is-kept working-text", "edit-badge", null, null]);
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_fix" ? { ...t, state: "waiting_for_user" as const, question: "Keep the new pickup?" } : t) }));
+  await act(async () => {});
+  expect(stands()).toEqual(["Needs your answer", "simple-edit-check", "edit-badge is-check", "1", "1 needs you"]);
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_fix" ? { ...t, state: "running" as const, question: null } : t) }));
+  await act(async () => {});
+  expect(stands()).toEqual(["Revising…", "simple-edit-check is-kept working-text", "edit-badge", null, null]);
   // The revision lands with nothing to check, and the edit is still open on its card. The list goes: the request,
   // back in the conversation, doesn't open the list of every edit by itself.
   edits.mockImplementation(async (_project, threadId) => ({ version: data.project.head!, edits: threadId !== thread.id ? [] : [
@@ -11027,12 +12383,12 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
       timelineEdits: [{ label: "wrap", range: { start: 11.5, end: 16 } }] }] }));
   await act(async () => {});
   expect(container.querySelector(".simple-pin .unit")).toBeNull();
-  expect([list(), seeAll(owner())?.getAttribute("aria-pressed"), container.querySelector('[data-run="task_fix"]')]).toEqual([null, "false", null]);
+  expect([list(), seeAll(owner())?.getAttribute("aria-expanded"), container.querySelector('[data-run="task_fix"]')]).toEqual([null, "false", null]);
 });
 
-it("draws a request about one place of an edit made in several once, under that edit's row, while only what needs the editor is listed", async () => {
+it("keeps a request about an unflagged place of a repeated edit apart from a flagged place's row, and places it under its own row in See all", async () => {
   const { base, thread } = madeRequest();
-  // The captions went on in two places. Scarlet flagged the second, and the editor sent the first back.
+  // The captions went on in two separate places. Scarlet flagged the second, and the editor sent the first back.
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== thread.id ? [] : [
       { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
@@ -11045,18 +12401,21 @@ it("draws a request about one place of an edit made in several once, under that 
   await act(async () => {});
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   expect(block().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
-  // "1 needs you" lists that edit as one row for both its places.
+  // "1 needs you" lists only the flagged place, not both places combined.
   await click(block().querySelector(".simple-pass-need")!);
   await act(async () => {});
-  expect([...block().querySelectorAll(".simple-edits .simple-edit")].map(row => [row.querySelector(".simple-edit-title")?.textContent, row.querySelector(".simple-edit-value")?.textContent]))
-    .toEqual([["captions", "2 places"]]);
-  // The request about the place that wasn't flagged is directly under that row, and not a second time under the list.
-  const under = [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
-  expect(under.map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
-  expect(under[0]!.previousElementSibling?.classList.contains("simple-edit")).toBe(true);
+  expect([...editRowsIn(block())].map(row => [row.querySelector(".simple-edit-title")?.textContent, row.querySelector(".simple-edit-value")?.textContent]))
+    .toEqual([["captions", "Edit"]]);
+  // The place that wasn't flagged was sent back: it and the request about it are Working's, on a row of its own.
+  const under = () => [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
+  expect(under()).toEqual([]);
+  await click(tabNamed(block(), "Working"));
+  expect([...editRowsIn(block())].map(row => row.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions"]);
+  expect(under().map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
+  expect(under()[0]!.previousElementSibling?.querySelector(".simple-edit-title")?.textContent).toBe("captions");
 });
 
-it("keeps a request about an edit that isn't among the ones that need the editor under their list", async () => {
+it("keeps a request about an edit that isn't among the ones that need the editor under its row in Working", async () => {
   const { base, thread } = madeRequest();
   // Only the wrap asks for a look, and the editor sent the captions back.
   data = { ...data, tasks: [...data.tasks, captionFix(base, thread.id)] };
@@ -11066,11 +12425,15 @@ it("keeps a request about an edit that isn't among the ones that need the editor
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   await click(block().querySelector(".simple-pass-need")!);
   await act(async () => {});
-  expect([...block().querySelectorAll(".simple-edits .simple-edit-title")].map(title => title.textContent)).toEqual(["wrap"]);
-  // The captions have no row in that list, so the request about them follows it.
-  const under = [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
-  expect(under.map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
-  expect(under[0]!.previousElementSibling?.classList.contains("simple-edits")).toBe(true);
+  const titles = () => [...block().querySelectorAll(".simple-edits .simple-edit-title")].map(title => title.textContent);
+  const under = () => [...block().querySelectorAll<HTMLElement>(".subunit[data-run]")];
+  expect(titles()).toEqual(["wrap"]);
+  // The captions have no row in For you, and neither has the request about them: both are Working's.
+  expect(under()).toEqual([]);
+  await click(tabNamed(block(), "Working"));
+  expect(titles()).toEqual(["captions"]);
+  expect(under().map(sub => sub.getAttribute("data-run"))).toEqual(["task_fix"]);
+  expect(under()[0]!.previousElementSibling?.classList.contains("simple-edit")).toBe(true);
 });
 
 it("keeps Scarlet's reply to two lines however long it is, and opens it in full on a click", async () => {
@@ -11109,7 +12472,7 @@ it("keeps decided edits in For you marked as handled even after nothing needs th
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
   const need = () => turn.querySelector<HTMLElement>(".simple-pass-need");
-  const rows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")].map(r =>
+  const rows = () => [...editRowsIn(turn)].map(r =>
     [r.querySelector(".edit-badge")?.textContent?.trim(), r.querySelector(".simple-edit-title")?.textContent, r.querySelector(".edit-badge")?.classList.contains("is-kept"), r.classList.contains("is-decided"), r.querySelector(".simple-edit-value")?.textContent]);
   // Just those two are listed without a click, numbered as in the whole list. "2 need you" opens the first.
   expect([need()?.getAttribute("title"), rows()]).toEqual(["2 need you", [["2", "captions", false, false, "Edit"], ["3", "wrap", false, false, "Edit"]]]);
@@ -11141,19 +12504,18 @@ it("leaves a flagged edit that's open where it is when need you is pressed, as a
   await show();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  const rows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
+  const rows = () => [...editRowsIn(turn)];
   const need = () => turn.querySelector<HTMLElement>(".simple-pass-need")!;
-  // The editor opens the second of the flagged edits from the whole list, then asks for just the ones that need them.
+  // The editor opens the second of the flagged edits with the optional line open, then presses For you.
   await click(rows()[2]!);
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   await click(need());
   await act(async () => {});
-  // The list is those two, and the edit they had open is still the one open: it doesn't jump back to the first.
-  expect(rows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions", "wrap"]);
+  // The optional line stays open, and the edit they had open is still the one open: it doesn't jump back to the first.
+  expect(rows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["music bed", "captions", "wrap"]);
   expect(openTitle()).toBe("wrap");
   // With an edit open that asks for nothing, it opens the first that does.
-  await click(seeAll(turn)!);
   await click(rows()[0]!);
   await act(async () => {});
   expect(openTitle()).toBe("music bed");
@@ -11167,11 +12529,12 @@ it("opens the next edit when one Scarlet didn't flag is kept, with a flagged edi
   appliedEdits();
   await show();
   await act(async () => {});
-  await click(turnFor("chg_approved_2").querySelector(".simple-edit")!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
   expect(openTitle()).toBe("music bed");
-  // The editor is going through them one by one: captions is next, not the flagged wrap two rows down.
+  // The editor is going through the optional ones one by one: captions is next, not the flagged wrap over them.
   await press("k");
   expect(openTitle()).toBe("captions");
+  // After the last optional one, Keep goes to what waits.
   await press("k");
   expect(openTitle()).toBe("wrap");
   // Kept on the flagged one, with no other flagged edit waiting, the card closes.
@@ -11188,6 +12551,28 @@ const oneAppliedCut = () => {
       beforeCut: { version: "v_before", removed: { start: 10, end: 12.4 } }, previous: [] },
   ] });
 };
+it("plays the calls still waiting round an open edit as Scarlet staged them, and shows each as a gap that opens it", async () => {
+  // Retakes a waiting call takes out looked missed while the editor reviewed a zoom over them (2026-11-23).
+  flagged();
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: c.cutAssessments!.map(a =>
+    a.index === 1 ? { ...a, start: 9, end: 11 } : a) } : c) };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: data.project.head!, edits: [
+    { changeId: "chg_approved_2", spot: 0, label: "Zoom in on the price", range: { start: 8, end: 14 }, previous: [] },
+  ] });
+  const passage = vi.spyOn(player, "previewRange");
+  await show();
+  await click(buttonIn(turnFor("chg_approved_2"), "See edit")!);
+  await act(async () => {});
+  expect(passage.mock.lastCall?.[5]).toEqual([{ start: 9, end: 11 }, { start: 598, end: 602.5 }]);
+  const gap = container.querySelector<HTMLElement>(".simple-timeline-gap.is-call")!;
+  expect(gap.classList.contains("is-skipped")).toBe(true);
+  expect(gap.textContent).toBe("Cut 1");
+  // A press on it opens the call.
+  await act(async () => { gap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, isPrimary: true })); });
+  await act(async () => {});
+  expect(container.querySelector(".edit-card")?.textContent).toContain("Cut 1");
+});
 it("says what each cut took out on one line, however many cuts the editor steps through", async () => {
   flagged();
   useProjectStore.setState({ current: data });
@@ -11210,6 +12595,9 @@ it("says what each cut took out on one line, however many cuts the editor steps 
     expect(editPanel()!.querySelectorAll(".edit-card-what")).toHaveLength(1);
   }
 });
+
+/** The waiting pass's two calls, which an open applied cut's After steps over as staged once the editor plays on. */
+const waitingCallCuts = [{ start: 230, end: 233 }, { start: 598, end: 602.5 }];
 
 const cutRow = () => turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-edits .simple-edit")!;
 
@@ -11235,7 +12623,7 @@ it("opens a cut unlit with its words folded when it is opened again, after Befor
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing “Keep the image test” · After");
   expect(transcriptLink().getAttribute("aria-expanded")).toBe("false");
   expect(openHead()!.querySelector(".edit-passage")).toBeNull();
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // A click in the red leaves it on Before from that point. Its open row pressed again starts it over as the video
   // runs, unlit: the card stays up, with the timeline still on the cut.
   await act(async () => { container.querySelector<HTMLElement>(".simple-timeline-band")!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, bubbles: true })); });
@@ -11246,7 +12634,7 @@ it("opens a cut unlit with its words folded when it is opened again, after Befor
   expect(beforeIcon(editPanel()!)).toEqual(["BeforeAfter\\", "Before", "false", "Play Before (\\)"]);
   expect(audition.mock.calls.length).toBe(plays + 1);
   // After, from the top of the listen: it steps over the cut again.
-  expect(audition.mock.lastCall?.[0]).toEqual({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] });
+  expect(audition.mock.lastCall?.[0]).toEqual({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts });
   expect(container.querySelector(".simple-timeline-band")?.getAttribute("style")).toBe(band);
   // Closed with Esc and opened again: no flash and no clicked point.
   await press("Escape");
@@ -11392,7 +12780,7 @@ it("leaves the Before key alone until the version before a cut has arrived", asy
   await act(async () => arrive());
   await act(async () => {});
   expect(beforeIcon(editPanel()!)?.[2]).toBe("false");
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
 });
 
 it("keeps a cut's card open while the version before it loads: ← → and the timeline are the player's, and only Esc closes it", async () => {
@@ -11427,7 +12815,7 @@ it("keeps a cut's card open while the version before it loads: ← → and the t
   // Once the version arrives, the cut plays on it as it does when it opens.
   await act(async () => arrive());
   for (let i = 0; i < 4; i++) await act(async () => {});
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
   // Esc is what closes it.
   await press("Escape");
   expect(editPanel()).toBeNull();
@@ -11478,7 +12866,7 @@ it("says so in a cut's words when the version before it can't be loaded, offers 
   expect(buttonIn(passage(), "Retry transcript")).toBeUndefined();
   expect(buttonIn(monitor, "Retry")).toBeUndefined();
   expect(editPanel()!.querySelector<HTMLButtonElement>(".edit-card-before")!.disabled).toBe(false);
-  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
+  expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }], beyond: waitingCallCuts }, expect.any(Number));
 });
 
 it("reads nothing of a cut's words on the video as it runs now while the version before it loads", async () => {
@@ -11512,12 +12900,12 @@ it("says a cut's length the same way in its row, its mark and on the timeline", 
   ] });
   vi.spyOn(api, "timeline").mockResolvedValue({ timeline: { ...data.timeline!, version: "v_before" } } as never);
   await show();
-  const rows = () => [...turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")];
+  const rows = () => [...editRowsIn(turnFor("chg_approved_2"))];
   // A cut of 9.97 s is "10 s" in its row, and one of 3:41 isn't "221 s" there while its mark says 3:41.
   expect(rows().map(r => r.querySelector(".simple-edit-value")?.textContent)).toEqual(["−10 s", "−3:41"]);
   await click(rows()[0]!);
   await act(async () => {});
-  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Removed · 10 s");
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Took out · 10 s");
   await click(transcriptLink());
   expect(openHead()!.querySelector(".edit-passage-cut")?.textContent).toBe("10 s");
 });
@@ -11686,7 +13074,7 @@ it("takes up an open cut as it was when its revision puts footage back, so it is
   await lands({ range: { start: 9.6, end: 10.8 }, kind: "restore" });
   // The card now has an edit's Before/After controls and the player includes the restored footage, with two seconds before it and up to three after.
   // It takes up the listen already in progress.
-  expect(editPanel()!.querySelector(".edit-card-length.is-added")?.textContent).toBe("Added");
+  expect(editPanel()!.querySelector(".edit-card-length.is-added")?.textContent).toBe("Put back");
   expect(editPanel()!.querySelector(".edit-card-words")).toBeNull();
   expect(beforeIcon(editPanel()!)).toEqual(["BeforeAfter\\", "Before", "false", "Play Before (\\)"]);
   expect(audition).toHaveBeenCalledTimes(listens);
@@ -11866,14 +13254,14 @@ it("gives a request's list the place of Scarlet's reply while it's open, and bri
   // For you shows the flagged edit, and Scarlet's reply follows the block.
   expect(reply()).toBe("Check edit 3 to hear how the ending lands.");
   const drawn = block();
-  // With every edit listed, the list has the reply's place and the block stays mounted.
+  // With the optional line open every edit is listed: the lists have the reply's place and the block stays mounted.
+  const lists = () => editLists(block()).map(([name]) => name);
   await click(seeAll(block())!);
-  expect([block().querySelector(".simple-edits")?.getAttribute("aria-label"), reply()]).toEqual(["Edits in this thread", undefined]);
+  expect([lists(), reply()]).toEqual([["Edits that need you", "Optional edits"], undefined]);
   expect(block()).toBe(drawn);
-  // For you opens the flagged edit. Once its card closes, the reply is back with just that edit listed.
-  await click(block().querySelector(".simple-pass-need")!);
-  await press("Escape");
-  expect([block().querySelector(".simple-edits")?.getAttribute("aria-label"), reply()]).toEqual(["Edits that need you", "Check edit 3 to hear how the ending lands."]);
+  // The line pressed again puts the optional edits away, and the reply is back with just the flagged edit listed.
+  await click(seeAll(block())!);
+  expect([lists(), reply()]).toEqual([["Edits that need you"], "Check edit 3 to hear how the ending lands."]);
 });
 
 it("keeps a revision whose new version couldn't be prepared, since nothing else would say it came to nothing", async () => {
@@ -11891,7 +13279,7 @@ it("keeps a revision whose new version couldn't be prepared, since nothing else 
   expect(fix?.textContent).toContain("Make the captions bigger.");
   // Scarlet's words are all it has: no row under them names the edit again or offers to open a version that isn't there.
   expect([...fix!.querySelectorAll(".req > *")].map(row => row.className)).toEqual(["req-said"]);
-  expect(fix!.querySelector(".req-said .said")?.textContent).toBe("I couldn’t prepare the preview for this edit.");
+  expect(fix!.querySelector(".req-said .said")?.textContent).toBe("Scarlet couldn’t prepare the preview for this edit.");
 });
 
 it("moves a request's closing words with its block to the place above the message box, and back", async () => {
@@ -11914,20 +13302,20 @@ it("keeps a list the editor opened on a request open when a revision of one of i
   await act(async () => {});
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   await click(seeAll(block())!);
-  expect(block().querySelectorAll(".simple-edits .simple-edit").length).toBe(3);
+  expect(editRowsIn(block()).length).toBe(3);
   // The block moves above the message box while Scarlet revises, and is mounted anew there: the list stays open.
   await event(d => ({ ...d, tasks: [...d.tasks, captionFix(base, thread.id)] }));
   await act(async () => {});
   expect(block().closest(".simple-pin")).not.toBeNull();
-  expect(block().querySelectorAll(".simple-edits .simple-edit").length).toBe(3);
-  expect(reviewModes(block())).toEqual([["For you", "false"], ["See all", "true"]]);
+  expect(editRowsIn(block()).length).toBe(3);
+  expect([reviewModes(block()), optionalLine(block())?.[1]]).toEqual([tabs(), "true"]);
   // And back in the conversation once the revision is done.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_fix" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString(), changeIds: ["chg_fixed"] } : t),
     changes: [...d.changes, { ...d.changes.find(c => c.id === "chg_approved_2")!, id: "chg_fixed", taskId: "task_fix", threadId: thread.id, createdAt: new Date().toISOString(),
       timelineEdits: [{ label: "captions", range: { start: 0.2, end: 2.4 } }] }] }));
   await act(async () => {});
   expect(block().closest(".simple-chat")).not.toBeNull();
-  expect(block().querySelectorAll(".simple-edits .simple-edit").length).toBe(3);
+  expect(editRowsIn(block()).length).toBe(3);
 });
 
 it("keeps a request that is tried again in its one block, and out of the queue", async () => {
@@ -11974,8 +13362,10 @@ it("names a queued request about an edit the same way with the timeline on its r
   await show();
   await act(async () => {});
   const tag = () => container.querySelector('[aria-label="Queued requests"] .queue-target')?.textContent;
-  // With the edit open, its request has the timeline, and the tag reads as the edit's row does.
-  await click(editRows("chg_approved_2")[2]!);
+  // The edit a request waits on is Working's row. With it open, its request has the timeline, and the tag reads as
+  // the edit's row does.
+  await click(tabNamed(turnFor("chg_approved_2"), "Working"));
+  await click(editRows("chg_approved_2")[0]!);
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   expect(tag()).toBe("Edit at 0:11");
@@ -12186,16 +13576,17 @@ it("aims an emptied box at the edit that's open now, not the one its deleted mes
   data = { ...data, tasks: data.tasks.map(t => t.state === "waiting_for_user" ? { ...t, state: "done" as const, question: null } : t) };
   useProjectStore.setState({ current: data });
   await show();
-  const rows = () => turnFor("chg_approved_2").querySelectorAll(".simple-edits .simple-edit");
-  await click(rows()[1]!);
+  const rows = () => editRowsIn(turnFor("chg_approved_2"));
+  // The list goes from the edit that waits ("wrap", the third by number) to the optional ones under it.
+  await click(rows()[2]!);
   await act(async () => {});
   const first = boxTag();
-  expect(first).toBe("Edit at 0:00");
+  expect(first).toBe("Edit at 0:11");
   // A note is begun on this edit, and the editor steps to the next one: the note stays aimed where it was written.
-  await act(async () => useUiStore.getState().setAgentDraft("Make them smaller"));
+  await act(async () => useUiStore.getState().setAgentDraft("Make it shorter"));
   await press("ArrowDown");
   await act(async () => {});
-  expect(rows()[2]!.getAttribute("aria-current")).toBe("true");
+  expect(rows()[0]!.getAttribute("aria-current")).toBe("true");
   expect(boxTag()).toBe(first);
   // They delete it instead. Nothing is being written any more, so the box talks to the edit on screen: the next note
   // typed must not revise the edit they left.
@@ -12318,7 +13709,7 @@ it("keeps the playhead where a skip put it through a reload of its edit's marker
 it("leaves full screen when Revise hands the keyboard to the message box, which full screen hides", async () => {
   appliedEdits();
   await show();
-  await click(turnFor("chg_approved_2").querySelectorAll<HTMLElement>(".simple-edits .simple-edit")[0]!);
+  await click(editRowsIn(turnFor("chg_approved_2"))[0]!);
   await act(async () => {});
   const stage = container.querySelector<HTMLElement>(".cut-preview")!;
   await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
@@ -12382,7 +13773,7 @@ it("starts a new edit about a stretch marked on the ruler, and keeps it while th
   expect(container.querySelector(".timeline-range")).toBeNull();
 });
 
-it("takes a marked stretch off on a click anywhere but the message box and the timeline", async () => {
+it("takes a marked stretch off on a click in the chat, and keeps it through clicks on the player and the timeline", async () => {
   idle();
   await show();
   await markOnRuler(11, 16);
@@ -12391,6 +13782,10 @@ it("takes a marked stretch off on a click anywhere but the message box and the t
     el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, pointerId: 7, clientX: x, clientY: 5 }));
   });
   const marked = () => (useUiStore.getState().agentContext as AgentContext | null)?.markedRange;
+  // Playing it, pausing it and pressing the picture keep it, so the editor can listen to it and adjust it.
+  await click(container.querySelector(".monitor-playback > button")!);
+  await click(container.querySelector(".simple-stage")!);
+  expect(marked()).toBeDefined();
   // The message box is where the message about it is written: a click there keeps it.
   await click(document.querySelector(".simple-thread") ?? container);
   expect(marked()).toBeUndefined();
@@ -12404,6 +13799,11 @@ it("takes a marked stretch off on a click anywhere but the message box and the t
   });
   expect(marked()).toBeDefined();
   await click(chat);
+  expect(marked()).toBeUndefined();
+  // Esc takes it off too.
+  await markOnRuler(11, 16);
+  expect(marked()).toBeDefined();
+  await press("Escape");
   expect(marked()).toBeUndefined();
 });
 
@@ -12423,11 +13823,40 @@ it("puts a marked stretch on the message beside the edit that's open, which stay
   expect(stretch.start).toBe(10);
   expect(stretch.end).toBeGreaterThan(10);
   expect([openTitle(), boxTag()]).toEqual(["captions", "Edit at 0:04"]);
-  // Closing the edit leaves the stretch: the message is then a new edit about it.
+  // Esc takes the stretch off first, and leaves the edit open.
+  await press("Escape");
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: edit.changeId });
+  expect((useUiStore.getState().agentContext as AgentContext).markedRange).toBeUndefined();
+  expect(openTitle()).toBe("captions");
+  // The next Esc closes the edit.
   await press("Escape");
   expect(openTitle()).toBeUndefined();
-  expect(useUiStore.getState().agentContext).toMatchObject({ time: 10, end: stretch.end, markedRange: stretch });
-  expect((useUiStore.getState().agentContext as AgentContext).changeId).toBeUndefined();
+});
+
+it("ends the marking of a frame on Esc and nothing else: the marked stretch and the open edit each take an Esc of their own after it", async () => {
+  beforeClipReady();
+  await show();
+  await click(appliedRows()[1]!);
+  await act(async () => {});
+  await markOnRuler(11, 16);
+  const stretch = () => (useUiStore.getState().agentContext as AgentContext | null)?.markedRange;
+  const marking = () => usePictureMarksStore.getState().marking;
+  expect([openTitle(), !!stretch()]).toEqual(["captions", true]);
+  // M marks the frame under the playhead. Esc ends the marking, and the stretch and the edit's card stay.
+  await pauses();
+  await press("m");
+  expect(marking()).toBe(PRJ);
+  await press("Escape");
+  expect([marking(), openTitle(), !!stretch()]).toEqual([null, "captions", true]);
+  // Then the stretch goes, and with none marked the card still outlasts the marking: it closes on the Esc after.
+  await press("Escape");
+  expect([openTitle(), !!stretch()]).toEqual(["captions", false]);
+  await press("m");
+  expect(marking()).toBe(PRJ);
+  await press("Escape");
+  expect([marking(), openTitle()]).toEqual([null, "captions"]);
+  await press("Escape");
+  expect(openTitle()).toBeUndefined();
 });
 
 it("keeps one list of every edit open at a time, and puts a request's edits on the timeline when its band is pressed", async () => {
@@ -12464,12 +13893,31 @@ it("keeps one list of every edit open at a time, and puts a request's edits on t
   await act(async () => {});
   expect(band("chg_later").classList.contains("is-marked")).toBe(true);
   expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
-  // Pressed again, the marked band lets go: no band is shaded and no request's edits are numbered on the timeline.
+  // Pressed again, the picked band lets go: no band is shaded, and the timeline marks every request's edits, each
+  // with the number its own request's list has (2026-11-23).
   await click(band("chg_later"));
   await act(async () => {});
   expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
-  expect(numbered()).toEqual([]);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "1", "2", "2", "3"]);
   // And a press marks it again.
+  await click(band("chg_later"));
+  await act(async () => {});
+  expect(band("chg_later").classList.contains("is-marked")).toBe(true);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
+  // Esc lets go as the second press does, and a press picks it again.
+  await press("Escape");
+  await act(async () => {});
+  expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "1", "2", "2", "3"]);
+  await click(band("chg_later"));
+  await act(async () => {});
+  expect(band("chg_later").classList.contains("is-marked")).toBe(true);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2"]);
+  // A press anywhere else in the chat lets go too (2026-11-23), and a press on the band picks it again.
+  await click(container.querySelector<HTMLElement>(".simple-chat")!);
+  await act(async () => {});
+  expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
+  expect(numbered().map(([n]) => n).sort()).toEqual(["1", "1", "2", "2", "3"]);
   await click(band("chg_later"));
   await act(async () => {});
   expect(band("chg_later").classList.contains("is-marked")).toBe(true);
@@ -12480,7 +13928,8 @@ it("keeps one list of every edit open at a time, and puts a request's edits on t
   expect(toggle("chg_approved_2").getAttribute("aria-pressed")).toBe("true");
   await click(toggle("chg_later"));
   expect(toggle("chg_later").getAttribute("aria-pressed")).toBe("true");
-  expect(toggle("chg_approved_2").getAttribute("aria-pressed")).toBe("false");
+  // The one that closed is the link on its sentence again.
+  expect([toggle("chg_approved_2").className, toggle("chg_approved_2").getAttribute("aria-expanded")]).toEqual(["simple-pass-toggle", "false"]);
   expect(container.querySelectorAll('.simple-review-tab[aria-pressed="true"]')).toHaveLength(1);
   // A request's band with an edit of it open leaves the card and shows that request's edits.
   await click(editRows("chg_later")[0]!);
@@ -12489,9 +13938,149 @@ it("keeps one list of every edit open at a time, and puts a request's edits on t
   await click(band("chg_approved_2"));
   await act(async () => {});
   expect(container.querySelector(".edit-card")).toBeNull();
-  expect(toggle("chg_later").getAttribute("aria-pressed")).toBe("false");
+  expect([toggle("chg_later").className, toggle("chg_later").getAttribute("aria-expanded")]).toEqual(["simple-pass-toggle", "false"]);
   expect(band("chg_approved_2").classList.contains("is-marked")).toBe(true);
   expect(numbered().map(([n]) => n).sort()).toEqual(["1", "2", "3"]);
+});
+
+it("folds a request to its heading with the arrow at the heading's left, and opens it for an edit opened on the timeline", async () => {
+  earlierRequestOnly(false);
+  const later = laterRequest("chg_later", false);
+  const at = new Date(Date.now() - 60_000).toISOString();
+  const request = (id: string, instruction: string, changeId: string) => Task.parse({ id, projectId: PRJ, kind: "edit", agent: "claude",
+    instruction, state: "done", createdBy: { type: "human", name: "Editor" }, changeIds: [changeId], createdAt: at, finishedAt: at });
+  data = { ...data, changes: [...data.changes.map(c => c.id === "chg_approved_2" ? { ...c, taskId: "task_zooms" } : c), { ...later.change, taskId: "task_fades" }],
+    tasks: [request("task_zooms", "Frame the screen", "chg_approved_2"), request("task_fades", "Fade both ends", "chg_later")] };
+  later.lists[threadWith("chg_later").id] = later.lists.chg_later!;
+  later.lists[threadWith("chg_approved_2").id] = later.lists[later.earlier]!;
+  useProjectStore.setState({ current: data });
+  await showFolded();
+  await act(async () => {});
+  const unit = (changeId: string) => turnFor(changeId).querySelector<HTMLElement>(".unit")!;
+  const arrow = (changeId: string) => unit(changeId).querySelector<HTMLButtonElement>(".unit-msg > .unit-fold")!;
+  expect([arrow("chg_later").getAttribute("aria-expanded"), unit("chg_later").classList.contains("is-collapsed")]).toEqual(["true", false]);
+  // The arrow folds the request: only its heading shows. The band stays the picked one, and the timeline keeps its edits.
+  const marks = numbered();
+  await click(arrow("chg_later"));
+  expect([arrow("chg_later").getAttribute("aria-expanded"), unit("chg_later").classList.contains("is-collapsed")]).toEqual(["false", true]);
+  expect(arrow("chg_later").getAttribute("aria-label")).toMatch(/^Expand this edit: /);
+  expect(unit("chg_later").querySelector(".unit-msg")!.classList.contains("is-marked")).toBe(true);
+  expect(numbered()).toEqual(marks);
+  // The other request is as it was, and the fold is kept for the next time the project opens.
+  expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(false);
+  expect(JSON.parse(localStorage.getItem(`scarlet.collapsedRequests.v1:${PRJ}`)!)).toHaveLength(1);
+  // An edit of the folded request opened from the timeline opens the request again, so its row is in view.
+  const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
+  strip.getBoundingClientRect = () => ({ left: 0, width: 1000 }) as DOMRect;
+  const dot = container.querySelector<HTMLElement>(".simple-timeline-mark.is-numbered")!;
+  await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(dot.style.left) * 10 })); });
+  await act(async () => {});
+  expect(container.querySelector(".edit-card")).not.toBeNull();
+  expect(unit("chg_later").classList.contains("is-collapsed")).toBe(false);
+  expect(localStorage.getItem(`scarlet.collapsedRequests.v1:${PRJ}`)).toBeNull();
+  // A press on the band's words is the band's: they don't open, and the press lets the picked band go.
+  const words = unit("chg_approved_2").querySelector<HTMLElement>(".unit-msg > p")!;
+  expect(words.hasAttribute("aria-expanded")).toBe(false);
+  expect(unit("chg_later").querySelector(".unit-msg")!.classList.contains("is-marked")).toBe(true);
+  await press("Escape");
+  await click(unit("chg_later").querySelector<HTMLElement>(".unit-msg > p")!);
+  await act(async () => {});
+  expect(container.querySelectorAll(".unit-msg.is-marked")).toHaveLength(0);
+  // The arrow opens a folded request too.
+  await click(arrow("chg_approved_2"));
+  expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(true);
+  await click(arrow("chg_approved_2"));
+  expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(false);
+});
+
+it("says on a folded request's band what waits on the editor under it: For you with its count, and the dot for a question", async () => {
+  appliedEdits();
+  idle();
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_made", kind: "edit" as const, instruction: "Tighten the wrap, add music and captions.",
+    context: { message: "Tighten the wrap, add music and captions." }, changeIds: ["chg_approved_2"] }] };
+  const thread = threadWith("chg_approved_2");
+  useProjectStore.setState({ current: data });
+  await withSimpleSheet(async () => {
+    await showFolded();
+    await act(async () => {});
+    const unit = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
+    const band = () => unit().querySelector<HTMLElement>(":scope > .unit-msg")!;
+    const fold = () => click(band().querySelector(".unit-fold")!);
+    /** The number on the request's For you tab, under the band. Folded, the tab is out of sight and still there. */
+    const tab = () => unit().querySelector(".simple-review-tab-count")?.textContent;
+    const need = () => band().querySelector(".unit-need");
+    const dotShows = () => [...band().querySelectorAll(".unit-state")].some(el => el.querySelector(".unit-dot") && styled(el, "display")[0] !== "none");
+    // Open, For you and its count are under the band, and the band says nothing of them.
+    expect(Number(tab())).toBeGreaterThan(0);
+    expect([need(), dotShows()]).toEqual([null, false]);
+    // Folded, everything under the band is out of sight, so the band says it: For you and the same count.
+    await fold();
+    expect(unit().classList.contains("is-collapsed")).toBe(true);
+    expect([need()?.textContent, need()?.querySelector(".unit-need-count")?.textContent, need()?.getAttribute("title")])
+      .toEqual([`For you${tab()}`, tab(), `${tab()} ${tab() === "1" ? "needs" : "need"} you`]);
+    expect(styled(need()!.querySelector(".unit-need-count")!, "color")).toEqual(styled(unit().querySelector(".simple-review-tab-count")!, "color"));
+    expect(band().querySelector(".unit-need button, .unit-need a")).toBeNull();
+    expect(dotShows()).toBe(false);
+    // Scarlet asks about one of its edits, under that edit's row: the folded band has the amber dot too, beside the count.
+    const now = new Date().toISOString();
+    await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_fix", kind: "edit" as const, state: "waiting_for_user" as const, summary: null, changeIds: [],
+      instruction: "Make the captions bigger.", question: "Bigger by how much?", createdAt: now, startedAt: now, finishedAt: undefined, expectedSeconds: undefined,
+      context: { threadId: thread.id, changeId: "chg_approved_2", editIndex: 1, time: 0.2, end: 2.4, message: "Make the captions bigger." } }],
+      taskEvents: { ...d.taskEvents, task_fix: [{ type: "question" as const, at: now, text: "Bigger by how much?" }] } }));
+    await act(async () => {});
+    expect(unit().querySelector('.subunit[data-run="task_fix"]')).not.toBeNull();
+    expect([unit().classList.contains("is-collapsed"), dotShows(), need()?.querySelector(".unit-need-count")?.textContent]).toEqual([true, true, tab()]);
+    // Opened again the band is as it was: the question and For you are under it.
+    await fold();
+    expect([unit().classList.contains("is-collapsed"), need(), dotShows()]).toEqual([false, null, false]);
+  });
+});
+
+it("says on a folded pass's band how many of its calls still wait, and keeps the dot for its own question beside the count", async () => {
+  finishedPass();
+  await withSimpleSheet(async () => {
+    await show();
+    await act(async () => {});
+    const unit = () => passCard().closest<HTMLElement>(".unit")!;
+    const band = () => unit().querySelector<HTMLElement>(":scope > .unit-msg")!;
+    const tab = () => unit().querySelector(".simple-review-tab-count")?.textContent;
+    const dot = () => { const el = band().querySelector<HTMLElement>(".unit-state:has(> .unit-dot)"); return el ? styled(el, "display")[0] !== "none" : false; };
+    expect(Number(tab())).toBeGreaterThan(0);
+    expect(band().querySelector(".unit-need")).toBeNull();
+    await click(band().querySelector(".unit-fold")!);
+    expect(band().querySelector(".unit-need")?.textContent).toBe(`For you${tab()}`);
+    // The pass's own request asks: open, the count under the band takes the dot's place; folded, the band has both.
+    const root = unit().dataset.run!;
+    await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === root ? { ...t, state: "waiting_for_user" as const, question: "Keep the cold open?", finishedAt: undefined } : t) }));
+    await act(async () => {});
+    expect([unit().classList.contains("is-collapsed"), dot(), band().querySelector(".unit-need-count")?.textContent]).toEqual([true, true, tab()]);
+    await click(band().querySelector(".unit-fold")!);
+    expect([unit().classList.contains("is-collapsed"), dot(), band().querySelector(".unit-need")]).toEqual([false, false, null]);
+  });
+});
+
+it("folds the request above the message box to its heading too, its list of edits with it", async () => {
+  const { base, thread } = madeRequest();
+  await withSimpleSheet(async () => {
+    await showFolded();
+    await act(async () => {});
+    const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
+    await click(seeAll(block())!);
+    // Scarlet revises one of its edits: the block holds the place above the message box, its list open.
+    await event(d => ({ ...d, tasks: [...d.tasks, captionFix(base, thread.id)] }));
+    await act(async () => {});
+    expect(block().closest(".simple-pin")).not.toBeNull();
+    const under = () => [...block().children].filter(el => !el.classList.contains("unit-msg"));
+    expect(under().some(el => el.querySelector(".simple-edits"))).toBe(true);
+    expect(under().map(el => styled(el, "display")[0])).not.toContain("none");
+    // Folded there, it is its heading alone: the list that scrolls above the box goes out of sight with the rest.
+    await click(block().querySelector<HTMLButtonElement>(".unit-msg > .unit-fold")!);
+    expect(block().classList.contains("is-collapsed")).toBe(true);
+    expect(under().map(el => styled(el, "display")[0])).toEqual(under().map(() => "none"));
+    await click(block().querySelector<HTMLButtonElement>(".unit-msg > .unit-fold")!);
+    expect(under().map(el => styled(el, "display")[0])).not.toContain("none");
+  });
 });
 
 it("shows the whole timeline on any press on a request's band", async () => {
@@ -12534,21 +14123,7 @@ it("goes from a kept edit Scarlet didn't flag to a call still waiting, or a flag
   expect(keepGoesTo([[edit(13, undefined, true)], [edit(21)]], 1, still, [])).toBeUndefined();
 });
 
-it("goes from an approved call in See all to the next item in time order, edit or call", () => {
-  const edit = (at: number, check?: string, kept = false) => ({ changeId: "chg_pass", spot: at, label: `at ${at}`, range: { start: at, end: at + 1 }, previous: [], kept, ...(check && { check }) });
-  const rows = [[edit(13, undefined, true)], [edit(21)], [edit(35)], [edit(45, "Listen to the join.")], [edit(50)]];
-  const still = (e: object) => !(e as { kept: boolean }).kept;
-  // Approved call at 0:27: the unflagged edit at 0:35 is next in See all, ahead of the waiting call at 0:55.
-  expect(callGoesTo(rows, still, [{ call: "cut 2", at: 55, after: true }], 27)).toEqual({ edit: rows[2]![0] });
-  // Approved call at 0:27: when another waiting call comes at 0:30 before the edit at 0:35, it goes to that call.
-  expect(callGoesTo(rows, still, [{ call: "cut 2", at: 30, after: true }], 27)).toEqual({ call: "cut 2" });
-  // Approved last call at 0:55: wraps past the kept 0:13 to the first unkept edit at 0:21.
-  expect(callGoesTo(rows, still, [], 55)).toEqual({ edit: rows[1]![0] });
-  // Nothing else waits: the card closes.
-  expect(callGoesTo([[edit(13, undefined, true)]], still, [], 27)).toBeUndefined();
-});
-
-it("steps through See all in list order when approving a call or keeping a flagged edit on a pass", async () => {
+it("keeps on through the optional edits and then what waits, on a pass with its optional line open", async () => {
   const { save } = runningPass(STAGED.slice(0, 2)); // calls at 0:02 (Cut 1) and 0:06 (Cut 2)
   const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: undefined, noteIds: [],
     timelineEdits: [
@@ -12572,41 +14147,77 @@ it("steps through See all in list order when approving a call or keeping a flagg
   const cardTitle = () => editPanel()?.querySelector(".edit-card-title")?.textContent;
   await show();
   await act(async () => {});
-  // Switch to the See all list: intro trim (0:01), Cut 1 (0:02), mid trim (0:04), mid check (0:05), late trim (0:05.5), Cut 2 (0:06), outro trim (0:09).
+  // The optional line lists the edits Scarlet didn't flag under the three that wait: Cut 1 (0:02), mid check (0:05)
+  // and Cut 2 (0:06), then intro trim, mid trim, late trim and outro trim.
   await click(seeAll(passCard())!);
   await act(async () => {});
   await click(passRow("intro trim"));
   await act(async () => {});
   expect(cardTitle()).toBe("intro trim");
-  // Keep intro trim -> goes to Cut 1 (For you call).
+  // Keep goes on down the optional edits, not to the calls between them on the timeline.
   await press("k");
+  expect(cardTitle()).toBe("mid trim");
+  await press("k");
+  expect(cardTitle()).toBe("late trim");
+  await press("k");
+  expect(cardTitle()).toBe("outro trim");
+  // After the last optional edit it goes to what waits: Cut 1, the flagged edit, then Cut 2.
+  await press("k");
+  await act(async () => {});
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 1");
-  // Approve Cut 1 on See all -> goes to mid trim (non-For-you edit), NOT skipping to Cut 2 or mid check!
   await press("k");
   await act(async () => {});
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
-  expect(cardTitle()).toBe("mid trim");
-  // Keep mid trim -> goes to mid check (flagged For you edit).
-  await press("k");
   expect(cardTitle()).toBe(SUMMARY);
-  // Keep mid check on See all -> goes to late trim (non-For-you edit), NOT skipping to Cut 2!
   await press("k");
-  expect(cardTitle()).toBe("late trim");
-  // Keep late trim -> goes to Cut 2 (next in See all).
-  await press("k");
+  await act(async () => {});
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 2");
-  // Approve Cut 2 (last waiting call) on See all -> schedules the pass and moves to outro trim instead of closing!
+  // Cut 2 is the last call waiting: Keep schedules the pass, and with nothing left to keep the card closes.
   await press("k");
   await act(async () => {});
   expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ applyWhenDone: true }));
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
-  expect(cardTitle()).toBe("outro trim");
-  // Keep outro trim -> every item in See all is done, so the card closes.
-  await press("k");
   expect(editPanel()).toBeNull();
 });
 
-it("keeps advancing through See all from a flagged edit instead of skipping to the next For you edit", async () => {
+it("steps ↑ and ↓ through For you as its list goes while a pass waits, from its optional edits to its calls and back", async () => {
+  runningPass(STAGED.slice(0, 2)); // calls at 0:02 (Cut 1) and 0:06 (Cut 2)
+  const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: undefined, noteIds: [],
+    timelineEdits: [
+      { label: "intro trim", range: { start: 1, end: 1.5 } },
+      { label: "mid trim", range: { start: 4, end: 4.5 } },
+      { label: "outro trim", range: { start: 9, end: 10 } },
+    ] };
+  data = { ...data, changes: [...data.changes, part], tasks: data.tasks.map(t => t.id === "task_done" ? { ...t, changeIds: [...t.changeIds, part.id] } : t) };
+  useProjectStore.setState({ current: data });
+  const request = threadWith("chg_ready").id;
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: useProjectStore.getState().current!.project.head!,
+    edits: threadId !== request ? [] : [
+      { changeId: "chg_part", spot: 0, label: "intro trim", range: { start: 1, end: 1.5 }, previous: [] },
+      { changeId: "chg_part", spot: 1, label: "mid trim", range: { start: 4, end: 4.5 }, previous: [] },
+      { changeId: "chg_part", spot: 2, label: "outro trim", range: { start: 9, end: 10 }, previous: [] },
+    ] }));
+  /** What is open: an edit by its card's words, or a call by its number. */
+  const open = () => editPanel()?.querySelector(".edit-card-title")?.textContent ?? container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent;
+  await show();
+  await act(async () => {});
+  // The optional line lists the edits Scarlet didn't flag under the calls that wait.
+  await click(seeAll(passCard())!);
+  await act(async () => {});
+  expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual([STAGED[0]!.reason, STAGED[1]!.reason, "intro trim", "mid trim", "outro trim"]);
+  await click(passRow("intro trim"));
+  await act(async () => {});
+  // ↓ goes down the list a row at a time, and stops at its end.
+  const seen = [open()];
+  for (let i = 0; i < 3; i++) { await press("ArrowDown"); await act(async () => {}); seen.push(open()); }
+  expect(seen).toEqual(["intro trim", "mid trim", "outro trim", "outro trim"]);
+  // ↑ goes back up it the same way, from the optional edits to the calls over them, and stops at the first.
+  const back = [];
+  for (let i = 0; i < 5; i++) { await press("ArrowUp"); await act(async () => {}); back.push(open()); }
+  expect(back).toEqual(["mid trim", "intro trim", "Cut 2", "Cut 1", "Cut 1"]);
+});
+
+it("keeps advancing through the optional edits from one of them, then goes to what waits", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -12618,16 +14229,16 @@ it("keeps advancing through See all from a flagged edit instead of skipping to t
   await show();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  // Switch to See all and start on the first edit.
-  await click(seeAll(turn)!);
-  await act(async () => {});
-  await click(turn.querySelector(".simple-edits .simple-edit")!);
+  // The optional line is open. Start on the first optional edit.
+  expect(editLists(turn)).toEqual([["Edits that need you", ["captions", "wrap"]], ["Optional edits", ["music bed", "zoom"]]]);
+  await click(editRowsIn(turn)[0]!);
   expect(openTitle()).toBe("music bed");
-  await press("k");
-  expect(openTitle()).toBe("captions");
-  // On See all, keeping the flagged captions edit goes to zoom (next in list), not skipping to wrap (next For you).
+  // Keep goes on down the optional edits: zoom is next, not the flagged captions.
   await press("k");
   expect(openTitle()).toBe("zoom");
+  // After the last optional edit it goes to what waits, in order, and closes the card when nothing is left.
+  await press("k");
+  expect(openTitle()).toBe("captions");
   await press("k");
   expect(openTitle()).toBe("wrap");
   await press("k");
@@ -12653,7 +14264,7 @@ it("shows draft timestamps on the player timeline, with seeking reserved for the
   expect(marks()).toEqual([]);
 });
 
-it("keeps a flagged marker edit in For you marked Done across tab switches, and ⌘Z returns it to waiting", async () => {
+it("keeps a to-do marked Done before the card lost Done in Done, marked Done across tab switches", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -12668,28 +14279,28 @@ it("keeps a flagged marker edit in For you marked Done across tab switches, and 
   const row = () => turn.querySelector<HTMLButtonElement>(".simple-edits .simple-edit")!;
   expect([need()?.getAttribute("title"), row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent])
     .toEqual(["1 needs you", false, "To do"]);
+  // The card has no Done any more: D leaves it waiting. One marked Done earlier is recorded as a kept edit is.
   await click(row());
   await act(async () => {});
   await press("d");
   await act(async () => {});
-  expect(editPanel()).toBeNull();
+  expect([editPanel() !== null, need()?.getAttribute("title")]).toEqual([true, "1 needs you"]);
+  await press("Escape");
+  await act(async () => keepEdits(PRJ, threadWith("chg_approved_2").id, [{ changeId: "chg_approved_2", spot: 1 }]));
   expect([need()?.getAttribute("title"), turn.querySelector(".simple-review-tab-count")]).toEqual([null, null]);
   expect([row().classList.contains("is-decided"), row().querySelector(".edit-badge")?.classList.contains("is-kept"), row().querySelector(".simple-edit-value")?.textContent])
     .toEqual([true, true, "Done"]);
-  // Switching to See all and back to For you preserves the handled row.
-  await click(seeAll(turn)!);
-  expect(reviewModes(turn)).toEqual([["For you", "false"], ["See all", "true"]]);
-  await click(need()!);
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
+  // It is Done's row, marked Done there, across a switch to For you and back.
+  await click(tabNamed(turn, "Done"));
+  expect(reviewModes(turn)).toEqual(tabs("Done"));
   expect([row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Done"]);
-  // ⌘Z undoes Done and returns the marker to waiting in For you.
-  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
-  await act(async () => {});
-  expect([need()?.getAttribute("title"), row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent])
-    .toEqual(["1 needs you", false, "To do"]);
+  await click(tabNamed(turn, "For you"));
+  expect(reviewModes(turn)).toEqual(tabs());
+  await click(tabNamed(turn, "Done"));
+  expect([row().classList.contains("is-decided"), row().querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Done"]);
 });
 
-it("parks a To do marker in For you with Later (L), drops the waiting count, advances, shows only Done when reopened, and supports ⌘Z", async () => {
+it("offers a To do marker Add, Revise and Reject only: L parks nothing, and Revise (R) aims the box at it while it still waits", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -12698,115 +14309,28 @@ it("parks a To do marker in For you with Later (L), drops the waiting count, adv
       { changeId: "chg_approved_2", spot: 2, label: "intro title", range: { start: 9, end: 11 }, previous: [], check: "Check the intro title" },
     ] }));
   const keepSpy = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
-  vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
   await showFolded();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
   const need = () => turn.querySelector<HTMLElement>(".simple-pass-need")!;
-  const rows = () => Array.from(turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit"));
+  const rows = () => Array.from(editRowsIn(turn));
   const actions = () => [...editPanel()!.querySelectorAll(".edit-card-acts button")].map(b => [b.textContent, b.getAttribute("title")]);
-
-  // Only two tabs (For you | See all); both the to-do marker and the flagged edit live in For you.
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
   expect(need().getAttribute("title")).toBe("2 need you");
-  expect(rows().map(r => [r.querySelector(".simple-edit-title")?.textContent, r.querySelector(".simple-edit-value")?.textContent]))
-    .toEqual([["Add studio B-roll", "To do"], ["intro title", "Edit"]]);
 
-  // Pressing L on the to-do parks it in For you as Later without calling keepEdits, drops the waiting count, and advances.
   await click(rows()[0]!);
   await act(async () => {});
-  expect(actions()).toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
+  expect(actions()).toEqual([["Add", "Have Scarlet add it (A)"], ["Revise", "Revise (R)"], ["", "Reject edit (X)"]]);
+  // L no longer parks it: the to-do still waits, and its card stays open.
   await press("l");
   await act(async () => {});
   expect(keepSpy).not.toHaveBeenCalled();
-  expect(need().getAttribute("title")).toBe("1 needs you");
-  expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toContain("Check the intro title");
-  const brollRow = () => rows()[0]!;
-  expect([
-    brollRow().classList.contains("is-decided"),
-    brollRow().querySelector(".edit-badge")?.classList.contains("is-check"),
-    brollRow().querySelector(".edit-badge")?.classList.contains("is-kept"),
-    brollRow().querySelector(".simple-edit-value")?.textContent,
-  ]).toEqual([false, false, false, "Later"]);
-
-  // Keeping the remaining flagged edit closes the card (skipping the parked Later to-do) and clears the badge.
-  await press("k");
-  await act(async () => {});
-  expect(editPanel()).toBeNull();
-  expect([need().getAttribute("title"), turn.querySelector(".simple-review-tab-count")]).toEqual([null, null]);
-
-  // Switching to See all and back to For you preserves the parked Later row.
-  await click(seeAll(turn)!);
-  expect(reviewModes(turn)).toEqual([["For you", "false"], ["See all", "true"]]);
-  await click(need());
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
-  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("Later");
-
-  // Reopening a Later to-do shows only Done (D); pressing L does nothing; pressing D marks it Done.
-  await click(brollRow());
-  await act(async () => {});
-  expect(actions()).toEqual([["Done", "Done (D)"]]);
-  await press("l");
-  expect(editPanel()).not.toBeNull();
-  await press("d");
-  await act(async () => {});
-  expect(editPanel()).toBeNull();
-  expect([brollRow().classList.contains("is-decided"), brollRow().querySelector(".edit-badge")?.classList.contains("is-kept"), brollRow().querySelector(".simple-edit-value")?.textContent])
-    .toEqual([true, true, "Done"]);
-
-  // ⌘Z undoes Done and returns the to-do to Later (not back to waiting yet) while reopening its card.
-  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
-  await act(async () => {});
-  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("Later");
-  expect(actions()).toEqual([["Done", "Done (D)"]]);
-
-  // Undo the kept edit and then undo Later: the to-do returns to waiting ("To do") and restores Later (L).
-  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
-  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
-  await act(async () => {});
-  expect(brollRow().querySelector(".simple-edit-value")?.textContent).toBe("To do");
-  expect(brollRow().querySelector(".edit-badge")?.classList.contains("is-check")).toBe(true);
   expect(need().getAttribute("title")).toBe("2 need you");
-  expect(actions()).toEqual([["Later", "Later (L)"], ["Done", "Done (D)"]]);
-});
-
-it("parks a dialogue pass's To do marker as Later in For you without holding up the waiting count or auto-advance", async () => {
-  runningPass();
-  flaggedPart();
-  const request = threadWith("chg_ready").id;
-  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: useProjectStore.getState().current!.project.head!,
-    edits: threadId !== request ? [] : [
-      { changeId: "chg_part", spot: 0, label: "wrap", range: { start: 3, end: 5 }, previous: [], check: "Check the wrap" },
-      { changeId: "chg_part", spot: 1, label: "Shoot B-roll", range: { start: 8, end: 10 }, previous: [], marker: true, check: "Record studio B-roll here" },
-      { changeId: "chg_part", spot: 2, label: "music bed", range: { start: 0, end: 2 }, previous: [] },
-    ] }));
-  const asked = askAll(STAGED).slice(0, 1).map((a, i) => ({ ...a, askOrder: i + 1 }));
-  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutAssessments: asked } : c) };
-  useProjectStore.setState({ current: data });
-  await showFolded();
-  await act(async () => {});
-  const turn = turnFor("chg_ready");
-  const need = () => turn.querySelector<HTMLElement>(".simple-pass-need")!;
-
-  expect(reviewModes(turn)).toEqual([["For you", "true"], ["See all", "false"]]);
-  expect(need().getAttribute("title")).toBe("3 need you");
-  expect(passRows().map(r => [r.querySelector(".edit-badge")?.textContent, r.querySelector(".simple-pass-label")?.textContent]))
-    .toEqual([["1", "A clean retake."], ["2", "wrap"], ["3", "Shoot B-roll"]]);
-
-  // Opening the to-do marker and pressing L parks it as Later in For you, drops the badge to 2, and wraps to Cut 1.
-  await click(passRows()[2]!);
-  await act(async () => {});
-  await press("l");
-  await act(async () => {});
+  expect(rows()[0]!.querySelector(".simple-edit-value")?.textContent).toBe("To do");
+  expect(editPanel()?.querySelector(".edit-card-title")?.textContent).toContain("Add B-roll here");
+  // Revise aims the message box at the to-do. It waits on the editor until a revision actually goes out.
+  await press("r");
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_approved_2" });
   expect(need().getAttribute("title")).toBe("2 need you");
-  expect(container.querySelector('[aria-label="Call"] .edit-card-count')?.textContent).toBe("Cut 1");
-  const markerRow = passRows()[2]!;
-  expect([
-    markerRow.classList.contains("is-decided"),
-    markerRow.querySelector(".edit-badge")?.classList.contains("is-check"),
-    markerRow.querySelector(".edit-badge")?.classList.contains("is-kept"),
-    markerRow.querySelector(".simple-pass-value")?.textContent,
-  ]).toEqual([false, false, false, "Later"]);
 });
 
 it("keeps a rejected flagged edit in For you marked Rejected and opens its Rejected card on click", async () => {
@@ -12830,7 +14354,7 @@ it("keeps a rejected flagged edit in For you marked Rejected and opens its Rejec
   expect(rejectedCard()?.querySelector(".edit-card-title")?.textContent).toBe(SUMMARY);
 });
 
-it("keeps kept and rejected flagged edits in For you while a dialogue pass waits on calls", async () => {
+it("puts kept and rejected flagged edits in Done while a dialogue pass waits on calls", async () => {
   runningPass();
   const thread = threadWith("chg_ready");
   const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: thread.id,
@@ -12845,12 +14369,16 @@ it("keeps kept and rejected flagged edits in For you while a dialogue pass waits
     ] }));
   await show();
   await act(async () => {});
-  // 3 calls + 1 waiting flagged edit = 4 need you; the already-rejected flagged edit stays visible marked Rejected.
+  // 3 calls + 1 waiting flagged edit = 4 need you. The already-rejected flagged edit is Done's row, marked Rejected.
   expect(needYou()).toBe("4 need you");
+  expect(passRows().some(r => r.textContent?.includes("intro music"))).toBe(false);
+  await click(tabNamed(passCard(), "Done"));
   const intro = passRows().find(r => r.textContent?.includes("intro music"))!;
   expect([intro.classList.contains("is-rejected"), intro.querySelector(".edit-badge")?.classList.contains("is-rejected"), intro.querySelector(".simple-pass-value")?.textContent])
     .toEqual([true, true, "Rejected"]);
-  // Keep wrap: it stays in the pass's For you list marked Kept, dimmed and ticked, while the 3 calls stay waiting.
+  await click(tabNamed(passCard(), "For you"));
+  // Keep wrap: it is Done's too, and stays in For you for its moment marked Kept, dimmed and ticked, while the 3 calls
+  // stay waiting.
   await click(passRows().find(r => r.textContent?.includes("wrap"))!);
   await act(async () => {});
   await press("k");
@@ -12861,7 +14389,38 @@ it("keeps kept and rejected flagged edits in For you while a dialogue pass waits
     .toEqual([true, true, "Kept"]);
 });
 
-it("keeps a dialogue pass's decided calls in For you after the pass applies", async () => {
+it("says v2 on a flagged edit that came back revised with Scarlet's own reason, among a waiting pass's calls", async () => {
+  runningPass();
+  const thread = threadWith("chg_ready");
+  const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: thread.id,
+    createdAt: new Date(Date.now() - 30_000).toISOString() };
+  data = { ...data, changes: [...data.changes.filter(c => c.id !== "chg_approved_2"), part],
+    tasks: data.tasks.map(t => t.id === "task_done" ? { ...t, changeIds: [part.id, ...t.changeIds] } : t) };
+  useProjectStore.setState({ current: data });
+  // "wrap" came back revised and Scarlet gave a reason of its own, "intro music" came back with none, and "captions" was never sent back.
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== thread.id ? [] : [
+      { changeId: "chg_part", spot: 0, label: "wrap", range: { start: 11.5, end: 16 }, kind: "audio" as const, previous: [{ changeId: "chg_old", spot: 0 }], check: CHECK },
+      { changeId: "chg_part", spot: 1, label: "intro music", range: { start: 0, end: 4 }, kind: "audio" as const, previous: [{ changeId: "chg_old", spot: 1 }], check: REVISED_CHECK },
+      { changeId: "chg_part", spot: 2, label: "captions", range: { start: 5, end: 5.5 }, kind: "audio" as const, previous: [], check: "The second line runs long" },
+    ] }));
+  await show();
+  await act(async () => {});
+  expect(passCard().querySelector(".simple-pass-list")?.className).toBe("simple-pass-list is-short");
+  const word = (label: string) => passRows().find(r => r.textContent?.includes(label))!.querySelector(".simple-pass-value")?.textContent;
+  // Each ends on where it stands: its version, as a revised call's row does, Revised, or else what it is.
+  expect([word("wrap"), word("intro music"), word("captions")]).toEqual(["v2", "Revised", "Audio"]);
+  // Kept, it says so.
+  await click(passRows().find(r => r.textContent?.includes("wrap"))!);
+  await act(async () => {});
+  await press("k");
+  await act(async () => {});
+  expect(word("wrap")).toBe("Kept");
+});
+
+const openPassRowIn = (scope: Element) => scope.querySelector<HTMLElement>('.simple-pass-list > li > button[aria-current="true"] .simple-pass-words')?.textContent;
+
+it("keeps a dialogue pass's decided calls in Done after the pass applies, and opens a rejected one as a rejected edit opens", async () => {
   finishedPass();
   const ready = data.changes.find(c => c.id === "chg_ready")!;
   const approved = {
@@ -12895,22 +14454,135 @@ it("keeps a dialogue pass's decided calls in For you after the pass applies", as
   await showFolded();
   await act(async () => {});
   const pass = passCard();
-  // Both decided calls stay in For you (no count badge since nothing waits): approved cut as Kept (clickable), skipped cut as Rejected.
-  expect(reviewModes(pass)).toEqual([["For you", "true"], ["See all", "false"]]);
+  // Both decided calls are Done's rows (For you has no count, since nothing waits): the approved cut as Kept, the
+  // skipped cut as Rejected, in timeline order with the cut Scarlet was sure of, and each opens.
+  expect(reviewModes(pass)).toEqual(tabs());
   expect(needYou()).toBeNull();
+  // For you isn't blank: with no row and no optional line it says nothing waits.
+  expect([passRows().length, pass.querySelector(".simple-review-empty")?.textContent]).toEqual([0, "Nothing waits on you."]);
+  await click(tabNamed(pass, "Done"));
+  expect(pass.querySelector(".simple-review-empty")).toBeNull();
   const rows = passRows();
   expect(rows.map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided"), r.classList.contains("is-rejected"), r.querySelector(".simple-pass-value")?.textContent, r.disabled]))
     .toEqual([
       [STAGED[0]!.reason, true, false, "Kept", false],
-      [STAGED[1]!.reason, false, true, "Rejected", true],
+      [STAGED[1]!.reason, false, true, "Rejected", false],
+      [STAGED[2]!.reason, true, false, "Kept", false],
     ]);
+  // A press on the rejected call opens it as a rejected edit's row opens: the row lit, the timeline on where its
+  // footage plays now (6 s on the video before the pass, a second earlier by the cut ahead of it), its card with
+  // Scarlet's note and Rejected and nothing to decide, and the message box aimed at that cut.
+  const gone = () => passRows()[1]!;
+  await click(gone());
+  await act(async () => {});
+  expect([gone().getAttribute("aria-current"), gone().matches(".is-on.is-rejected"), editPanel()]).toEqual(["true", true, null]);
+  expect([rejectedSays(), rejectedCard()!.querySelector(".edit-card-title")?.textContent]).toEqual([["Rejected", 0], STAGED[1]!.reason]);
+  expect(container.querySelector(".simple-timeline-band, .simple-timeline-cut")?.textContent).toBe("Rejected");
+  expect(boxTag()).toBe("Cut at 0:05");
+  expect(useUiStore.getState().agentContext).toMatchObject({ changeId: "chg_ready", cutIndex: 1, time: 5, end: 6, label: STAGED[1]!.reason });
+  // ↑ steps to Done's row before where it was, and Esc closes it.
+  await press("ArrowUp");
+  await act(async () => {});
+  expect([rejectedCard(), editPanel() !== null, openPassRowIn(pass)]).toEqual([null, true, STAGED[0]!.reason]);
+  await click(gone());
+  await act(async () => {});
+  expect(rejectedSays()).toEqual(["Rejected", 0]);
+  await press("Escape");
+  expect([rejectedCard(), gone().getAttribute("aria-current")]).toEqual([null, null]);
   // Clicking the approved cut opens its applied edit card.
-  await click(rows[0]!);
+  await click(passRows()[0]!);
   await act(async () => {});
   expect(editPanel()).not.toBeNull();
-  // See all lists only the actual applied edits, not the skipped call.
-  await click(seeAll(pass)!);
-  expect(passRows().map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual([STAGED[0]!.reason, STAGED[2]!.reason]);
+  // Every row is decided, so there is no optional line under For you.
+  expect(optionalLine(pass)).toBeNull();
+});
+
+it("ticks in Done the cuts that went in with a pass through its calls, Scarlet's own picks too, and not an edit that still waits, a doubt raised since or a cut sent back", async () => {
+  const CUTS: Staged[] = [...STAGED, { start: 14, end: 15, reason: "A second go at the sign-off." }];
+  finishedPass(CUTS);
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
+  const thread = threadWith("chg_ready");
+  const ready = data.changes.find(c => c.id === "chg_ready")!;
+  // The pass went in on its last call. The editor kept the first cut and rejected the second. The last two had no
+  // call: Scarlet settled them itself, and they went in with the others.
+  const approved = { ...ready, state: "approved" as const, appliedVersion: ready.toVersion,
+    cutAssessments: ready.cutAssessments!.map(a => a.index >= 2 ? { ...a, verdict: "cut" as const } : a),
+    cutChoices: [
+      { index: 0, start: CUTS[0]!.start, end: CUTS[0]!.end, choice: "cut" as const },
+      { index: 1, start: CUTS[1]!.start, end: CUTS[1]!.end, choice: "keep" as const },
+    ],
+    appliedReview: { duration: 13, originalDuration: 16, originalVersion: "ver_1", joins: [
+      { reviewIndex: 0, at: 2, removed: { start: CUTS[0]!.start, end: CUTS[0]!.end } },
+      { reviewIndex: 2, at: 10, removed: { start: CUTS[2]!.start, end: CUTS[2]!.end } },
+      { reviewIndex: 3, at: 12, removed: { start: CUTS[3]!.start, end: CUTS[3]!.end } },
+    ] } };
+  // An edit the same request applied on its own asks for a look, and still waits on the editor.
+  const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: thread.id,
+    createdAt: new Date(Date.now() - 30_000).toISOString() };
+  data = { ...data, changes: [...data.changes.filter(c => c.id !== "chg_approved_2").map(c => c.id === "chg_ready" ? approved : c), part],
+    tasks: data.tasks.map(t => t.id === "task_done" ? { ...t, changeIds: [part.id, ...t.changeIds] } : t) };
+  useProjectStore.setState({ current: data });
+  const cut = (spot: number, at: number, staged: Staged) => ({ changeId: "chg_ready", spot, label: staged.reason, range: { start: at - 1, end: at + 1 }, at, kind: "cut" as const,
+    beforeCut: { version: "ver_1", removed: { start: staged.start, end: staged.end } }, previous: [] });
+  // A later request raised a doubt about the last cut, which Scarlet had settled: that is new, and the editor's to look at.
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_ready").id ? [] : [
+      cut(0, 2, CUTS[0]!),
+      { changeId: "chg_part", spot: 0, label: "mid check", range: { start: 5, end: 5.5 }, kind: "audio" as const, previous: [], check: CHECK },
+      cut(1, 10, CUTS[2]!),
+      { ...cut(2, 12, CUTS[3]!), check: "The sign-off now starts on a breath.", recheck: "2026-11-23T10:00:00.000Z" },
+    ] }));
+  await showFolded();
+  await act(async () => {});
+  expect(needYou()).toBe("2 need you");
+  /** Each row of the list shown: its words, whether it is ticked (the row's class and its tick), its time, and what it ends on. */
+  const listed = () => passRows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided"), !!r.querySelector(".simple-pass-tick"),
+    r.querySelector(".simple-pass-time")?.textContent, r.querySelector(".simple-pass-value")?.textContent]);
+  const lit = () => passRows().find(r => r.getAttribute("aria-current"))?.querySelector(".simple-pass-words")?.textContent;
+  const tab = async (name: "For you" | "Working" | "Done") => { await click(tabNamed(passCard(), name)); await act(async () => {}); };
+  // For you has the edit that asks for a look and the cut doubted since. Neither is ticked, and their times say they
+  // need the editor.
+  expect(listed()).toEqual([
+    ["mid check", false, false, "0:05, needs you", "Audio"],
+    [CUTS[3]!.reason, false, false, "0:12, needs you", "−1.0 s"],
+  ]);
+  // The timeline marks the two that wait, in amber.
+  expect(numbered()).toEqual([["2", "check"], ["4", "check"]]);
+  // Done has the cut the editor approved and the one Scarlet settled, which went in with the pass, both ticked, and
+  // the call the editor rejected, which left its footage in.
+  await tab("Done");
+  expect(listed()).toEqual([
+    [CUTS[0]!.reason, true, true, "0:02", "Kept"],
+    [CUTS[1]!.reason, false, true, "0:05", "Rejected"],
+    [CUTS[2]!.reason, true, true, "0:10", "Kept"],
+  ]);
+  await tab("For you");
+  // Keep agrees with the ticks. From the edit that waits it goes to the cut doubted since, and from that one, the last
+  // waiting, nothing is left to keep: the card closes.
+  await click(passRow("mid check"));
+  await act(async () => {});
+  expect([!!editPanel(), lit()]).toEqual([true, "mid check"]);
+  await press("k");
+  await act(async () => {});
+  expect([!!editPanel(), lit(), needYou()]).toEqual([true, CUTS[3]!.reason, "1 needs you"]);
+  await press("k");
+  await act(async () => {});
+  expect([editPanel(), lit(), needYou()]).toEqual([null, undefined, null]);
+  // Every row is Done's now, and ticked.
+  await tab("Done");
+  expect(listed().map(([words, , ticked, , ends]) => [words, ticked, ends])).toEqual([[CUTS[0]!.reason, true, "Kept"], ["mid check", true, "Kept"],
+    [CUTS[1]!.reason, true, "Rejected"], [CUTS[2]!.reason, true, "Kept"], [CUTS[3]!.reason, true, "Kept"]]);
+  expect(ticks()).toEqual([]);
+  // Sent back for revision, the cut Scarlet settled is on its way out: it is Working's row, with no tick, and says so
+  // where its amount was.
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  const now = new Date().toISOString();
+  await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_revise_settled", state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined,
+    summary: null, changeIds: [], context: { changeId: "chg_ready", editIndex: 1, threadId: thread.id, message: "Leave a beat before it" } }] }));
+  await act(async () => {});
+  await tab("Working");
+  expect(listed()).toEqual([[CUTS[2]!.reason, false, false, "0:10", undefined]]);
+  expect(passRow(CUTS[2]!.reason).querySelector(".simple-pass-check")?.textContent).toBe("Revising…");
 });
 
 it("says under the timeline what Scarlet is doing while it edits the video shown, and a press brings that request into view", async () => {
@@ -12950,6 +14622,27 @@ it("says under the timeline what Scarlet is doing while it edits the video shown
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running"
     ? { ...t, state: "done" as const, finishedAt: new Date().toISOString() } : t) }));
   expect(status()).toBeNull();
+});
+
+it("brings a request Scarlet is on again after Retry into view from the line under the timeline", async () => {
+  // The request failed and was tried again. Its one block keeps the first attempt's name, and Scarlet works under the second.
+  const again = data.tasks.find(t => t.id === "task_running")!;
+  const failed = { ...again, id: "task_tried", state: "failed" as const, error: "unexpected status 500", retryTaskId: again.id,
+    createdAt: new Date(Date.now() - 600_000).toISOString(), startedAt: new Date(Date.now() - 590_000).toISOString(), finishedAt: new Date(Date.now() - 580_000).toISOString() };
+  data = { ...data, tasks: [failed, ...data.tasks] };
+  useProjectStore.setState({ current: data });
+  await show();
+  const block = container.querySelector<HTMLElement>('.unit[data-run="task_tried"]')!;
+  expect(block.querySelector(".req-now")).not.toBeNull();
+  const scrolled: Element[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { value(this: Element) { scrolled.push(this); }, configurable: true });
+  try {
+    await click(container.querySelector<HTMLButtonElement>(".timeline-foot .timeline-working")!);
+    expect(scrolled).toEqual([block.querySelector(".req-now")]);
+    expect(block.querySelector(".req-now")!.hasAttribute("data-flash")).toBe(true);
+  } finally {
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  }
 });
 
 it("steps through a pass's For you items in exact list order with arrow keys across interleaved calls and flagged edits", async () => {
@@ -13022,7 +14715,7 @@ it("advances through a pass's For you items in exact list order on K and X acros
   expect(currentCard()).toBeNull();
 });
 
-it("stays within For you when stepping with arrow keys from kept or rejected For you edits", async () => {
+it("steps with the arrow keys within the tab shown: a kept or rejected edit is Done's, and never to an optional one", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({
     version: data.project.head!,
@@ -13037,8 +14730,9 @@ it("stays within For you when stepping with arrow keys from kept or rejected For
   await showFolded();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  const forYouRows = () => [...turn.querySelectorAll<HTMLButtonElement>(".simple-edits .simple-edit")];
-  expect(forYouRows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions", "gone check", "wrap"]);
+  const forYouRows = () => [...editRowsIn(turn)];
+  // The rejected edit is Done's row: For you has the two that wait.
+  expect(forYouRows().map(r => r.querySelector(".simple-edit-title")?.textContent)).toEqual(["captions", "wrap"]);
 
   // Keep captions -> advances directly to wrap.
   await click(forYouRows()[0]!);
@@ -13047,24 +14741,34 @@ it("stays within For you when stepping with arrow keys from kept or rejected For
   await press("k");
   expect(openTitle()).toBe("wrap");
 
-  // Reopen kept captions and press ArrowDown: stays in For you (goes to wrap, never unflagged zoom).
+  // Kept, captions is Done's row. Opened from where it still is in For you for its moment, Done is the tab shown. It
+  // is the only stop there: a rejected edit is none, and the arrows never reach the unflagged zoom.
   await click(forYouRows()[0]!);
   await act(async () => {});
-  expect(openTitle()).toBe("captions");
+  expect([openTitle(), reviewModes(turn)]).toEqual(["captions", tabs("Done")]);
   await press("ArrowDown");
-  expect(openTitle()).toBe("wrap");
+  expect(openTitle()).toBe("captions");
   await press("ArrowUp");
   expect(openTitle()).toBe("captions");
 
-  // Open rejected For you edit and step ArrowDown / ArrowUp: stays within For you (wrap / captions), never zoom.
-  await click(forYouRows()[1]!);
+  // The rejected edit opens from its row. ↓ has nothing after it, and ↑ steps to Done's row before where it was.
+  const gone = () => forYouRows().find(r => r.textContent?.includes("gone check"))!;
+  await click(gone());
   await act(async () => {});
+  expect(openTitle()).toBe("gone check");
   await press("ArrowDown");
-  expect(openTitle()).toBe("wrap");
-  await click(forYouRows()[1]!);
-  await act(async () => {});
+  expect(openTitle()).toBe("gone check");
   await press("ArrowUp");
   expect(openTitle()).toBe("captions");
+
+  // For you opens the one that still waits, and it has no row beside it there.
+  await click(tabNamed(turn, "For you"));
+  await act(async () => {});
+  expect(openTitle()).toBe("wrap");
+  await press("ArrowUp");
+  expect(openTitle()).toBe("wrap");
+  await press("ArrowDown");
+  expect(openTitle()).toBe("wrap");
 });
 
 it("dashes every undecided For you cut and edit on the timeline, and draws decided or unflagged ones solid", async () => {
@@ -13087,6 +14791,9 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
         previous: [], check: "Check framing." },
     ] }));
   const dashed = () => container.querySelector(".simple-timeline-band")?.classList.contains("is-proposed");
+  // A decided row is Done's, and opening it from where it still is in For you shows Done: For you is pressed again
+  // to go on to the next one that waits.
+  const forYou = async () => { await click(tabNamed(passCard(), "For you")); await act(async () => {}); };
   await show();
   await act(async () => {});
   // 1. Waiting call: dashed.
@@ -13097,6 +14804,7 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
   await act(async () => {});
   await openCall("Breath before the price.");
   expect(dashed()).toBe(false);
+  await forYou();
   // 2. Waiting flagged applied cut in For you: dashed, matching waiting calls.
   await click(passRows().find(r => r.textContent?.includes("Flagged cut"))!);
   await act(async () => {});
@@ -13107,6 +14815,7 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
   await click(passRows().find(r => r.textContent?.includes("Flagged cut"))!);
   await act(async () => {});
   expect(dashed()).toBe(false);
+  await forYou();
   // 3. Waiting flagged non-cut edit: dashed while waiting, solid once kept.
   await click(passRows().find(r => r.textContent?.includes("Flagged zoom"))!);
   await act(async () => {});
@@ -13116,7 +14825,8 @@ it("dashes every undecided For you cut and edit on the timeline, and draws decid
   await click(passRows().find(r => r.textContent?.includes("Flagged zoom"))!);
   await act(async () => {});
   expect(dashed()).toBe(false);
-  // 4. Unflagged cut opened from See all: solid.
+  await forYou();
+  // 4. Unflagged cut opened from the optional line: solid.
   await click(seeAll(passCard())!);
   await act(async () => {});
   await click(passRows().find(r => r.textContent?.includes("Settled cut"))!);

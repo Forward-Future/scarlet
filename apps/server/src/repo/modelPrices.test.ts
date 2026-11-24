@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -95,6 +95,22 @@ it("fetches the list when a model has no price, keeps it, and waits a day before
   now += 24 * 60 * 60 * 1000;
   again.missed();
   await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+});
+
+it("uses a kept list only when it is newer than the one this build shipped with", async () => {
+  const file = join(dir, "model-prices.json");
+  const shipped: PriceList = { fetchedAt: at, models: { "gemini-9-pro": { rates: [1.5, 6] } } };
+  const kept = (fetchedAt: string) => writeFile(file, JSON.stringify({ fetchedAt, models: { "gemini-9-pro": { rates: [1, 4] } } }));
+
+  await kept("2026-11-01T00:00:00.000Z");
+  const older = new ModelPrices({ file }, shipped);
+  await older.ready();
+  expect(older.rates("gemini-9-pro", undefined, undefined)).toEqual([1.5, 6]);
+
+  await kept("2026-11-20T00:00:00.000Z");
+  const newer = new ModelPrices({ file }, shipped);
+  await newer.ready();
+  expect(newer.rates("gemini-9-pro", undefined, undefined)).toEqual([1, 4]);
 });
 
 it("never fetches without being given a way to, and keeps the list it has when a fetch fails", async () => {
