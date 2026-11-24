@@ -31,6 +31,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A file Scarlet can't read now says so by its own name, without the full path of Scarlet's library folder.
 - A WebM screen or voice recording saved without its length now imports with its real length, so reading its text, faces and sound, and choosing voices in it, work instead of saying it's still being prepared.
 - With a damaged copy of the Whisper model saved, an open Settings no longer keeps your computer busy checking it again every few seconds: it is checked once.
+- Changing a project's settings while its video is being edited no longer leaves the old cut on screen when the new timeline takes a moment to load: Scarlet loads it again by itself.
 
 ## November 23, 2026
 
