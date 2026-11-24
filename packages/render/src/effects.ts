@@ -189,7 +189,7 @@ registerEffect("eq", "audio", (p, ctx) => {
       ctx.warn("eq band without frequency ignored");
       continue;
     }
-    out.push(`equalizer=f=${fnum(f)}:t=q:w=${fnum(clamp(num(b.width ?? b.q, 1), 0.1, 100))}:g=${fnum(clamp(num(b.gain, 0), -40, 40))}`);
+    out.push(`equalizer=f=${fnum(clamp(f, 1, 20000))}:t=q:w=${fnum(clamp(num(b.width ?? b.q, 1), 0.1, 100))}:g=${fnum(clamp(num(b.gain, 0), -40, 40))}`);
   }
   return out;
 });

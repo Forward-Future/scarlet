@@ -6,7 +6,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { AudioStreamInfo, MediaAsset, MediaKind } from "@scarlet/timeline";
-import { LOCAL_MEDIA_INPUT, failureReason, resolveFfprobe, runCapture } from "./exec.js";
+import { LOCAL_MEDIA_INPUT, failureReason, resolveFfprobe, runCapture, runFfmpeg } from "./exec.js";
 import { pictureColorOf, type PictureColor } from "./hdr.js";
 
 export interface ProbeResult {
@@ -163,7 +163,24 @@ export async function withDecoderFallback<D extends "cuda" | "videotoolbox", T>(
 
 // Import, proxy chunks and render inspection often probe the same MP4. Keep
 // bounded JSON strings so every caller still gets independent mutable metadata.
-const probeCache = new Map<string, { stamp: string; json: string }>();
+const probeCache = new Map<string, { stamp: string; json: string; measured?: number }>();
+
+/**
+ * Seconds a file runs, from reading every packet of its picture and sound once: for a file whose container leaves its
+ * length out (a browser's WebM recording). The packets are copied, not decoded, so this is quick. 0 when none is found.
+ */
+async function measuredDuration(file: string, signal?: AbortSignal): Promise<number> {
+  let end = 0;
+  try {
+    await runFfmpeg([...LOCAL_MEDIA_INPUT, "-i", file, "-map", "0:v?", "-map", "0:a?", "-c", "copy", "-f", "null", "-"],
+      { signal, onProgress: seconds => { end = Math.max(end, seconds); } });
+  } catch {
+    signal?.throwIfAborted();
+    // A file that ends early still says how far it got.
+    if (!(end > 0)) return 0;
+  }
+  return end;
+}
 
 export async function probeMedia(
   file: string,
@@ -223,6 +240,17 @@ export async function probeMedia(
   const formatName = json.format?.format_name;
   const isStillImage =
     !!video && (IMAGE_FORMATS.test(formatName ?? "") || (video.nb_frames === "1" && !audio));
+  // Without a length, every tool that works on a range of the recording would find none. Read it once from the
+  // packets, and keep it with the file's probe.
+  if (!(duration > 0) && !isStillImage && (video || audio)) {
+    const kept = probeCache.get(key);
+    if (kept?.stamp === stamp && kept?.measured !== undefined) duration = kept.measured;
+    else {
+      duration = await measuredDuration(file, opts.signal);
+      const entry = probeCache.get(key);
+      if (entry && entry.stamp === stamp) entry.measured = duration;
+    }
+  }
 
   // avg_frame_rate is what the stream actually plays at; r_frame_rate is the
   // timebase-derived guess and can be doubled for interlaced/variable sources.

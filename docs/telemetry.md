@@ -33,6 +33,7 @@ Every event also carries its capture time, a random UUID for delivery deduplicat
 | --- | --- |
 | `agent_not_installed` | The agent's command-line tool couldn't be found or started |
 | `agent_not_signed_in` | The agent's tool isn't signed in, or its sign-in or key was refused |
+| `agent_incompatible` | The agent's tool refused the options or settings Scarlet starts it with, as an older or much newer version does |
 | `rate_limited` | A usage limit, quota, credit balance or rate limit |
 | `model_unavailable` | The chosen model doesn't exist or this account can't use it |
 | `provider_error` | The model provider answered with a server error or was overloaded |

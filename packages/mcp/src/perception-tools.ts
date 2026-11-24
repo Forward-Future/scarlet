@@ -267,7 +267,12 @@ export function registerPerception(deps: PerceptionDeps) {
       const sliceHeard = slice.length === words.length ? allHeard : allHeard.filter(h => h.start <= slice.at(-1)!.end + 1e-3);
       const body = formatTimelineTranscript(slice, sliceJoins,
         { detail, fps: project.settings.fps, all, removed: join => joinTook(join, transcripts), heard: sliceHeard });
-      const more = words.length > slice.length ? `\nShowing ${slice.length} of ${words.length} words; continue with from=${(slice.at(-1)!.end + 0.001).toFixed(3)}.` : "";
+      // Words are in order of their start: one said over the last word shown can end before it does. The next page
+      // starts at the earliest such word, so it isn't skipped; otherwise just after the last word shown.
+      const last = slice.at(-1);
+      const overlapped = last ? words.slice(slice.length).filter(w => w.end < last.end + 0.001) : [];
+      const nextFrom = overlapped.length ? Math.min(...overlapped.map(w => w.start)) : (last?.end ?? range.start) + 0.001;
+      const more = words.length > slice.length ? `\nShowing ${slice.length} of ${words.length} words; continue with from=${nextFrom.toFixed(3)}.` : "";
       return `Version ${tl.version}, ${range.start.toFixed(2)}–${range.end.toFixed(2)} of ${duration.toFixed(2)} s timeline: ${words.length} words, ${joins.length} joins.\n${body}${more}`;
     };
     let output = render(shown);

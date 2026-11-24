@@ -968,6 +968,14 @@ fn finished_task_folders_keep_only_artifacts_and_old_ones_are_pruned() {
 }
 
 #[test]
+fn names_a_claude_project_folder_as_claude_code_does_for_a_path_with_an_emoji() {
+    // Claude Code reads the path as JavaScript does, in UTF-16 units: 🎬 is two of them, so two dashes. é is one.
+    let claude = Path::new("/c");
+    let cwd = Path::new("/Users/me/🎬 Café/tasks-v2/ab12");
+    assert_eq!(claude_project_dir(cwd, claude), Some(claude.join("projects").join("-Users-me----Caf--tasks-v2-ab12")));
+}
+
+#[test]
 fn removes_only_the_claude_project_folder_named_after_the_task_folder() {
     let home = tempfile::tempdir().unwrap();
     // Escaping checked against Claude Code 2.1.316: real path, every non-alphanumeric character as "-".

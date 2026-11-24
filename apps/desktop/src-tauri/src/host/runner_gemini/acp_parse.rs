@@ -168,16 +168,20 @@ pub fn is_scarlet_mcp_permission(params: &Value) -> bool {
     names.into_iter().any(names_scarlet_tool)
 }
 
-/// Every path a permission request names: its locations, and any absolute path among its input's values.
+/// Every path a permission request names: its locations, and any absolute path among its input's values, or any that
+/// climbs out of the folder it is read from (`../`).
 fn named_paths(params: &Value) -> Vec<String> {
     fn absolute(v: &str) -> bool {
         let v = v.trim();
-        v.starts_with('/') || v.starts_with("~/") || (v.len() > 2 && v.as_bytes()[1] == b':' && (v.as_bytes()[2] == b'\\' || v.as_bytes()[2] == b'/'))
+        v.starts_with('/') || v.starts_with("~/") || drive(v)
+    }
+    fn climbs(v: &str) -> bool {
+        v.trim().split(['/', '\\']).any(|part| part == "..")
     }
     fn visit(value: &Value, depth: usize, out: &mut Vec<String>) {
         if depth > 4 { return; }
         match value {
-            Value::String(v) if absolute(v) && v.len() < 4096 => out.push(v.trim().to_string()),
+            Value::String(v) if (absolute(v) || climbs(v)) && v.len() < 4096 => out.push(v.trim().to_string()),
             Value::Array(items) => items.iter().for_each(|v| visit(v, depth + 1, out)),
             Value::Object(map) => map.values().for_each(|v| visit(v, depth + 1, out)),
             _ => {}
@@ -203,17 +207,30 @@ fn resolved(path: &str) -> String {
     format!("{prefix}/{}", parts.join("/"))
 }
 
+/// A Windows path from a drive's root: `C:\` or `C:/`.
+fn drive(v: &str) -> bool {
+    let b = v.as_bytes();
+    b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+}
+
 /// Whether a request's agent may use one of agy's own tools: yes unless it names a path outside the folders it works in
 /// (its task folder, and those its programs live in). agy's sandbox restricts its terminal; its file tools reach as far
-/// as the user's files do, the library that holds Scarlet's token among them.
+/// as the user's files do, the library that holds Scarlet's token among them. A relative path is read from the task
+/// folder, the first of them, as agy reads it.
 pub fn workspace_permission(params: &Value, roots: &[String]) -> bool {
     if is_scarlet_mcp_permission(params) {
         return true;
     }
+    let task_folder = roots.iter().find(|r| !r.trim().is_empty()).cloned();
     let roots: Vec<String> = roots.iter().map(|r| resolved(r)).collect();
     named_paths(params).iter().all(|path| {
         if path.starts_with('~') { return false; }
-        let p = resolved(path);
+        let relative = !path.starts_with(['/', '\\']) && !drive(path);
+        let p = match (relative, &task_folder) {
+            (false, _) => resolved(path),
+            (true, Some(folder)) => resolved(&format!("{folder}/{path}")),
+            (true, None) => return false,
+        };
         roots.iter().any(|root| p == *root || p.starts_with(&format!("{}/", root.trim_end_matches('/'))))
     })
 }
