@@ -115,6 +115,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Once your edits are decided and nothing is waiting on you, Export at the top turns white until you export the video, and the export for another editing app is now called “For Resolve, Final Cut or Premiere…”.
 - Scarlet now tells you when Claude Code, Codex or Gemini has a newer version, with a small dot on the model button, and updates it for you with one press from the model menu or Settings › General, the same way you installed it.
 - Project settings now opens with the cursor in the Name field, so you can type a new name straight away instead of a space or Enter closing it.
+- A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
 - Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
 
 ## November 22, 2026
