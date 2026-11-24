@@ -347,9 +347,9 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
 
   // Whether Scarlet has this request and it can be stopped: such a request has Stop at its heading's right.
   const stoppable = (r: Run) => runIsActive(r.task) && !(waitingToStart(r.task) && r.root === r.task.id);
-  // Pause holds all editing in the project, so one request in the whole chat draws it: this thread says which of its
-  // requests could, as they are drawn below, and reads which one does.
-  const pauseOffer: PauseOffer = { bands: [], rows: [] };
+  // Pause holds all editing in the project, so one band in the whole chat draws it: this thread says which of its
+  // bands could, as they are drawn below, and reads which one does.
+  const pauseOffer: PauseOffer = { bands: [], under: [] };
   const pauseOn = usePauseOn(thread.id, section, pauseOffer);
   // How many of the request's calls and flagged edits still wait on the editor: the number its For you tab shows,
   // counted as the tab counts it (`waitingPassRows`, `waitingRows`). Only a folded request's band says it, so it is
@@ -362,7 +362,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     return waitingPassRows(pass?.calls, listed, e => !!e.check || fromCalls.has(editKey(e)), { reviewed, revising });
   };
 
-  const unit = (run: Run, inside = false, hidden = false): ReactElement => {
+  const unit = (run: Run, inside = false): ReactElement => {
     const { task } = run;
     const ids = new Set(run.attempts.map(t => t.id));
     const mine = entries.filter(e => !!e.taskId && ids.has(e.taskId) && !(e.kind === "change" && folded.has(e.change.id)));
@@ -430,7 +430,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const shut = !inside && !!request && !!actions.collapsed?.has(run.root);
     // The requests about one of this block's cuts or edits, each drawn under its row.
     const below = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, run: runs.find(r => r.root === root)! })) : [];
-    const nests: Nest[] = below.map(({ key, run: about }) => ({ key, node: unit(about, true, shut) }));
+    const nests: Nest[] = below.map(({ key, run: about }) => ({ key, node: unit(about, true) }));
     const rows = run === owner && hasRows ? (aside: ReactNode) => summed
       ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} />
       : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} /> : undefined;
@@ -467,32 +467,35 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       .some(r => aboutOne(r) && isWorking(r.task.state));
     const standing = stands ?? (among ? <span className="unit-word is-at-once" title={`Scarlet is working on ${atOnce} cuts or edits at the same time.`}>Working on {atOnce} at once</span> : null);
     const stop = stoppable(run) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
-    // A request that edits the video has its controls at the band's right for as long as Scarlet has it: Stop, which
-    // ends just this one, paused or not; and, on one request in the whole chat, Pause, which holds all editing in the
-    // project, then Resume once it is paused, which picks the paused work up first. Each is an icon alone, named the
-    // moment the pointer rests on it.
+    // A request that edits the video has Stop at the band's right for as long as Scarlet has it, which ends just this
+    // one, paused or not. One band in the whole chat has Pause too, which holds all editing in the project, then Resume
+    // once it is paused, which picks the paused work up first. Each is an icon alone, named the moment the pointer
+    // rests on it.
     const hold = editingPaused
       ? () => { const runWith = resumeRunChoice(allTasks, effective); return attempt(run.root, runWith ? resumeEditing(projectId, runWith) : resumeEditing(projectId)); }
       : () => attempt(run.root, stopEditing(projectId));
-    // Pause is the project's, so the chat draws it on one request only (`usePauseOn`): this one says whether it could.
-    // A request under a row of a folded block is out of sight, and offers nothing.
-    if (editsProject && stop && !hidden) {
-      (inside ? pauseOffer.rows : pauseOffer.bands).push(run.root);
-      if (isPinned) pauseOffer.pinnedBand = run.root;
-      if (inside && pinned === run.root) pauseOffer.pinnedRow = run.root;
-    }
-    const editActions = editsProject && stop ?
-      <div className="unit-actions">
-        {pauseOn === run.root && <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
-          aria-description={editingPaused ? "Paused work picks up first, where it left off."
-            : "All editing in this project stops. Nothing new starts, and edits already made stay."}
-          // Pause becomes Resume in place: clicked, it lets go of the focus, so Space plays and can't press Resume.
-          onClick={letGo(hold)}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>}
-        <TipButton className="unit-stop-edit" tip="Stop this edit" aria-label={request ? `Stop this edit: ${request.text}` : "Stop this edit"}
-          aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div> : undefined;
-    const requestControl = editActions ?? (!editsProject && stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>);
     // Scarlet has a request under one of this block's rows: the band reads as the one it works on, on two lines.
     const worksUnder = !inside && !!request && run === owner && runs.some(r => nested.has(r.root) && isProjectEditTask(r.task) && stoppable(r));
+    // Pause is the project's, so the chat draws it on one band only (`usePauseOn`): this one says whether it could.
+    // A request under a row never draws it, and has Stop alone: with no band of its own at work, its block's band
+    // holds Pause for as long as Scarlet has a request under its rows, also once the band's own request is done.
+    const stops = editsProject && !!stop;
+    if (!inside && (stops || worksUnder)) {
+      (stops ? pauseOffer.bands : pauseOffer.under).push(run.root);
+      if (isPinned) pauseOffer.pinned = run.root;
+    }
+    const pause = !inside && pauseOn === run.root && <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
+      aria-description={editingPaused ? "Paused work picks up first, where it left off."
+        : "All editing in this project stops. Nothing new starts, and edits already made stay."}
+      // Pause becomes Resume in place: clicked, it lets go of the focus, so Space plays and can't press Resume.
+      onClick={letGo(hold)}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>;
+    const editActions = stops ?
+      <div className="unit-actions">
+        {pause}
+        <TipButton className="unit-stop-edit" tip="Stop this edit" aria-label={request ? `Stop this edit: ${request.text}` : "Stop this edit"}
+          aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div>
+      : pause ? <div className="unit-actions">{pause}</div> : undefined;
+    const requestControl = editActions ?? (!editsProject && stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>);
     // The request Scarlet is working on keeps its time and tokens in view, where they count up. Any other (finished,
     // stopped, waiting on the editor or its turn) and one under a row show them when the pointer rests on the heading:
     // under a row, the row and the line of what Scarlet is on say enough.

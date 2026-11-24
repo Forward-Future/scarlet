@@ -5302,12 +5302,16 @@ it("shows Scarlet on two calls at once: each row has its own Stop, and Pause is 
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_aside", 2, { kind: "edit" as const, instruction: "Keep the aside.", ...started() })] }));
   await act(async () => {});
   expect(document.querySelector(".queue-row")).toBeNull();
-  // Pause holds all editing, so the chat draws it once: on a request's band, and under neither row. Each request under
-  // a row has Stop alone, and neither its time and tokens nor Scarlet's opening sentence: those show on hover. Nothing
-  // sits over the message box.
+  // Pause holds all editing, so the chat has it once. Another request works too, above the message box, and its band
+  // has a Stop of its own: Pause is there, and neither on the pass's band nor under its rows. Each request under a row
+  // has Stop alone, and neither its time and tokens nor Scarlet's opening sentence: those show on hover. Nothing sits
+  // over the message box.
   expect(container.querySelector(".queue-tray")).toBeNull();
   expect(container.querySelector(".subunit .unit-pause-edit")).toBeNull();
-  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), !!b.closest(".unit-msg")])).toEqual([["Pause editing", true]]);
+  const pinnedBand = container.querySelector<HTMLElement>(".simple-pin > .unit > .unit-msg")!;
+  expect([pinnedBand.closest(".unit") !== block(), [...pinnedBand.querySelectorAll(".unit-actions button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))]).toEqual([true, ["Pause editing", "Stop this edit"]]);
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => b.closest(".unit-msg"))).toEqual([pinnedBand]);
+  expect(block().querySelector(":scope > .unit-msg .unit-actions")).toBeNull();
   expect([...container.querySelectorAll(".subunit .unit-actions")].map(a => [...a.querySelectorAll("button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))))
     .toEqual([["Stop this edit"], ["Stop this edit"]]);
   expect([...container.querySelectorAll(".subunit .unit-tokens")].every(t => t.classList.contains("is-quiet"))).toBe(true);
@@ -5334,6 +5338,24 @@ it("shows Scarlet on two calls at once: each row has its own Stop, and Pause is 
   // An ordinary word, such as the stopped request's, isn't marked that way.
   const stopped = container.querySelector('.subunit[data-run="task_aside"] .subunit-msg .unit-word')!;
   expect([stopped.textContent, stopped.className]).toEqual(["Stopped", "unit-word"]);
+  // The other requests finish, and no band has a Stop of its own. Pause holds all editing, so the block has it once, on
+  // its band, for as long as Scarlet works under its rows. The request under the row still has Stop alone.
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_running" || t.id === "task_waiting" ? { ...t, state: "done" as const, question: null, finishedAt: new Date().toISOString() } : t) }));
+  await act(async () => {});
+  // The pass's block holds the place above the message box now, as the one Scarlet is working in.
+  const held = container.querySelector<HTMLElement>('.subunit[data-run="task_revise"]')!.closest<HTMLElement>(".unit")!;
+  expect([held.dataset.run, held.closest(".simple-pin") !== null]).toEqual(["task_done", true]);
+  expect(container.querySelector(".subunit .unit-pause-edit")).toBeNull();
+  expect([...held.querySelectorAll(":scope > .unit-msg .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing"]);
+  expect([...container.querySelectorAll(".unit-pause-edit")]).toHaveLength(1);
+  expect([...container.querySelectorAll(".subunit .unit-actions")].map(a => [...a.querySelectorAll("button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))))
+    .toEqual([["Stop this edit"]]);
+  // Paused, the block's band still holds the one control, now Resume, and the request under the row keeps Stop alone.
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: true }, tasks: d.tasks.map(t => t.id === "task_revise" ? { ...t, state: "queued" as const } : t) }));
+  await act(async () => {});
+  const paused = container.querySelector<HTMLElement>('.subunit[data-run="task_revise"]')!.closest<HTMLElement>(".unit")!;
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg") === paused.querySelector(":scope > .unit-msg")])).toEqual([["Resume editing", true]]);
+  expect([...container.querySelectorAll(".subunit .unit-actions button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))).toEqual(["Stop this edit"]);
 });
 
 it("keeps a call Revising… when it comes back revised while a second note on it still waits", async () => {
@@ -9392,7 +9414,7 @@ it("shows Scarlet's recheck of an approved cut under that call, with why and non
   expect(under!.textContent).not.toMatch(/keep|Kept the original delivery|The video changed|Recheck this cut/);
 });
 
-it("says where Scarlet's recheck stands once, at the right of its Auto heading, with Stop there while it runs", async () => {
+it("says where Scarlet's recheck stands once, at the right of its Auto heading, with Stop there while it runs and Pause on a band", async () => {
   finishedPass();
   data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
   useProjectStore.setState({ current: data });
@@ -9407,10 +9429,11 @@ it("says where Scarlet's recheck stands once, at the right of its Auto heading, 
   const heading = () => under().querySelector<HTMLElement>(":scope > .subunit-msg")!;
   const said = (words: string) => under().textContent!.split(words).length - 1;
   expect(heading().querySelector(".simple-revising.is-auto")?.textContent).toBe("Auto");
-  // While it runs its heading ends on Stop, as any request under a row does: Pause is the project's and is on a band,
-  // once, and its active time shows on hover. No row under it holds them.
+  // While it runs its heading ends on Stop, as any request under a row does, and its active time shows on hover. Pause
+  // is on a band, once: here on that of the request above the message box, which has a Stop of its own. No row under
+  // the recheck holds them.
   expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit"]);
-  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), !!b.closest(".unit > .unit-msg")])).toEqual([["Pause editing", true]]);
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Pause editing", container.querySelector(".simple-pin > .unit > .unit-msg")]]);
   expect(heading().lastElementChild?.className).toBe("unit-actions");
   expect(heading().querySelector(":scope > .unit-tokens > .run-work-time")).not.toBeNull();
   expect(under().querySelector(".req .req-right, .req .unit-actions, .req .run-stop")).toBeNull();
@@ -12129,8 +12152,11 @@ it("draws a revision of one applied edit under that edit's row, at work, and und
   // Its Stop is its own heading's last word, and the request that holds it has none: Scarlet isn't on that one.
   expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
   expect(owner().querySelector(":scope > .unit-msg > .unit-stop")).toBeNull();
-  // No band in the chat can hold Pause, so the request under the row does: there is still one, and only one.
-  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".subunit")])).toEqual([["Pause editing", sub()]]);
+  // No band in the chat has a Stop of its own, so the block's band holds Pause while Scarlet works under its row: there
+  // is still one, and only one. The request under the row never has it: its heading ends on Stop alone.
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Pause editing", owner().querySelector(":scope > .unit-msg")]]);
+  expect([...owner().querySelectorAll(":scope > .unit-msg .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing"]);
+  expect([...sub().querySelectorAll(".subunit-msg > .unit-actions button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))).toEqual(["Stop this edit"]);
   // Opened, the list has it directly under the row it revises, and that row's word moves while Scarlet works.
   await click(seeAll(owner())!);
   const row = sub().previousElementSibling as HTMLElement;
