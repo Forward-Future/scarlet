@@ -12,6 +12,7 @@ import { errorMessage } from "../../lib/client";
 import { clock as clockLabel, parseTimestamp } from "../../lib/format";
 import { editKey } from "../../lib/keptEdits";
 import { markedFrameUrl } from "../../lib/markedFramePictures";
+import { usePauseOn, type PauseOffer } from "../../lib/pauseControl";
 import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../lib/passCalls";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../lib/requestRuns";
 import { runAim, runIsActive, spentLabel } from "../../lib/taskRun";
@@ -342,12 +343,24 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     return from === run || (run === owner && (settled(from) || nested.has(from.root)));
   });
 
-  // The block's own heading, when it has one: a request under one of its rows leaves Pause to it.
-  const ownerHeaded = !!owner && entries.some(e => e.kind === "request" && !!e.taskId && owner.attempts.some(t => t.id === e.taskId));
-  // Whether Scarlet has this request and it can be stopped: such a request has controls at its heading's right.
+  // Whether Scarlet has this request and it can be stopped: such a request has Stop at its heading's right.
   const stoppable = (r: Run) => runIsActive(r.task) && !(waitingToStart(r.task) && r.root === r.task.id);
+  // Pause holds all editing in the project, so one request in the whole chat draws it: this thread says which of its
+  // requests could, as they are drawn below, and reads which one does.
+  const pauseOffer: PauseOffer = { bands: [], rows: [] };
+  const pauseOn = usePauseOn(thread.id, section, pauseOffer);
+  // How many of the request's calls and flagged edits still wait on the editor: the number its For you tab shows,
+  // counted as the tab counts it (`PassSummary`, `ThreadResult`). A pass counts its open calls and each flagged edit;
+  // any other request counts a flagged edit made in several places once, as its list has one row for it. Only a
+  // folded request's band says it, so it is counted only then.
+  const forYou = () => {
+    if (!hasRows) return 0;
+    const flagged = listed.filter(e => !!e.check && !reviewed(e) && !revising(e));
+    if (!summed) return editGroups(listed).filter(group => group.members.some(m => flagged.includes(m.edit))).length;
+    return flagged.length + (actions.pass?.threadId === thread.id ? actions.pass.calls.filter(c => c.state === "open").length : 0);
+  };
 
-  const unit = (run: Run, inside = false): ReactElement => {
+  const unit = (run: Run, inside = false, hidden = false): ReactElement => {
     const { task } = run;
     const ids = new Set(run.attempts.map(t => t.id));
     const mine = entries.filter(e => !!e.taskId && ids.has(e.taskId) && !(e.kind === "change" && folded.has(e.change.id)));
@@ -410,8 +423,12 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       }
     });
     const final = finalOf(run);
+    // The arrow at the band's left folds the request to its heading, on one line, and opens it again. What is under the
+    // band stays mounted, so Scarlet's work goes on being read while it is out of sight.
+    const shut = !inside && !!request && !!actions.collapsed?.has(run.root);
     // The requests about one of this block's cuts or edits, each drawn under its row.
-    const nests: Nest[] = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, node: unit(runs.find(r => r.root === root)!, true) })) : [];
+    const below = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, run: runs.find(r => r.root === root)! })) : [];
+    const nests: Nest[] = below.map(({ key, run: about }) => ({ key, node: unit(about, true, shut) }));
     const rows = run === owner && hasRows ? (aside: ReactNode) => summed
       ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} />
       : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} /> : undefined;
@@ -440,7 +457,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const paused = editingPaused && editsProject && task.state === "queued";
     const stands = runIsActive(task) ? task.state === "waiting_for_user" ? <span className="unit-dot" aria-hidden />
         : paused ? <span className="unit-word" title={PAUSED_HINT}>Paused</span> : null
-      : ended ? <span className="unit-word">{ended.replace(/ · .*$/, "")}</span> : proposing ? <span className="unit-word">Suggestion</span> : null;
+      : ended ? <span className="unit-word">{ended}</span> : proposing ? <span className="unit-word">Suggestion</span> : null;
     // Scarlet works on several cuts or edits at once, an agent on each. The block that holds one of them says how many
     // there are, in the heading's place for where a request stands: each has its own row, and some may be out of view.
     const atOnce = actions.atOnce ?? 0;
@@ -448,27 +465,32 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       .some(r => aboutOne(r) && isWorking(r.task.state));
     const standing = stands ?? (among ? <span className="unit-word is-at-once" title={`Scarlet is working on ${atOnce} cuts or edits at the same time.`}>Working on {atOnce} at once</span> : null);
     const stop = stoppable(run) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
-    // A request that edits the video has its controls at the band's right for as long as Scarlet has it: Pause, which
-    // holds all editing in the project, then Resume once it is paused, which picks the paused work up first; and Stop,
-    // which ends just this one, paused or not. Each is an icon alone, named the moment the pointer rests on it.
+    // A request that edits the video has its controls at the band's right for as long as Scarlet has it: Stop, which
+    // ends just this one, paused or not; and, on one request in the whole chat, Pause, which holds all editing in the
+    // project, then Resume once it is paused, which picks the paused work up first. Each is an icon alone, named the
+    // moment the pointer rests on it.
     const hold = editingPaused
       ? () => { const runWith = resumeRunChoice(allTasks, effective); return attempt(run.root, runWith ? resumeEditing(projectId, runWith) : resumeEditing(projectId)); }
       : () => attempt(run.root, stopEditing(projectId));
-    const pause = <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
-      aria-description={editingPaused ? "Paused work picks up first, where it left off."
-        : "All editing in this project stops. Nothing new starts, and edits already made stay."}
-      // Pause becomes Resume in place: clicked, it lets go of the focus, so Space plays and can't press Resume.
-      onClick={letGo(hold)}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>;
-    // Pause holds all editing, so a block has it once, on its band: a request under one of its rows has Stop alone, and
-    // the band keeps Pause for as long as Scarlet is on any of them, also once the band's own request is done.
-    const pauseForNested = !inside && !!request && run === owner && runs.some(r => nested.has(r.root) && isProjectEditTask(r.task) && stoppable(r));
+    // Pause is the project's, so the chat draws it on one request only (`usePauseOn`): this one says whether it could.
+    // A request under a row of a folded block is out of sight, and offers nothing.
+    if (editsProject && stop && !hidden) {
+      (inside ? pauseOffer.rows : pauseOffer.bands).push(run.root);
+      if (isPinned) pauseOffer.pinnedBand = run.root;
+      if (inside && pinned === run.root) pauseOffer.pinnedRow = run.root;
+    }
     const editActions = editsProject && stop ?
       <div className="unit-actions">
-        {!(inside && ownerHeaded) && pause}
+        {pauseOn === run.root && <TipButton className="unit-pause-edit" tip={editingPaused ? "Resume editing" : "Pause editing"}
+          aria-description={editingPaused ? "Paused work picks up first, where it left off."
+            : "All editing in this project stops. Nothing new starts, and edits already made stay."}
+          // Pause becomes Resume in place: clicked, it lets go of the focus, so Space plays and can't press Resume.
+          onClick={letGo(hold)}><Icon name={editingPaused ? "play" : "pause"} size={13} /></TipButton>}
         <TipButton className="unit-stop-edit" tip="Stop this edit" aria-label={request ? `Stop this edit: ${request.text}` : "Stop this edit"}
-          aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div>
-      : pauseForNested ? <div className="unit-actions">{pause}</div> : undefined;
+          aria-description="What it already changed stays, and the next request can start." onClick={stop}><Icon name="stop" size={13} /></TipButton></div> : undefined;
     const requestControl = editActions ?? (!editsProject && stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>);
+    // Scarlet has a request under one of this block's rows: the band reads as the one it works on, on two lines.
+    const worksUnder = !inside && !!request && run === owner && runs.some(r => nested.has(r.root) && isProjectEditTask(r.task) && stoppable(r));
     // The request Scarlet is working on keeps its time and tokens in view, where they count up. Any other (finished,
     // stopped, waiting on the editor or its turn) and one under a row show them when the pointer rests on the heading:
     // under a row, the row and the line of what Scarlet is on say enough.
@@ -515,11 +537,12 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const markable = !!actions.mark;
     const marked = markable && actions.marked === thread.id;
     const pressable = markable || !!actions.fitTimeline;
-    // The arrow at the band's left folds the request to its heading, on one line, and opens it again. What is under the
-    // band stays mounted, so Scarlet's work goes on being read while it is out of sight.
-    const shut = !!request && !!actions.collapsed?.has(run.root);
+    // Folded, everything under the band is out of sight, so the band says what waits on the editor there: For you and
+    // how many calls or flagged edits still wait, and the dot for a question, its own or one under a row. Both when both.
+    const need = shut && run === owner ? forYou() : 0;
+    const asksUnder = shut && task.state !== "waiting_for_user" && below.some(({ run: about }) => about.task.state === "waiting_for_user");
     const block = <div key={run.root} className={`unit${shut ? " is-collapsed" : ""}`} data-run={run.root} data-pinned={isPinned || undefined}>
-      {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}${isWorking(task.state) || pauseForNested ? " is-live" : ""}`}
+      {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}${isWorking(task.state) || worksUnder ? " is-live" : ""}`}
         aria-current={marked || undefined} onClick={pressable ? e => {
           if ((e.target as Element).closest('button, a, input, textarea, [role="menu"]') || window.getSelection()?.toString()) return;
           if (markable) actions.mark!(thread.id);
@@ -529,7 +552,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
           aria-label={`${shut ? "Expand" : "Collapse"} this edit: ${request.text}`} onClick={() => actions.collapse!(run.root)}><Icon name="chevron" size={11} /></TipButton>}
         <span className="simple-who">You</span>
         <Said fixed lead={<>{(about ?? tag) && <span className="simple-revising">{about ?? tag}</span>}<MarkedFrameOnRequest projectId={projectId} task={task} /></>} text={request.text} />
-        <span className="unit-state">{standing}</span>{headingEnd}</div>}
+        <span className="unit-state">{standing}</span>
+        {asksUnder && <span className="unit-state"><span className="unit-dot" aria-hidden /></span>}
+        {need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>For you<span className="unit-need-count">{need}</span></span>}
+        {headingEnd}</div>}
       {bundle}
       {learnedIn(run).map(l => <LearnedLine key={l.id} learning={l} onReview={actions.reviewLearning} />)}
       {wrong}

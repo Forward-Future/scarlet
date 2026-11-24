@@ -5172,7 +5172,7 @@ it("keeps a second call Revising… when the first revised cut comes back, and d
   expect(approve).not.toHaveBeenCalled();
 });
 
-it("shows Scarlet on two calls at once: each row has its own actions, alongside project Stop", async () => {
+it("shows Scarlet on two calls at once: each row has its own Stop, and Pause is on a band, once", async () => {
   finishedPass();
   const cancelTask = vi.fn().mockResolvedValue(undefined);
   useProjectStore.setState({ cancelTask });
@@ -5188,11 +5188,12 @@ it("shows Scarlet on two calls at once: each row has its own actions, alongside 
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_aside", 2, { kind: "edit" as const, instruction: "Keep the aside.", ...started() })] }));
   await act(async () => {});
   expect(document.querySelector(".queue-row")).toBeNull();
-  // Pause holds all editing, so the block has it once, on its band. Each request under a row has Stop alone, and
-  // neither its time and tokens nor Scarlet's opening sentence: those show on hover. Nothing sits over the message box.
+  // Pause holds all editing, so the chat draws it once: on a request's band, and under neither row. Each request under
+  // a row has Stop alone, and neither its time and tokens nor Scarlet's opening sentence: those show on hover. Nothing
+  // sits over the message box.
   expect(container.querySelector(".queue-tray")).toBeNull();
   expect(container.querySelector(".subunit .unit-pause-edit")).toBeNull();
-  expect([...block().querySelectorAll(":scope > .unit-msg .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing"]);
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), !!b.closest(".unit-msg")])).toEqual([["Pause editing", true]]);
   expect([...container.querySelectorAll(".subunit .unit-actions")].map(a => [...a.querySelectorAll("button")].map(b => b.getAttribute("aria-label")?.replace(/:.*/, ""))))
     .toEqual([["Stop this edit"], ["Stop this edit"]]);
   expect([...container.querySelectorAll(".subunit .unit-tokens")].every(t => t.classList.contains("is-quiet"))).toBe(true);
@@ -7123,7 +7124,9 @@ it("shows cache progress on the Media button and offers Pause from More", async 
   expect(mediaButton().getAttribute("aria-description")).toBe("Caching 30%");
   expect(mediaButton().textContent).toBe("Media");
   await openMenu();
-  await click(menuItem("Pause"));
+  // The menu's row says what it pauses: the chat's own Pause, on a request's band, is for editing.
+  expect(menuItem("Pause")).toBeUndefined();
+  await click(menuItem("Pause media processing"));
   expect(updateProject).toHaveBeenCalledWith({ mediaPaused: true }, PRJ);
   expect(container.querySelector('[role="menu"]')).toBeNull();
 });
@@ -7207,7 +7210,8 @@ it("offers Resume from the Media hover card and More while media processing is p
   expect(mediaButton().getAttribute("aria-description")).toBe("Media processing is paused");
   expect(buttonIn(container.querySelector(".media-hover-card")!, "Resume")).toBeTruthy();
   await openMenu();
-  await click(menuItem("Resume"));
+  expect(menuItem("Resume")).toBeUndefined();
+  await click(menuItem("Resume media processing"));
   expect(updateProject).toHaveBeenCalledExactlyOnceWith({ mediaPaused: false }, PRJ);
 });
 
@@ -9232,7 +9236,7 @@ it("shows Scarlet's recheck of an approved cut under that call, with why and non
   expect(under!.textContent).not.toMatch(/keep|Kept the original delivery|The video changed|Recheck this cut/);
 });
 
-it("says where Scarlet's recheck stands once, at the right of its Auto heading, with Stop there while it runs and Pause on the band", async () => {
+it("says where Scarlet's recheck stands once, at the right of its Auto heading, with Stop there while it runs", async () => {
   finishedPass();
   data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? { ...c, cutReasons: STAGED.map(r => ({ start: r.start, end: r.end, reason: r.reason })) } : c) };
   useProjectStore.setState({ current: data });
@@ -9247,10 +9251,10 @@ it("says where Scarlet's recheck stands once, at the right of its Auto heading, 
   const heading = () => under().querySelector<HTMLElement>(":scope > .subunit-msg")!;
   const said = (words: string) => under().textContent!.split(words).length - 1;
   expect(heading().querySelector(".simple-revising.is-auto")?.textContent).toBe("Auto");
-  // While it runs its heading ends on Stop, as any request under a row does: Pause is on the block's band, and its
-  // active time shows on hover. No row under it holds them.
+  // While it runs its heading ends on Stop, as any request under a row does: Pause is the project's and is on a band,
+  // once, and its active time shows on hover. No row under it holds them.
   expect([...heading().querySelectorAll(":scope > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit"]);
-  expect([...under().closest(".unit")!.querySelectorAll(":scope > .unit-msg .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Pause editing"]);
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), !!b.closest(".unit > .unit-msg")])).toEqual([["Pause editing", true]]);
   expect(heading().lastElementChild?.className).toBe("unit-actions");
   expect(heading().querySelector(":scope > .unit-tokens > .run-work-time")).not.toBeNull();
   expect(under().querySelector(".req .req-right, .req .unit-actions, .req .run-stop")).toBeNull();
@@ -9353,7 +9357,7 @@ it("takes out a request about one cut that was picked up again and then changed 
   }
 });
 
-it("keeps a request about one cut in the conversation while it's paused for a transcript, with or without its cut revised", async () => {
+it("keeps a request about one cut in the conversation while it waits for a transcript, with or without its cut revised", async () => {
   finishedPass();
   await show();
   await act(async () => {});
@@ -9361,17 +9365,18 @@ it("keeps a request about one cut in the conversation while it's paused for a tr
   const waited = data.media.find(m => m.kind === "audio" && !m.transcriptId)!;
   const now = new Date().toISOString();
   await event(d => ({ ...d, tasks: [...d.tasks, callRequest("task_about", 0, { kind: "revise" as const, state: "done" as const, startedAt: now, finishedAt: now, needsTranscripts: [waited.id] })] }));
-  // Paused is stopped early: it stays under its call, says so at the right of the editor's words, and has its one action.
+  // Waiting for a transcript is stopped early: it stays under its call, says what it needs at the right of the editor's
+  // words, and has its one action. It doesn't say Paused: that is editing the editor paused, which Resume picks up.
   // No transcript is being made for it, so that action is the one that starts it.
   const about = () => container.querySelector<HTMLElement>('.subunit[data-run="task_about"]');
   const stands = () => [about()?.closest("li")?.querySelector(":scope > button .simple-pass-label")?.textContent,
     about()?.querySelector(".subunit-msg > .unit-state")?.textContent, about()?.querySelector(".run-wait button")?.textContent];
-  expect(stands()).toEqual([STAGED[0]!.reason, "Paused", "Transcribe"]);
-  // Paused with the cut already revised: the pass comes back with it, and the request is still there to finish.
+  expect(stands()).toEqual([STAGED[0]!.reason, "Needs transcript", "Transcribe"]);
+  // Waiting with the cut already revised: the pass comes back with it, and the request is still there to finish.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_about" ? { ...t, changeIds: ["chg_revised"] } : t),
     changes: [...d.changes.map(c => c.id === "chg_ready" ? { ...c, state: "rejected" as const, replacedBy: "chg_revised" } : c),
       { ...d.changes.find(c => c.id === "chg_ready")!, id: "chg_revised", taskId: "task_about", createdAt: new Date().toISOString() }] }));
-  expect(stands()).toEqual([STAGED[0]!.reason, "Paused", "Transcribe"]);
+  expect(stands()).toEqual([STAGED[0]!.reason, "Needs transcript", "Transcribe"]);
 });
 
 it("keeps the way to finish a request about one cut that is paused for a transcript, through later requests in the pass", async () => {
@@ -11807,6 +11812,35 @@ it("shows edit actions while working or asking, and a status once the request st
   expect(container.querySelector('.unit[data-run="task_done"] .simple-action-more')).toBeNull();
 });
 
+it("draws Pause once in the chat, on the request above the message box or else the lowest band, and Stop on every request", async () => {
+  const stopEditing = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ stopEditing });
+  await show();
+  const pauses = () => [...container.querySelectorAll<HTMLElement>(".unit-pause-edit")];
+  const held = () => [...container.querySelectorAll<HTMLElement>(".unit > .unit-msg")].filter(band => band.querySelector(".unit-stop-edit"));
+  const runsOf = (bands: HTMLElement[]) => bands.map(band => band.closest<HTMLElement>(".unit")!.dataset.run).sort();
+  // Scarlet works on one request and asks about another. Each has its own Stop.
+  expect(runsOf(held())).toEqual(["task_running", "task_waiting"]);
+  // Pause holds all editing in the project, so the chat has one: on the request fixed above the message box.
+  const pinned = container.querySelector<HTMLElement>(".simple-pin > .unit > .unit-msg")!;
+  expect(held()).toContain(pinned);
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Pause editing", pinned]]);
+  await click(pauses()[0]!);
+  expect(stopEditing).toHaveBeenCalledExactlyOnceWith(PRJ);
+  // Paused, both wait for Resume and neither is above the message box: Resume is on the lowest of their bands, once.
+  await event(d => ({ ...d, project: { ...d.project, editingPaused: true },
+    tasks: d.tasks.map(t => t.id === "task_running" || t.id === "task_waiting" ? { ...t, state: "queued" as const, question: null } : t) }));
+  await act(async () => {});
+  const inChat = [...container.querySelectorAll<HTMLElement>(".simple-chat .unit > .unit-msg")].filter(band => band.querySelector(".unit-stop-edit"));
+  expect([runsOf(held()), inChat.length]).toEqual([["task_running", "task_waiting"], 2]);
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Resume editing", inChat.at(-1)]]);
+  // The one that had it stopped: the other takes it, so there is always one while any request could hold it.
+  const last = inChat.at(-1)!.closest<HTMLElement>(".unit")!.dataset.run!;
+  await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === last ? { ...t, state: "cancelled" as const, finishedAt: new Date().toISOString() } : t) }));
+  await act(async () => {});
+  expect(pauses().map(b => [b.getAttribute("aria-label"), b.closest(".unit-msg")])).toEqual([["Resume editing", inChat[0]]]);
+});
+
 it("keeps where a request stands on the first line of its band's words, level with \"N need you\", however many lines they take", async () => {
   await withSimpleSheet(async () => {
     await show();
@@ -11897,6 +11931,8 @@ it("draws a revision of one applied edit under that edit's row, at work, and und
   // Its Stop is its own heading's last word, and the request that holds it has none: Scarlet isn't on that one.
   expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
   expect(owner().querySelector(":scope > .unit-msg > .unit-stop")).toBeNull();
+  // No band in the chat can hold Pause, so the request under the row does: there is still one, and only one.
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => [b.getAttribute("aria-label"), b.closest(".subunit")])).toEqual([["Pause editing", sub()]]);
   // Opened, the list has it directly under the row it revises, and that row's word moves while Scarlet works.
   await click(seeAll(owner())!);
   const row = sub().previousElementSibling as HTMLElement;
@@ -11938,6 +11974,9 @@ it("draws a revision of an edit under its row while the request that made it sti
   // Each has its own Stop: the request's in its band, the revision's on its own heading.
   expect(owner().querySelector(':scope > .unit-msg [aria-label^="Stop this edit"]')).not.toBeNull();
   expect(sub().querySelector('.subunit-msg > .unit-actions [aria-label^="Stop this edit"]')).not.toBeNull();
+  // Pause is the project's: one, on the band, and none under the row.
+  expect([...container.querySelectorAll(".unit-pause-edit")].map(b => b.closest(".unit-msg"))).toEqual([owner().querySelector(":scope > .unit-msg")]);
+  expect([...sub().querySelectorAll(".subunit-msg > .unit-actions button")].map(b => b.getAttribute("aria-label"))).toEqual(["Stop this edit: Make the captions bigger."]);
   expect(sub().querySelector('[aria-label="Scarlet’s work"] .working-text')).not.toBeNull();
   // Opened, the edit's row says it is being revised while the request goes on.
   await click(seeAll(owner())!);
@@ -13565,6 +13604,73 @@ it("folds a request to its heading with the arrow at the heading's left, and ope
   expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(true);
   await click(arrow("chg_approved_2"));
   expect(unit("chg_approved_2").classList.contains("is-collapsed")).toBe(false);
+});
+
+it("says on a folded request's band what waits on the editor under it: For you with its count, and the dot for a question", async () => {
+  appliedEdits();
+  idle();
+  const base = data.tasks.find(t => t.id === "task_done")!;
+  data = { ...data, tasks: [...data.tasks, { ...base, id: "task_made", kind: "edit" as const, instruction: "Tighten the wrap, add music and captions.",
+    context: { message: "Tighten the wrap, add music and captions." }, changeIds: ["chg_approved_2"] }] };
+  const thread = threadWith("chg_approved_2");
+  useProjectStore.setState({ current: data });
+  await withSimpleSheet(async () => {
+    await showFolded();
+    await act(async () => {});
+    const unit = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
+    const band = () => unit().querySelector<HTMLElement>(":scope > .unit-msg")!;
+    const fold = () => click(band().querySelector(".unit-fold")!);
+    /** The number on the request's For you tab, under the band. Folded, the tab is out of sight and still there. */
+    const tab = () => unit().querySelector(".simple-review-tab-count")?.textContent;
+    const need = () => band().querySelector(".unit-need");
+    const dotShows = () => [...band().querySelectorAll(".unit-state")].some(el => el.querySelector(".unit-dot") && styled(el, "display")[0] !== "none");
+    // Open, For you and its count are under the band, and the band says nothing of them.
+    expect(Number(tab())).toBeGreaterThan(0);
+    expect([need(), dotShows()]).toEqual([null, false]);
+    // Folded, everything under the band is out of sight, so the band says it: For you and the same count.
+    await fold();
+    expect(unit().classList.contains("is-collapsed")).toBe(true);
+    expect([need()?.textContent, need()?.querySelector(".unit-need-count")?.textContent, need()?.getAttribute("title")])
+      .toEqual([`For you${tab()}`, tab(), `${tab()} ${tab() === "1" ? "needs" : "need"} you`]);
+    expect(styled(need()!.querySelector(".unit-need-count")!, "color")).toEqual(styled(unit().querySelector(".simple-review-tab-count")!, "color"));
+    expect(band().querySelector(".unit-need button, .unit-need a")).toBeNull();
+    expect(dotShows()).toBe(false);
+    // Scarlet asks about one of its edits, under that edit's row: the folded band has the amber dot too, beside the count.
+    const now = new Date().toISOString();
+    await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_fix", kind: "edit" as const, state: "waiting_for_user" as const, summary: null, changeIds: [],
+      instruction: "Make the captions bigger.", question: "Bigger by how much?", createdAt: now, startedAt: now, finishedAt: undefined, expectedSeconds: undefined,
+      context: { threadId: thread.id, changeId: "chg_approved_2", editIndex: 1, time: 0.2, end: 2.4, message: "Make the captions bigger." } }],
+      taskEvents: { ...d.taskEvents, task_fix: [{ type: "question" as const, at: now, text: "Bigger by how much?" }] } }));
+    await act(async () => {});
+    expect(unit().querySelector('.subunit[data-run="task_fix"]')).not.toBeNull();
+    expect([unit().classList.contains("is-collapsed"), dotShows(), need()?.querySelector(".unit-need-count")?.textContent]).toEqual([true, true, tab()]);
+    // Opened again the band is as it was: the question and For you are under it.
+    await fold();
+    expect([unit().classList.contains("is-collapsed"), need(), dotShows()]).toEqual([false, null, false]);
+  });
+});
+
+it("says on a folded pass's band how many of its calls still wait, and keeps the dot for its own question beside the count", async () => {
+  finishedPass();
+  await withSimpleSheet(async () => {
+    await show();
+    await act(async () => {});
+    const unit = () => passCard().closest<HTMLElement>(".unit")!;
+    const band = () => unit().querySelector<HTMLElement>(":scope > .unit-msg")!;
+    const tab = () => unit().querySelector(".simple-review-tab-count")?.textContent;
+    const dot = () => { const el = band().querySelector<HTMLElement>(".unit-state:has(> .unit-dot)"); return el ? styled(el, "display")[0] !== "none" : false; };
+    expect(Number(tab())).toBeGreaterThan(0);
+    expect(band().querySelector(".unit-need")).toBeNull();
+    await click(band().querySelector(".unit-fold")!);
+    expect(band().querySelector(".unit-need")?.textContent).toBe(`For you${tab()}`);
+    // The pass's own request asks: open, the count under the band takes the dot's place; folded, the band has both.
+    const root = unit().dataset.run!;
+    await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === root ? { ...t, state: "waiting_for_user" as const, question: "Keep the cold open?", finishedAt: undefined } : t) }));
+    await act(async () => {});
+    expect([unit().classList.contains("is-collapsed"), dot(), band().querySelector(".unit-need-count")?.textContent]).toEqual([true, true, tab()]);
+    await click(band().querySelector(".unit-fold")!);
+    expect([unit().classList.contains("is-collapsed"), dot(), band().querySelector(".unit-need")]).toEqual([false, false, null]);
+  });
 });
 
 it("shows the whole timeline on any press on a request's band", async () => {
