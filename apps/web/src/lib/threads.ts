@@ -176,6 +176,8 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
   return edit ? { note, edit } : { note, changeId: change.id, call: index };
 }
 
+/** A run that failed with nothing more to say about it. Its block's own row says so, so the chat doesn't repeat it. */
+export const COULDNT_FINISH = "Scarlet couldn’t finish this edit.";
 /**
  * Why a run or a render failed, when what its host or model reported reads as a sentence the editor can act on ("You've
  * hit your usage limit"). A CLI that ended by itself reports its name and code, then the end of what it wrote: its last
@@ -190,8 +192,6 @@ export function failureReason(error: string | undefined): string | undefined {
   if (said.split(" ").length < 3 || said.length > 200 || trace || !readsPlain(said)) return undefined;
   return `${said.charAt(0).toUpperCase()}${said.slice(1)}${/[.!?…]$/.test(said) ? "" : "."}`;
 }
-/** A run that failed with nothing more to say about it. Its block's own row says so, so the chat doesn't repeat it. */
-export const COULDNT_FINISH = "Scarlet couldn’t finish this edit.";
 
 /** What the chat says of a run that failed or was stopped. */
 function failureText(t: Task, hasEdit: boolean) {
