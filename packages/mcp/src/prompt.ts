@@ -34,6 +34,22 @@ export interface LearningCheckContext {
   skills: Array<{ id: string; name: string; description: string }>;
 }
 
+/** One earlier request of the project's chat, as the editor read it. */
+export interface EarlierRequest {
+  /** The editor's words. */
+  asked: string;
+  /** The latest things Scarlet showed the editor while it worked, in order. */
+  told?: string[];
+  /** The latest questions Scarlet asked the editor, with their answers. */
+  answers?: Array<{ question: string; answer: string }>;
+  /** Scarlet's closing words. */
+  replied?: string;
+  /** The edits the request saved, each with its state. */
+  edits?: string[];
+  /** Where the request stands when it hasn't finished: waiting, running or stopped early. */
+  standing?: string;
+}
+
 export interface PromptContext {
   /** The project (settings + media) and its head timeline, or a pre-rendered summary string. */
   project: { project: Project; timeline: Timeline | null } | string;
@@ -47,6 +63,11 @@ export interface PromptContext {
   replacedPass?: string;
   /** Earlier question/answer pairs when the task was paused and resumed. */
   qa?: Array<{ question: string; answer: string }>;
+  /**
+   * The project's latest earlier requests, oldest first, each with what Scarlet told the editor. The chat shows them as
+   * one conversation, so the editor's words may refer to any of them.
+   */
+  earlier?: EarlierRequest[];
   skills: Skill[];
   /** The skill a skill_edit task revises. Such a task edits no video, so its prompt is about the skill alone. */
   editSkill?: Skill;
@@ -58,6 +79,8 @@ export interface PromptContext {
   listenCheck?: { mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string };
   /** The editor's setting for how many of a pass's cuts they are asked to check. Omitted = balanced. */
   checkIn?: CheckIn;
+  /** The editor's own words, from Settings, on how Scarlet writes to them. Omitted or empty = nothing added. */
+  talkingToYou?: string;
   /** Directory the agent may use for temp files; mentioned in the prompt. */
   workDir?: string;
   /** How long the host lets this run take, in minutes. Omitted when the host doesn't say. */
@@ -84,6 +107,11 @@ function styleGuideSection(guide: NonNullable<PromptContext["styleGuide"]>): str
   if (guide.path) lines.push(`It is in the ${fileKind(guide.mime, guide.path)} at ${guide.path}.`);
   if (guide.text?.trim()) lines.push(guide.path ? `What they wrote with it:\n\n${guide.text.trim()}` : guide.text.trim());
   return lines.join("\n\n");
+}
+
+/** The editor's own words on how Scarlet writes to them, from "Talking to you" in Settings. */
+function talkingToYouSection(words: string): string {
+  return `# How the editor wants you to write to them\n\nThe editor wrote this in Scarlet's settings for everything you write to them: what you say you will do, your updates, the reason on each edit, your questions and your closing sentences. It is about how you say things; where Scarlet shows your words and how long they can be, above, still holds.\n\n${words.trim()}`;
 }
 
 /**
@@ -113,10 +141,29 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 ## Writing for the editor
 
 - Before your first tool call, say in one sentence what the request will come to when you are done, such as “I’ll take the retakes, false starts and dead air out of the interview and bring you any cut I’m unsure of.” Scarlet keeps that sentence above your steps for as long as you work, so it is about the whole request, not your first step.
-- After that sentence, while you work, Scarlet shows your latest update whole as what you are doing, on two lines, until your next tool call: one sentence of at most 100 characters on what you are doing now. A longer update is cut off there.
+- After that sentence, while you work, Scarlet shows your latest update whole as what you are doing, on two lines, until your next tool call: one sentence of at most 100 characters on what you are doing now. A longer update is cut off there. Updates leave the chat when you finish: afterwards the editor reads your closing sentences and the edits listed under the request, so what they asked for is never only in an update.
 - Always save why you made each edit, even when the editor asked for the exact change. Scarlet shows the short summary of what changed in the chat and the reason on the card above the timeline. For example, “Zoomed in on the score” in the chat and “So viewers can read the score as you say it” on the card. Ground the reason in the footage, the editorial goal or the editor’s request. For an exact request, a short reference to that request is enough. Write the reason as you would say it to the editor beside them: everyday words, “you” for them, what they will hear named by the words said (“your first try”, “the second time you say it”), never your own terms for the footage (delivery, take, start, surviving, edge, join). For a cut that waits on them, say in one or two short sentences what you chose and what might make them choose otherwise: “Your second try says the whole thing, so I took out the first. The first makes it clearer the model did the bug squash, so check the second still does.”, not “The second line gives the full task. Check who does the bug pass in the surviving delivery.” Add \`check\` only when a doubt is left for the editor to settle by listening or looking. Any doubt you leave about an edit goes on that edit: \`check\` as you save it, or \`edit_flag\` once it is in the video, an earlier request’s edit included. The flag holds the edit among those that need the editor until they keep it. A doubt about something you leave in, such as a restart that may not be meant, reaches the editor the same way, as an edit they can approve or skip: in a dialogue pass, a cut staged for review.
-- End with one or two short, plain sentences that sum up at the highest level what you did to the video, as you would tell the editor in person, such as “Tightened the talk to 10:29 and punched in on each demo.” Scarlet shows them first under the request, on two lines of about 120 characters, and folds the rest away until the editor clicks. Nothing you want the editor to look at, listen to or decide goes in them: they reach what needs them from For you, which lists edits only, so each doubt goes on its edit (\`check\` or \`edit_flag\`) and a decision you need goes to \`task_question\`. No times, edit numbers or lists. A request you finish without an edit says why in those sentences.
+- Keep every card short, simple and easy to read at a glance — one or two plain sentences as you would say them out loud, never a technical spec. Leave timestamps (\`2:26.0–2:57.0\`), durations (\`~31 s\`), \`Covers "..."\` prefixes, parenthetical tags (\`(with camera inset, ...)\`), arrow chains (\`→\`), beat-by-beat scripts, and production shorthand (\`3-stage\`, \`4-beat\`, \`archival/stock\`) off the card: the card already sits over that exact spot on the timeline. For a \`todo\` marker (\`addMarker\` with \`kind: "todo"\`), the marker’s text is what the card asks of the editor: write one short, plain sentence describing what to show or add, and keep the edit’s \`reason\` to one brief sentence on why without repeating the marker’s text.
+- End with one or two short, plain sentences that sum up at the highest level what you did to the video, as you would tell the editor in person, such as “Tightened the talk to 10:29 and punched in on each demo.” Scarlet shows them first under the request, on two lines of about 120 characters, and folds the rest away until the editor clicks. Nothing you want the editor to look at, listen to or decide goes in them: they reach what needs them from For you, which lists edits only, so each doubt goes on its edit (\`check\` or \`edit_flag\`) and a decision you need goes to \`task_question\`. No times, edit numbers or lists, and no Markdown: Scarlet shows them as plain text. When the editor asks for ideas at places in the video and not yet for the work itself, a list of them included (B-roll to add and where, spots for a graphic), each idea is a \`todo\` marker at its place (\`addMarker\` in \`timeline_propose\`) that says what you would do there, so For you lists them and each opens on the timeline; the sentences only say you left them. What the editor asks you to find or check at places in the video is listed the same way, one edit a place, each opening on the timeline: where an edit or a marker is already at the place, what you found goes on it (a revision that \`replaces\` it, or \`edit_flag\` when nothing about it changes), and otherwise a \`todo\` marker there says it. A web address the editor needs is written out in full, on the edit at its place or, when it has no place in the video, in your closing sentences: Scarlet makes it a link. A request you finish without an edit says why in those sentences.
 - Give times as m:ss.t on the timeline the editor will watch. Don’t mention source seconds, clip IDs, version IDs, tool names or operations. Say “edit” for a change, and “cut” only for an edit that removes footage.`;
+
+/**
+ * The chat before this request. Each message reached the model alone, so "tell me the timestamps", sent after Scarlet
+ * had found two clips, was answered about a sponsor read: nothing said which clips (2026-11-23).
+ */
+function earlierInChat(earlier: PromptContext["earlier"]): string[] {
+  if (!earlier?.length) return [];
+  const under = (text: string) => text.trim().replace(/\n+/g, "\n   ");
+  const blocks = earlier.map((r, i) => [
+    `${i + 1}. The editor asked: "${under(r.asked)}"`,
+    ...(r.told ?? []).map(t => `   You told them: ${under(t)}`),
+    ...(r.answers ?? []).map(p => `   You asked them: "${under(p.question)}"\n   They answered: "${under(p.answer)}"`),
+    ...(r.replied?.trim() ? [`   You closed with: ${under(r.replied)}`] : []),
+    ...(r.edits?.length ? [`   Edits it saved: ${r.edits.join("; ")}`] : []),
+    ...(r.standing ? [`   ${r.standing}`] : []),
+  ].join("\n"));
+  return [`# Earlier in this chat\n\nThe editor reads their requests in this project as one conversation with you, so their words now may refer to an earlier request or to what you told them. These are the latest, oldest first.\n\n${blocks.join("\n")}`];
+}
 
 /** Earlier question/answer pairs, for a run that starts again after the editor answered. */
 function earlierAnswers(qa: PromptContext["qa"]): string[] {
@@ -282,7 +329,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   if (ctx.workDir && caps.files && caps.shell) {
     // A request launched with its harness's own tools. What to use them for is the model's call; that B-roll and graphics
     // are the editor's to ask for is the editor's standing word (2026-11-21), said here once.
-    parts.push(`Your task artifact directory is: ${ctx.workDir}\nBeside Scarlet's tools you have your harness's own: a shell, sandboxed to this task's folder, with ffmpeg and ffprobe on its PATH where this machine has them, file tools${caps.web ? ", and web search" : ""}. Use them for what Scarlet's tools don't give: a file built for the edit, something looked up. \`web_capture\` takes the picture of a page on the web, \`graphic_render\` draws a page you write, and \`asset_add\` brings a finished file into the project, with \`source\` for anything taken from the web. The project's footage and the video are read through Scarlet's tools: the shell can't reach them. B-roll and graphics are made when the editor asked for them, in their words or in a skill of theirs, never on your own initiative.`);
+    parts.push(`Your task artifact directory is: ${ctx.workDir}\nBeside Scarlet's tools you have your harness's own: a shell, sandboxed to this task's folder, with ffmpeg and ffprobe on its PATH where this machine has them, file tools${caps.web ? ", and web search" : ""}. Use them for what Scarlet's tools don't give: a file built for the edit, something looked up. \`web_capture\` takes the picture of a page on the web, \`web_video\` reads a video on the web and saves a part of it, \`graphic_render\` draws a page you write, and \`asset_add\` brings a finished file into the project, with \`source\` for anything taken from the web. The project's footage and the video are read through Scarlet's tools: the shell can't reach them. B-roll and graphics are made when the editor asked for them, in their words or in a skill of theirs, never on your own initiative.`);
   } else if (ctx.workDir && caps.files) {
     parts.push(`Your task artifact directory is: ${ctx.workDir}\n\`asset_add\` imports a graphic, animation or music bed you made there, with how you made it.`);
   }
@@ -292,7 +339,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   }
 
   // Project summary. A long timeline lists only the clips near where the request points, if it points anywhere.
-  const summary = typeof ctx.project === "string" ? ctx.project : summarizeProject(ctx.project.project, ctx.project.timeline, { most: PROMPT_CLIPS, near: requestRange(ctx.task) });
+  const summary = typeof ctx.project === "string" ? ctx.project : summarizeProject(ctx.project.project, ctx.project.timeline, { most: PROMPT_CLIPS, near: requestRange(ctx.task), requestedAt: ctx.task?.createdAt });
   parts.push(`# Project\n\n${summary}`);
 
   // Task
@@ -403,7 +450,10 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     parts.push(`# Your task\n\n${lines.join("\n")}`);
   }
 
+  parts.push(...earlierInChat(ctx.earlier));
+
   if (ctx.styleGuide) parts.push(styleGuideSection(ctx.styleGuide));
+  if (ctx.talkingToYou?.trim()) parts.push(talkingToYouSection(ctx.talkingToYou));
 
   // Notes
   if (ctx.notes?.length) {

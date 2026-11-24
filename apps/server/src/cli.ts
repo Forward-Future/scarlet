@@ -52,6 +52,7 @@ Environment: SCARLET_PORT, SCARLET_DATA, SCARLET_SKILLS_SEED,
              SCARLET_HOST (bind address, default 127.0.0.1),
              OPENAI_API_KEY (transcription + note cleanup), ANTHROPIC_API_KEY / GEMINI_API_KEY (note cleanup),
              FFMPEG_PATH / FFPROBE_PATH,
+             YT_DLP_PATH (a yt-dlp to read videos on the web with, in place of the one Scarlet fetches),
              SCARLET_TELEMETRY_ENABLED (false turns off anonymous usage reports; see docs/telemetry.md)`;
 
 async function runMcp(argv: string[]) {

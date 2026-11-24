@@ -277,7 +277,7 @@ describe("an editing prompt", () => {
   it("tells a request what its harness's own tools are for, and that B-roll and graphics are the editor's to ask for", () => {
     const prompt = buildSystemPrompt({ ...base, workDir: "/work/task_1/artifacts", capabilities: { images: true, audio: false, files: true, shell: true, web: true, plan: false } });
     expect(prompt).toContain("Your task artifact directory is: /work/task_1/artifacts\nBeside Scarlet's tools you have your harness's own: a shell, sandboxed to this task's folder, with ffmpeg and ffprobe on its PATH where this machine has them, file tools, and web search.");
-    expect(prompt).toContain("`web_capture` takes the picture of a page on the web, `graphic_render` draws a page you write, and `asset_add` brings a finished file into the project, with `source` for anything taken from the web.");
+    expect(prompt).toContain("`web_capture` takes the picture of a page on the web, `web_video` reads a video on the web and saves a part of it, `graphic_render` draws a page you write, and `asset_add` brings a finished file into the project, with `source` for anything taken from the web.");
     expect(prompt).toContain("B-roll and graphics are made when the editor asked for them, in their words or in a skill of theirs, never on your own initiative.");
     // A run launched with Scarlet's tools only is told nothing of a shell.
     expect(buildSystemPrompt({ ...base, workDir: "/work/task_1/artifacts", capabilities: { images: true, audio: false, files: false, plan: false } })).not.toContain("shell");
@@ -313,5 +313,37 @@ describe("stripFrontmatter", () => {
     expect(stripFrontmatter("---\r\nname: a\r\n---\r\nBody")).toBe("Body");
     expect(stripFrontmatter("Body\n---\nnot: frontmatter\n---\n")).toBe("Body\n---\nnot: frontmatter\n---\n");
     expect(stripFrontmatter("---\nnever closed")).toBe("---\nnever closed");
+  });
+});
+
+describe("the chat before a request", () => {
+  const task = { kind: "edit" as const, instruction: "tell me the timestamps", agent: "claude" as const, context: {} };
+
+  it("follows the task with the earlier requests, oldest first, each with what Scarlet told the editor", () => {
+    const prompt = buildSystemPrompt({ project: "", skills: [], task, earlier: [
+      { asked: "find both of those clips", told: ["Kontorovich: https://example.com/a\n\nEllenberg: https://example.com/b"], replied: "Found both. The links are above." },
+      { asked: "even out the levels", answers: [{ question: "Which clip?", answer: "The sponsor read" }], edits: ['"Evened the level" (change chg_1, applied)'], standing: "It hasn’t finished yet." },
+    ] });
+    expect(prompt).toContain([
+      "# Earlier in this chat",
+      "",
+      "The editor reads their requests in this project as one conversation with you, so their words now may refer to an earlier request or to what you told them. These are the latest, oldest first.",
+      "",
+      '1. The editor asked: "find both of those clips"',
+      "   You told them: Kontorovich: https://example.com/a",
+      "   Ellenberg: https://example.com/b",
+      "   You closed with: Found both. The links are above.",
+      '2. The editor asked: "even out the levels"',
+      '   You asked them: "Which clip?"',
+      '   They answered: "The sponsor read"',
+      '   Edits it saved: "Evened the level" (change chg_1, applied)',
+      "   It hasn’t finished yet.",
+    ].join("\n"));
+    expect(prompt.indexOf("# Your task")).toBeLessThan(prompt.indexOf("# Earlier in this chat"));
+  });
+
+  it("adds nothing to a request with no chat before it", () => {
+    expect(buildSystemPrompt({ project: "", skills: [], task, earlier: [] })).toBe(buildSystemPrompt({ project: "", skills: [], task }));
+    expect(buildSystemPrompt({ project: "", skills: [], task })).not.toContain("# Earlier in this chat");
   });
 });

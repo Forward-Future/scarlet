@@ -568,6 +568,25 @@ describe("listing a thread's edits in the chat", () => {
     // A revision's card says what the revision did, not what the edit it replaced did.
     expect(listed[1]!.summary).toBeUndefined();
   });
+
+  it("keeps an edit that a revision only trimmed inside listed as that edit, not as a cut at its end", () => {
+    // Scarlet inserted a sponsor segment, then took a black frame off its end and named the segment again: the
+    // request's one edit left the list, and the chat had no edit to open (2026-11-23).
+    const v0 = { ...timelineFromKeepRanges("project", "interview", [{ start: 0, end: 200 }]), version: "v0" };
+    const v1 = { ...v0, version: "v1" };
+    const v2 = { ...timelineFromKeepRanges("project", "interview", [{ start: 0, end: 100.5 }, { start: 100.6, end: 200 }]), version: "v2" };
+    const versions = { v0, v1, v2 };
+    const history = [{ version: "v0", parent: null }, { version: "v1", parent: "v0" }, { version: "v2", parent: "v1" }];
+    const inserted = { ...change, id: "insert", fromVersion: "v0", toVersion: "v1",
+      timelineEdits: [{ label: "SpaceX integration", range: { start: 40, end: 100.6 }, summary: "Inserted the SpaceX integration" }] };
+    const trim = { ...change, id: "trim", fromVersion: "v1", toVersion: "v2", createdAt: "2026-01-02T00:00:00Z",
+      description: "Removed a black frame at the end of the SpaceX integration", ops: [{ op: "rippleDelete", start: 100.5, end: 100.6 }],
+      timelineEdits: [{ label: "SpaceX integration", range: { start: 40, end: 100.5 }, summary: "Inserted the SpaceX integration",
+        replaces: { changeId: "insert", spot: 0 } }] };
+    const edits = threadTimeline(thread([Change.parse(inserted), Change.parse(trim)]), v2, history, version => versions[version as keyof typeof versions], 30);
+    expect(edits.map(e => [e.changeId, e.label, e.range, e.beforeCut])).toEqual([["trim", "SpaceX integration", { start: 40, end: 100.5 }, undefined]]);
+    expect(edits[0]!.kind).not.toBe("cut");
+  });
 });
 
 describe("a doubt a later request raises about an edit already in the video", () => {

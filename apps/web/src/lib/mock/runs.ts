@@ -69,7 +69,7 @@ export async function applyChange(store: MockStore, changeId: string, spots?: nu
   const project = store.projectById(change.projectId);
   if (change.state === "approved") {
     if (restoredCuts && [...restoredCuts].sort().join(",") !== change.restoredCuts?.slice().sort().join(",")) {
-      throw new Error("This proposal was already approved with different choices.");
+      throw new Error("This pass already went in with different calls.");
     }
     return { change, project, outcome: "applied" };
   }

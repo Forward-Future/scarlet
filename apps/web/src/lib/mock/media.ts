@@ -51,6 +51,20 @@ export function removeMedia(store: MockStore, projectId: string, mediaId: string
 }
 
 /** Choose which audio track of a multi-track recording Scarlet reads. */
+export function setMediaNote(store: MockStore, mediaId: string, note: string) {
+  for (const [projectId, list] of Object.entries(store.db.media)) {
+    const current = list.find(m => m.id === mediaId);
+    if (!current) continue;
+    const { editorNote: _old, ...rest } = current;
+    const text = note.trim();
+    const updated: MediaAsset = { ...rest, ...(text && { editorNote: text }) };
+    replaceMedia(store, projectId, updated);
+    store.emit({ type: "media.updated", projectId, media: updated });
+    return { media: updated };
+  }
+  throw notFound("Media");
+}
+
 export function setMediaAudioTrack(store: MockStore, mediaId: string, audioTrack: AudioTrackSelection) {
   for (const [projectId, list] of Object.entries(store.db.media)) {
     const current = list.find(m => m.id === mediaId);
