@@ -22,6 +22,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - An undo or a rejected edit that went through no longer says it failed, or leaves the old cut on screen, when the new timeline takes a moment to load: Scarlet loads it again by itself.
 - ⌘Z on a revision whose version you've applied since no longer stops Scarlet's work on it while saying it couldn't undo it.
 - A project's card in the library now flips through its footage on hover after its video finishes importing, and after Scarlet's engine restarts, instead of staying on its poster until Scarlet is reopened.
+- Rewording a rule in Learnings with a Japanese, Chinese or Korean keyboard no longer throws away what you wrote when you press Esc or Enter to finish a word.
 - Typing a note in Media with a Japanese, Chinese or Korean keyboard no longer saves it, or closes it, when you press Enter or Esc to finish a word.
 - Moving the end of a marked range with → near the end of the video no longer pushes it past the end, where its handle disappeared and the arrows stopped working.
 - M, or a marking tool, pressed while the video plays now pauses it and starts marking that frame, instead of only pausing.
