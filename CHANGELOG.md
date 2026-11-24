@@ -130,6 +130,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
 - Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
 - An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
+- Searching the Transcript now finds a word with an apostrophe in it whether it was written with a straight or a curly one, so “Wendy’s” finds “Wendy's” and “don't” finds “don’t”.
 
 ## November 22, 2026
 
