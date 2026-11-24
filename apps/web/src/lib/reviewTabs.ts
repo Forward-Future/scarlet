@@ -35,21 +35,53 @@ export function rowsOfTab<R extends { place: RowPlace; at: number; num?: number 
   return tab === "you" ? [...of("you"), ...(optionalOpen ? of("optional") : [])] : of(tab);
 }
 
+/** Where a row is in its list when it isn't one of the list's rows: by number in a list that goes by numbers, else by time. */
+function fromHere<R extends { at: number; num?: number }>(list: readonly R[], where: { at: number; num?: number }, order: ListOrder) {
+  const byNumber = !!order?.numbers && where.num !== undefined && list.every(r => r.num !== undefined);
+  return (r: R) => byNumber ? r.num! - where.num! || r.at - where.at : r.at - where.at;
+}
+
 /**
- * The row ↑ or ↓ reaches from `current` in `list`. A row that isn't in the list (the tab shown doesn't hold it) steps
- * to the one after or before where it is in the video.
+ * The row ↑ or ↓ reaches from `current` in `list`. From a row that isn't in the list (the tab shown doesn't hold it,
+ * or it has just left) they step to the row after or before `where` it is.
  */
-export function rowBeside<R extends { at: number }>(list: readonly R[], current: R | undefined, at: number, delta: number): R | undefined {
+export function rowBeside<R extends { at: number; num?: number }>(list: readonly R[], current: R | undefined, where: { at: number; num?: number }, delta: number, order: ListOrder): R | undefined {
   const here = current ? list.indexOf(current) : -1;
   if (here >= 0) return list[here + delta];
-  return delta > 0 ? list.find(r => r.at >= at) : list.findLast(r => r.at < at);
+  const after = fromHere(list, where, order);
+  return delta > 0 ? list.find(r => after(r) >= 0) : list.findLast(r => after(r) < 0);
 }
 
 /** Where Keep goes from `current`: the next row of `list` after it, wrapping to the earlier ones. */
-export function rowAfter<R extends { at: number }>(list: readonly R[], current: R | undefined, at: number): R | undefined {
+export function rowAfter<R extends { at: number; num?: number }>(list: readonly R[], current: R | undefined, where: { at: number; num?: number }, order: ListOrder): R | undefined {
   const here = current ? list.indexOf(current) : -1;
   if (here >= 0) return list[here + 1] ?? (here > 0 ? list[0] : undefined);
-  return list.find(r => r.at > at) ?? list[0];
+  const after = fromHere(list, where, order);
+  return list.find(r => after(r) > 0) ?? list[0];
+}
+
+/**
+ * One stop of a request's lists as ↑ ↓ and Keep go through them: a row of edits (one edit, an edit made in several
+ * places, a moment) or a call. A rejected edit is neither: it is counted for how its list is ordered, and stepped past.
+ */
+export type ReviewStop<E, C> = { place: RowPlace; at: number; num?: number; row?: readonly E[]; call?: C };
+
+/** A request's stops, in the order its lists are built from: its rows of edits, its calls, then what was rejected. */
+export function reviewStops<E extends { at?: number; range: { start: number } }, C>(of: {
+  rows: readonly (readonly E[])[]; place(row: readonly E[]): RowPlace; num?(edit: E): number | undefined;
+  calls?: readonly { call: C; at: number; num?: number; place: RowPlace }[];
+  gone?: readonly { at: number; num?: number }[];
+}): ReviewStop<E, C>[] {
+  return [
+    ...of.rows.map(row => ({ row, place: of.place(row), at: Math.min(...row.map(e => e.at ?? e.range.start)), num: row.length === 1 ? of.num?.(row[0]!) : undefined })),
+    ...(of.calls ?? []),
+    ...(of.gone ?? []).map(gone => ({ ...gone, place: "done" as const })),
+  ];
+}
+
+/** The stops of the tab shown that ↑ and ↓ step through, top to bottom as the chat lists them. */
+export function stopsShown<E, C>(stops: readonly ReviewStop<E, C>[], open: string | undefined, order: ListOrder) {
+  return rowsOfTab(stops, tabShown(open), open === "all", order).filter(stop => !!stop.row || !!stop.call);
 }
 
 /** How long a row the editor has just acted on stays in For you with its new word, and how long it then takes to fade. */

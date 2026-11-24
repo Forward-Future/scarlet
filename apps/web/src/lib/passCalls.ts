@@ -75,9 +75,9 @@ function nextInTime<C>(stops: Stop<C>[], from: number) {
   return (stops.find(n => n.at > from || (n.at === from && n.after)) ?? stops[0])?.next;
 }
 
-/** Where Keep goes from an edit on `rows[shown]` in the full ("See all") list: the next row of the list in time order,
- * past the shown one and wrapping to earlier ones, with an edit that `still` waits or a call that does. A row is
- * one edit made in several places (or a moment), and goes by its first place that still waits. */
+/** Where Keep goes from an edit on `rows[shown]` in a request's one list of every edit: the next row of the list in
+ * time order, past the shown one and wrapping to earlier ones, with an edit that `still` waits or a call that does. A
+ * row is one edit made in several places (or a moment), and goes by its first place that still waits. */
 export function keepGoesTo<C>(rows: readonly (readonly ThreadEdit[])[], shown: number, still: (e: ThreadEdit) => boolean,
   calls: readonly { call: C; at: number }[]): { edit: ThreadEdit } | { call: C } | undefined {
   const here = rows[shown];
@@ -92,39 +92,14 @@ export function keepGoesTo<C>(rows: readonly (readonly ThreadEdit[])[], shown: n
   ], from);
 }
 
-/** Where Approve or Skip goes from a call in the full ("See all") list: the next row in time order, past the decided
- * call at `from` and wrapping to earlier ones, whether it is an edit that `still` waits or another call that does. */
-export function callGoesTo<C>(rows: readonly (readonly ThreadEdit[])[], still: (e: ThreadEdit) => boolean,
-  calls: readonly { call: C; at: number; after: boolean }[], from: number): { edit: ThreadEdit } | { call: C } | undefined {
-  return nextInTime([
-    ...rows.flatMap(row => {
-      const edit = row.find(still);
-      return edit ? [{ at: rowAt(row), after: false, next: { edit } }] : [];
-    }),
-    ...calls.map(c => ({ at: c.at, after: c.after, next: { call: c.call } })),
-  ], from);
-}
-
-/**
- * The full ("See all") list of a pass that waits, as ↑ and ↓ step through it: its edits' rows and its calls together,
- * in time order as the chat lists them. An edit and a call at the same time list the edit first.
- */
-export function seeAllOrder<C>(rows: readonly (readonly ThreadEdit[])[], calls: readonly { call: C; at: number }[]): ({ row: readonly ThreadEdit[] } | { call: C })[] {
-  const stops: { at: number; stop: { row: readonly ThreadEdit[] } | { call: C } }[] = [
-    ...rows.map(row => ({ at: rowAt(row), stop: { row } })),
-    ...calls.map(c => ({ at: c.at, stop: { call: c.call } })),
-  ];
-  return stops.sort((a, b) => a.at - b.at).map(s => s.stop);
-}
-
 export type PassForYouItem<C, E extends Omit<ThreadEdit, "at"> = ThreadEdit> =
   | { kind: "call"; call: C; at: number; num?: number; waiting: boolean }
   | { kind: "edit"; edit: E; at: number; num?: number; waiting: boolean };
 
 /**
- * The waiting pass's "For you" items in the exact top-to-bottom order `PassSummary` displays them:
- * by stable publication number (`num`) when any call carries `askOrder`, else by timeline position (`at`).
- * Pre-sorting by `at` matches `PassSummary` on any ties.
+ * The waiting pass's calls and flagged edits, decided or not, in the order they reached the editor: by stable
+ * publication number (`num`) when any call carries `askOrder`, else by timeline position (`at`). For you lists the
+ * ones that still wait in this order.
  */
 export function passForYouOrder<C, E extends Omit<ThreadEdit, "at">>(
   calls: readonly { call: C; at: number; num?: number; waiting: boolean }[],
@@ -137,20 +112,6 @@ export function passForYouOrder<C, E extends Omit<ThreadEdit, "at">>(
   ].sort((a, b) => a.at - b.at);
   if (byNumber) items.sort((a, b) => (a.num ?? Infinity) - (b.num ?? Infinity));
   return items;
-}
-
-/**
- * Where Keep / Approve / Skip goes from item `current` in a waiting pass's "For you" list:
- * the next waiting item after `current` in list order, wrapping to earlier items if none follow.
- */
-export function nextWaitingInForYou<C, E extends Omit<ThreadEdit, "at">>(
-  items: readonly PassForYouItem<C, E>[],
-  current: number,
-): { call: C } | { edit: E } | undefined {
-  if (current < 0) return undefined;
-  const next = items.slice(current + 1).find(item => item.waiting)
-    ?? items.slice(0, current).find(item => item.waiting);
-  return next ? (next.kind === "call" ? { call: next.call } : { edit: next.edit }) : undefined;
 }
 
 /**
