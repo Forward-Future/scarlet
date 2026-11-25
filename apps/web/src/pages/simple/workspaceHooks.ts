@@ -6,7 +6,8 @@ import { api, errorMessage, UNEXPLAINED } from "../../lib/client";
 import { editKindWord } from "../../lib/editKind";
 import type { Moment } from "../../lib/editMoments";
 import { distinctClock, parseTimestamp } from "../../lib/format";
-import { ignorePageShortcut, isAltClearRangeKey, isComposing, isEditableTarget } from "../../lib/hotkeys";
+import { ignorePageShortcut, isComposing, isEditableTarget, matchesClearRangeKey } from "../../lib/hotkeys";
+import { matchesShortcut } from "../../stores/shortcuts";
 import { editKey, keepEdits } from "../../lib/keptEdits";
 import { needNumbers } from "../../lib/needNumbers";
 import { savedChoices, type Call, type CutChoice } from "../../lib/passCalls";
@@ -18,7 +19,7 @@ import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
 import type { Thread } from "../../lib/threads";
 import { marksTakeEscape } from "../../components/player/PictureMarks";
-import { inFullScreen, KEPT_TIMELINES, LANDING_SETTLES, LANDING_SHOWS, stepOf, type Panel } from "./types";
+import { inFullScreen, KEPT_TIMELINES, LANDING_SETTLES, LANDING_SHOWS, type Panel } from "./types";
 
 /**
  * The timelines a pass's cuts are carried across. Each working cut the window shows is kept as it goes by, so the
@@ -322,10 +323,10 @@ export function useEditCardShortcuts(active: boolean, stepEdit: (delta: number) 
   editKeys.current = { stepEdit, closeEdit };
   useEffect(() => {
     if (!active) return;
-    // Capture phase, so ↑ and ↓ step between edits before anything else takes them. ← and → pass through to the player.
+    // Capture phase, so previous/next edit keys (↑ and ↓ by default) step between edits before anything else takes them. ← and → pass through to the player.
     const onKey = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e) || e.shiftKey) return;
-      const step = stepOf(e.key);
+      if (ignorePageShortcut(e)) return;
+      const step = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
       if (step) {
         e.preventDefault();
         if (!e.repeat) editKeys.current.stepEdit(step);
@@ -352,9 +353,9 @@ export function useCallCardShortcuts(reviewKeysOn: boolean, hasPass: boolean, st
   useEffect(() => {
     if (!reviewKeysOn) return;
     const onKey = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e) || e.shiftKey) return;
+      if (ignorePageShortcut(e)) return;
       const keys = reviewKeys.current;
-      const step = stepOf(e.key);
+      const step = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
       // With no call to step to, the arrows stay the player's: a pass still running, or one with nothing to ask. They
       // stay the player's while a suggestion is on its card too: no key acts on a call that isn't on screen.
       if (hasPass && !keys.suggestion && step && keys.calls) {
@@ -413,7 +414,7 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
       const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
       const escape = plain && e.key === "Escape";
       const erase = plain && !e.shiftKey && (e.key === "Delete" || e.key === "Backspace");
-      const clearInOut = isAltClearRangeKey(e);
+      const clearInOut = matchesClearRangeKey(e);
       if (!escape && !erase && !clearInOut) return;
       if ((escape && inFullScreen()) || marksTakeEscape(e)) return;
       e.preventDefault();
