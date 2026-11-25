@@ -90,17 +90,18 @@ export function stopsShown<E, C>(stops: readonly ReviewStop<E, C>[], open: strin
   return rowsOfTab(stops, tabShown(open), open === "all", order).filter(stop => !!stop.row || !!stop.call);
 }
 
-/** How long a row the editor has just acted on stays in For you with its new word, and how long it then takes to fade. */
+/** How long a row the editor has just acted on stays where it was with its new word, and how long it then takes to fade. */
 export const LINGER_MS = 2500;
 export const LINGER_FADE_MS = 300;
 
-type Held = { key: string; from: "you" | "optional"; leaving: boolean; timers: ReturnType<typeof setTimeout>[] };
+export type HeldFrom = "you" | "optional" | "done";
+type Held = { key: string; from: HeldFrom; leaving: boolean; busy: boolean; timers: ReturnType<typeof setTimeout>[] };
 
 /**
  * The rows the editor has just acted on. Kept, rejected or sent back, a row of For you belongs to Done or Working at
- * once, and stays where it was for a moment with its new word before it fades and leaves, so the list doesn't jump
- * under the pointer. Held by the turn, which outlives its block moving between the conversation and the place above
- * the message box.
+ * once, and one sent back from Done belongs to Working at once; either stays where it was for a moment with its new
+ * state before it fades and leaves, so the list doesn't jump under the pointer. Held by the turn, which outlives its
+ * block moving between the conversation and the place above the message box.
  */
 export class ReviewLinger {
   private places = new Map<string, RowPlace>();
@@ -126,27 +127,52 @@ export class ReviewLinger {
 
   /**
    * Where each row is now. One that was listed in For you (`optionalShown`: its optional rows were too) and has gone
-   * to Working or Done is held. `was` names the rows it took the place of: a rejected edit is a new row for the old.
-   * Called as the list draws, so a row that has just moved is still in the list in that same draw.
+   * to Working or Done is held. One that was in Done (`doneShown`: Done is shown, or it was still held in For you as
+   * kept/done) and has gone to Working is held where it is so it shows Scarlet at work before fading out. `was` names
+   * the rows it took the place of: a rejected edit is a new row for the old. `busy` says Scarlet is actively working
+   * on it now. Called as the list draws, so a row that has just moved is still in the list in that same draw.
    */
-  track(rows: readonly { key: string; place: RowPlace; was?: readonly string[] }[], optionalShown: boolean) {
+  track(
+    rows: readonly { key: string; place: RowPlace; was?: readonly string[]; busy?: boolean }[],
+    optionalShown: boolean,
+    doneShown = false,
+  ) {
     const next = new Map<string, RowPlace>();
-    for (const { key, place, was = [] } of rows) {
+    for (const { key, place, was = [], busy = false } of rows) {
       next.set(key, place);
       const earlier = [key, ...was].find(k => this.places.has(k));
       const from = earlier === undefined ? undefined : this.places.get(earlier);
       // A row an earlier one became keeps what was held for it.
       const carried = earlier !== undefined && earlier !== key ? this.held.get(earlier) : undefined;
       if (carried && !this.held.has(key)) { this.held.delete(earlier!); carried.key = key; this.held.set(key, carried); }
-      if (place === "you" || place === "optional") this.drop(key);
-      else if ((from === "you" || (from === "optional" && optionalShown)) && !this.held.has(key)) this.hold(key, from);
+      const current = this.held.get(key);
+      if (place === "you" || place === "optional" || current?.from === place) {
+        this.drop(key);
+      } else if (from === "done" && place === "working") {
+        // Moving from Done (or a just-kept row still lingering in For you) to Working: stay in place,
+        // start showing Scarlet at work, then fade out and leave.
+        if (doneShown) {
+          this.drop(key);
+          this.hold(key, "done", busy);
+        } else if (current && (current.from === "you" || (current.from === "optional" && optionalShown))) {
+          this.drop(key);
+          this.hold(key, current.from, busy);
+        }
+      } else if ((from === "you" || (from === "optional" && optionalShown)) && !current) {
+        this.hold(key, from, busy);
+      } else if (current && !current.leaving && place === "working" && busy && !current.busy) {
+        // The revision was queued when first held and Scarlet just began working on it: restart the linger
+        // window so the editor sees it actively working for a full moment before it fades out.
+        this.drop(key);
+        this.hold(key, current.from, true);
+      }
     }
     for (const key of [...this.held.keys()]) if (!next.has(key)) this.drop(key);
     this.places = next;
   }
 
-  private hold(key: string, from: "you" | "optional") {
-    const held: Held = { key, from, leaving: false, timers: [] };
+  private hold(key: string, from: HeldFrom, busy = false) {
+    const held: Held = { key, from, leaving: false, busy, timers: [] };
     const leave = () => { if (this.held.get(held.key) === held) { this.held.delete(held.key); this.changed(); } };
     held.timers.push(setTimeout(() => {
       // With motion reduced it leaves at once, with no fade.
@@ -159,7 +185,7 @@ export class ReviewLinger {
   }
 
   /** Whether a row is held in the list it has left: `from` says which, and `leaving` that it is fading out. */
-  of(key: string): { from: "you" | "optional"; leaving: boolean } | undefined { return this.held.get(key); }
+  of(key: string): { from: HeldFrom; leaving: boolean } | undefined { return this.held.get(key); }
 
   dispose() {
     for (const held of this.held.values()) held.timers.forEach(clearTimeout);

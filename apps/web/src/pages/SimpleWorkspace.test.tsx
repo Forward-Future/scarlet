@@ -15693,3 +15693,127 @@ it("lets the editor unkeep an approved waiting pass call in Done, and does not o
   expect(passRows()[0]?.querySelector(".simple-pass-value")?.textContent).toBe("Rejected");
   expect(passCard().querySelector(".simple-unkeep")).toBeNull();
 });
+
+it("keeps a row moving from Done to Working in place showing it is working, then fades it out and moves it", async () => {
+  const { base, thread } = madeRequest();
+  keepEdits(PRJ, thread.id, [{ changeId: "chg_approved_2", spot: 2 }]);
+  const allowMotion = () => {
+    vi.mocked(window.matchMedia).mockImplementation(query => ({
+      matches: false, media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    } as unknown as MediaQueryList));
+  };
+  allowMotion();
+  await showFolded();
+  await act(async () => {});
+  const turn = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
+  await click(tabNamed(turn(), "Done"));
+  await act(async () => {});
+  expect([...turn().querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you", "Working", "Done1"]);
+  expect(editRowsIn(turn())).toHaveLength(1);
+  expect(editRowsIn(turn())[0]!.querySelector(".simple-edit-value")?.textContent).toBe("Kept");
+
+  vi.useFakeTimers();
+  try {
+    const now = new Date().toISOString();
+    await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_revise_from_done", kind: "edit" as const, state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined,
+      summary: null, changeIds: [], instruction: "Keep the last word", context: { changeId: "chg_approved_2", editIndex: 2, threadId: thread.id, message: "Keep the last word" } }] }));
+    await act(async () => {});
+
+    // Still on Done tab: counts updated immediately, row stays in place showing Revising… and its nested working block.
+    expect(reviewModes(turn())).toEqual(tabs("Done"));
+    expect([...turn().querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you", "Working1", "Done"]);
+    const item = () => turn().querySelector<HTMLLIElement>(".simple-edits > li");
+    expect(item()).not.toBeNull();
+    expect(item()!.classList.contains("is-leaving")).toBe(false);
+    expect(item()!.querySelector(".simple-edit-check")?.textContent).toBe("Revising…");
+    expect(item()!.querySelector(".simple-edit-check")?.classList.contains("working-text")).toBe(true);
+    expect(item()!.querySelector('.subunit[data-run="task_revise_from_done"]')).not.toBeNull();
+
+    // After 2.5 s it fades out in Done, and after 300 ms it leaves Done while remaining in Working.
+    await act(async () => { vi.advanceTimersByTime(2500); });
+    expect(item()?.classList.contains("is-leaving")).toBe(true);
+    // Switching to Working mid-fade shows the row normally (never marked is-leaving in Working).
+    await click(tabNamed(turn(), "Working"));
+    await act(async () => {});
+    expect(item()?.classList.contains("is-leaving")).toBe(false);
+    expect(item()?.querySelector(".simple-edit-check")?.textContent).toBe("Revising…");
+
+    await click(tabNamed(turn(), "Done"));
+    await act(async () => {});
+    expect(item()?.classList.contains("is-leaving")).toBe(true);
+    await act(async () => { vi.advanceTimersByTime(300); });
+    expect(item()).toBeNull();
+    expect(turn().querySelector(".simple-review-empty")?.textContent).toBe("Nothing decided yet.");
+
+    // Working still holds the active revision.
+    await click(tabNamed(turn(), "Working"));
+    await act(async () => {});
+    expect(item()).not.toBeNull();
+    expect(item()!.querySelector(".simple-edit-check")?.textContent).toBe("Revising…");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps a dialogue pass row moving from Done to Working in place showing Revising…, then fades it out", async () => {
+  const CUTS: Staged[] = [...STAGED];
+  finishedPass(CUTS);
+  const allowMotion = () => {
+    vi.mocked(window.matchMedia).mockImplementation(query => ({
+      matches: false, media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    } as unknown as MediaQueryList));
+  };
+  allowMotion();
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
+  const thread = threadWith("chg_ready");
+  const ready = data.changes.find(c => c.id === "chg_ready")!;
+  const approved = { ...ready, state: "approved" as const, appliedVersion: ready.toVersion,
+    cutChoices: [{ index: 0, start: CUTS[0]!.start, end: CUTS[0]!.end, choice: "cut" as const }],
+    appliedReview: { duration: 14, originalDuration: 16, originalVersion: "ver_1", joins: [
+      { reviewIndex: 0, at: 2, removed: { start: CUTS[0]!.start, end: CUTS[0]!.end } },
+    ] } };
+  data = { ...data, changes: data.changes.map(c => c.id === "chg_ready" ? approved : c) };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== thread.id ? [] : [
+      { changeId: "chg_ready", spot: 0, label: CUTS[0]!.reason, range: { start: 1, end: 3 }, at: 2, kind: "cut" as const,
+        beforeCut: { version: "ver_1", removed: { start: CUTS[0]!.start, end: CUTS[0]!.end } }, previous: [] },
+    ] }));
+  await showFolded();
+  await act(async () => {});
+  await click(tabNamed(passCard(), "Done"));
+  await act(async () => {});
+  expect(passRows()).toHaveLength(1);
+  expect(passRows()[0]!.querySelector(".simple-pass-value")?.textContent).toBe("Kept");
+
+  vi.useFakeTimers();
+  try {
+    const base = data.tasks.find(t => t.id === "task_done")!;
+    const now = new Date().toISOString();
+    await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_revise_pass_done", state: "running" as const, createdAt: now, startedAt: now, finishedAt: undefined,
+      summary: null, changeIds: [], context: { changeId: "chg_ready", editIndex: 0, threadId: thread.id, message: "Leave a beat before it" } }] }));
+    await act(async () => {});
+
+    const item = () => passCard().querySelector<HTMLLIElement>(".simple-pass-list > li");
+    expect(reviewModes(passCard())).toEqual(tabs("Done"));
+    expect(item()).not.toBeNull();
+    expect(item()!.classList.contains("is-leaving")).toBe(false);
+    expect(item()!.querySelector(".simple-pass-check")?.textContent).toBe("Revising…");
+    expect(item()!.querySelector('.subunit[data-run="task_revise_pass_done"]')).not.toBeNull();
+
+    await act(async () => { vi.advanceTimersByTime(2500); });
+    expect(item()?.classList.contains("is-leaving")).toBe(true);
+    await act(async () => { vi.advanceTimersByTime(300); });
+    expect(item()).toBeNull();
+    expect(passCard().querySelector(".simple-review-empty")?.textContent).toBe("Nothing decided yet.");
+
+    await click(tabNamed(passCard(), "Working"));
+    await act(async () => {});
+    expect(item()?.querySelector(".simple-pass-check")?.textContent).toBe("Revising…");
+    expect(item()?.classList.contains("is-leaving")).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
