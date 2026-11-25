@@ -299,7 +299,11 @@ export function useUndoShortcut(workspaceActive: boolean, projectId: string, und
       const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value && !emptiedByHand.has(e.target);
       if (isEditableTarget(e.target) && !box) return;
       if (document.querySelector('dialog[open], [role="dialog"], [role="menu"]')) return;
-      if (!lastStep(useUndoStore.getState().steps, projectId)) return;
+      if (!lastStep(useUndoStore.getState().steps, projectId)) {
+        // The key is left to the page, and nothing is taken back: said so the log shows the press did nothing.
+        appLog("action", "undo-skipped", { project: projectId, reason: "empty" });
+        return;
+      }
       e.preventDefault();
       if (!e.repeat) void undoRef.current.undo();
     };
@@ -397,7 +401,10 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
     const release = (e: PointerEvent) => {
       const was = down;
       down = undefined;
-      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) clearRef.current();
+      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) {
+        appLog("timeline", "range-cleared", { via: "click-away" });
+        clearRef.current();
+      }
     };
     const key = (e: KeyboardEvent) => {
       if (e.defaultPrevented || isEditableTarget(e.target) || isComposing(e)) return;
@@ -410,6 +417,7 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
       if (!escape && !erase && !clearInOut) return;
       if ((escape && inFullScreen()) || marksTakeEscape(e)) return;
       e.preventDefault();
+      appLog("timeline", "range-cleared", { via: "key", key: clearInOut ? "alt+x" : e.key });
       clearRef.current();
     };
     document.addEventListener("pointerdown", press, true);

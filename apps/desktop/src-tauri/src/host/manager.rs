@@ -137,7 +137,9 @@ impl HostManager {
 
     pub fn stop_blocking(&self) {
         tauri::async_runtime::block_on(async {
-            let _ = tokio::time::timeout(Duration::from_secs(20), self.stop()).await;
+            if tokio::time::timeout(Duration::from_secs(20), self.stop()).await.is_err() {
+                log::warn!("[desktop] host-stop-timeout elapsedMs=20000");
+            }
         });
     }
 

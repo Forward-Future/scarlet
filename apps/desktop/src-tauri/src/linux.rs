@@ -21,9 +21,14 @@ pub fn enable_voice_input(window: &tauri::WebviewWindow) -> tauri::Result<()> {
             // Audio can accompany a display capture too. WebKit exposes this check in its C API.
             let display = unsafe { webkit2gtk::ffi::webkit_user_media_permission_is_for_display_device(media.as_ptr()) != 0 };
             if !from_editor || display || media.is_for_video_device() || !media.is_for_audio_device() {
+                log::info!(
+                    "microphone: request denied without asking (from the editor: {from_editor}, display: {display}, camera: {}, audio: {})",
+                    media.is_for_video_device(), media.is_for_audio_device()
+                );
                 request.deny();
                 return true;
             }
+            log::info!("microphone: asking the editor to allow voice input");
             let (send, answer) = tokio::sync::oneshot::channel();
             owner.dialog().message("Allow Scarlet to use your microphone for voice input?")
                 .parent(&owner).buttons(MessageDialogButtons::OkCancelCustom("Allow".into(), "Cancel".into()))
@@ -31,7 +36,13 @@ pub fn enable_voice_input(window: &tauri::WebviewWindow) -> tauri::Result<()> {
             // The dialog can answer from another thread. Resolve WebKit's request on the GTK thread.
             let request = request.clone();
             glib::MainContext::default().spawn_local(async move {
-                if answer.await == Ok(true) { request.allow(); } else { request.deny(); }
+                if answer.await == Ok(true) {
+                    log::info!("microphone: the editor chose Allow");
+                    request.allow();
+                } else {
+                    log::info!("microphone: the editor chose Cancel; voice input denied");
+                    request.deny();
+                }
             });
             true
         });

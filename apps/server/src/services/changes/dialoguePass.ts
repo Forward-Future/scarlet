@@ -173,7 +173,9 @@ type DialogueCutsResult = {
 export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body: DialogueCutsRequest, options: { fold?: boolean; checkAttempt?: () => void } = {}): DialogueCutsResult {
   try {
     return saveDialogueCuts(ctx, user, projectId, body, { ...options, settle: true });
-  } catch {
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    ctx.log(`[edit] settled-cuts-left-out project=${logId(projectId)} reason=${typeof code === "string" ? code : "error"}`);
     // Settled cuts go in with the save only when that is all it changes: one that would bring two waiting calls together,
     // or anything else the save refuses with them in, stays in the review as before and the save goes ahead without it.
     // A save refused for its own reasons is refused again here, as it was before.
