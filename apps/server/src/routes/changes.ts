@@ -49,7 +49,7 @@ export function changeRoutes(ctx: Ctx) {
     return c.json(ctx.db.transaction(() => {
       const task = requireProjectEditAttempt(ctx, attempt, projectId, body.taskId ?? attempt?.taskId);
       if (!task) throw badRequest("no_task", "Only a request's run flags an edit for the editor.");
-      return flagEdit(ctx, projectId, task, body);
+      return flagEdit(ctx, projectId, requestOf(ctx, task), body);
     }, "immediate")(), 201);
   });
 
