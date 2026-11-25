@@ -303,13 +303,30 @@
 .playback-speed-trigger[aria-expanded="true"] { background: var(--color-raised); }
 .playback-speed button:focus-visible { outline-offset: -2px; }
 .playback-speed-panel {
-  position: absolute; bottom: calc(100% + 4px); right: 0; display: flex; align-items: center;
-  width: max-content; max-width: calc(100cqw - 12px); padding: 3px; border: 1px solid #4b4a48; border-radius: 7px;
+  position: absolute; bottom: calc(100% + 4px); right: 0; display: flex; flex-direction: column; align-items: stretch;
+  width: max-content; min-width: 178px; max-width: calc(100cqw - 12px); padding: 4px; border: 1px solid #4b4a48; border-radius: 7px;
   background: #1c1c1b; box-shadow: 0 3px 12px #0005;
 }
+.playback-speed-stepper { display: flex; align-items: center; justify-content: space-between; flex: none; padding: 0 2px 3px; }
 .playback-speed-panel .btn-icon { width: 28px; min-width: 0; height: 28px; font-size: 16px; }
 .playback-speed-panel .btn-icon:disabled { color: #969693; opacity: 1; }
-.playback-speed-panel output { flex: none; width: 5ch; text-align: center; color: #f4f0e8; font: 12px/1 var(--font-mono); }
+.playback-speed-panel output { flex: 1; text-align: center; color: #f4f0e8; font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.playback-speed-shortcut {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 2px; padding: 6px 6px 3px; border-top: 1px solid #353533;
+}
+.playback-speed-shortcut-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: #d6d3cd; font-size: 12px; line-height: 1; white-space: nowrap;
+}
+.playback-speed-shortcut .preference-select.compact {
+  min-height: 24px; padding: 2px 7px; gap: 5px; font: 12px/1 var(--font-mono); font-variant-numeric: tabular-nums;
+  background: #272726; border-color: #424240; color: #f4f0e8;
+}
+.playback-speed-shortcut .preference-select.compact:enabled:hover,
+.playback-speed-shortcut .preference-select.compact[aria-expanded="true"] {
+  background: #323230;
+}
 @container (max-width: 280px) {
   .playback-speed-panel { top: calc(100% + 4px); bottom: auto; }
 }
