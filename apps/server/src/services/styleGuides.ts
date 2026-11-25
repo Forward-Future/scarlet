@@ -378,7 +378,7 @@ function rewriteLinks(html: string, targets: Map<string, string>): string {
     .sort((a, b) => b.length - a.length)
     .map(target => target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
     .join("|");
-  return html.replace(new RegExp(`(?<=^|["'\`(=,\\s])(?:${pattern})(?=$|["'\`)?#,\\s])`, "g"), match => targets.get(match) ?? match);
+  return html.replace(new RegExp(`(?<=^|["'\`(=,\\s])(?:${pattern})(?=$|["'\`)?>#,\\s])`, "g"), match => targets.get(match) ?? match);
 }
 
 /** Strip the 8-hex-char dedupe prefix added by `adoptLinkedFiles` so saved asset names stay clean. */

@@ -576,6 +576,12 @@ describe("gemini ACP parser", () => {
     expect(allow({ name: "write_file", rawInput: { file_path: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(false);
     expect(allow({ name: "read_file", kind: "read", rawInput: { file_path: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(true);
     expect(allow({ name: "run_shell_command", kind: "execute", rawInput: { command: "/opt/scarlet-fixture/bin/ffmpeg -version" } })).toBe(true);
+    // And when agy omits `kind`, read/search/shell tool names still get readRoots, while edit/write tools do not.
+    expect(allow({ name: "read_file", rawInput: { Path: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(true);
+    expect(allow({ name: "run_command", rawInput: { CommandLine: "/opt/scarlet-fixture/bin/ffmpeg -version" } })).toBe(true);
+    expect(allow({ name: "edit_file", rawInput: { Path: "/opt/scarlet-fixture/bin/ffmpeg", Target: "a", Replacement: "b" } })).toBe(false);
+    // `edit_file`'s `Target` is the text snippet to replace, not a file path (`~50ms` is not a home path).
+    expect(allow({ name: "edit_file", kind: "edit", rawInput: { Path: "/w/artifacts/page.css", Target: "~50ms fade", Replacement: "100ms fade" } })).toBe(true);
     expect(allow({ name: "write_file", kind: "edit", rawInput: { file_path: "/w/artifacts/page.html" } })).toBe(true);
     expect(allow({ name: "read_file", kind: "read", rawInput: { file_path: "/etc/passwd" } })).toBe(false);
   });

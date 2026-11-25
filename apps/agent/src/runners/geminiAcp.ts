@@ -152,9 +152,14 @@ export function namesPath(value: string, windows = process.platform === "win32")
 
 /**
  * The input keys a file tool says where it reads or writes under. A plain name under one (`a.json`) is a path to check
- * too: inside the task folder it may be a link to a file anywhere.
+ * too: inside the task folder it may be a link to a file anywhere. `target` is left out: `edit_file` puts the text to
+ * replace there (`Target`), and a single-line snippet such as `~50ms` is not a path.
  */
-const PATH_KEYS = new Set(["path", "paths", "file_path", "filepath", "absolute_path", "dir_path", "target", "source", "destination"]);
+const PATH_KEYS = new Set([
+  "path", "paths", "file_path", "filepath", "absolute_path", "dir_path",
+  "directory", "directorypath", "directory_path", "searchpath", "search_path",
+  "targetfile", "target_file", "source", "destination",
+]);
 
 /**
  * Every path a permission request names: its locations, any absolute path among its input's values, or any that climbs
@@ -199,6 +204,11 @@ function realPath(path: string): string | undefined {
 
 /** ACP kinds of tool call that only look: they may reach the folders a request's programs live in, besides its own. */
 const READ_KINDS = new Set(["read", "search", "execute"]);
+/** Built-in tool names that only look (or run in agy's sandboxed shell), for requests that omit `toolCall.kind`. */
+const READ_TOOLS = new Set([
+  "read_file", "view_file", "view_file_outline", "view_code_item", "list_dir",
+  "find_by_name", "grep_search", "glob", "grep", "run_command", "run_shell_command", "bash",
+]);
 
 /**
  * Whether a request's agent may use one of agy's own tools: yes unless it names a path outside the folders it works in.
@@ -215,8 +225,11 @@ export function workspacePermission(params: unknown, writeRoots: string[], readR
   const slash = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
   const real = (p: string) => slash(realPath(p) ?? p);
   const writable = writeRoots.filter((r) => r.trim()).map((r) => real(resolvePath(r)));
-  const kind = asString(asRecord(asRecord(params)?.toolCall)?.kind);
-  const within = [...writable, ...(kind && READ_KINDS.has(kind) ? readRoots.filter((r) => r.trim()).map((r) => real(resolvePath(r))) : [])];
+  const tc = asRecord(asRecord(params)?.toolCall);
+  const kind = asString(tc?.kind);
+  const rawTool = (asString(tc?.name) ?? asString(tc?.toolName))?.trim().toLowerCase();
+  const readsOnly = kind ? READ_KINDS.has(kind) : Boolean(rawTool && READ_TOOLS.has(rawTool));
+  const within = [...writable, ...(readsOnly ? readRoots.filter((r) => r.trim()).map((r) => real(resolvePath(r))) : [])];
   const inside = (p: string, roots: string[]) => roots.some((root) => p === root || p.startsWith(`${root}/`));
   const taskFolder = writeRoots.find((r) => r.trim());
   return namedPaths(params).every((path) => {

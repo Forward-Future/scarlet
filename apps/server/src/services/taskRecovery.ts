@@ -85,7 +85,8 @@ function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, 
 function restartDecisionCheck(ctx: Ctx, check: Task, asked: Task): Task | undefined {
   try {
     return createTask(ctx, {
-      projectId: check.projectId, kind: "learning_check", agent: check.agent, model: check.model, fast: check.fast,
+      projectId: check.projectId, kind: "learning_check", agent: check.agent, model: check.model,
+      effort: check.effort, fast: check.fast, serviceTier: check.serviceTier,
       instruction: check.instruction, context: { checksTaskId: asked.id, readsDecisions: true }, createdBy: check.createdBy,
     });
   } catch (err) {

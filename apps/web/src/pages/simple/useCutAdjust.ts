@@ -210,21 +210,33 @@ export function useCutAdjust({
 
   // 3. Waiting dialogue-pass call bounds (clamped between neighboring staged cuts and any already-applied cuts).
   const callBounds = useMemo(() => {
-    if (activeMode !== "call" || !pass || !openCall || !heard || !displayedTimeline || !displayedBand) return;
+    if (activeMode !== "call" || !pass || !openCall || !heard || !displayedTimeline || !displayedBand || !passRemovals) return;
     const dur = timelineDuration(displayedTimeline);
     const pad = 1 / fps;
     let minStart = 0, maxEnd = dur;
-    const siblings = passRemovals ?? [];
-    for (let i = 0; i < siblings.length; i++) {
-      if (i === openCall.index) continue;
-      const other = siblings[i];
-      if (!other) return;
+    let boundedLeft = false, boundedRight = false;
+    for (let i = openCall.index - 1; i >= 0; i--) {
+      const other = passRemovals[i];
+      if (!other) {
+        if (!boundedLeft) return;
+        continue;
+      }
       if (other.end <= heard.start + 0.5 / fps) {
         const delta = heard.start - other.end - pad;
         minStart = Math.max(minStart, displayedBand.start - Math.max(0, delta));
-      } else if (other.start >= heard.end - 0.5 / fps) {
+        boundedLeft = true;
+      }
+    }
+    for (let i = openCall.index + 1; i < passRemovals.length; i++) {
+      const other = passRemovals[i];
+      if (!other) {
+        if (!boundedRight) return;
+        continue;
+      }
+      if (other.start >= heard.end - 0.5 / fps) {
         const delta = other.start - heard.end - pad;
         maxEnd = Math.min(maxEnd, displayedBand.end + Math.max(0, delta));
+        boundedRight = true;
       }
     }
     if (callView) {
