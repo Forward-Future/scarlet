@@ -719,7 +719,7 @@ export function SimpleWorkspaceBeta() {
     // this view's own listen; any other edit under the player's. A moment's main edit picked on its own from under
     // the moment's row, or the moment picked again from its row, is opened anew.
     const sameWay = threadTimeline.single === !!single;
-    if (showing && matchesEdit(showing, ref) && thread.id === focus?.threadId && sameWay) {
+    if (showing && !threadTimeline.leaving && matchesEdit(showing, ref) && thread.id === focus?.threadId && sameWay) {
       setOpenedFrom(from ? { run: from, ref: { changeId: ref.changeId, spot: ref.spot } } : undefined);
       player.pause();
       // Choosing it again takes the aim off an empty message box, so the box is aimed at the cut or edit again.
@@ -729,6 +729,7 @@ export function SimpleWorkspaceBeta() {
       return;
     }
     setOpenedFrom(from ? { run: from, ref: { changeId: ref.changeId, spot: ref.spot } } : undefined);
+    if (threadTimeline.leaving) threadTimeline.stay();
     leaveForEdit();
     if (thread.id === focus?.threadId && !threadTimeline.loading) {
       const edit = threadTimeline.edits.find(e => matchesEdit(e, ref)) ?? threadTimeline.rejected.find(e => matchesEdit(e, ref));
@@ -1252,6 +1253,10 @@ export function SimpleWorkspaceBeta() {
   // asks the editor a question about a cut or an edit waits on them, so its row is For you's.
   const asksEditor = (run?: { state: Task["state"] }) => run?.state === "waiting_for_user";
   const passWaitingEdit = (e: ThreadEdit) => !!e.check && !passReviewed(e) && !passRevising(e);
+  // A flagged edit whose revision has stopped to ask the editor something waits on them again, as a call that asks does.
+  const waitsOrAsks = (e: ThreadEdit) => waitingEdit(e) || (!!e.check && asksEditor(revisingEdit(e)));
+  const passWaitsOrAsks = (e: ThreadEdit) => passWaitingEdit(e) || (!!e.check && asksEditor(passRevising(e)));
+  const callWaitsOrAsks = (call: Call) => waiting(call) || (sentBack(call.index) && asksEditor(cutRuns.get(call.index)));
   const passEditRows = useMemo(() => passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 && threadTimeline.moments
     ? threadTimeline.moments.map(m => m.edits) : listMoments(passEdits).map(m => m.edits) as ThreadEdit[][],
   [passThread?.id, focusThread?.id, threadTimeline.edits.length, threadTimeline.moments, passEdits]);
@@ -1261,7 +1266,7 @@ export function SimpleWorkspaceBeta() {
   /** The focused request's stops: its rows of edits, the pass's calls when it is the pass's, and what was rejected. */
   const focusStopsNow = (): Stop[] => reviewStops({
     rows: editsByRow,
-    place: row => rowPlace(row, { waits: e => waitingEdit(e) || asksEditor(revisingEdit(e)), sent: e => !!revisingEdit(e),
+    place: row => rowPlace(row, { waits: waitsOrAsks, sent: e => !!revisingEdit(e),
       kept: e => reviewed(e) || decidedCallEditKeys.has(editKey(e)) }),
     num: passIsFocus ? passEditNum : undefined,
     calls: passIsFocus ? callStops() : [],
@@ -1270,7 +1275,7 @@ export function SimpleWorkspaceBeta() {
   /** The waiting pass's stops, also while the timeline is on another request. */
   const passStopsNow = (): Stop[] => passIsFocus ? focusStopsNow() : reviewStops({
     rows: passEditRows,
-    place: row => rowPlace(row, { waits: e => passWaitingEdit(e) || asksEditor(passRevising(e)), sent: e => !!passRevising(e), kept: e => passReviewed(e) }),
+    place: row => rowPlace(row, { waits: passWaitsOrAsks, sent: e => !!passRevising(e), kept: e => passReviewed(e) }),
     num: passEditNum, calls: callStops(),
     gone: (passThread ? rejectedPassEdits : noEdits).map(e => ({ at: e.range.start, num: passEditNum(e) })),
   });
@@ -1295,7 +1300,7 @@ export function SimpleWorkspaceBeta() {
     // Low risk's, Working's or Done's. From an edit that isn't a row there (one just rejected) they step to the row
     // after or before where it is. Past the request's last row they go on in the next request's (see `stepEdit`).
     return stopTarget(rowBeside(sectionStops(focusStops, focusList, onLowRisk, focusOrder), hereStop, here!, delta, focusOrder),
-      row => row.find(waitingEdit) ?? row[0]!);
+      row => row.find(waitsOrAsks) ?? row[0]!);
   }
   // ↑ and ↓ reach the log as a bare key: this says which call they went to.
   function stepToCall(change: Change, call: Call) {
@@ -1322,15 +1327,15 @@ export function SimpleWorkspaceBeta() {
     const next = openCall
       ? rowBeside(list, stops.find(stop => stop.call?.index === openCall.index), { at: listedAt.get(openCall.index) ?? openCall.start, num: callNo.get(openCall.index) }, delta, passOrder)
       : delta > 0 ? list[0] : list.at(-1);
-    return stopTarget(next, row => row.find(passWaitingEdit) ?? row[0]!);
+    return stopTarget(next, row => row.find(passWaitsOrAsks) ?? row[0]!);
   }
   // Keep goes to the next row that waits on the editor in For you, in its order, a call or a flagged edit, wrapping to
   // the earlier ones; once nothing waits it goes on to the first low-risk row, and the card closes once nothing is left.
   // On a low-risk row (an edit Scarlet didn't flag) it goes to the next low-risk row, wrapping to the earlier ones,
   // then to another request's, then to what waits.
   const unkeptEdit = (e: ThreadEdit) => !e.check && !reviewed(e) && !revisingEdit(e);
-  const stillWaits = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.call ? waiting(stop.call) : !!stop.row?.some(waits);
-  const waitingStops = rowsOfTab(focusStops, "you", false, focusOrder).filter(stillWaits(waitingEdit));
+  const stillWaits = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.call ? callWaitsOrAsks(stop.call) : !!stop.row?.some(waits);
+  const waitingStops = rowsOfTab(focusStops, "you", false, focusOrder).filter(stillWaits(waitsOrAsks));
   const lowStops = inListOrder(focusStops.filter(stop => stop.place === "optional" && !!stop.row), focusOrder);
   const afterKeep = !reviewingEdit ? undefined
     : onLowRisk ? rowAfter(lowStops, hereStop, here!, focusOrder)
@@ -1338,15 +1343,15 @@ export function SimpleWorkspaceBeta() {
   // Keep reaches a moment as ↑ ↓ do: whole, at the edit it is named for, however much of it is kept already. The
   // first of its edits still to keep would open alone and unfold the moment.
   const momentLead = (edit: ThreadEdit) => threadTimeline.moments ? editsByRow.find(row => row.includes(edit))?.[0] ?? edit : edit;
-  const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitingEdit) ?? momentLead(row.find(unkeptEdit) ?? row[0]!));
+  const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitsOrAsks) ?? momentLead(row.find(unkeptEdit) ?? row[0]!));
   const nextEditAfterKeep = nextAfterKeep && "edit" in nextAfterKeep ? nextAfterKeep.edit : undefined;
   const nextCallAfterKeep = nextAfterKeep && "call" in nextAfterKeep ? nextAfterKeep.call : undefined;
   // Keep or Reject edit on a call goes on the same way: to the next row that waits in For you, a call or a flagged edit.
   const openStops = listening && pass ? passStopsNow() : [];
   const nextAfterCallDecision = !listening || !pass ? undefined : stopTarget(
-    rowAfter(rowsOfTab(openStops, "you", false, passOrder).filter(stillWaits(passWaitingEdit)), openStops.find(stop => stop.call?.index === listening.index),
+    rowAfter(rowsOfTab(openStops, "you", false, passOrder).filter(stillWaits(passWaitsOrAsks)), openStops.find(stop => stop.call?.index === listening.index),
       { at: listedAt.get(listening.index) ?? listening.cut.start, num: callNo.get(listening.index) }, passOrder),
-    row => row.find(passWaitingEdit) ?? row[0]!);
+    row => row.find(passWaitsOrAsks) ?? row[0]!);
   const onCall = !!openCall && !openCallBack && !reviewingEdit;
   const upcomingCall = onCall ? (nextAfterCallDecision && "call" in nextAfterCallDecision ? nextAfterCallDecision.call : undefined) : nextCallAfterKeep;
   const upcomingEdit = onCall ? (nextAfterCallDecision && "edit" in nextAfterCallDecision ? nextAfterCallDecision.edit : undefined) : nextEditAfterKeep;
@@ -1506,7 +1511,7 @@ export function SimpleWorkspaceBeta() {
   }
   /** Opens what still waits on the editor, this request's first and then another's. Says whether there was any. */
   function openWaiting() {
-    const waits = stopTarget(waitingStops[0], row => row.find(waitingEdit) ?? row[0]!);
+    const waits = stopTarget(waitingStops[0], row => row.find(waitsOrAsks) ?? row[0]!);
     if (waits && "edit" in waits) { actions.playEdit(waits.edit, openOnItsOwn(waits.edit)); return true; }
     if (waits && "call" in waits) { actions.listen(pass!, waits.call); return true; }
     return openElsewhere(focusThread?.id, 1, true);

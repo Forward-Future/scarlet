@@ -15292,3 +15292,126 @@ it("keeps the new layout's column of edits, and no \u201cNothing waits on you.\u
     localStorage.clear();
   });
 });
+
+it("reopens a cut's card with Keep and Revise when ⌘Z immediately takes back Reject edit, in both layouts", async () => {
+  const verify = async (inBeta: boolean) => {
+    appliedEdits();
+    const head = data.project.head!;
+    vi.spyOn(api, "timeline").mockImplementation(async (_, version = "head") => ({ timeline: { ...data.timeline!, version } }));
+    const cutList = (over: object = {}) => vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({
+      version: data.project.head!,
+      edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+        { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+        { changeId: "chg_approved_2", spot: 1, label: "captions", range: { start: 0.5, end: 3.5 }, at: 2, kind: "cut" as const, previous: [],
+          beforeCut: { version: head, removed: { start: 2, end: 2.4 } }, ...over },
+        { changeId: "chg_approved_2", spot: 2, label: "wrap", range: { start: 11.5, end: 16 }, previous: [], check: CHECK, summary: SUMMARY },
+      ],
+    }));
+    let listed = cutList();
+    const land = (version: string) => {
+      const cur = useProjectStore.getState().current!;
+      data = { ...cur, project: { ...cur.project, head: version }, timeline: cur.timeline && { ...cur.timeline, version } };
+      useProjectStore.setState({ current: data });
+    };
+    const rejectEdits = vi.fn(async () => {
+      listed.mockRestore();
+      listed = cutList({ rejected: true, beforeCut: undefined, at: undefined, kind: "restore" as const, range: { start: 2, end: 2.4 } });
+      land("ver_back");
+      return "ver_back";
+    });
+    const historyEdit = vi.fn(async () => {
+      listed.mockRestore();
+      listed = cutList();
+      land("ver_cut_again");
+    });
+    useProjectStore.setState({ createTask: vi.fn(), rejectEdits: rejectEdits as never, historyEdit: historyEdit as never });
+    await show();
+    const row = inBeta
+      ? columnRows("Low risk").find(r => columnWords(r) === "captions")!
+      : editRowsIn(turnFor("chg_approved_2"))[1]!;
+    await click(row);
+    await act(async () => {});
+    expect(buttonIn(editPanel()!, "Keep")).not.toBeUndefined();
+    await click(openHead()!.querySelector<HTMLButtonElement>('.edit-card-acts > .edit-card-reject[aria-label="Reject edit"]')!);
+    await act(async () => {});
+    expect(container.querySelector('.cut-transport > .edit-card[aria-label="Rejected edit"]')).not.toBeNull();
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+    await act(async () => {});
+    await act(async () => {});
+    expect(historyEdit.mock.calls).toEqual([["ver_back", "revert"]]);
+    expect([container.querySelector('.cut-transport > .edit-card[aria-label="Rejected edit"]'), !!editPanel() && !!buttonIn(editPanel()!, "Keep")])
+      .toEqual([null, true]);
+  };
+  await verify(false);
+  await act(async () => root.render(null));
+  useUndoStore.setState({ steps: [], undoing: undefined, error: undefined });
+  const fresh = buildDb();
+  const project = fresh.projects.find(p => p.id === PRJ)!;
+  data = {
+    id: PRJ, project, timeline: fresh.timelines[project.head!]!,
+    media: project.media, changes: fresh.changes, notes: fresh.notes, renders: fresh.renders,
+    tasks: fresh.tasks, taskEvents: fresh.taskEvents, versions: fresh.versions[PRJ]!,
+    fullRenderKeys: { context: fullRenderContext(project), preview: fresh.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+  };
+  useProjectStore.setState({ current: data });
+  await inNewLayout(() => verify(true));
+});
+
+/** A request whose two edits are flagged, with the captions sent back and that revision stopped to ask the editor something. */
+const flaggedPairOneAsking = () => {
+  appliedEdits();
+  idle();
+  const thread = threadWith("chg_approved_2");
+  vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({
+    version: data.project.head!,
+    edits: threadId !== thread.id ? [] : [
+      { changeId: "chg_approved_2", spot: 1, label: "captions", range: { start: 0.2, end: 2.4 }, previous: [], check: "The second line runs long" },
+      { changeId: "chg_approved_2", spot: 2, label: "wrap", range: { start: 11.5, end: 16 }, previous: [], check: CHECK, summary: SUMMARY },
+    ],
+  }));
+  const base = data.tasks.find(t => t.id === "task_done")!, now = new Date().toISOString();
+  data = {
+    ...data,
+    changes: data.changes.filter(c => c.id === "chg_approved_2"),
+    tasks: [...data.tasks,
+      { ...base, id: "task_made", kind: "edit" as const, instruction: "Add captions and tighten the wrap.",
+        context: { message: "Add captions and tighten the wrap." }, changeIds: ["chg_approved_2"] },
+      { ...base, id: "task_ask", kind: "edit" as const, state: "waiting_for_user" as const, question: "Upper or lower third?", summary: null, changeIds: [],
+        instruction: "Move the captions.", createdAt: now, startedAt: now, finishedAt: undefined, expectedSeconds: undefined,
+        context: { threadId: thread.id, changeId: "chg_approved_2", editIndex: 1, time: 0.2, end: 2.4, message: "Move the captions." } }],
+  };
+  useProjectStore.setState({ current: data });
+};
+
+it("goes on from the last flagged edit kept to the same request's edit that says Needs your answer", async () => {
+  flaggedPairOneAsking();
+  await showFolded();
+  await act(async () => {});
+  const turn = container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
+  expect(turn.querySelector(".simple-pass-need")?.getAttribute("title")).toBe("2 need you");
+  await click(turn.querySelector(".simple-pass-need")!);
+  await act(async () => {});
+  await click(editRowsIn(turn).find(r => r.querySelector(".simple-edit-title")?.textContent === "wrap")!);
+  await act(async () => {});
+  expect(openTitle()).toBe("wrap");
+  // Kept, it was the last that simply waits: the card goes on to the captions, which ask for an answer, and doesn't close.
+  await press("k");
+  await act(async () => {});
+  expect(openTitle()).toBe("captions");
+  localStorage.clear();
+});
+
+it("goes on from the last flagged edit kept to the same request's edit that says Needs your answer, in the new layout", async () => {
+  await inNewLayout(async () => {
+    flaggedPairOneAsking();
+    await showFolded();
+    await act(async () => {});
+    await click(columnRows("For you").find(row => columnWords(row) === "wrap")!);
+    await act(async () => {});
+    expect(columnOpen()).toBe("wrap");
+    await press("k");
+    await act(async () => {});
+    expect(columnOpen()).toBe("captions");
+    localStorage.clear();
+  });
+});

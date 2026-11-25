@@ -20,6 +20,7 @@ interface StagedFile {
   key: string;
   name: string;
   source: File | { path: string };
+  uploaded?: StyleGuideAsset;
 }
 
 function uniqueSlug(base: string, existing: readonly StyleGuideRecord[]): string {
@@ -49,10 +50,12 @@ export function StyleGuideEditorPage() {
   const [loaded, setLoaded] = useState<StyleGuideRecord | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  // The guide a send on the new page already created: a retry after a later step failed goes on with it.
+  const createdHere = useRef<string | undefined>(undefined);
 
   // Merge live store updates (e.g. preview updated via WebSocket) with loaded record.
   const guide = useMemo(() => {
-    if (isNew) return null;
+    if (isNew) return loaded && loaded.id === createdHere.current ? loaded : null;
     if (storeGuide && loaded) {
       return (storeGuide.updatedAt ?? "") >= (loaded.updatedAt ?? "") ? storeGuide : loaded;
     }
@@ -79,6 +82,7 @@ export function StyleGuideEditorPage() {
 
   const threadRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLTextAreaElement>(null);
+  const sendButton = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const askId = useId();
   const { effective, unavailableReason } = useAgentAvailability();
@@ -94,6 +98,7 @@ export function StyleGuideEditorPage() {
   useEffect(() => {
     setLoadError(null);
     if (isNew) {
+      createdHere.current = undefined;
       setLoaded(null);
       setEdits([]);
       setActiveEvents([]);
@@ -161,8 +166,17 @@ export function StyleGuideEditorPage() {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [edits.length, edit?.state, activeEvents.length]);
 
+  const land = (el: HTMLElement | null) => {
+    if (!el) return;
+    el.dataset.escFocus = "";
+    el.addEventListener("blur", () => { delete el.dataset.escFocus; }, { once: true });
+    el.focus();
+    if (document.activeElement !== el) delete el.dataset.escFocus;
+  };
   useEscapeToLeave(() => {
     if (lightboxOpen) { setLightboxOpen(false); return; }
+    if (ask.trim()) { land(sendButton.current ?? boxRef.current); return; }
+    if (stagedFiles.length > 0) { land(boxRef.current); return; }
     navigate("/settings/style-guides");
   }, 'dialog[open], [role="menu"], [data-shortcut-overlay]');
 
@@ -250,13 +264,20 @@ export function StyleGuideEditorPage() {
         const requestedSlug = slugifyStyleGuideName(name);
         const derived = requestedSlug || uniqueSlug(text.split(/\s+/).slice(0, 3).join("-"), library);
         targetGuide = await create({ name: derived, isDefault });
+        createdHere.current = targetGuide.id;
         setLoaded(targetGuide);
         setName(targetGuide.name);
       }
 
       const uploaded: StyleGuideAsset[] = [];
       for (const item of stagedFiles) {
+        if (item.uploaded) {
+          uploaded.push(item.uploaded);
+          continue;
+        }
         const res = await api.uploadStyleGuideAsset(targetGuide.id, item.source, item.name);
+        item.uploaded = res.asset;
+        setStagedFiles(prev => prev.map(f => (f.key === item.key ? { ...f, uploaded: res.asset } : f)));
         uploaded.push(res.asset);
         targetGuide = res.styleGuide;
         setLoaded(res.styleGuide);
@@ -529,6 +550,7 @@ export function StyleGuideEditorPage() {
                   {sending && <Spinner className="size-3.5 shrink-0" />}
                   {typed && (
                     <button
+                      ref={sendButton}
                       type="button"
                       className="btn-primary composer-send shrink-0"
                       aria-label="Send"

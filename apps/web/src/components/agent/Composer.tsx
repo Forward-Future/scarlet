@@ -555,7 +555,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         const emptyBox = !e.defaultPrevented && !isComposing(e) && !recording && !heard && e.target === inputRef.current && !inputRef.current.value;
         // Esc or Option/Alt+X in an empty box takes a range off at once, as they do elsewhere on the page. A popover
         // that is open takes its own Esc first.
-        if (e.key === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) takeOffRange();
+        if (e.key === "Escape" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) {
+          e.preventDefault();
+          rangeTakenOff.current = takeOffRange();
+        }
         if (isAltClearRangeKey(e) && emptyBox && shownRange && !document.querySelector("[data-escape-owner]")) {
           e.preventDefault();
           rangeTakenOff.current = takeOffRange();

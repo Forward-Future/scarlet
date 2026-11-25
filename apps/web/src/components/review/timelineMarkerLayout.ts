@@ -234,16 +234,65 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
     for (let i = 0; i < row.length; i++) {
       const half = row[i]!.layout.width / 2;
       if (keepInside(i) && xs[i]! < minLeft(half)) xs[i] = minLeft(half);
+      if (i > 0 && groupSpan >= span) {
+        const clear = row[i - 1]!.layout.width / 2 + half + MARK_GAP;
+        if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
+      }
     }
     return row.map(({ layout }, i) => ({ ...layout, at: xs[i]! / width * 100 }));
   };
   const placed = [...circles.values()].flatMap(placeRow).sort((a, b) => a.at - b.at);
-  // Markers from different groups never merge into one pill, and still must not draw on top of each other.
-  if (width > 0 && groupSpan >= span && circles.size > 1 && placed.length > 1) {
+  // Markers from different groups never merge into one pill, and still must not draw on top of each other. When all
+  // groups together crowd the track beyond what fits at their own spacing, fold the closest eligible same-group pair
+  // into a pill so every drawn marker still fits with MARK_GAP between neighbours.
+  const fitsTrack = (list: readonly MarkLayout[]) => {
+    if (!list.length) return true;
+    let x = Math.min(width - list[0]!.width / 2, list[0]!.width / 2 + startInset);
+    for (let i = 1; i < list.length; i++) x += list[i - 1]!.width / 2 + list[i]!.width / 2 + MARK_GAP;
+    return x + list.at(-1)!.width / 2 <= width;
+  };
+  if (width > 0 && groupSpan >= span && placed.length > 1 && (circles.size > 1 || !fitsTrack(placed))) {
+    while (!fitsTrack(placed)) {
+      let bestI = -1, bestJ = -1, bestGap = Infinity;
+      for (let i = 0; i < placed.length; i++) {
+        const a = placed[i]!;
+        if (a.dots.some(dot => dot.current)) continue;
+        const group = a.dots[0]!.group ?? "";
+        for (let j = i + 1; j < placed.length; j++) {
+          const b = placed[j]!;
+          if ((b.dots[0]!.group ?? "") !== group) continue;
+          if (!b.dots.some(dot => dot.current) && px(a.times[0]!, b.times.at(-1)!) <= RUN_REACH) {
+            const gap = b.times[0]! - a.times.at(-1)!;
+            if (gap < bestGap) { bestGap = gap; bestI = i; bestJ = j; }
+          }
+          break;
+        }
+      }
+      if (bestI < 0) break;
+      const a = placed[bestI]!, b = placed[bestJ]!;
+      const times = [...a.times, ...b.times];
+      const dots = [...a.dots, ...b.dots];
+      const merged: MarkLayout = {
+        key: a.key,
+        time: a.time,
+        times,
+        dots,
+        at: position((times[0]! + times.at(-1)!) / 2),
+        width: markWidth(dots.some(dot => dot.time !== dots[0]!.time)),
+      };
+      placed.splice(bestJ, 1);
+      placed[bestI] = merged;
+      placed.sort((x, y) => x.at - y.at);
+    }
     const xs = placed.map(m => m.at / 100 * width);
-    for (let i = 1; i < placed.length; i++) {
-      const clear = placed[i - 1]!.width / 2 + placed[i]!.width / 2 + MARK_GAP;
-      if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
+    for (let i = 0; i < placed.length; i++) {
+      const half = placed[i]!.width / 2;
+      const minX = Math.min(width - half, half + startInset);
+      if (xs[i]! < minX) xs[i] = minX;
+      if (i > 0) {
+        const clear = placed[i - 1]!.width / 2 + half + MARK_GAP;
+        if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
+      }
     }
     for (let i = placed.length - 1; i >= 0; i--) {
       const half = placed[i]!.width / 2;
@@ -257,6 +306,10 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
       const half = placed[i]!.width / 2;
       const minX = Math.min(width - half, half + startInset);
       if (xs[i]! < minX) xs[i] = minX;
+      if (i > 0) {
+        const clear = placed[i - 1]!.width / 2 + half + MARK_GAP;
+        if (xs[i]! < xs[i - 1]! + clear) xs[i] = Math.min(width - half, xs[i - 1]! + clear);
+      }
     }
     return placed.map((m, i) => ({ ...m, at: xs[i]! / width * 100 }));
   }

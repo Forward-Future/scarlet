@@ -2250,3 +2250,29 @@ it("has nothing to send while the box holds only a time", async () => {
   await type("0:04 zoom in");
   expect(container.querySelector(".composer-send")).not.toBeNull();
 });
+
+it("lets ⌘Z put back a chosen transcript range that Esc took off an empty box, and keeps that Esc to the box", async () => {
+  useUiStore.getState().setAgentContext({ time: 12, end: 18, version: project.head!, clipIds: [] });
+  await show();
+  expect(aimName()?.textContent).toContain("Range");
+
+  const field = container.querySelector("textarea")!;
+  let escapedDefaultPrevented = false;
+  const checkEscape = (e: KeyboardEvent) => { if (e.key === "Escape") escapedDefaultPrevented = e.defaultPrevented; };
+  window.addEventListener("keydown", checkEscape);
+  try {
+    await act(async () => {
+      field.focus();
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(escapedDefaultPrevented).toBe(true);
+    expect(useUiStore.getState().agentContext).toBeNull();
+    // ⌘Z in the empty box puts the transcript range back.
+    await act(async () => {
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(useUiStore.getState().agentContext).toMatchObject({ time: 12, end: 18 });
+  } finally {
+    window.removeEventListener("keydown", checkEscape);
+  }
+});
