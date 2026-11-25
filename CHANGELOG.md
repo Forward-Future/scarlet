@@ -24,6 +24,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Exported captions in Chinese, Japanese, Korean or Thai now wrap inside the frame and use a font that has their characters.
 - Transcript search in Hindi, Thai and similar languages no longer matches words that differ only by a vowel or tone mark.
 - Scarlet running on another computer keeps its edits going through a brief network drop, and shows as back online as soon as it returns.
+- Combined For you and low-risk edits into one unified Priority list in both the default and beta layouts: edits that need your call stay pinned at the top, confident edits sit right below under a thin Confident edits divider (newest request first), with an inline All / Needs you filter, a Keep N confident button (with ⌘Z undo), and Show → links in chat to jump straight to a request's edits.
 - In the default layout, For you, Working, Done, and edit lists now stay fixed at the bottom above the message box while new messages appear above them.
 - Exported Final Cut Pro XML files now include standard format names (such as 4K 30p and 1080p 29.97p) so Final Cut Pro imports them cleanly.
 - Voice dictation now ignores silence and quiet room tone so silent recordings no longer turn into phantom phrases like "thank you".

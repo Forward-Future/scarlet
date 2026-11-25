@@ -100,6 +100,31 @@ describe("RailStore", () => {
     expect(view.sections.done.map(r => r.label)).toEqual(["New done at 0:50", "Old done at 2:00"]);
   });
 
+  it("orders Confident edits newest request first while keeping timeline order within each request", () => {
+    const store = new RailStore();
+    store.report("t_old", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 0,
+      rows: [
+        makeRow({ key: "c1/0", threadId: "t_old", threadOrder: 0, at: 5, label: "Old cut at 0:05", place: "optional" }),
+        makeRow({ key: "c1/1", threadId: "t_old", threadOrder: 0, at: 20, label: "Old cut at 0:20", place: "optional" }),
+      ],
+    });
+    store.report("t_new", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 1,
+      rows: [
+        makeRow({ key: "c2/0", threadId: "t_new", threadOrder: 1, at: 180, label: "New title at 3:00", place: "optional" }),
+        makeRow({ key: "c2/1", threadId: "t_new", threadOrder: 1, at: 90, label: "New title at 1:30", place: "optional" }),
+      ],
+    });
+    const view = store.view();
+    expect(view.sections.low.map(r => r.label)).toEqual([
+      "New title at 1:30",
+      "New title at 3:00",
+      "Old cut at 0:05",
+      "Old cut at 0:20",
+    ]);
+  });
+
   it("combines a multi-request graphic chain (add -> move -> extend/shift) into one Graphic row while keeping distinct clips separate", () => {
     const store = new RailStore();
     store.report("t_add", {

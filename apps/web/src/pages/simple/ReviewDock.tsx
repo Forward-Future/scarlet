@@ -4,9 +4,8 @@ import { Icon } from "../../components/ui/primitives";
 import { clock as clockLabel } from "../../lib/format";
 import { inListOrder, ReviewLinger, tabShown, type ListOrder, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
-import { useLowRiskFold, useLowRiskLine } from "./lowRiskFold";
-import { LOW_RISK_TIP } from "./PassSummary";
-import type { DockEntry, DockRow, ReviewDockStore } from "./reviewDockStore";
+import { useLeavingRows } from "./lowRiskFold";
+import { dedupeDockEntries, type DockEntry, type DockRow, type ReviewDockStore } from "./reviewDockStore";
 import { useReviewTabHeight } from "./reviewTabHeight";
 import { letGo, type PassList } from "./types";
 
@@ -18,61 +17,65 @@ const EMPTY_TAB = {
 
 const TIME_ORDER: ListOrder = { numbers: false };
 
-function LowRiskSwitch({ count, on, onToggle, leaving }: { count: number; on: boolean; onToggle(): void; leaving?: boolean }) {
-  const edits = count === 1 ? "edit" : "edits";
-  return <div className="simple-low-risk" inert={leaving || undefined} aria-hidden={leaving || undefined}>
-    <button type="button" role="switch" className="simple-low-risk-toggle" aria-checked={on} aria-label={`Include ${count} low risk ${edits}`}
-      aria-description={LOW_RISK_TIP} title={LOW_RISK_TIP} data-log-control="include-low-risk" onClick={letGo(onToggle)}>
-      <span className="simple-low-risk-switch" aria-hidden="true" />
-      <span className="simple-low-risk-words">{count} low risk {edits}</span>
-    </button>
-  </div>;
-}
+const doneLabel = (count: number) => count === 1 ? "Keep the confident edit" : `Keep all ${count} confident edits`;
 
-function DockReviewTabs({ need, working, done, list: [open, setOpen], reveal, showNeeded, extraAll, closeExplicit }: {
-  need: number; working: number; done: number; list: PassList; reveal(): void; showNeeded(): void;
-  extraAll?: { label: string; onClose(): void };
-  closeExplicit?: () => void;
+function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], reveal, showNeeded, onKeepConfident }: {
+  need: number; optional: number; working: number; done: number; list: PassList; reveal(): void; showNeeded(): void;
+  onKeepConfident?(): void;
 }) {
-  const tab = extraAll || closeExplicit ? undefined : tabShown(open);
+  const tab = tabShown(open);
+  const total = need + optional;
   const show = (next: "working" | "done") => () => {
-    if (extraAll) extraAll.onClose();
-    else closeExplicit?.();
     if (tab === next) return;
     reveal();
     setOpen(next);
   };
   const tally = (n: number) => n > 0 && <span className="simple-review-tab-tally" aria-hidden="true">{n}</span>;
+  const forYouTitle = need > 0 && optional > 0
+    ? `${total} unreviewed (${need} ${need === 1 ? "needs" : "need"} you)`
+    : need > 0 ? `${need} ${need === 1 ? "needs" : "need"} you`
+    : optional > 0 ? `${optional} confident ${optional === 1 ? "edit" : "edits"}` : undefined;
   return <div className="simple-review-tabs" role="group" aria-label="Edit lists">
     <button type="button" className="simple-review-tab simple-pass-need" aria-label="For you" aria-pressed={tab === "you"}
-      title={need ? `${need} ${need === 1 ? "needs" : "need"} you` : undefined} onClick={letGo(() => { extraAll?.onClose(); closeExplicit?.(); showNeeded(); })}>
-      For you{need > 0 && <span className="simple-review-tab-count" aria-hidden="true">{need}</span>}
+      title={forYouTitle} onClick={letGo(showNeeded)}>
+      For you
+      {total > 0 && (need > 0 && optional > 0
+        ? <><span className="simple-review-tab-total" aria-hidden="true">{total}</span><span className="simple-review-tab-sep" aria-hidden="true">·</span><span className="simple-review-tab-count" aria-hidden="true">{need}</span></>
+        : need > 0
+          ? <span className="simple-review-tab-count" aria-hidden="true">{need}</span>
+          : <span className="simple-review-tab-total" aria-hidden="true">{optional}</span>)}
     </button>
     <button type="button" className="simple-review-tab" aria-label="Working" aria-pressed={tab === "working"}
       title={working ? `${working} with Scarlet` : undefined} onClick={letGo(show("working"))}>Working{tally(working)}</button>
     <button type="button" className="simple-review-tab" aria-label="Done" aria-pressed={tab === "done"}
       title={done ? `${done} decided` : undefined} onClick={letGo(show("done"))}>Done{tally(done)}</button>
-    {extraAll && <button type="button" className="simple-review-tab is-see-all" aria-pressed title="Hide the edits" onClick={letGo(extraAll.onClose)}>
-      {extraAll.label}
-    </button>}
+    {tab === "you" && optional > 0 && onKeepConfident && (
+      <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
+        onClick={letGo(onKeepConfident)}>Keep {optional} confident</button>
+    )}
   </div>;
 }
 
 /**
  * The fixed bottom review lists dock for the non-beta workspace.
- * Sits between `.simple-chat` (above) and `.composer-dock` (below) so the For you, Working,
- * Done, and See all lists stay fixed at the bottom while new messages flow above them.
+ * Sits between `.simple-chat` (above) and `.composer-dock` (below) so the combined For you
+ * Priority list (flagged edits pinned on top, confident edits right below), Working, Done,
+ * and See all lists stay fixed at the bottom while new messages flow above them.
  */
-export function ReviewDock({ store, threadIds, list: listState, laterRequests = 0, onListOpen }: {
+export function ReviewDock({ store, threadIds, list: listState, laterRequests = 0, onListOpen, onKeepConfident, flashedThreadId }: {
   store: ReviewDockStore;
   /** Thread ids in conversation order (oldest first) for deterministic tie-breaking. */
   threadIds: readonly string[];
-  /** Active tab state for the docked tabbed lists (`undefined`/`"need"` = For you, `"all"` = For you + low risk, `"working"`, `"done"`). */
+  /** Active tab/filter state (`undefined`/`"all"` = For you All, `"need"` = For you Needs you only, `"working"`, `"done"`). */
   list: PassList;
   /** Number of requests in the chat above; an increase collapses held blank tab space. */
   laterRequests?: number;
-  /** Focus the timeline on an applied pass's edits while low-risk edits are included in the dock. */
+  /** Notify the workspace when a pass's confident edits are shown on screen so the timeline marks them too. */
   onListOpen?(threadId: string, open: boolean, moved?: boolean): void;
+  /** Keep all confident edits at once (with ⌘Z undo). */
+  onKeepConfident?(): void;
+  /** Thread whose rows briefly flash after clicking Show → in chat. */
+  flashedThreadId?: string;
 }) {
   useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
   const [linger] = useState(() => new ReviewLinger());
@@ -81,94 +84,122 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
 
   const [open, setOpen] = listState;
   const host = useRef<HTMLDivElement>(null);
+  useLeavingRows(host);
   const askedReveal = useRef(false);
   const reveal = () => { askedReveal.current = true; };
 
   const reports = store.orderedReports(threadIds);
-  const tabReports = reports.filter(r => r.hasForYou);
-  const hasTabs = tabReports.length > 0;
-  const explicitAllReport = reports.find(r => !r.hasForYou && r.allOpen);
-  const explicitSingleReport = !explicitAllReport ? reports.find(r => !r.hasForYou && r.singleOpen) : undefined;
-  const explicitReport = explicitAllReport ?? explicitSingleReport;
+  const loadedOf = new Map(reports.map(r => [r.threadId, r.listLoaded] as const));
+  const hasTabs = reports.some(r => r.hasForYou);
   const tab: ReviewTab = tabShown(open);
-  const optionalOpen = hasTabs && !explicitReport && open === "all";
-  // Working and Done have no low risk switch: For you comes back with it as it was left.
-  if (hasTabs && !explicitReport && tab === "you") linger.lowRisk = optionalOpen;
+  if (hasTabs && tab === "you") linger.needsOnly = open === "need";
 
-  // Low risk rows open into For you's one list and close out of it without shifting what's in view.
-  const low = useLowRiskFold(host, optionalOpen && tab === "you", on => setOpen(on ? "all" : undefined), hasTabs && !explicitReport && tab === "you");
+  // Merge all threads' entries (deduplicated across cross-thread flags) in timeline order for tracking, Working, and Done.
+  const deduped = hasTabs ? dedupeDockEntries(reports.flatMap(r => r.entries)) : [];
+  const allowedKeys = new Set(deduped.map(e => e.key));
+  const allEntries = hasTabs ? inListOrder(deduped, TIME_ORDER) : [];
+  const inPlace = (place: RowPlace) => allEntries.filter(e => e.place === place);
+  const optional = hasTabs ? inPlace("optional") : [];
+  const need = hasTabs ? inPlace("you").filter(e => e.row.needs || e.row.asks).length : 0;
+  const needsOnly = hasTabs && tab === "you" && open === "need" && need > 0;
+  const optionalShown = hasTabs && tab === "you" && !needsOnly;
+  const allLoaded = reports.length > 0 && reports.every(r => r.listLoaded !== false);
 
-  // Merge entries from threads with review lists in timeline order when in tabbed mode.
-  const allEntries = hasTabs ? inListOrder(tabReports.flatMap(r => r.entries), TIME_ORDER) : [];
+  // Automatically drop the "Needs you" filter once edit lists have loaded and no flagged edits remain so confident edits stay visible.
+  useEffect(() => {
+    if (hasTabs && allLoaded && open === "need" && need === 0 && optional.length > 0) setOpen(undefined);
+  }, [hasTabs, allLoaded, open, need, optional.length, setOpen]);
+
+  // While a pass's confident edits are shown in the dock (and its list has settled), notify the workspace so the timeline shows its cuts too.
+  const openPassThreadId = optionalShown
+    ? reports.find(r => r.isPass && r.listLoaded !== false && r.entries.some(e => e.place === "optional" && allowedKeys.has(e.key)))?.threadId
+    : undefined;
+  useEffect(() => {
+    if (!onListOpen || !openPassThreadId) return;
+    onListOpen(openPassThreadId, true, false);
+    return () => { onListOpen(openPassThreadId, false); };
+  }, [openPassThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (hasTabs) {
     linger.track(
-      allEntries.map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })),
-      optionalOpen && tab === "you",
+      allEntries
+        .filter(e => e.row.callIndex !== undefined || loadedOf.get(e.threadId) !== false)
+        .map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })),
+      optionalShown,
       tab === "done",
     );
   }
   const heldFrom = (from: "you" | "optional" | "done") =>
     allEntries.filter(e => (from === "done" ? e.place === "working" : e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
-  const inPlace = (place: RowPlace) => allEntries.filter(e => e.place === place);
 
-  const optional = hasTabs ? inPlace("optional") : [];
-  const lowLine = useLowRiskLine(host, optional.length, hasTabs && !explicitReport && tab === "you");
-  const lowRows = hasTabs && !explicitReport && low.shown ? [...optional, ...heldFrom("optional")] : [];
+  // Priority list rows: flagged pinned at top (timeline order), confident right below (newest request first, timeline order within each request).
+  const youRows = hasTabs && tab === "you"
+    ? inListOrder(
+      allEntries.filter(e => e.place === "you" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "you")),
+      TIME_ORDER,
+    )
+    : [];
+  const lowRows = optionalShown
+    ? [...reports].reverse().flatMap(r =>
+      inListOrder(
+        r.entries.filter(e => allowedKeys.has(e.key) && (e.place === "optional" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "optional"))),
+        TIME_ORDER,
+      ),
+    )
+    : [];
   const lowKeys = new Set(lowRows.map(e => e.key));
-  const need = hasTabs ? tabReports.reduce((sum, r) => sum + r.need, 0) : 0;
-  const youBaseRows = hasTabs ? inPlace("you").length + heldFrom("you").length : 0;
+  const youBaseRows = youRows.length;
   const workingCount = hasTabs ? inPlace("working").length : 0;
   const doneCount = hasTabs ? inPlace("done").length : 0;
   const doneRows = hasTabs ? doneCount + heldFrom("done").length : 0;
 
   // Count nested requests across visible entries so useReviewTabHeight knows when nested content changes.
-  const visibleEntriesForCount = !hasTabs || explicitReport ? []
-    : tab === "you" ? allEntries.filter(e => e.place === "you" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "you") || lowKeys.has(e.key))
+  const visibleEntriesForCount = !hasTabs ? []
+    : tab === "you" ? [...youRows, ...lowRows]
     : tab === "done" ? [...inPlace("done"), ...heldFrom("done")]
     : inPlace("working");
   const nestedCount = visibleEntriesForCount.reduce((n, e) => n + e.row.nests.length + (e.unfolded && e.members ? e.members.reduce((m, mem) => m + mem.nests.length, 0) : 0), 0);
 
   useReviewTabHeight(host, {
-    enabled: hasTabs && !explicitReport,
+    enabled: hasTabs,
     tab,
     counts: { you: youBaseRows + lowRows.length, working: workingCount, done: doneRows },
     youBase: youBaseRows,
-    hasLowRisk: optional.length > 0,
-    lowOpen: low.shown,
-    lowClosing: low.closing,
+    hasLowRisk: need > 0 && optional.length > 0,
+    lowOpen: optionalShown,
     nestedCount,
     laterRequests,
   });
 
-  // Untabbed mode (or an explicitly opened "See all" / "See edit" / "See N edits so far" on a thread with no review items).
-  const untabbedReport = explicitReport ?? (!hasTabs ? reports.find(r => r.onlyRejected) : undefined);
-  const hasCalls = tabReports.some(r => r.hasCalls);
+  // Untabbed mode: show whichever thread opened "See all" / "See N edits so far", else any single open edit or rejected-only thread.
+  const untabbedReport = !hasTabs
+    ? reports.find(r => r.allOpen) ?? reports.find(r => r.singleOpen) ?? reports.find(r => r.onlyRejected)
+    : undefined;
+  const hasCalls = reports.some(r => r.hasCalls);
 
-  type Drawn = { id: "all" | ReviewTab; label: string; rows: DockEntry[] };
-  const drawn: Drawn[] = untabbedReport
-    ? [{
-      id: "all",
-      label: untabbedReport.isPass ? "Every edit" : "Edits in this thread",
-      rows: untabbedReport.entries,
-    }]
-    : hasTabs
-      ? tab === "you"
-        ? [{
-          id: "you",
-          label: hasCalls ? "Calls that need you" : "Edits that need you",
-          rows: inListOrder(
-            allEntries.filter(e => e.place === "you" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "you") || lowKeys.has(e.key)),
-            TIME_ORDER,
-          ),
-        }]
-        : [{
-          id: tab,
-          label: tab === "working" ? "With Scarlet" : "Decided",
-          rows: inListOrder(tab === "done" ? [...inPlace("done"), ...heldFrom("done")] : inPlace(tab), TIME_ORDER),
-        }]
+  type Drawn = { id: "all" | ReviewTab; label: string; rows: DockEntry[]; splitAt?: number };
+  const drawn: Drawn[] = hasTabs
+    ? tab === "you"
+      ? [{
+        id: "you",
+        label: hasCalls ? "Calls and edits for you" : "Edits for you",
+        rows: [...youRows, ...lowRows],
+        splitAt: youRows.length > 0 && lowRows.length > 0 ? youRows.length : undefined,
+      }]
+      : [{
+        id: tab,
+        label: tab === "working" ? "With Scarlet" : "Decided",
+        rows: inListOrder(tab === "done" ? [...inPlace("done"), ...heldFrom("done")] : inPlace(tab), TIME_ORDER),
+      }]
+    : untabbedReport
+      ? [{
+        id: "all",
+        label: untabbedReport.isPass ? "Every edit" : "Edits in this thread",
+        rows: untabbedReport.entries,
+      }]
       : [];
 
-  // Auto-switch tabs when an edit or call is opened from outside (timeline dot, ⌘Z, Learnings, "See edit").
+  // Auto-switch tabs/filter when an edit or call is opened from outside (timeline dot, ⌘Z, Learnings, Show →).
   const onEntry = hasTabs ? allEntries.find(e => e.row.on || e.members?.some(m => m.on)) : undefined;
   const openId = onEntry?.row.id;
   const lastOpen = useRef<string | undefined>(undefined);
@@ -176,39 +207,30 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     const was = lastOpen.current;
     lastOpen.current = openId;
     if (!hasTabs || !onEntry || openId === was) return;
-    if (explicitReport && onEntry.threadId === explicitReport.threadId) return;
-    if (explicitAllReport) store.closeAll(explicitAllReport.threadId);
-    const shown = !explicitReport && (tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalOpen) : onEntry.place === tab);
-    if (!shown) setOpen(onEntry.place === "you" ? (linger.lowRisk ? "all" : undefined) : onEntry.place === "optional" ? "all" : onEntry.place);
+    const shown = tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalShown) : onEntry.place === tab;
+    if (!shown) setOpen(onEntry.place === "you" ? (linger.needsOnly ? "need" : undefined) : onEntry.place === "optional" ? undefined : onEntry.place);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reset dock list state only when review tabs actually disappear (never on initial mount before threads report).
-  const hadTabs = useRef(hasTabs);
+  // Reset dock list state only when review tabs disappear after having been shown (never on initial mount before turns report).
+  const hadTabs = useRef(false);
+  if (hasTabs) hadTabs.current = true;
   useEffect(() => {
-    if (hadTabs.current && !hasTabs && open !== undefined) setOpen(undefined);
-    hadTabs.current = hasTabs;
+    if (hadTabs.current && !hasTabs && open !== undefined) {
+      hadTabs.current = false;
+      setOpen(undefined);
+    }
   }, [hasTabs, open, setOpen]);
 
-  // While low-risk edits are toggled on in the dock, an applied pass's full cuts take the timeline until toggled off.
-  const dockedPassThread = hasTabs && !explicitAllReport && open === "all"
-    ? [...tabReports].reverse().find(r => r.isPass && r.entries.some(e => !!e.row.edit))?.threadId
-    : undefined;
-  useEffect(() => {
-    if (!dockedPassThread || !onListOpen) return;
-    onListOpen(dockedPassThread, true, false);
-    return () => onListOpen(dockedPassThread, false);
-  }, [dockedPassThread]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Bring the first row into view when explicitly switching tabs or opening "See all" (unless a row is already selected).
+  // Bring the first row into view when explicitly switching tabs or opening an untabbed list via See all.
   const revealSeq = store.getRevealSeq();
-  const seenReveal = useRef(revealSeq);
+  const lastRevealSeq = useRef(revealSeq);
   useEffect(() => {
-    const requested = askedReveal.current || revealSeq !== seenReveal.current;
-    if (!requested) return;
+    const fromStore = revealSeq !== lastRevealSeq.current;
+    if (!askedReveal.current && !fromStore) return;
     const rows = host.current?.querySelector(".simple-pass-list");
     if (!rows) return;
-    seenReveal.current = revealSeq;
     askedReveal.current = false;
+    lastRevealSeq.current = revealSeq;
     if (!rows.querySelector('[aria-current="true"]')) {
       rows.querySelector(":scope > li > button")?.scrollIntoView?.({ block: "nearest" });
     }
@@ -236,9 +258,11 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   if (!hasTabs && !untabbedReport && !passApplying && !passErrorReport) return null;
 
   const showNeeded = () => {
-    setOpen(was => was === "all" || linger.lowRisk ? "all" : undefined);
-    if (!allEntries.some(e => (e.row.on && (e.row.needs || e.row.asks)) || e.members?.some(m => m.on && (m.needs || m.asks)))) {
-      const target = inListOrder(inPlace("you"), TIME_ORDER).find(e => (e.row.needs || e.row.asks) && !!e.row.open);
+    setOpen(linger.needsOnly ? "need" : undefined);
+    const waitingOpen = allEntries.some(e => (e.row.on && (e.row.needs || e.row.asks)) || e.members?.some(m => m.on && (m.needs || m.asks)));
+    const confidentOpen = !waitingOpen && need === 0 && allEntries.some(e => e.row.on && e.place === "optional");
+    if (!waitingOpen && !confidentOpen) {
+      const target = inListOrder(inPlace("you"), TIME_ORDER).find(e => (e.row.needs || e.row.asks) && !!e.row.open) ?? lowRows.find(e => !!e.row.open);
       if (target) store.openRow(target.threadId, target.key);
     }
   };
@@ -269,68 +293,72 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     </li>
   );
 
-  const rowList = ({ id, label, rows: list }: Drawn) => (
+  const rowList = ({ id, label, rows: list, splitAt }: Drawn) => (
     <ol key={id} className={pastHour ? "simple-pass-list has-hours" : "simple-pass-list"} aria-label={label}>
-      {list.map(entry => {
+      {list.map((entry, idx) => {
         const { row, members, more, moment, unfolded } = entry;
         const value = id === "all" ? row.value : row.decision ?? row.value;
         const heldRow = hasTabs ? linger.of(entry.key) : undefined;
         const leaving = !!heldRow?.leaving && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
         const canUnkeepRow = !!row.unkeep && !leaving;
-        return <li key={row.key}
-          data-thread={entry.threadId}
-          className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
-          data-low-risk={id === "you" && lowKeys.has(entry.key) ? "" : undefined}>
-          <button type="button"
-            className={[
-              row.on && "is-on",
-              row.rejected && "is-rejected",
-              row.asks && "is-asking",
-              !row.on && !row.rejected && row.decided && (id !== "all" || entry.isPass) && "is-decided",
-            ].filter(Boolean).join(" ") || undefined}
-            aria-current={row.on || undefined}
-            data-log-control={row.dataLogControl}
-            data-log-label={row.dataLogLabel}
-            disabled={!row.open}
-            title={row.title}
-            aria-label={row.ariaLabel}
-            onClick={letGo(() => store.openRow(entry.threadId, entry.key))}
-            onPointerEnter={() => store.hoverRow(entry.threadId, row.mark, row.hover)}
-            onPointerLeave={() => store.hoverRow(entry.threadId)}>
-            <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>
-              {clockLabel(row.displayAt)}{entry.isPass && (row.needs || row.asks) && <span>, needs you</span>}
-            </span>
-            <span className="simple-pass-label">
-              {(row.rejected || row.skipped) && <RejectedMark />}
-              {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
-              <span className="simple-pass-words">{row.label}</span>
-              {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
-              {row.fresh && <small className="edit-version is-new">New</small>}
-              {more && moment && entry.onToggleMoment && <span className="simple-pass-more" aria-expanded={!!unfolded}
-                title={unfolded ? "Hide its edits" : "Show its edits"}
-                onClick={e => { e.stopPropagation(); store.toggleMoment(entry.threadId, entry.key); }}>{more}</span>}
-            </span>
-            {!row.word && value && <span className={row.asks ? "simple-pass-value is-need" : row.busy ? "simple-pass-value working-text" : "simple-pass-value"} title={row.spent}>{value}</span>}
-            {row.word && <span className={`simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={row.spent}>{row.word}</span>}
-          </button>
-          {canUnkeepRow && <span className="simple-row-unkeep"
-            onPointerEnter={() => store.hoverRow(entry.threadId, row.mark, row.hover)} onPointerLeave={() => store.hoverRow(entry.threadId)}>
-            <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
-              aria-label={`Unkeep ${row.label}`} title={row.unkeepTip ?? "Unkeep"}
-              onClick={letGo(() => store.unkeepRow(entry.threadId, entry.key))}>Unkeep</button>
-          </span>}
-          {row.nests.map(nest => nest.node)}
-          {unfolded && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
-            {members.map(m => renderMember(entry, m))}
-          </ol>}
-        </li>;
+        const isLowRow = id === "you" && lowKeys.has(entry.key);
+        const flashed = !!flashedThreadId && flashedThreadId === entry.threadId;
+        return <Fragment key={row.key}>
+          {splitAt !== undefined && idx === splitAt && (
+            <li className="review-tier-sep" role="presentation"><span>Confident edits ({optional.length})</span></li>
+          )}
+          <li className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
+            data-thread={entry.threadId}
+            data-low-risk={isLowRow ? "" : undefined}
+            data-flash={flashed ? "" : undefined}>
+            <button type="button"
+              className={[
+                row.on && "is-on",
+                row.rejected && "is-rejected",
+                row.asks && "is-asking",
+                !row.on && !row.rejected && row.decided && (id !== "all" || entry.isPass) && "is-decided",
+              ].filter(Boolean).join(" ") || undefined}
+              aria-current={row.on || undefined}
+              data-log-control={row.dataLogControl}
+              data-log-label={row.dataLogLabel}
+              disabled={!row.open}
+              title={row.title || row.label}
+              aria-label={row.ariaLabel}
+              onClick={letGo(() => store.openRow(entry.threadId, entry.key))}
+              onPointerEnter={() => store.hoverRow(entry.threadId, row.mark, row.hover)}
+              onPointerLeave={() => store.hoverRow(entry.threadId)}>
+              <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>
+                {clockLabel(row.displayAt)}{(row.needs || row.asks) && <span>, needs you</span>}
+              </span>
+              <span className="simple-pass-label">
+                {(row.rejected || row.skipped) && <RejectedMark />}
+                {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+                <span className="simple-pass-words">{row.label}</span>
+                {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
+                {row.fresh && <small className="edit-version is-new">New</small>}
+                {more && moment && entry.onToggleMoment && <span className="simple-pass-more" aria-expanded={!!unfolded}
+                  title={unfolded ? "Hide its edits" : "Show its edits"}
+                  onClick={e => { e.stopPropagation(); store.toggleMoment(entry.threadId, entry.key); }}>{more}</span>}
+              </span>
+              {!row.word && value && <span className={row.asks ? "simple-pass-value is-need" : row.busy ? "simple-pass-value working-text" : "simple-pass-value"} title={row.spent}>{value}</span>}
+              {row.word && <span className={`simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={row.spent}>{row.word}</span>}
+            </button>
+            {canUnkeepRow && <span className="simple-row-unkeep"
+              onPointerEnter={() => store.hoverRow(entry.threadId, row.mark, row.hover)} onPointerLeave={() => store.hoverRow(entry.threadId)}>
+              <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
+                aria-label={`Unkeep ${row.label}`} title={row.unkeepTip ?? "Unkeep"}
+                onClick={letGo(() => store.unkeepRow(entry.threadId, entry.key))}>Unkeep</button>
+            </span>}
+            {row.nests.map(nest => nest.node)}
+            {unfolded && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
+              {members.map(m => renderMember(entry, m))}
+            </ol>}
+          </li>
+        </Fragment>;
       })}
     </ol>
   );
 
-  const extraAll = explicitAllReport && !explicitAllReport.soFar && explicitAllReport.onCloseAll
-    ? { label: explicitAllReport.allLabel, onClose: () => store.closeAll(explicitAllReport.threadId) } : undefined;
-  const closeExplicit = explicitSingleReport ? () => store.closeSingle(explicitSingleReport.threadId) : undefined;
   const seeTab = !hasTabs && untabbedReport?.allOpen && !untabbedReport.soFar && untabbedReport.onCloseAll && (
     <div className="simple-review-tabs" role="group" aria-label="Edit lists">
       <button type="button" className="simple-review-tab is-see-all" aria-pressed title="Hide the edits" onClick={letGo(() => store.closeAll(untabbedReport.threadId))}>
@@ -339,13 +367,21 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     </div>
   );
 
-  const isPassDock = untabbedReport ? untabbedReport.isPass : tabReports.some(r => r.isPass);
+  const isPassDock = hasTabs ? reports.some(r => r.isPass) : !!(untabbedReport?.isPass || passApplying || passErrorReport);
 
   return <div className="simple-review-dock" role="region" aria-label="Edit lists">
     <div ref={host} className="simple-pass" role="group" aria-label={isPassDock ? "Dialogue pass" : "Edits"}>
-      {hasTabs && <DockReviewTabs need={need} working={workingCount} done={doneCount} list={listState} reveal={reveal} showNeeded={showNeeded} extraAll={extraAll} closeExplicit={closeExplicit} />}
+      {hasTabs && <DockReviewTabs need={need} optional={optional.length} working={workingCount} done={doneCount}
+        list={listState} reveal={reveal} showNeeded={showNeeded} onKeepConfident={onKeepConfident} />}
       {seeTab}
-      {lowLine && <LowRiskSwitch count={lowLine.count} on={optionalOpen} onToggle={low.toggle} leaving={lowLine.leaving} />}
+      {hasTabs && tab === "you" && need > 0 && optional.length > 0 && (
+        <div className="review-filter-bar" role="group" aria-label="Filter edits">
+          <button type="button" className="review-filter-chip" aria-pressed={!needsOnly}
+            onClick={letGo(() => setOpen(undefined))}>All {need + optional.length}</button>
+          <button type="button" className="review-filter-chip is-warn" aria-pressed={needsOnly}
+            onClick={letGo(() => setOpen("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
+        </div>
+      )}
       {drawn.map(list => <Fragment key={list.id}>
         {list.rows.length > 0 ? rowList(list) : list.id !== "all" && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
       </Fragment>)}

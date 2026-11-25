@@ -7,7 +7,7 @@ import { appliedReviewChange, timelineDuration, type Change, type CutAssessment,
 import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
 import { useReviewed, useRevising } from "../../components/review/threadEditState";
 import { QueueTray, useRewordingHold, type QueuedRequest } from "../../components/chat/QueueTray";
-import { recordEditReview } from "../../lib/editReviews";
+import { recordEditReview, recordEditReviews } from "../../lib/editReviews";
 import { forgetCalls, recordUndo, undoLast, type CallStep } from "../../lib/undo";
 import { editKey, keepEdits, notYetKept } from "../../lib/keptEdits";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
@@ -63,7 +63,7 @@ import { savedRewording, saveRewording } from "./rewordingStorage";
 import { savedCollapsed, savedDockList, savedOpenLists, saveCollapsed, saveDockList, saveOpenLists } from "./openListsStorage";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./ReviewCards";
 import { ReviewDock } from "./ReviewDock";
-import { ReviewDockContext, ReviewDockStore, type DockEntry } from "./reviewDockStore";
+import { ReviewDockContext, ReviewDockStore, stepInDock, type DockEntry } from "./reviewDockStore";
 import { TimelineWorking } from "../../components/review/TimelineWorking";
 import { Turn } from "./Turn";
 import { useCallListen } from "./useCallListen";
@@ -152,6 +152,14 @@ export function LegacySimpleWorkspace() {
   const [dock] = useState(() => new ReviewDockStore());
   const dockHasTabs = useSyncExternalStore(dock.subscribeHasTabs, dock.hasTabsSnapshot, dock.hasTabsSnapshot);
   const [dockList, setDockList] = useState<OpenList>(() => savedDockList(current.id));
+  const [flashedThread, setFlashedThread] = useState<string>();
+  const flashTimer = useRef<number>(0);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+  const flashThreadInDock = useCallback((threadId: string) => {
+    clearTimeout(flashTimer.current);
+    setFlashedThread(threadId);
+    flashTimer.current = window.setTimeout(() => setFlashedThread(undefined), 1150);
+  }, []);
   const dockListOf = useRef(current.id);
   useEffect(() => {
     if (dockListOf.current === current.id) return saveDockList(current.id, dockList);
@@ -566,10 +574,10 @@ export function LegacySimpleWorkspace() {
       projectId: current.id, changeId: pass.id, index: listening.index, ...(was && { was }) });
     // A and S reach the log as a bare key: this says which call it decided and how many still wait.
     appLog("action", choice === approves(allCalls.find(a => a.index === listening.index)) ? "approve-call" : "skip-call", { change: pass.id, cut: listening.index, at: listening.cut.start, left: remainingCalls.length });
-    const nextDock = dockHasTabs && !dock.explicitReport(threadIds) ? nextDockAfterKeep(listedAt.get(listening.index) ?? listening.cut.start) : undefined;
+    const nextDock = dockHasTabs ? nextDockAfterKeep(listedAt.get(listening.index) ?? listening.cut.start) : undefined;
     const next = nextAfterCallDecision;
     player.pause();
-    if (dockHasTabs && !dock.explicitReport(threadIds)) {
+    if (dockHasTabs) {
       if (nextDock?.row.callIndex !== undefined) {
         const nextCall = allCalls.find(a => a.index === nextDock.row.callIndex);
         if (nextCall) {
@@ -795,9 +803,12 @@ export function LegacySimpleWorkspace() {
     stopShowing();
     player.seek(decision.time, true);
   }
+  const chosenRef = useRef(false);
+  chosenRef.current = threadTimeline.chosen;
   function listOpen(threadId: string, open: boolean, moved?: boolean) {
     setOpenList(current => open ? threadId : current === threadId ? undefined : current);
     if (open && !moved) setFocus(f => f?.threadId === threadId ? f : { threadId });
+    else if (!open && !chosenRef.current) setFocus(f => f?.threadId === threadId && !f.changeId ? undefined : f);
   }
   const lightMark = (time?: number, row?: HoveredReviewRow) => {
     // A row's dot is where its footage is on the version the timeline shows.
@@ -955,6 +966,28 @@ export function LegacySimpleWorkspace() {
       && tasks.filter(t => t.kind !== "transcribe" && t.state === "waiting_for_user" && !!t.question).length === 1 ? replyThread.question.id : undefined,
     cutName,
     callTime: (changeId, cutIndex) => callAtTime({ changeId, cutIndex }),
+    showThread(threadId) {
+      const report = dock.get(threadId);
+      if (!report) return;
+      const waiting = report.entries.find(e => e.place === "you" && !e.row.rejected && !!e.row.open);
+      const confident = report.entries.find(e => e.place === "optional" && !e.row.rejected && !!e.row.open);
+      const workingEntry = report.entries.find(e => e.place === "working" && !!(e.row.stepOpen ?? e.row.open));
+      const doneEntry = report.entries.find(e => e.place === "done" && !!e.row.open);
+      if (waiting) {
+        if (tabShown(dockList) !== "you") setDockList(undefined);
+        waiting.row.open?.();
+      } else if (confident) {
+        setDockList(undefined);
+        confident.row.open?.();
+      } else if (workingEntry) {
+        setDockList("working");
+        (workingEntry.row.stepOpen ?? workingEntry.row.open)?.();
+      } else if (doneEntry) {
+        setDockList("done");
+        doneEntry.row.open?.();
+      }
+      flashThreadInDock(threadId);
+    },
   };
   // The pass goes in once nothing is left to decide: no call waits on the editor and no cut is with Scarlet. The editor's
   // last call does this itself; this covers a pass that gets there another way, such as a run that ends with every
@@ -1301,7 +1334,7 @@ export function LegacySimpleWorkspace() {
   const shownRow = reviewingEdit ? editsByRow.findIndex(row => row.includes(reviewingEdit)) : -1;
   const waitingEdit = (e: ThreadEdit) => !!e.check && !reviewed(e) && !revisingEdit(e);
   // Which of each request's lists the chat shows: ↑ ↓ and Keep go by the rows of that tab.
-  const explicitAllDock = dock.explicitReport(threadIds);
+  const explicitAllDock = dock.explicitAllReport(threadIds);
   const focusList = focusThread ? lists[focusThread.id] : undefined;
   const passList = dockHasTabs && !explicitAllDock ? dockList : passThread ? lists[passThread.id] : undefined;
   const passIsFocus = !!pass && !!passThread && passThread.id === focusThread?.id;
@@ -1411,7 +1444,7 @@ export function LegacySimpleWorkspace() {
     (next.row.stepOpen ?? next.row.open)?.();
   }
   function stepEdit(delta: number) {
-    const explicitAll = dock.explicitReport(threadIds);
+    const explicitAll = dock.explicitAllReport(threadIds);
     if (dockHasTabs && !explicitAll && reviewingEdit) {
       // Stepping inside an unfolded moment's individual edits stays within that moment first.
       if (openMoment) {
@@ -1426,7 +1459,8 @@ export function LegacySimpleWorkspace() {
       const nav = dock.tabNavigable(threadIds, dockList);
       const current = nav.find(e => e.row.on || e.members?.some(m => m.on));
       const hereAt = reviewingEdit.at ?? reviewingEdit.range.start;
-      const next = rowBeside(nav, current, { at: hereAt }, delta, { numbers: false });
+      const tier = reviewingEdit.check || reviewingEdit.wasCheck ? "you" : "optional";
+      const next = stepInDock(nav, current, { at: hereAt, threadId: focusThread?.id, tier }, delta);
       openSteppedDockEntry(next);
       return;
     }
@@ -1600,17 +1634,43 @@ export function LegacySimpleWorkspace() {
     }
     moveOnFromShown();
   }
-  /** Next row in the unified fixed bottom dock's For you list (with low risk edits included when switched on). */
+  /** Next row in the unified fixed bottom dock's For you Priority list. */
   function nextDockAfterKeep(hereAt: number): DockEntry | undefined {
     const waitingList = dock.waitingEntries(threadIds);
-    const keepList = dock.keepEntries(threadIds, dockList === "all");
+    const includeConfident = dockList !== "need" || waitingList.length === 0;
+    const keepList = dock.keepEntries(threadIds, includeConfident);
     const current = keepList.find(e => e.row.on || e.members?.some(m => m.on));
-    if (dockList === "all") return rowNext(keepList, current, { at: hereAt }, { numbers: false }) ?? waitingList.find(e => e !== current);
-    return rowAfter(waitingList, current, { at: hereAt }, { numbers: false });
+    const confident = keepList.filter(e => e.place === "optional");
+    // While on a waiting item, finish remaining waiting items first (wrapping to earlier ones),
+    // then move into confident edits when All is active.
+    if (!current || current.place === "you") {
+      return rowAfter(waitingList, current, { at: hereAt }, { numbers: false })
+        ?? (includeConfident ? confident[0] : undefined);
+    }
+    // While on a confident edit, advance strictly down Confident edits, wrapping back to anything still waiting at the end.
+    return rowNext(confident, current, { at: hereAt }, { numbers: false })
+      ?? waitingList.find(e => e !== current);
+  }
+  /** Keep all confident edits across requests at once, with one-press ⌘Z undo. */
+  function keepConfident() {
+    const parts = dock.confidentEdits(threadIds).flatMap(({ threadId, refs }) => {
+      const fresh = notYetKept(current.id, threadId, refs);
+      return fresh.length ? [{ threadId, refs: fresh }] : [];
+    });
+    if (!parts.length) return;
+    const wasOnConfident = !!reviewingEdit && !reviewingEdit.check && !reviewingEdit.wasCheck;
+    for (const part of parts) if (keepEdits(current.id, part.threadId, part.refs, head ?? undefined)) recordEditReviews(current.id, part.refs, "keep");
+    recordUndo({ kind: "keepAll", word: "Keep all", projectId: current.id, parts });
+    appLog("action", "keep-low-risk", { count: parts.reduce((n, part) => n + part.refs.length, 0), requests: parts.length });
+    if (wasOnConfident) {
+      const firstWaiting = dock.waitingEntries(threadIds)[0];
+      if (firstWaiting?.row.open) firstWaiting.row.open();
+      else closeEdit();
+    }
   }
   // Keep, Add and Reject edit go on to the same place: the next edit or call that still waits, else the card closes.
   function moveOnFromShown() {
-    if (dockHasTabs && !dock.explicitReport(threadIds) && reviewingEdit) {
+    if (dockHasTabs && !dock.explicitAllReport(threadIds) && reviewingEdit) {
       const next = nextDockAfterKeep(reviewingEdit.at ?? reviewingEdit.range.start);
       if (next?.row.open) { next.row.open(); return; }
       closeEdit();
@@ -1624,7 +1684,7 @@ export function LegacySimpleWorkspace() {
   // Working's now, and the card moves to the next one that waits. From Working or Done, and in a request with one
   // list of every edit, the card stays on the edit it revised.
   function moveOnFromRevised() {
-    if (dockHasTabs && !dock.explicitReport(threadIds)) {
+    if (dockHasTabs && !dock.explicitAllReport(threadIds)) {
       if (tabShown(dockList) !== "you") return;
       if (reviewingEdit) { moveOnFromShown(); return; }
       if (!openCall || !pass) return;
@@ -1690,7 +1750,7 @@ export function LegacySimpleWorkspace() {
   // decision of the editor's are: one that asks for a look, or a spot marked for them, waits for their own Keep. While
   // a cut, an edit or a call is open the player is on its own passage, and nothing is kept this way.
   const watchedMoments = useMemo(() => {
-    const lowIncluded = dockHasTabs && !explicitAllDock ? dockList === "all" : !!focusThread && lists[focusThread.id] === "all";
+    const lowIncluded = dockHasTabs && !explicitAllDock ? dockList !== "need" : !!focusThread && lists[focusThread.id] === "all";
     if (!focusThread || !lowIncluded || !threadTimeline.moments || !passFocused) return [];
     return threadTimeline.moments
       .filter(m => m.edits.every(e => !e.check && !e.marker) && m.edits.some(e => !reviewed(e) && !revisingEdit(e)));
@@ -1707,7 +1767,7 @@ export function LegacySimpleWorkspace() {
       if (!nav.length) return;
       const current = nav.find(e => e.row.on || e.members?.some(m => m.on));
       const next = openCall
-        ? rowBeside(nav, current, { at: listedAt.get(openCall.index) ?? openCall.start }, delta, { numbers: false })
+        ? stepInDock(nav, current, { at: listedAt.get(openCall.index) ?? openCall.start, threadId: passThread?.id, tier: "you" }, delta)
         : delta > 0 ? nav[0] : nav.at(-1);
       openSteppedDockEntry(next);
       return;
@@ -2467,7 +2527,8 @@ export function LegacySimpleWorkspace() {
               {!current.reviewStatus && current.headError && <p className="simple-error" role="alert">{current.headError}{" "}
                 <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>}
             </div>
-            <ReviewDock key={current.id} store={dock} threadIds={threadIds} list={[dockList, setDockList]} laterRequests={ordered.length} onListOpen={listOpen} />
+            <ReviewDock key={current.id} store={dock} threadIds={threadIds} list={[dockList, setDockList]} laterRequests={ordered.length}
+              onListOpen={listOpen} onKeepConfident={keepConfident} flashedThreadId={flashedThread} />
             {/* The tag in the box shows where a message goes. This line says it for screen readers only. */}
             {!rewordingItem && (replyThread || !aimMatches) && <div className="simple-target" role="status">
               <span>{aimLabel}</span>

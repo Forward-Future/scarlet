@@ -477,7 +477,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
             unkeepEdits(projectId, thread.id, [e]);
             recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: [e], name: label });
           },
-          unkeepTip: e.check ? "Move back to For you" : tabbed ? "Move back to low risk" : "Unkeep",
+          unkeepTip: e.check || tabbed ? "Move back to For you" : "Unkeep",
         }),
         fresh: fresh.has(e.changeId) }];
     }),
@@ -569,7 +569,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
         unkeepEdits(projectId, thread.id, unkeepMembers);
         recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepMembers, name: main.label });
       } : undefined,
-      unkeepTip: unkeepMembers.length > 0 ? (tabbed ? "Move back to low risk" : "Unkeep") : undefined,
+      unkeepTip: unkeepMembers.length > 0 ? (tabbed ? "Move back to For you" : "Unkeep") : undefined,
       was: members.flatMap(m => m.was ?? []), title: members.map(m => m.label).join("\n") }, members, more, moment: moment.key,
       unfolded: unfolded.has(moment.key) || members.some(m => m.on),
       place: members.some(m => asks.has(m.key)) ? "you" : rowPlace(members, { waits: m => m.needs || m.asks, sent: m => m.pending, kept: m => m.decided }),
@@ -811,7 +811,12 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const soFar = (!!working || !!pass?.running) && !made;
   const canSeeAll = edits.length > 0;
   const seeProps = { thread, actions, single, rows: totalRows + rejected.length, count: totalRows, soFar, list: listState, reveal, column: !!rail };
-  const seeEvery = (rail ? !!single : !tabbed) && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
+  const seeEvery = rail
+    ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
+      : !soFar && canSeeAll && actions.showThread
+        ? <button type="button" className="simple-pass-toggle" title="Show these edits in For you" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
+        : null)
+    : !tabbed && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const tabs = tabbed && <ReviewListTabs need={need} working={inPlace("working").length} done={inPlace("done").length} list={listState} reveal={reveal} showNeeded={showNeeded} />;
   const outsideList = <>
@@ -911,7 +916,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
     for (const { members } of groups) {
       const row = members.map(m => m.edit), key = editKey(row[0]!);
       const place = row.some(e => asks.has(editKey(e))) ? "you"
-        : rowPlace(row, { waits: e => !!e.check && (asksEditor(revising(e)) || (!reviewed(e) && !revising(e))), sent: e => !!revising(e), kept: e => reviewed(e) });
+        : rowPlace(row, { waits: e => asksEditor(revising(e)) || (!!e.check && !reviewed(e) && !revising(e)), sent: e => !!revising(e), kept: e => reviewed(e) });
       for (const e of row) rowOf.set(editKey(e), key);
       placeOf.set(key, place);
       const busy = row.some(e => { const r = revising(e); return !!r && isWorking(r.state); });
@@ -994,7 +999,12 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const listed = new Set(tabbed ? rowOf.keys() : showsList ? [...edits, ...gone].map(editKey) : []);
   const canSeeAll = open === "all" || edits.length > 0;
   const seeProps = { thread, actions, single, rows: groups.length + gone.length, count: groups.length, soFar: working && !made, list, reveal, column: !!rail };
-  const seeEvery = (rail ? !!single : !tabbed) && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
+  const seeEvery = rail
+    ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
+      : !(working && !made) && canSeeAll && actions.showThread
+        ? <button type="button" className="simple-pass-toggle" title="Show these edits in For you" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
+        : null)
+    : !tabbed && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const showNeeded = () => {
     setOpen(was => was === "all" ? was : undefined);
@@ -1037,7 +1047,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       const decided = isKept && !isRevising;
       const decision = decided ? (shown.marker ? "Done" : "Kept") : undefined;
       const needs = !asks && !isRevising && rowEdits.some(waiting);
-      const countsAsNeed = rowEdits.some(e => !!e.check && (asksEditor(revising(e)) || (!reviewed(e) && !revising(e))));
+      const countsAsNeed = rowEdits.some(e => asksEditor(revising(e)) || (!!e.check && !reviewed(e) && !revising(e)));
       const at = Math.min(...rowEdits.map(e => (e as ThreadEdit).at ?? e.range.start));
       const displayAt = (!reviewed(shown) && !isRevising ? shown.reviewRange?.start : undefined) ?? ((shown as ThreadEdit).at ?? shown.range.start);
       const rawKind = editRowWord(shown);

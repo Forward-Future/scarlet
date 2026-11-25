@@ -14,7 +14,7 @@ import { isRecheck, type Thread } from "../../lib/threads";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { recordUndo } from "../../lib/undo";
 import { useLowRiskFold, useLowRiskLine } from "./lowRiskFold";
-import { useReviewDockStore, type DockEntry, type DockRow } from "./reviewDockStore";
+import { useDockHasTabs, useReviewDockStore, type DockEntry, type DockRow } from "./reviewDockStore";
 import { useReviewTabHeight } from "./reviewTabHeight";
 import { callRowKey, isWorking, letGo, listedBefore, noNests, noRejected, noSpent, type ChatActions, type HoveredReviewRow, type Nest, type PassList, type Spent } from "./types";
 
@@ -207,7 +207,7 @@ interface Entry {
  * request about one cut or edit that is still in the chat (`nests`) sits directly under that cut's or edit's row.
  * `aside` is what the run used, when that shows.
  */
-export function PassSummary({ projectId, thread, edits, rejected = noRejected, actions, aside, list: listState, listedNeed, working, nests = noNests, spent = noSpent, linger: heldLinger, lastOpen: heldOpen, onTabs, laterRequests = 0 }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[];
+export function PassSummary({ projectId, thread, edits, rejected = noRejected, actions, aside, list: listState, listedNeed, working, nests = noNests, spent = noSpent, linger: heldLinger, lastOpen: heldOpen, listLoaded, onTabs, laterRequests = 0 }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[];
   /** Hears whether the rows are under For you, Working and Done: Scarlet's reply then stays over them. */
   onTabs?(tabbed: boolean): void;
   /** Edits the editor rejected: out of the video, each keeps a row in the list of every edit, with a × and "Rejected". */
@@ -215,6 +215,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   actions: ChatActions; aside?: ReactNode; list: PassList; listedNeed: RefObject<Set<string>>; working?: boolean; nests?: readonly Nest[]; spent?: Spent;
   /** The rows just acted on and the edit last opened, held by the turn: see `ThreadResult`. */
   linger?: ReviewLinger; lastOpen?: RefObject<string | undefined>;
+  /** True once this thread's live edit list has settled (so initial saved → located arrival won't linger rows). */
+  listLoaded?: boolean;
   /** Newer requests below this one in the chat; an increase collapses held blank tab space. */
   laterRequests?: number }) {
   const reviewed = useReviewed(projectId, thread);
@@ -226,6 +228,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const [open, setOpen] = listState;
   const [host, reveal] = useReveal(open);
   const dock = useReviewDockStore();
+  const dockHasTabs = useDockHasTabs();
   const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
   const openCalls = pass?.calls.filter(c => c.state === "open").length ?? 0;
   // Calls the editor decided before the pass applied are rows of Done: approved cuts link to their applied edit row,
@@ -340,7 +343,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
             unkeepEdits(projectId, thread.id, [e]);
             recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: [e], name: label });
           },
-          unkeepTip: e.check ? "Move back to For you" : hasForYou ? "Move back to low risk" : "Unkeep",
+          unkeepTip: e.check || dockHasTabs || hasForYou ? "Move back to For you" : "Unkeep",
         }),
         fresh: fresh.has(e.changeId) }];
     }),
@@ -430,7 +433,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         unkeepEdits(projectId, thread.id, unkeepMembers);
         recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepMembers, name: main.label });
       } : undefined,
-      unkeepTip: unkeepMembers.length > 0 ? (hasForYou ? "Move back to low risk" : "Unkeep") : undefined,
+      unkeepTip: unkeepMembers.length > 0 ? (dockHasTabs || hasForYou ? "Move back to For you" : "Unkeep") : undefined,
       was: members.flatMap(m => m.was ?? []), title: members.map(m => m.label).join("\n") }, members, more, moment: moment.key,
       unfolded: unfolded.has(moment.key) || members.some(m => m.on),
       place: members.some(m => asks.has(m.key)) ? "you" : rowPlace(members, { waits: m => m.needs || m.asks, sent: m => m.pending, kept: m => m.decided }),
@@ -531,8 +534,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   useKeepSelectedInView(host, selectedKey, ".simple-pass-list [aria-current=\"true\"]");
   const fold = (key: string) => setUnfolded(was => { const next = new Set(was); if (!next.delete(key)) next.add(key); return next; });
   const soFar = (!!working || !!pass?.running) && !made;
+  const ownsEdit = (e: Omit<ThreadEdit, "at">) =>
+    thread.changes.some(c => c.id === e.changeId) || e.previous.some(p => thread.changes.some(c => c.id === p.changeId));
   const dockRowOf = (r: PassRow, rowNests: readonly Nest[], extra?: { more?: string; moment?: string }): DockRow => {
     const callIdx = callIndexOf.get(r.key);
+    const edit = editOf.get(r.key);
     return {
       key: `${thread.id}/${r.key}`,
       rawKey: r.key,
@@ -571,7 +577,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       dataLogControl: "open-pass-item",
       dataLogLabel: extra?.moment ? "Moment" : "Pass item",
       callIndex: callIdx,
-      edit: editOf.get(r.key),
+      edit,
+      owns: edit ? ownsEdit(edit) : undefined,
       editOrder: editIndexOf.has(r.key) ? { index: editIndexOf.get(r.key)!, of: edits.length } : undefined,
       nests: rowNests,
     };
@@ -590,7 +597,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     num: entry.num,
     isPass: true,
   }));
-  const singleOpen = actions.marked === thread.id && !!single && !hasForYou && open !== "need" && !!actions.showing && matchesEdit(actions.showing, single);
+  const singleOpen = !!single && ownsEdit(single) && !hasForYou && !dockHasTabs && open !== "need" && !!actions.showing && matchesEdit(actions.showing, single);
   const allRowsCount = totalRows + rejected.length;
   useLayoutEffect(() => {
     if (!dock) return;
@@ -609,6 +616,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       onlyRejected,
       singleOpen,
       onCloseSingle: () => actions.stopShowing(),
+      listLoaded,
       passApplying: !!(waiting && pass?.deciding),
       passError: pass?.error || undefined,
       onRetryPass: waiting && !pass?.deciding ? pass?.apply : undefined,
@@ -619,7 +627,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   if (empty) return null;
   // A request whose row is under a tab is drawn there, under that row, and nowhere else. One about a cut or edit with
   // no row at all still shows, under what the pass made.
-  const placed = new Set((dock ? (hasForYou || listed ? entries : []) : hasForYou ? entries : drawn.flatMap(list => list.rows)).flatMap(keysOf));
+  const placed = new Set((dock ? (dockHasTabs || listed ? entries : []) : hasForYou ? entries : drawn.flatMap(list => list.rows)).flatMap(keysOf));
   const pastHour = drawn.some(list => list.rows.some(({ row }) => clockLabel(row.displayAt).length > 5));
   const rowList = ({ id, label, rows: list }: Drawn) => {
     // Every list leads with each row's time and keeps its version and amount: the time is bold amber on a tint while
@@ -685,7 +693,12 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const canSeeAll = edits.length > 0;
   const revealList = dock ? () => dock.requestReveal() : reveal;
   const seeProps = { thread, actions, single, rows: totalRows + rejected.length, count: totalRows, soFar, list: listState, reveal: revealList };
-  const seeEvery = !hasForYou && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
+  const seeEvery = dock && dockHasTabs
+    ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
+      : !soFar && canSeeAll && actions.showThread
+        ? <button type="button" className="simple-pass-toggle" title="Show these edits in For you" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
+        : null)
+    : !hasForYou && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !dock && !hasForYou && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const tabs = !dock && hasForYou && <ReviewListTabs need={need} working={inPlace("working").length} done={inPlace("done").length} list={listState} reveal={reveal} showNeeded={showNeeded} />;
   const outsideList = <>
@@ -730,7 +743,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
  * decided or sent back stays in For you a moment with its new word, then fades and leaves. A request about an edit
  * that is still in the chat (`nests`) sits directly under that edit's row.
  */
-export function ThreadResult({ projectId, thread, edits, rejected, actions, aside, working, nests = noNests, spent = noSpent, list, listedNeed, wasShowing: heldShowing, linger: heldLinger, lastOpen: heldOpen, onTabs, laterRequests = 0 }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[]; rejected?: Omit<ThreadEdit, "at">[]; actions: ChatActions;
+export function ThreadResult({ projectId, thread, edits, rejected, actions, aside, working, nests = noNests, spent = noSpent, list, listedNeed, wasShowing: heldShowing, linger: heldLinger, lastOpen: heldOpen, listLoaded, onTabs, laterRequests = 0 }: { projectId: string; thread: Thread; edits: Omit<ThreadEdit, "at">[]; rejected?: Omit<ThreadEdit, "at">[]; actions: ChatActions;
   /** Hears whether the rows are under For you, Working and Done: Scarlet's reply then stays over them. */
   onTabs?(tabbed: boolean): void;
   aside?: ReactNode; working?: boolean; nests?: readonly Nest[]; spent?: Spent;
@@ -739,6 +752,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
    *  nor turn into another. `wasShowing` is whether one of the edits was open when the block last drew, `lastOpen`
    *  which, and `linger` the rows just decided or sent back, which stay in For you a moment. */
   list: PassList; listedNeed: RefObject<Set<string>>; wasShowing?: RefObject<boolean>; linger?: ReviewLinger; lastOpen?: RefObject<string | undefined>;
+  /** True once this thread's live edit list has settled (so initial saved → located arrival won't linger rows). */
+  listLoaded?: boolean;
   /** Newer requests below this one in the chat; an increase collapses held blank tab space. */
   laterRequests?: number }) {
   const reviewed = useReviewed(projectId, thread);
@@ -750,6 +765,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   const [open, setOpen] = list;
   const [host, reveal] = useReveal(open);
   const dock = useReviewDockStore();
+  const dockHasTabs = useDockHasTabs();
   const gone = rejected ?? noRejected;
   const isForYou = (e: Omit<ThreadEdit, "at">) => e.rejected ? (!!e.wasCheck || listedBefore(listedNeed.current, e)) : !!e.check;
   // An edit open on the timeline shows in a list: the one that's open, or one that opens with it when none is.
@@ -780,7 +796,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     for (const { members } of groups) {
       const row = members.map(m => m.edit), key = editKey(row[0]!);
       const place = row.some(e => asks.has(editKey(e))) ? "you"
-        : rowPlace(row, { waits: e => !!e.check && (asksEditor(revising(e)) || (!reviewed(e) && !revising(e))), sent: e => !!revising(e), kept: e => reviewed(e) });
+        : rowPlace(row, { waits: e => asksEditor(revising(e)) || (!!e.check && !reviewed(e) && !revising(e)), sent: e => !!revising(e), kept: e => reviewed(e) });
       for (const e of row) rowOf.set(editKey(e), key);
       placeOf.set(key, place);
       const busy = row.some(e => { const r = revising(e); return !!r && isWorking(r.state); });
@@ -879,24 +895,32 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   }, [working, edits, rowsName]);
   // Edits that are one row have their requests under that row. Under the tabs a
   // request whose row is under any of them is drawn there and nowhere else; with one list, every row it shows counts.
-  const listed = new Set(hasForYou ? rowOf.keys() : showsList ? [...edits, ...gone].map(editKey) : []);
+  const listed = new Set(dock ? (dockHasTabs || showsList ? [...edits, ...gone].map(editKey) : []) : hasForYou ? rowOf.keys() : showsList ? [...edits, ...gone].map(editKey) : []);
   const canSeeAll = open === "all" || edits.length > 0;
   const soFar = !!working && !made;
   const revealList = dock ? () => dock.requestReveal() : reveal;
   const seeProps = { thread, actions, single, rows: groups.length + gone.length, count: groups.length, soFar, list, reveal: revealList };
-  const seeEvery = !hasForYou && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
+  const seeEvery = dock && dockHasTabs
+    ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
+      : !soFar && canSeeAll && actions.showThread
+        ? <button type="button" className="simple-pass-toggle" title="Show these edits in For you" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
+        : null)
+    : !hasForYou && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !dock && !hasForYou && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
 
+  const ownsEdit = (e: Omit<ThreadEdit, "at">) =>
+    thread.changes.some(c => c.id === e.changeId) || e.previous.some(p => thread.changes.some(c => c.id === p.changeId));
   // Build normalized rows for the fixed bottom review dock so every edit (and rejected edit) appears in order.
   const dockEntries: DockEntry[] = [];
   if (dock && (edits.length > 0 || gone.length > 0)) {
     const openIdx = showing?.rejected ? -1 : showing ? edits.findIndex(e => matchesEdit(showing, e)) : -1;
     const order = listPlaces(thread, edits, gone);
     const groupRows = groups.map(({ members }) => {
-      const shown = members.find(m => m.i === openIdx) ?? members.find(m => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit)) ?? members[0]!;
+      const shown = members.find(m => m.i === openIdx) ?? members.find(m => asksEditor(revising(m.edit))) ?? members.find(m => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit)) ?? members[0]!;
       const needsCount = members.filter(m => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit)).length;
       const allKept = members.every(m => reviewed(m.edit));
       const unkeepRefs = allKept ? members.filter(m => !m.edit.marker && canUnkeep(m.edit)).map(m => m.edit) : [];
+      const groupEdits = members.map(m => m.edit);
       const rowNests = members.flatMap(m => nests.filter(nest => nest.key === editKey(m.edit)));
       const took = members.map(m => spent.get(editKey(m.edit))).find(Boolean);
       const was = members.flatMap(m => m.edit.previous.map(editKey));
@@ -908,6 +932,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
         needs: needsCount,
         allKept,
         unkeepRefs,
+        groupEdits,
         rowNests,
         took,
         was,
@@ -968,7 +993,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       }
     };
     pushGone(-1, firstOf(0));
-    groupRows.forEach(({ edit, i, places, needs: needCount, allKept, unkeepRefs, rowNests, took, was, firstKey }, atIdx) => {
+    groupRows.forEach(({ edit, i, places, needs: needCount, allKept, unkeepRefs, groupEdits, rowNests, took, was, firstKey }, atIdx) => {
       const rawKey = firstKey;
       const on = i === openIdx;
       const isKept = places > 1 ? allKept : reviewed(edit);
@@ -988,7 +1013,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       const rowTime = clockLabel(displayAt);
       const checkTitle = revised || edit.reason ? undefined : edit.check;
       const showUnkeep = decided && !edit.marker && unkeepRefs.length > 0;
-      const unkeepTip = edit.check ? "Move back to For you" : hasForYou ? "Move back to low risk" : "Unkeep";
+      const unkeepTip = edit.check || dockHasTabs || hasForYou ? "Move back to For you" : "Unkeep";
       const entryPlace = placeOf.get(firstKey) ?? "optional";
       dockEntries.push({
         key: `${thread.id}/${rawKey}`,
@@ -1039,6 +1064,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
           dataLogControl: "open-edit",
           dataLogLabel: "Edit",
           edit,
+          owns: ownsEdit(edit),
+          edits: groupEdits,
           editOrder: { index: i + 1, of: edits.length },
           nests: rowNests,
         },
@@ -1046,7 +1073,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       pushGone(firstOf(atIdx), firstOf(atIdx + 1));
     });
   }
-  const singleOpen = actions.marked === thread.id && !!single && !!shownEdit && !hasForYou;
+  const singleOpen = !!single && ownsEdit(single) && !!shownEdit && !hasForYou && !dockHasTabs;
   const totalCount = groups.length + gone.length;
   useLayoutEffect(() => {
     if (!dock) return;
@@ -1065,6 +1092,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       onlyRejected,
       singleOpen,
       onCloseSingle: () => actions.stopShowing(),
+      listLoaded,
       onRowHover: (_mark, hover) => actions.lightMark(undefined, hover),
     });
   });

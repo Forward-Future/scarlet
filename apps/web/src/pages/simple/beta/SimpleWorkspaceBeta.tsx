@@ -172,6 +172,20 @@ export function SimpleWorkspaceBeta() {
   const railVersion = useSyncExternalStore(rail.subscribe, rail.snapshot, rail.snapshot);
   const railView = rail.view();
   const [railOpen, setRailOpen] = useState({ working: true, done: false, low: true });
+  // Priority list filter for the combined For you rail: "all" shows flagged pinned at top + confident below; "need" shows flagged only.
+  const [railFilter, setRailFilter] = useState<"all" | "need">("all");
+  const [flashedThread, setFlashedThread] = useState<string>();
+  const flashTimer = useRef<number>(0);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+  // Automatically fall back from "Needs you" to "All" once the last flagged edit is handled so confident edits stay visible.
+  useEffect(() => {
+    if (railFilter === "need" && rail.total("you") === 0) setRailFilter("all");
+  }, [railVersion, railFilter, rail]);
+  const flashThreadInRail = useCallback((threadId: string) => {
+    clearTimeout(flashTimer.current);
+    setFlashedThread(threadId);
+    flashTimer.current = window.setTimeout(() => setFlashedThread(undefined), 1150);
+  }, []);
   // One list of every edit is open at a time, so two "Hide" links never stand for one timeline: opening another
   // request's closes it. The list of what needs the editor is a review list, and leaves the others as they are.
   const listOf = (threadId: string): PassList => [lists[threadId], next => {
@@ -544,7 +558,8 @@ export function SimpleWorkspaceBeta() {
     const view = rail.view();
     const currentCallRow = passThread ? view.findForCall(passThread.id, listening.index) : undefined;
     const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
-    const nextRow = nextRowAfter(waits, currentCallRow, listedAt.get(listening.index) ?? listening.cut.start);
+    const nextRow = nextRowAfter(waits, currentCallRow, listedAt.get(listening.index) ?? listening.cut.start)
+      ?? (railFilter !== "need" ? view.sections.low.find(isSteppableRailRow) : undefined);
     const nextSamePassCall = nextRow?.isCall && nextRow.threadId === passThread?.id && nextRow.callIndex !== undefined
       ? allCalls.find(a => a.index === nextRow.callIndex) : undefined;
     player.pause();
@@ -883,6 +898,27 @@ export function SimpleWorkspaceBeta() {
     answering: replyThread?.question && (!agentContext || agentContext === "whole") ? replyThread.question.id : undefined,
     cutName,
     callTime: (changeId, cutIndex) => callAtTime({ changeId, cutIndex }),
+    showThread(threadId) {
+      const view = rail.view();
+      const match = (list: readonly UnifiedRailRow[]) => list.find(r => r.threadIds.includes(threadId) && !!r.open);
+      const waitingRow = match(view.sections.you);
+      const confidentRow = match(view.sections.low);
+      const workingRow = match(view.sections.working);
+      const doneRow = match(view.sections.done);
+      if (waitingRow) {
+        waitingRow.open?.();
+      } else if (confidentRow) {
+        setRailFilter("all");
+        confidentRow.open?.();
+      } else if (workingRow) {
+        setRailOpen(was => was.working ? was : { ...was, working: true });
+        workingRow.open?.();
+      } else if (doneRow) {
+        setRailOpen(was => was.done ? was : { ...was, done: true });
+        doneRow.open?.();
+      }
+      flashThreadInRail(threadId);
+    },
   };
   // The pass goes in once nothing is left to decide: no call waits on the editor and no cut is with Scarlet. The editor's
   // last call does this itself; this covers a pass that gets there another way, such as a run that ends with every
@@ -1334,9 +1370,9 @@ export function SimpleWorkspaceBeta() {
       next.open?.();
       return;
     }
-    // Past the end of For you, ↓ continues into Low risk; above Low risk, ↑ goes back into For you.
+    // Past the end of flagged rows, ↓ continues into Confident edits when All is active; above Confident edits, ↑ goes back into flagged rows.
     // Working and Done stay within their own unified lists.
-    if (section === "you" && delta > 0) view.sections.low.find(isSteppableRailRow)?.open?.();
+    if (section === "you" && delta > 0 && railFilter !== "need") view.sections.low.find(isSteppableRailRow)?.open?.();
     else if (section === "low" && delta < 0) view.sections.you.findLast(isSteppableRailRow)?.open?.();
   }
   function stepEdit(delta: number) {
@@ -1547,7 +1583,8 @@ export function SimpleWorkspaceBeta() {
     const section = current?.section ?? (onLowRisk ? "low" : "you");
     if (section === "low") {
       const lows = view.sections.low.filter(isSteppableRailRow);
-      const next = nextRowAfter(lows, current, whereAt);
+      const idx = current ? lows.findIndex(r => r.key === current.key) : -1;
+      const next = idx >= 0 ? lows[idx + 1] : lows.find(r => r.key !== current?.key);
       if (next) { next.open?.(); return; }
       if (!openWaiting(current)) closeEdit();
       return;
@@ -1555,8 +1592,10 @@ export function SimpleWorkspaceBeta() {
     const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
     const next = nextRowAfter(waits, current, whereAt);
     if (next) { next.open?.(); return; }
-    const firstLow = view.sections.low.find(r => isSteppableRailRow(r) && r.key !== current?.key);
-    if (firstLow) { firstLow.open?.(); return; }
+    if (railFilter !== "need") {
+      const firstLow = view.sections.low.find(r => isSteppableRailRow(r) && r.key !== current?.key);
+      if (firstLow) { firstLow.open?.(); return; }
+    }
     closeEdit();
   }
   /** Opens the first row that still waits on the editor in unified For you. Says whether there was any. */
@@ -1719,8 +1758,8 @@ export function SimpleWorkspaceBeta() {
   }, [appliedTarget?.version, threadTimeline.located, reviewingEdit]);
   const editOpen = !!reviewingEdit;
   const openEditKey = reviewingEdit && editKey(reviewingEdit);
-  // Opening an edit while its section (Low risk, Working, or Done) is folded unfolds it so the open row is lit.
-  // Manually folding that section while the same edit stays open keeps it folded.
+  // Opening a confident edit while filtered to Needs you returns to All; opening a Working/Done edit unfolds its section.
+  // Manually refolding that section while the same edit stays open keeps it folded.
   const lastUnfoldedSection = useRef<string>(undefined);
   useEffect(() => {
     const sec = openRailRow?.section;
@@ -1729,7 +1768,8 @@ export function SimpleWorkspaceBeta() {
     if (!key || !sec || sec === "you") { lastUnfoldedSection.current = undefined; return; }
     if (lastUnfoldedSection.current === key) return;
     lastUnfoldedSection.current = key;
-    const targetSec: "low" | "working" | "done" = sec;
+    if (sec === "low") { setRailFilter("all"); return; }
+    const targetSec: "working" | "done" = sec;
     setRailOpen(was => was[targetSec] ? was : { ...was, [targetSec]: true });
   }, [openRailRow?.section, reviewingEdit, focusThread, openEditKey, openCall, pass]);
   // The edit that's open, for a rejection that lands after the editor stepped on: only the edit it was sent from moves on.
@@ -2498,6 +2538,7 @@ export function SimpleWorkspaceBeta() {
         </ChatRail>
         <ReviewRail projectId={current.id} store={rail} compact={compact} reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}
           open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
+          filter={railFilter} onFilter={setRailFilter} flashedThreadId={flashedThread}
           selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined}
           onDoneLow={keepLowRisk} onHover={lightMark} />
         <div className="workspace-stage simple-stage">
