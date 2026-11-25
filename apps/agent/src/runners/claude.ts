@@ -281,7 +281,7 @@ export function claudeCanRunBare(env: NodeJS.ProcessEnv): boolean {
 
 /** Build the exact command line (pure, for tests and for reporting). */
 export function buildClaudeCommand(
-  opts: Pick<RunAgentOptions, "model" | "effort" | "fast" | "serviceTier" | "systemPrompt" | "instruction" | "mcp" | "resumeSession" | "plan" | "workspace">,
+  opts: Pick<RunAgentOptions, "model" | "effort" | "fast" | "serviceTier" | "systemPrompt" | "instruction" | "mcp" | "resumeSession" | "plan" | "workspace" | "settingsEnv">,
   bin: string,
   tmpDir: string,
   bare = false,
@@ -330,7 +330,8 @@ export function buildClaudeCommand(
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.effort ? ["--effort", opts.effort] : []),
     "--settings",
-    JSON.stringify({ sandbox, ...(permissions && { permissions }), ...(opts.serviceTier ? { fastMode: opts.serviceTier === "fast" } : opts.fast ? { fastMode: true } : {}) }),
+    // A provider run's address and model go here too (`settingsEnv`): the flag's settings outrank the user's files.
+    JSON.stringify({ sandbox, ...(permissions && { permissions }), ...(opts.settingsEnv && { env: opts.settingsEnv }), ...(opts.serviceTier ? { fastMode: opts.serviceTier === "fast" } : opts.fast ? { fastMode: true } : {}) }),
   ];
   return {
     file: bin,

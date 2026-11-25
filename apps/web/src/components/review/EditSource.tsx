@@ -4,6 +4,7 @@ import type { ThreadEdit } from "@scarlet/shared";
 import { api } from "../../lib/client";
 import { desktop } from "../../lib/desktop";
 import { clockRange } from "../../lib/format";
+import { blurOnPointerClick } from "../../lib/hotkeys";
 import { Icon } from "../ui/primitives";
 
 /**
@@ -33,7 +34,7 @@ export function editSource(edit: Pick<ThreadEdit, "kind" | "range"> | undefined,
 export function SourceLink({ open, toggle }: { open: boolean; toggle(): void }) {
   const name = open ? "Hide source" : "Show source";
   return <button type="button" className="edit-card-icon edit-card-source" data-log-control="toggle-source" aria-label={name} title={name}
-    aria-expanded={open} onClick={toggle}><Icon name="link" size={14} /></button>;
+    aria-expanded={open} onClick={e => { blurOnPointerClick(e); toggle(); }}><Icon name="link" size={14} /></button>;
 }
 
 const capturedOn = (at: string | undefined) => {

@@ -6,18 +6,26 @@ use std::time::Duration;
 
 use super::catalog::{describe_agents, is_quota_eligible, lacks_models, take_catalog};
 use super::types::{AgentAvailability, SubscriptionQuota};
-use super::{detect, update, HostRuntime, HostStatus};
+use super::{detect, providers, update, HostRuntime, HostStatus};
 use crate::util::child_env;
 
 /// How long cached subscription quota stays fresh before a non-forced refresh re-probes.
 const QUOTA_TTL: Duration = Duration::from_secs(60);
 
 impl HostRuntime {
-    /// Startup, sign-in and the picker can all request a fresh snapshot.
+    /// Startup, sign-in and the picker can all request a fresh snapshot. `env` is the host's (`agent_env`): Ollama,
+    /// LM Studio and OpenRouter are asked about beside the CLIs, and come after them.
     pub(super) async fn detect_agents(&self, env: &HashMap<String, String>) -> Option<String> {
         let _detecting = self.detecting.lock().await;
-        let mut found = detect::detect(env, &self.paths.home, &self.models).await;
-        self.mcp.load_catalogs(&mut found, env, &self.paths.custom_claude_models(), &self.paths.custom_gemini_models()).await;
+        let cli_env = providers::cli_env(env);
+        let clis = async {
+            let mut found = detect::detect(&cli_env, &self.paths.home, &self.models).await;
+            self.mcp.load_catalogs(&mut found, &cli_env, &self.paths.custom_claude_models(), &self.paths.custom_gemini_models()).await;
+            found
+        };
+        let (mut found, extra) = tokio::join!(clis, providers::detect(env, &self.models));
+        let claude = found.iter().any(|a| a.id == "claude" && a.installed);
+        found.extend(providers::through_claude(extra, claude));
         log::info!("assistants: {}", describe_agents(&found));
         let mut agents = self.agents.write().await;
         let mut failed = Vec::new();
@@ -41,9 +49,7 @@ impl HostRuntime {
                 if let Some(old) = agents.iter().find(|a| a.id == agent.id && a.models.is_some()) {
                     take_catalog(agent, old.model.clone(), old.model_options.clone(), old.models.clone(), old.model_labels.clone());
                 }
-                failed.push(match agent.id.as_str() {
-                    "claude" => "Claude Code", "codex" => "Codex", "gemini" => "Gemini", id => id,
-                });
+                failed.push(providers::label(&agent.id).to_string());
             }
         }
         let error = (!failed.is_empty()).then(|| format!("Couldn't refresh models for {}. Try again.", failed.join(", ")));

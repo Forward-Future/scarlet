@@ -117,3 +117,23 @@ it("keeps a model that isn't signed in now, saying so, and offers no Add at the 
     await cleanup();
   }
 });
+
+it("keeps a task added while a rename is still being saved, whichever answer comes back first", async () => {
+  const { container, update, cleanup } = await setup();
+  try {
+    // The engine answers the rename only after the add went out, with the list as the rename left it.
+    const answers: Array<() => void> = [];
+    update.mockImplementation(patch => new Promise(resolve => {
+      answers.push(() => resolve({ settings: { ...buildDb().settings, ...patch } }));
+    }));
+    const name = container.querySelector<HTMLInputElement>(".task-model-name")!;
+    await typeInto(name, "Dialogue");
+    await leave(name);
+    await act(async () => container.querySelector<HTMLButtonElement>(".task-models-add button")!.click());
+    expect(names(container)).toEqual(["Dialogue", "Motion graphics", "New task"]);
+    await act(async () => answers[0]!());
+    expect(names(container)).toEqual(["Dialogue", "Motion graphics", "New task"]);
+    await act(async () => answers[1]!());
+    expect(names(container)).toEqual(["Dialogue", "Motion graphics", "New task"]);
+  } finally { await cleanup(); }
+});

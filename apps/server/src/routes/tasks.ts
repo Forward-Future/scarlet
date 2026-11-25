@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { checkAttachments } from "../services/graphics.js";
+import { findStyleGuideAsset } from "../services/styleGuides.js";
 import { z } from "zod/v3";
-import { CompleteTaskRequest, CreateTaskRequest, EDITING_TOOL_GROUPS, PictureMarks, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskAttachment, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
+import { CompleteTaskRequest, CreateTaskRequest, QuestionChoices, questionChoicesOf, EDITING_TOOL_GROUPS, isStyleGuideEdit, PictureMarks, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskAttachment, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict } from "../errors.js";
@@ -54,6 +55,7 @@ export function taskRoutes(ctx: Ctx) {
     const body = await jsonBody(c, CreateTaskRequest);
     if (body.kind === "skill_from_change") throw badRequest("use_skill_from_change", "Create this task from an approved change with /skills/from-change");
     if (body.kind === "skill_edit") throw badRequest("use_skill_edit", "Ask for a change to a skill with /skills/:skillId/edit");
+    if (body.kind === "style_guide_edit") throw badRequest("use_style_guide_edit", "Ask for a change to a style guide with /style-guides/:styleGuideId/edit");
     if (body.kind === "learning_check") throw badRequest("not_a_request", "Scarlet starts this check itself, with each request.");
     if (body.kind === "area_check") throw badRequest("not_a_request", "Scarlet starts this check itself, when a save needs it.");
     if (body.kind === "listen_check") throw badRequest("not_a_request", "Scarlet starts this itself, when a request asks to hear a passage.");
@@ -120,7 +122,7 @@ export function taskRoutes(ctx: Ctx) {
     const state = c.req.query("state");
     // A skill edit and a learning check only borrow the project to run in. Neither is part of its conversation, and a
     // hand-off's edits are the request's that handed it the work.
-    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check', 'area_check', 'listen_check', 'hand_off', 'broll_make')" + (state ? " AND state = ?" : ""),
+    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'style_guide_edit', 'learning_check', 'area_check', 'listen_check', 'hand_off', 'broll_make')" + (state ? " AND state = ?" : ""),
       state ? [project.id, TaskState.parse(state)] : [project.id], "created_at DESC");
     const conversation = c.req.query("events") === "conversation"
       ? ctx.repos.taskEvents.conversations(tasks.filter(t => t.kind !== "transcribe").map(t => t.id)) : undefined;
@@ -181,8 +183,8 @@ export function taskRoutes(ctx: Ctx) {
   });
 
   r.post("/tasks/:taskId/reword", async (c) => {
-    const { text, skillIds } = await jsonBody(c, RewordTaskRequest);
-    return c.json(ctx.db.transaction(() => ({ task: rewordTask(ctx, c.var.user, requireTask(c.req.param("taskId")), text, skillIds) }), "immediate")());
+    const { text, skillIds, styleGuideIds } = await jsonBody(c, RewordTaskRequest);
+    return c.json(ctx.db.transaction(() => ({ task: rewordTask(ctx, c.var.user, requireTask(c.req.param("taskId")), text, skillIds, styleGuideIds) }), "immediate")());
   });
 
   r.post("/tasks/:taskId/retry", async (c) => c.json({ task: retryTask(ctx, c.req.param("taskId"), await jsonBody(c, RunChoice)) }));
@@ -198,7 +200,17 @@ export function taskRoutes(ctx: Ctx) {
     if (body.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to run this request.");
     // Files sent with an answer are kept with the request as its own files are, so the run is told of them the same way.
     const answering = body.attachments?.length ? requireTask(c.req.param("taskId")) : undefined;
-    const attached = answering && await checkAttachments(ctx, answering.projectId, body.attachments);
+    let attached: TaskAttachment[] | undefined;
+    if (answering && body.attachments?.length) {
+      if (isStyleGuideEdit(answering) && answering.context.styleGuideId) {
+        const found = await Promise.all(body.attachments.map(a => findStyleGuideAsset(ctx, answering.context.styleGuideId!, a.id)));
+        const missing = body.attachments.filter((_, i) => !found[i]);
+        if (missing.length) throw badRequest("unknown_attachment", `${missing.map(a => quote(a.name)).join(", ")} isn't attached to this style guide.`);
+        attached = found.map((f, i) => ({ id: f!.asset.id, name: f!.asset.name, size: f!.asset.size, ...(body.attachments![i]!.mime || f!.asset.mime ? { mime: body.attachments![i]!.mime ?? f!.asset.mime } : {}) }));
+      } else {
+        attached = await checkAttachments(ctx, answering.projectId, body.attachments);
+      }
+    }
     if (body.pictureMarks && !attached?.some(a => a.id === body.pictureMarks!.attachmentId)) {
       throw badRequest("unknown_attachment", "The marked frame's picture isn't attached to this message. Mark the frame again.");
     }
@@ -237,13 +249,15 @@ export function taskRoutes(ctx: Ctx) {
 
   // Called by agent hosts
   r.on("POST", ["/tasks/:taskId/question", "/projects/:projectId/tasks/:taskId/question"], async (c) => {
-    const { startedAt, text, sessionId } = await jsonBody(c, z.object({ startedAt: z.string().datetime().optional(), text: z.string().min(1),
-      sessionId: z.string().min(1).max(200).nullable().optional() }));
+    const { startedAt, text, sessionId, choices } = await jsonBody(c, z.object({ startedAt: z.string().datetime().optional(), text: z.string().min(1),
+      sessionId: z.string().min(1).max(200).nullable().optional(), choices: QuestionChoices.optional() }));
     const waiting = ctx.db.transaction(() => {
       let task = requireTask(c.req.param("taskId"), c.req.param("projectId"));
       // A lost response may be retried by the MCP process or its host, even after an answer and a new claim.
       if (task.startedAt !== startedAt) return false;
-      if (task.state === "claimed" || task.state === "running") task = appendTaskEvent(ctx, task, { type: "question", text }).task;
+      if (task.state === "claimed" || task.state === "running") task = appendTaskEvent(ctx, task, { type: "question", text, ...(choices && { data: { choices } }) }).task;
+      // The host may hand the question over before the MCP process does, without the answers it offers: they join it.
+      else if (choices && task.state === "waiting_for_user" && task.question === text && !task.questionChoices) task = saveTask(ctx, { ...task, questionChoices: questionChoicesOf({ choices }) });
       const waiting = task.state === "waiting_for_user";
       // Only the host knows the CLI session that asked; the MCP server's copy leaves it alone.
       // An answer may already have re-queued this claim, and may have switched models: that attempt's session is not kept.
@@ -325,7 +339,7 @@ export function taskRoutes(ctx: Ctx) {
     const requests = `kind IN ${PROJECT_EDIT_KINDS} AND project_id IN (SELECT id FROM projects WHERE deleted_at IS NULL AND editing_paused = 0)`;
     // Quitting stops a skill Scarlet writes or revises too, and it carries on at the next launch as a request does.
     // A learning check isn't run again, and the request it reads is counted already.
-    const runs = `kind IN ('edit','note','revise','skill_edit','skill_from_change') AND ${live}`;
+    const runs = `kind IN ('edit','note','revise','skill_edit','style_guide_edit','skill_from_change') AND ${live}`;
     // A request held for Continue, an answer or calls will wait for the editor after a quit too.
     const queued = ctx.repos.tasks.select(`state = 'queued' AND ${requests}`);
     let waiting = 0;

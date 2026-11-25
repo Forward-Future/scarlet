@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const hashing = vi.hoisted(() => ({ count: 0 }));
 vi.mock("@scarlet/render", async actual => {
   const render = await actual<typeof import("@scarlet/render")>();
   return { ...render, hashFile: (...args: Parameters<typeof render.hashFile>) => { hashing.count++; return render.hashFile(...args); } };
 });
-import { BUNDLED_WHISPER_CPP, LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, supportsWhisperAvx2 } from "./localModel.js";
+import { BUNDLED_WHISPER_CPP, LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, devWhisperCli, supportsWhisperAvx2 } from "./localModel.js";
 
 const bytes = Buffer.from("test model");
 const model = { name: "test.bin", url: "https://example.invalid/test.bin", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -76,6 +76,29 @@ it("finds the bundled whisper-cli beside the engine only when its program is rea
   expect(bundledWhisperCli({ SCARLET_BIN_DIR: dir })).toBeUndefined();
   // Only Windows has a separate GPU build.
   if (process.platform !== "win32") expect(bundledWhisperGpu({ SCARLET_BIN_DIR: dir })).toBeUndefined();
+});
+
+it("falls back in dev to SCARLET_WHISPER_CLI or a usable whisper-cli on PATH, never in packaged SEA builds", async () => {
+  const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  const emptyDir = join(dir, "empty"), nonExecDir = join(dir, "nonexec"), realDir = join(dir, "real");
+  for (const d of [emptyDir, nonExecDir, realDir]) await mkdir(d, { recursive: true });
+  const empty = join(emptyDir, name), nonExec = join(nonExecDir, name), onPath = join(realDir, name);
+  const explicit = join(dir, `explicit-${name}`);
+  await writeFile(empty, "", { mode: 0o755 });
+  await writeFile(nonExec, "program", { mode: 0o644 });
+  if (process.platform !== "win32") await chmod(nonExec, 0o644);
+  await writeFile(onPath, "program", { mode: 0o755 });
+  await writeFile(explicit, "explicit", { mode: 0o755 });
+
+  const pathList = [emptyDir, ...(process.platform === "win32" ? [] : [nonExecDir]), realDir].join(delimiter);
+  expect(devWhisperCli({}, false)).toBeUndefined();
+  expect(devWhisperCli({ PATH: pathList }, false)).toBe(onPath);
+  expect(devWhisperCli({ SCARLET_WHISPER_CLI: explicit, PATH: pathList }, false)).toBe(explicit);
+  // An empty or missing SCARLET_WHISPER_CLI falls through to PATH.
+  expect(devWhisperCli({ SCARLET_WHISPER_CLI: empty, PATH: pathList }, false)).toBe(onPath);
+  expect(devWhisperCli({ SCARLET_WHISPER_CLI: join(dir, "missing"), PATH: pathList }, false)).toBe(onPath);
+  // Packaged SEA builds never fall back outside the bundle.
+  expect(devWhisperCli({ SCARLET_WHISPER_CLI: explicit, PATH: pathList }, true)).toBeUndefined();
 });
 
 it("selects Linux's optimized Whisper only on CPUs that can run it", async () => {

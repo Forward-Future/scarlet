@@ -118,14 +118,14 @@ async function cmdAuth(positional: string[]): Promise<void> {
     child.on("close", resolve);
   });
   const cfg = await loadConfig();
-  const a = (await detect({ models: cfg.models })).find((x) => x.id === agent);
+  const a = (await detect({ models: cfg.models, providers: cfg.providers })).find((x) => x.id === agent);
   if (a) console.log(`\n${formatAvailability([a])}`);
   if (code !== 0) process.exitCode = 1;
   else if (cfg.server) console.log("Restart `scarlet-agent start` (if running) so the server sees the new sign-in.");
 }
 async function cmdStatus(): Promise<void> {
   const cfg = await loadConfig();
-  const agents = await detect({ models: cfg.models });
+  const agents = await detect({ models: cfg.models, providers: cfg.providers });
   console.log(formatAvailability(agents));
   if (cfg.server) console.log(`\nserver: ${cfg.server}${cfg.hostId ? `  host: ${cfg.hostId}` : ""}`);
   else console.log("\nnot connected (scarlet-agent connect --server URL)");

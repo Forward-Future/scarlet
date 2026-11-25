@@ -5,8 +5,8 @@ import { appLog } from "../../lib/appLog";
 import { api, errorMessage, UNEXPLAINED } from "../../lib/client";
 import { editKindWord } from "../../lib/editKind";
 import type { Moment } from "../../lib/editMoments";
-import { parseTimestamp } from "../../lib/format";
-import { ignorePageShortcut, isEditableTarget } from "../../lib/hotkeys";
+import { distinctClock, parseTimestamp } from "../../lib/format";
+import { ignorePageShortcut, isAltClearRangeKey, isComposing, isEditableTarget } from "../../lib/hotkeys";
 import { editKey, keepEdits } from "../../lib/keptEdits";
 import { needNumbers } from "../../lib/needNumbers";
 import { savedChoices, type Call, type CutChoice } from "../../lib/passCalls";
@@ -211,9 +211,11 @@ export function usePassCallNumbers(
     const editKeyOf = (e: (typeof edits)[number]) => `edit/${editKey(e.previous[0] ?? e)}`;
     const numbers = needNumbers(projectId, passThread.id, passRoot?.resumeRootId ?? passRoot?.id ?? pass.id, [...callKeys, ...edits.map(editKeyOf)]);
     allCalls.forEach((call, i) => callNo.set(call.index, numbers.get(callKeys[i]!.key)!));
+    const times = [...allCalls.map(a => a.start), ...edits.map(at)];
     for (const e of edits) {
       const n = numbers.get(editKeyOf(e))!;
-      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} ${n}`;
+      // It goes by its time, as its row does: "Cut at 0:11", or "Edit at 0:11" for one that took no footage out.
+      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} at ${distinctClock(at(e), times)}`;
       for (const ref of [e, ...e.previous]) passEditNo.set(editKey(ref), { n, name });
     }
     return { callNo, passEditNo };
@@ -297,7 +299,11 @@ export function useUndoShortcut(workspaceActive: boolean, projectId: string, und
       const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value && !emptiedByHand.has(e.target);
       if (isEditableTarget(e.target) && !box) return;
       if (document.querySelector('dialog[open], [role="dialog"], [role="menu"]')) return;
-      if (!lastStep(useUndoStore.getState().steps, projectId)) return;
+      if (!lastStep(useUndoStore.getState().steps, projectId)) {
+        // The key is left to the page, and nothing is taken back: said so the log shows the press did nothing.
+        appLog("action", "undo-skipped", { project: projectId, reason: "empty" });
+        return;
+      }
       e.preventDefault();
       if (!e.repeat) void undoRef.current.undo();
     };
@@ -381,27 +387,37 @@ export function useEscapeCloses(enabled: boolean, onClose: () => void) {
   }, [enabled]);
 }
 
-/** Clears a timeline marked range on Esc, ahead of anything else Esc would close, or on a short click outside the
- *  composer and the stage (the player, its card and the timeline), so the editor can play the range, pause and adjust
- *  it without losing it. */
+/** Clears a timeline marked range on Esc, Delete/Backspace, or Option/Alt+X (ahead of anything else Esc would close),
+ *  or on a short click outside the composer and the stage (the player, its card and the timeline), so the editor can
+ *  play the range, pause and adjust it without losing it. */
 export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () => void) {
   const clearRef = useRef(onClear);
   clearRef.current = onClear;
   useEffect(() => {
     if (!hasMarkedRange) return;
     let down: { x: number; y: number; id: number; away: boolean } | undefined;
-    const away = (target: EventTarget | null) => target instanceof Element && !target.closest(".composer-dock, .simple-stage, .timeline-range-loupe");
+    const away = (target: EventTarget | null) => target instanceof Element && !target.closest(".composer-dock, .simple-stage, .timeline-range-loupe, .timeline-range-menu");
     const press = (e: PointerEvent) => { down = e.isPrimary && e.button === 0 ? { x: e.clientX, y: e.clientY, id: e.pointerId, away: away(e.target) } : undefined; };
     const release = (e: PointerEvent) => {
       const was = down;
       down = undefined;
-      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) clearRef.current();
+      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) {
+        appLog("timeline", "range-cleared", { via: "click-away" });
+        clearRef.current();
+      }
     };
     const key = (e: KeyboardEvent) => {
-      // A popover that is open, full screen, the marking of a frame, or words being written take their own Esc first.
-      if (e.key !== "Escape" || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)
-        || document.querySelector("[data-escape-owner]") || inFullScreen() || marksTakeEscape(e)) return;
+      if (e.defaultPrevented || isEditableTarget(e.target) || isComposing(e)) return;
+      // An open dialog, menu, popover, full screen, or frame marking takes its own keys first.
+      if (document.querySelector('dialog[open], [role="dialog"], [role="menu"], [data-escape-owner], [data-shortcut-overlay]')) return;
+      const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
+      const escape = plain && e.key === "Escape";
+      const erase = plain && !e.shiftKey && (e.key === "Delete" || e.key === "Backspace");
+      const clearInOut = isAltClearRangeKey(e);
+      if (!escape && !erase && !clearInOut) return;
+      if ((escape && inFullScreen()) || marksTakeEscape(e)) return;
       e.preventDefault();
+      appLog("timeline", "range-cleared", { via: "key", key: clearInOut ? "alt+x" : e.key });
       clearRef.current();
     };
     document.addEventListener("pointerdown", press, true);

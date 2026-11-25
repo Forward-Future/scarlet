@@ -270,7 +270,11 @@ pub(crate) async fn pick_destination(app: &AppHandle, title: &str, file_name: &s
         picker = picker.add_filter("WebVTT captions", &["vtt"]);
     }
     picker.save_file(move |p| { let _ = tx.send(p); });
-    rx.await.map_err(|e| e.to_string())?.map(|picked| picked.into_path().map_err(|e| e.to_string())).transpose()
+    let picked = rx.await.map_err(|e| e.to_string())?;
+    if picked.is_none() {
+        log::info!("{title}: save dialog cancelled");
+    }
+    picked.map(|picked| picked.into_path().map_err(|e| e.to_string())).transpose()
 }
 
 #[derive(serde::Serialize)]

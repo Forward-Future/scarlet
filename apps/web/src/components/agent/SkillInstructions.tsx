@@ -1,24 +1,37 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import type { Skill } from "@scarlet/shared";
+import type { Skill, StyleGuideRecord } from "@scarlet/shared";
 import { useSkillsStore } from "../../stores/skills";
+import { useStyleGuidesStore } from "../../stores/styleGuides";
+import { useUiStore } from "../../stores/ui";
 import { markSkillMatches, normalizeSkillLines, revealSkillMatch, type SkillFindState } from "./SkillFind";
 
-/** A `/skill` the library has, where it is in the text. Words the library has no skill for stay plain. */
-function keywordSpans(text: string, skills: readonly Pick<Skill, "name">[]) {
-  const names = new Set(skills.map(s => s.name));
-  return Array.from(text.matchAll(/(^|[^\w/])\/([a-z0-9][a-z0-9-]*)/gi), m => {
-    const name = m[2]!;
+/** A `/skill` or `@style-guide` the library has, where it is in the text. Words the library doesn't know stay plain. */
+function keywordSpans(
+  text: string,
+  skills: readonly Pick<Skill, "name">[],
+  styleGuides: readonly Pick<StyleGuideRecord, "name">[] = [],
+) {
+  const skillNames = new Set(skills.map(s => s.name));
+  const styleNames = new Set(styleGuides.map(g => g.name.toLowerCase()));
+  return Array.from(text.matchAll(/(^|[^\w/@])([/@])([a-z0-9][a-z0-9-]*)/gi), m => {
+    const sigil = m[2]! as "/" | "@";
+    const name = m[3]!;
     const start = m.index + m[1]!.length;
-    return names.has(name) ? { start, end: start + 1 + name.length, name } : undefined;
+    const kind = sigil === "/" ? (skillNames.has(name) ? "skill" as const : undefined)
+      : (styleNames.has(name.toLowerCase()) ? "style" as const : undefined);
+    return kind ? { start, end: start + 1 + name.length, name, kind } : undefined;
   }).filter(k => !!k);
 }
 
-/** The text with each keyword in a faint fill, so the editor can tell a skill of theirs from plain words. */
-export function MarkedKeywords({ text, skills }: { text: string; skills?: readonly Skill[] }) {
+/** The text with each keyword in a faint fill, so the editor can tell a skill or style guide from plain words. */
+export function MarkedKeywords({ text, skills, styleGuides }: { text: string; skills?: readonly Skill[]; styleGuides?: readonly StyleGuideRecord[] }) {
   const librarySkills = useSkillsStore(s => s.skills);
+  const styleGuidesBeta = useUiStore(s => s.styleGuidesBeta);
+  const libraryStyles = useStyleGuidesStore(s => s.styleGuides);
+  const activeStyles = styleGuides ?? (styleGuidesBeta ? libraryStyles : []);
   const parts: ReactNode[] = [];
   let at = 0;
-  for (const k of keywordSpans(text, skills ?? librarySkills)) {
+  for (const k of keywordSpans(text, skills ?? librarySkills, activeStyles)) {
     parts.push(text.slice(at, k.start), <span key={k.start} className="skill-keyword">{text.slice(k.start, k.end)}</span>);
     at = k.end;
   }
@@ -48,11 +61,17 @@ export function SkillInstructions({ value: body, onChange, readOnly, placeholder
   const skills = useSkillsStore(s => s.skills);
   const skillStatus = useSkillsStore(s => s.status);
   const loadSkills = useSkillsStore(s => s.load);
+  const styleGuidesBeta = useUiStore(s => s.styleGuidesBeta);
+  const libraryStyleGuides = useStyleGuidesStore(s => s.styleGuides);
+  const styleGuides = styleGuidesBeta ? libraryStyleGuides : [];
+  const styleStatus = useStyleGuidesStore(s => s.status);
+  const loadStyleGuides = useStyleGuidesStore(s => s.load);
   // The keyword under the pointer: `at` tells two of the same name apart, so the note follows the one pointed at.
-  const [hover, setHover] = useState<{ name: string; at: number; left: number; top: number } | null>(null);
+  const [hover, setHover] = useState<{ kind: "skill" | "style"; name: string; at: number; left: number; top: number } | null>(null);
 
-  // Keywords are known by the library's skills, so they are read as the page opens.
+  // Keywords are known by the library's skills and style guides, so they are read as the page opens.
   useEffect(() => { if (skillStatus === "idle") void loadSkills(); }, [skillStatus, loadSkills]);
+  useEffect(() => { if (styleGuidesBeta && styleStatus === "idle") void loadStyleGuides(); }, [styleGuidesBeta, styleStatus, loadStyleGuides]);
 
   useLayoutEffect(() => {
     const pane = backdrop.current, field = box.current;
@@ -75,9 +94,9 @@ export function SkillInstructions({ value: body, onChange, readOnly, placeholder
   // The text drawn under the field: the same words, with each keyword's fill.
   const marked: ReactNode[] = [];
   let at = 0;
-  for (const k of keywordSpans(value, skills)) {
+  for (const k of keywordSpans(value, skills, styleGuides)) {
     if (at < k.start) marked.push(<Fragment key={at}>{markSkillMatches(value.slice(at, k.start), at, find)}</Fragment>);
-    marked.push(<span key={k.start} className={`skill-keyword${hover?.at === k.start ? " is-hover" : ""}`} data-keyword={k.name} data-at={k.start}>
+    marked.push(<span key={k.start} className={`skill-keyword${hover?.at === k.start ? " is-hover" : ""}`} data-keyword={k.name} data-kind={k.kind} data-at={k.start}>
       {markSkillMatches(value.slice(k.start, k.end), k.start, find)}
     </span>);
     at = k.end;
@@ -90,14 +109,19 @@ export function SkillInstructions({ value: body, onChange, readOnly, placeholder
       for (const r of el.getClientRects()) {
         if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
           const outer = backdrop.current!.parentElement!.getBoundingClientRect();
-          return { name: el.dataset.keyword!, at: Number(el.dataset.at), left: r.left - outer.left, top: r.top - outer.top };
+          const kind = el.dataset.kind === "style" ? "style" as const : "skill" as const;
+          return { kind, name: el.dataset.keyword!, at: Number(el.dataset.at), left: r.left - outer.left, top: r.top - outer.top };
         }
       }
     }
     return null;
   }
 
-  const hoverDescription = hover && skills.find(s => s.name === hover.name)?.description;
+  const hoverDescription = hover
+    ? hover.kind === "style"
+      ? styleGuides.find(g => g.name.toLowerCase() === hover.name.toLowerCase())?.description
+      : skills.find(s => s.name === hover.name)?.description
+    : undefined;
 
   return <div className="skill-instructions">
     <div ref={backdrop} className={`${className} skill-instructions-text`} aria-hidden="true">{marked}{"​"}</div>
@@ -112,8 +136,10 @@ export function SkillInstructions({ value: body, onChange, readOnly, placeholder
       onMouseLeave={() => setHover(null)}
       onChange={e => onChange(e.target.value)} />
     {hover && <div className="skill-keyword-note" role="tooltip" style={{ left: hover.left - 6, top: hover.top - 6 }}>
-      <span className="skill-keyword-words"><span>/{hover.name}</span>
-        <small>Skill{hoverDescription ? ` · ${hoverDescription}` : ""}</small></span>
+      <span className="skill-keyword-words">
+        <span>{hover.kind === "style" ? `@${hover.name}` : `/${hover.name}`}</span>
+        <small>{hover.kind === "style" ? "Style guide" : "Skill"}{hoverDescription ? ` · ${hoverDescription}` : ""}</small>
+      </span>
     </div>}
   </div>;
 }

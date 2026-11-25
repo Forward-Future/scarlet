@@ -31,3 +31,18 @@ it("shows tokens in the chat unless the editor turned them off", async () => {
   expect((await import("./ui")).useUiStore.getState().showRunTokens).toBe(false);
   localStorage.removeItem("scarlet.runTokens");
 });
+
+it("puts words into a message where the cursor is, with a space either side, and swaps or takes out what they replace", async () => {
+  const { spliceDraft } = await import("./ui");
+  expect(spliceDraft("", 0, "0:09")).toEqual({ text: "0:09 ", caret: 5 });
+  expect(spliceDraft("zoom in here", 7, "0:09")).toEqual({ text: "zoom in 0:09 here", caret: 13 });
+  expect(spliceDraft("zoom in", 7, "0:09")).toEqual({ text: "zoom in 0:09 ", caret: 13 });
+  // What it replaces is still in the message: the new words take its place, wherever the cursor is.
+  expect(spliceDraft("loud 0:04 – 0:10 here", 0, "0:05 – 0:12", "0:04 – 0:10")).toEqual({ text: "loud 0:05 – 0:12 here", caret: 16 });
+  // Gone from the message, the new words go where the cursor is instead.
+  expect(spliceDraft("loud here", 4, "0:05 – 0:12", "0:04 – 0:10").text).toBe("loud 0:05 – 0:12 here");
+  // Empty words take it out, with one of the spaces it stood between.
+  expect(spliceDraft("loud 0:04 – 0:10 here", 0, "", "0:04 – 0:10").text).toBe("loud here");
+  expect(spliceDraft("loud 0:04 – 0:10 ", 0, "", "0:04 – 0:10").text).toBe("loud ");
+  expect(spliceDraft("loud", 2, "", "0:04 – 0:10")).toEqual({ text: "loud", caret: 2 });
+});

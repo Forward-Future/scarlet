@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { appLog } from "./appLog";
+import { appLog, errorName } from "./appLog";
 
 export type RecorderState = "idle" | "requesting" | "recording" | "denied" | "unsupported" | "error";
 
@@ -10,6 +10,9 @@ export interface RecorderResult {
 }
 
 export const MAX_RECORD_SECONDS = 120;
+
+/** Why a recording stopped, as the log says it: sent, thrown away (Esc), the 2:00 cap, or too short or empty to send. */
+type StopReason = "send" | "discard" | "cap";
 
 /** How loud the voice is, from 0 for silence to 1 for clear speech, from the samples' RMS: about -55 dB to -15 dB. */
 export function voiceLevel(samples: ArrayLike<number>) {
@@ -43,6 +46,7 @@ export function useRecorder(onResult: (r: RecorderResult) => void) {
   const timer = useRef<number | null>(null);
   const cancelled = useRef(false);
   const pending = useRef<symbol | null>(null);
+  const why = useRef<StopReason>("send");
   // Reads the microphone's level while recording, for the button's ring. It adds nothing to what is recorded.
   const meter = useRef<{ audio: AudioContext; analyser: AnalyserNode; samples: Float32Array<ArrayBuffer> } | null>(null);
   const onResultRef = useRef(onResult);
@@ -67,7 +71,7 @@ export function useRecorder(onResult: (r: RecorderResult) => void) {
   }, []);
 
   const stop = useCallback(
-    (discard = false) => {
+    (discard = false, reason?: StopReason) => {
       if (pending.current) {
         pending.current = null;
         setState("idle");
@@ -75,18 +79,19 @@ export function useRecorder(onResult: (r: RecorderResult) => void) {
       const r = rec.current;
       if (!r) return;
       if (r.state === "inactive") {
-        if (discard) cancelled.current = true;
+        if (discard) { cancelled.current = true; why.current = "discard"; }
         return;
       }
       cancelled.current = discard;
+      why.current = reason ?? (discard ? "discard" : "send");
       r.stop();
     },
     [],
   );
 
   const start = useCallback(async (stillHeld?: () => boolean) => {
-    if (pending.current || rec.current) return;
-    if (state === "unsupported") return;
+    if (pending.current || rec.current) { appLog("voice", "start-ignored", { reason: "busy" }); return; }
+    if (state === "unsupported") { appLog("voice", "start-ignored", { reason: "unsupported" }); return; }
     const request = Symbol();
     pending.current = request;
     const deliver = onResultRef.current;
@@ -96,6 +101,8 @@ export function useRecorder(onResult: (r: RecorderResult) => void) {
       const s = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (pending.current !== request || (stillHeld && !stillHeld())) {
         s.getTracks().forEach((track) => track.stop());
+        // Let go of, or stopped, while the microphone was still being opened: nothing was recorded.
+        appLog("voice", "stop", { reason: "before-start" });
         if (pending.current === request) {
           pending.current = null;
           setState("idle");
@@ -110,8 +117,9 @@ export function useRecorder(onResult: (r: RecorderResult) => void) {
         audio.createMediaStreamSource(s).connect(analyser);
         meter.current = { audio, analyser, samples: new Float32Array(analyser.fftSize) };
         void audio.resume().catch(() => {});
-      } catch {
+      } catch (err) {
         // No meter: the recording goes on, and the ring stays still.
+        appLog("voice", "meter-failed", { name: errorName(err) }, { level: "warn" });
       }
       const mimeType = pickMime();
       const r = new MediaRecorder(s, mimeType ? { mimeType } : undefined);
@@ -128,6 +136,8 @@ export function useRecorder(onResult: (r: RecorderResult) => void) {
         // A recorder that failed stops too. It has already said so, and what it caught is not a finished message.
         if (!failed) setState("idle");
         setElapsed(0);
+        const reason = failed ? "failed" : cancelled.current ? "discard" : !blob.size ? "empty" : seconds < 0.4 ? "too-short" : why.current;
+        appLog("voice", "stop", { reason, seconds, bytes: blob.size });
         if (!failed && !cancelled.current && blob.size > 0 && seconds >= 0.4) {
           deliver({ blob, seconds, mimeType: blob.type });
         }
@@ -144,10 +154,11 @@ export function useRecorder(onResult: (r: RecorderResult) => void) {
       r.start(250);
       pending.current = null;
       setState("recording");
+      appLog("voice", "start");
       timer.current = window.setInterval(() => {
         const e = (performance.now() - startedAt.current) / 1000;
         setElapsed(e);
-        if (e >= MAX_RECORD_SECONDS) stop(false);
+        if (e >= MAX_RECORD_SECONDS) stop(false, "cap");
       }, 200);
     } catch (err) {
       if (pending.current !== request) return;
@@ -173,7 +184,10 @@ export function useRecorder(onResult: (r: RecorderResult) => void) {
     cancelled.current = true;
     if (rec.current) {
       rec.current.onstop = null;
-      if (rec.current.state !== "inactive") rec.current.stop();
+      if (rec.current.state !== "inactive") {
+        appLog("voice", "stop", { reason: "unmount", seconds: (performance.now() - startedAt.current) / 1000 });
+        rec.current.stop();
+      }
     }
     cleanup();
   }, [cleanup]);

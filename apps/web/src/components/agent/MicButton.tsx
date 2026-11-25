@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { appLog } from "../../lib/appLog";
 import { MAX_RECORD_SECONDS, useRecorder, type RecorderResult } from "../../lib/recorder";
 import { isComposing } from "../../lib/hotkeys";
 import { useUiStore } from "../../stores/ui";
@@ -18,6 +19,8 @@ if (typeof window !== "undefined") {
     if (e.key !== "Escape" || !discards.size || e.metaKey || e.ctrlKey || e.altKey || isComposing(e)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
+    // This Esc goes no further, so nothing after it hears or logs it: it is said here.
+    appLog("voice", "discard-key", { recordings: discards.size });
     for (const discard of [...discards]) discard();
   }, true);
 }

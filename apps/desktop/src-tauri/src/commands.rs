@@ -34,6 +34,38 @@ pub async fn host_refresh_quota(state: State<'_, AppState>, force: Option<bool>)
     Ok(state.host.refresh_quota(force.unwrap_or(false)).await)
 }
 
+/// Ollama, LM Studio and OpenRouter as Settings › Models shows them. Whether there is an OpenRouter key, never the key.
+#[tauri::command]
+pub async fn provider_settings(state: State<'_, AppState>) -> Result<crate::host::providers::SettingsView, String> {
+    let home = state.paths.home.clone();
+    // The editor's environment may wait on their login shell.
+    let env = tokio::task::spawn_blocking(move || crate::util::child_env(&home)).await.map_err(|e| e.to_string())?;
+    Ok(crate::host::providers::view(&state.paths.provider_settings(), &env))
+}
+
+/// Save one provider's settings: `{ provider, url?, apiKey?, disabled? }`, where a field left out stays as it was and
+/// null or empty text clears it. Then look for the assistants again, as Refresh models does, and return the host.
+/// The arguments are read whole, since whether a field is there at all matters.
+#[tauri::command]
+pub async fn save_provider_settings(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> Result<HostStatus, String> {
+    use crate::host::providers::{SettingsPatch, SAVING};
+    let tauri::ipc::InvokeBody::Json(args) = request.body() else {
+        return Err("expected the settings as JSON".into());
+    };
+    let patch = SettingsPatch::from_args(args)?;
+    {
+        let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+        let mut settings = state.paths.provider_settings();
+        patch.apply(&mut settings);
+        state.paths.save_provider_settings(&settings).map_err(|e| {
+            log::warn!("{} settings could not be saved: {e:#}", crate::host::providers::label(&patch.provider));
+            format!("Could not save the settings: {e:#}")
+        })?;
+    }
+    log::info!("{} settings saved", crate::host::providers::label(&patch.provider));
+    Ok(state.host.refresh_agents().await)
+}
+
 #[tauri::command]
 pub async fn agent_install(state: State<'_, AppState>, agent: String) -> Result<crate::host::install::InstallResult, String> {
     let result = crate::host::install::install(&agent, &state.paths.home).await?;
@@ -108,7 +140,11 @@ pub async fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     if !is_https(&url) {
         return Err("only https links can be opened".into());
     }
-    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+    // Never the link itself: a sign-in link carries its own codes.
+    app.opener().open_url(url, None::<&str>).map_err(|e| {
+        log::warn!("could not open a link in the browser");
+        e.to_string()
+    })
 }
 
 /// Open Scarlet's data folder or its log folder in Finder / Explorer (Settings, and the page for a Scarlet that can't start).
@@ -117,7 +153,10 @@ pub async fn open_path(app: AppHandle, state: State<'_, AppState>, path: String)
     if !is_own_folder(&path, &state.paths) {
         return Err("only Scarlet's data and log folders can be opened".into());
     }
-    app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
+    app.opener().open_path(path, None::<&str>).map_err(|e| {
+        log::warn!("could not open Scarlet's folder: {e}");
+        e.to_string()
+    })
 }
 
 fn is_https(url: &str) -> bool {
@@ -160,7 +199,11 @@ pub async fn finish_folder_export(app: AppHandle, state: State<'_, AppState>, de
 /// Show a saved file in Finder / Explorer.
 #[tauri::command]
 pub async fn reveal_path(app: AppHandle, path: String) -> Result<(), String> {
-    app.opener().reveal_item_in_dir(path).map_err(|e| e.to_string())
+    // Never where it is: the editor named the file.
+    app.opener().reveal_item_in_dir(path).map_err(|e| {
+        log::warn!("could not show a saved file in its folder");
+        e.to_string()
+    })
 }
 
 /// The filters Add files offers. A drop takes any file, and the engine reads whatever ffmpeg can. The Mac's panel
@@ -193,14 +236,24 @@ pub async fn pick_files(app: AppHandle) -> Result<Vec<String>, String> {
     picker.pick_files(move |paths| {
         let _ = tx.send(paths);
     });
-    let paths = rx.await.map_err(|e| e.to_string())?.unwrap_or_default();
-    Ok(paths
+    let paths = rx.await.map_err(|e| e.to_string())?;
+    let Some(paths) = paths else {
+        log::info!("Add files: cancelled");
+        return Ok(Vec::new());
+    };
+    let picked = paths.len();
+    let files: Vec<String> = paths
         .into_iter()
         .filter_map(|p| match p {
             FilePath::Path(p) => Some(p.to_string_lossy().to_string()),
             FilePath::Url(u) => u.to_file_path().ok().map(|p| p.to_string_lossy().to_string()),
         })
-        .collect())
+        .collect();
+    if files.len() < picked {
+        log::warn!("Add files: {} of {picked} picked file(s) had no local path and were left out", picked - files.len());
+    }
+    log::info!("Add files: {} file(s) chosen", files.len());
+    Ok(files)
 }
 
 #[derive(serde::Deserialize)]
@@ -213,11 +266,17 @@ pub enum UiLogMessage {
 /// A renderer flush crosses the native bridge once. Keep each line a separate log record.
 #[tauri::command]
 pub fn desktop_log(level: Option<String>, message: UiLogMessage) {
-    let write = |message: &str| match level.as_deref() {
-        Some("error") => log::error!("[ui] {message}"),
-        Some("warn") => log::warn!("[ui] {message}"),
-        Some("debug") => log::debug!("[ui] {message}"),
-        _ => log::info!("[ui] {message}"),
+    let write = |message: &str| {
+        match level.as_deref() {
+            Some("error") => log::error!("[ui] {message}"),
+            Some("warn") => log::warn!("[ui] {message}"),
+            Some("debug") => log::debug!("[ui] {message}"),
+            _ => log::info!("[ui] {message}"),
+        }
+        // What became of a message is also kept where every copy of Scarlet writes, so it can be found from any.
+        if crate::copies::is_request_line(message) {
+            crate::copies::request_line(message);
+        }
     };
     match message {
         UiLogMessage::Line(line) => write(&line),
@@ -263,7 +322,10 @@ pub fn desktop_info(app: AppHandle, state: State<'_, AppState>) -> DesktopInfo {
 
 #[tauri::command]
 pub fn save_editor_model(state: State<'_, AppState>, selection: EditorModelSelection) -> Result<(), String> {
-    state.paths.save_editor_model(&selection).map_err(|e| e.to_string())
+    state.paths.save_editor_model(&selection).map_err(|e| {
+        log::warn!("could not save the editor model preference: {e:#}");
+        e.to_string()
+    })
 }
 
 #[cfg(test)]

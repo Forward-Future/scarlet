@@ -143,7 +143,7 @@ it("explains each top-left icon on hover (including disabled buttons) and hides 
     ["Draw", "Draw freehand"],
     ["Box", "Drag a box"],
     ["Point", "Drop a pin"],
-    ["Undo", "Remove the last mark"],
+    ["Undo", "Take back the last mark"],
     ["Clear marks", "Remove all marks"],
   ] as const) {
     await hoverItem(label, "pointerover");
@@ -211,6 +211,16 @@ it("lets the editor grab and move boxes, freehand marks, and points, clamping to
   // Grab and move the box (+80px = +0.2 in x, +40px = +0.2 in y)
   await dragEl('rect.picture-mark-hit[data-mark-index="0"]', 80, 70, 160, 110);
   expect(marks()[0]).toEqual({ kind: "box", box: { x: 0.3, y: 0.4, w: 0.2, h: 0.3 } });
+
+  // ⌘Z puts the moved box back where it was, and every mark stays: a second one then takes the last mark drawn.
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
+  expect(marks()).toHaveLength(3);
+  expect(marks()[0]).toEqual({ kind: "box", box: { x: 0.1, y: 0.2, w: 0.2, h: 0.3 } });
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
+  expect(marks()).toHaveLength(2);
+  await press("pointerdown", 360, 160);
+  await press("pointerup", 360, 160);
+  await dragEl('rect.picture-mark-hit[data-mark-index="0"]', 80, 70, 160, 110);
 
   // Clicking a mark without dragging neither moves it nor creates a stray point.
   await dragEl('rect.picture-mark-hit[data-mark-index="0"]', 160, 110, 160, 110);

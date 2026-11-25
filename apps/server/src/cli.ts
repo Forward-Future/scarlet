@@ -76,7 +76,7 @@ async function runServe(argv: string[]) {
   }
   // Analysis workers and agent tool connections use the same executable.
   // Initialize the HTTP engine only in the process that will serve requests.
-  const [{ serve }, { createApp }, { accessToken, localUser, publishDesktopSession }, { attachWebSocket }, { DEFAULT_POSTHOG_KEY }] = await Promise.all([
+  const [{ serve }, { createApp }, { accessToken, localUser, publishDesktopSession }, { attachWebSocket }, { DEFAULT_POSTHOG_KEY, SCARLET_VERSION }] = await Promise.all([
     import("@hono/node-server"), import("./app.js"), import("./auth.js"), import("./ws.js"),
     import("./telemetry/config.js"),
   ]);
@@ -113,6 +113,17 @@ async function runServe(argv: string[]) {
   });
 
   const hostname = solo ? "127.0.0.1" : (process.env.SCARLET_HOST ?? "127.0.0.1");
+  // One line saying what this engine is and how it is set up, so a log read later knows what it came from.
+  const logReady = (boundPort: number) => {
+    let transcription = "unknown";
+    try {
+      transcription = ctx.settings().transcription.provider;
+    } catch (err) {
+      transcription = `unreadable (${(err as Error).message})`;
+    }
+    const telemetry = ctx.telemetry.unavailable ? "unavailable" : ctx.telemetry.active ? "on" : "off";
+    ctx.log(`[lifecycle] ready port=${boundPort} version=${SCARLET_VERSION} node=${process.version} solo=${solo} transcription=${transcription} telemetry=${telemetry} data=${dataDir}`);
+  };
   const server = serve({ fetch: app.fetch, port, hostname }, (info: AddressInfo) => {
     const user = localUser(ctx);
     const token = accessToken(ctx);
@@ -120,6 +131,7 @@ async function runServe(argv: string[]) {
       publishDesktopSession(ctx, info.port);
       const ready = { port: info.port, url: `http://127.0.0.1:${info.port}`, token, userId: user.id, dataDir };
       console.log(`SCARLET_READY ${JSON.stringify(ready)}`);
+      logReady(info.port);
       return;
     }
     const settings = ctx.settings();
@@ -128,6 +140,7 @@ async function runServe(argv: string[]) {
     console.log(`  transcription: ${settings.transcription.provider}`);
     console.log(`  note cleanup:  ${settings.noteCleanup.enabled ? "on" : "off"}`);
     console.log(`  access token:  ${ctx.paths.accessToken} (agent host / MCP: --token-file)`);
+    logReady(info.port);
   }) as Server;
 
   // Multi-GB uploads can outlast Node's default five-minute request deadline.
@@ -140,22 +153,23 @@ async function runServe(argv: string[]) {
   attachWebSocket(server, ctx);
 
   let stopping = false;
-  const shutdown = async () => {
+  const shutdown = async (via: string) => {
     if (stopping) return;
     stopping = true;
     if (!solo) console.log("shutting down...");
+    ctx.log(`[lifecycle] shutting down via=${via}`);
     server.close();
     await ctx.close();
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
   // The desktop app closes our stdin when it exits; treat that as a stop signal
   // so a crashed parent never leaves an orphan engine running.
   if (solo && stdinIsPipe()) {
     process.stdin.resume();
-    process.stdin.on("end", shutdown);
-    process.stdin.on("close", shutdown);
+    process.stdin.on("end", () => shutdown("stdin"));
+    process.stdin.on("close", () => shutdown("stdin"));
   }
 }
 

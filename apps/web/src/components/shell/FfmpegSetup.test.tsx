@@ -78,3 +78,34 @@ it("shows installed status in Settings and offers install when missing", async (
     vi.unstubAllGlobals();
   }
 });
+
+it("shows an install started on the Projects page as still installing in Settings", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.spyOn(desktopModule, "isDesktop").mockReturnValue(true);
+  vi.spyOn(desktop, "ffmpegStatus").mockResolvedValue(MISSING);
+  let finish!: (status: typeof INSTALLED) => void;
+  const install = vi.spyOn(desktop, "ffmpegInstall").mockReturnValue(new Promise(resolve => { finish = resolve; }));
+
+  const banner = document.body.appendChild(document.createElement("div")), card = document.body.appendChild(document.createElement("div"));
+  const bannerRoot = createRoot(banner), cardRoot = createRoot(card);
+  try {
+    await act(async () => bannerRoot.render(<FfmpegSetupBanner />));
+    await act(async () => banner.querySelector<HTMLButtonElement>("button")!.click());
+    // The editor goes to Settings while it downloads.
+    await act(async () => bannerRoot.unmount());
+    await act(async () => cardRoot.render(<FfmpegSetupCard />));
+    const button = card.querySelector<HTMLButtonElement>("button")!;
+    expect(button.textContent).toContain("Installing FFmpeg…");
+    expect(button.disabled).toBe(true);
+    await act(async () => button.click());
+    expect(install).toHaveBeenCalledTimes(1);
+    await act(async () => finish(INSTALLED));
+    expect(card.textContent).toContain("✓ Installed");
+  } finally {
+    await act(() => cardRoot.unmount());
+    banner.remove();
+    card.remove();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});

@@ -145,3 +145,24 @@ it("says why nothing can transcribe, so Media can offer the fix", async () => {
   expect(ready).toMatchObject({ transcriptionAvailable: true });
   expect(ready).not.toHaveProperty("transcriptionIssue");
 });
+
+it("falls back to a working whisper-cli on PATH when a dev checkout only has a zero-byte placeholder", async () => {
+  const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  const binDir = join(dataDir, "placeholder-bin"), pathDir = join(dataDir, "path-bin");
+  await mkdir(binDir, { recursive: true });
+  await mkdir(pathDir, { recursive: true });
+  await writeFile(join(binDir, name), "");
+  const fallback = join(pathDir, name);
+  await writeFile(fallback, "program", { mode: 0o755 });
+  const devApp = createApp({ dataDir: join(dataDir, "dev"), skillsSeedDir: join(dataDir, "none"), env: { SCARLET_BIN_DIR: binDir, PATH: pathDir }, log: () => {} });
+  try {
+    expect(devApp.ctx.whisperCli).toBe(fallback);
+    expect(devApp.ctx.whisperCliBundled).toBe(false);
+    expect(devApp.ctx.settings().transcription.provider).toBe("whispercpp");
+    expect((await importTranscriptionPolicy(devApp.ctx)).provider).toBe("whispercpp");
+    const res = await devApp.app.request("/api/settings", { headers: { Authorization: `Bearer ${accessToken(devApp.ctx)}` } });
+    expect(await res.json()).toMatchObject({ transcriptionAvailable: true });
+  } finally {
+    await devApp.ctx.close();
+  }
+});

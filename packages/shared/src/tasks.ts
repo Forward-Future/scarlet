@@ -44,6 +44,7 @@ export const TaskKind = z.enum([
   "revise", // revise a rejected/sent-back change
   "skill_from_change", // write a SKILL.md capturing an approved change
   "skill_edit", // revise one skill as the editor described; not part of a project's conversation
+  "style_guide_edit", // design or update one style guide in chat; not part of a project's conversation
   "learning_check", // read one request for a standing rule to offer; started with the request, beside it
   "area_check", // look at one frame of a recording and say what of it viewers may see; started when a save needs it
   "listen_check", // hear one passage of a recording and say what it heard, for a request whose model can't hear; started by its `listen` call
@@ -111,7 +112,7 @@ export const Task = z.object({
       changeId: Id.optional(),
       cutIndex: z.number().int().nonnegative().optional(),
       editIndex: z.number().int().nonnegative().optional(),
-      /** The selected edit's number in the editor's list, which is how they and Scarlet's replies refer to it. */
+      /** No longer set: the editor's lists go by time, not number. Kept so requests saved before still read. */
       editNumber: z.number().int().positive().optional(),
       /**
        * The other edits in the moment the editor's words are about, when they were looking at a moment of the list and
@@ -122,6 +123,8 @@ export const Task = z.object({
       skillName: SkillSlug.optional(),
       /** The skill the editor asked Scarlet to revise. */
       skillId: Id.optional(),
+      /** The style guide the editor asked Scarlet to design or revise. */
+      styleGuideId: Id.optional(),
       /** The learning this skill edit saves, when the editor approved one. */
       learningId: Id.optional(),
       /** The request a learning_check task reads. A rule it offers is that request's. */
@@ -150,6 +153,8 @@ export const Task = z.object({
       /** The local passage established on the first save, in this immutable version's timeline seconds. */
       dialogueRange: z.object({ version: Id, start: Seconds, end: Seconds }).optional(),
       skillIds: z.array(Id).optional(),
+      /** Style guides explicitly referenced with @name for this request. */
+      styleGuideIds: z.array(Id).optional(),
       /** The thread this task belongs to. Defaults to the task's own id (a new thread). */
       threadId: Id.optional(),
       /**
@@ -170,6 +175,8 @@ export const Task = z.object({
   hostId: Id.nullable().default(null),
   /** The skill a skill_from_change task produced, or a skill_edit task revised. */
   resultSkillId: Id.optional(),
+  /** The style guide a style_guide_edit task updated. */
+  resultStyleGuideId: Id.optional(),
   /**
    * What the pass's latest repeat check measured, on the version it read: evidence kept with the request for the window
    * and the evals. It holds nothing open: a pass that says it is done is done (2026-11-21).
@@ -247,6 +254,8 @@ export const Task = z.object({
   sessionRevokedFor: z.string().datetime().optional(),
   /** Pending question from the agent, if waiting_for_user. */
   question: z.string().nullable().default(null),
+  /** The short answers Scarlet offered with that question, when it has a few clear ones: one press sends one. */
+  questionChoices: z.array(z.string()).optional(),
   /** Where the editor can hear the updated passage while answering a question about a staged cut. */
   cutConflict: z.object({ version: Id, range: TimeRange.optional(), changeId: Id.optional(), index: z.number().int().nonnegative().optional(),
     answered: z.literal(true).optional(), retried: z.literal(true).optional(),
@@ -269,7 +278,7 @@ export type Task = z.infer<typeof Task>;
 
 /** Retrying is safe only if an editing worker failed before saving an output. */
 export function canRetryTask(task: Task): boolean {
-  return task.state === "failed" && task.kind !== "transcribe" && !task.changeIds.length && !task.resultSkillId;
+  return task.state === "failed" && task.kind !== "transcribe" && !task.changeIds.length && !task.resultSkillId && !task.resultStyleGuideId;
 }
 
 /**
@@ -286,7 +295,7 @@ export function taskNeedsTranscripts(task: Task): boolean {
 }
 
 export function taskRecoveryAction(task: Task, hasLinkedChange: boolean): "resume" | "retry" | undefined {
-  if (task.kind === "transcribe" || task.resultSkillId) return;
+  if (task.kind === "transcribe" || task.resultSkillId || task.resultStyleGuideId) return;
   if (task.state === "cancelled" || taskWasStopped(task) || taskNeedsTranscripts(task)) return "resume";
   if (canRetryTask(task) && !hasLinkedChange) return task.resumeRootId ? "resume" : "retry";
   // A run that failed after saving picks up where it left off, keeping what it saved.
@@ -315,9 +324,21 @@ export function skillEditTarget(task: Task, projectId: string) {
   return { skillId: task.context.skillId, hostId: task.hostId };
 }
 
+/** The one style guide a live style-guide-edit task may revise: the one the editor asked about. */
+export function styleGuideEditTarget(task: Task, projectId: string) {
+  if (task.kind !== "style_guide_edit" || task.projectId !== projectId || !task.hostId ||
+      (task.state !== "claimed" && task.state !== "running") || !task.context.styleGuideId) return undefined;
+  return { styleGuideId: task.context.styleGuideId, hostId: task.hostId };
+}
+
 /** A request to revise a skill. It isn't about the project it runs in. */
 export function isSkillEdit(task: Pick<Task, "kind">): boolean {
   return task.kind === "skill_edit";
+}
+
+/** A request to design or revise a style guide. It isn't about the project it runs in. */
+export function isStyleGuideEdit(task: Pick<Task, "kind">): boolean {
+  return task.kind === "style_guide_edit";
 }
 
 /** The check that reads a request for a standing rule. It runs beside the request and edits nothing. */
@@ -354,7 +375,7 @@ export function isHandOff(task: Pick<Task, "kind">): boolean {
  * check, an area check or a listen check), or a hand-off, whose edits are the request's that handed it the work.
  */
 export function isAsideTask(task: Pick<Task, "kind">): boolean {
-  return isSkillEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBrollMake(task) || isHandOff(task);
+  return isSkillEdit(task) || isStyleGuideEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBrollMake(task) || isHandOff(task);
 }
 
 /**
@@ -406,6 +427,7 @@ export type CreateTaskRequest = z.infer<typeof CreateTaskRequest>;
 export const RewordTaskRequest = z.object({
   text: z.string().trim().min(1),
   skillIds: z.array(Id).optional(),
+  styleGuideIds: z.array(Id).optional(),
 });
 export type RewordTaskRequest = z.infer<typeof RewordTaskRequest>;
 
@@ -417,6 +439,15 @@ export const DialogueScanPage = z.object({
   to: z.number().finite().optional(),
 }).refine(p => p.from < p.end && (p.to === undefined || (p.to > p.from && p.to <= p.end)));
 export type DialogueScanPage = z.infer<typeof DialogueScanPage>;
+
+/** The answers a question can offer the editor to pick with one press: two to four, each a few words. */
+export const QuestionChoices = z.array(z.string().trim().min(1).max(80)).min(2).max(4);
+
+/** The answers a `question` event offered, when it offered a well-formed set. */
+export function questionChoicesOf(data: Record<string, unknown> | undefined): string[] | undefined {
+  const parsed = QuestionChoices.safeParse(data?.choices);
+  return parsed.success ? parsed.data : undefined;
+}
 
 export const TaskEvent = z.object({
   id: Id.optional(),

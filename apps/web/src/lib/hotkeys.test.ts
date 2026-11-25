@@ -2,7 +2,7 @@
 import { act, createElement, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { arrowSeekTime, handleCutArrow, ignorePageShortcut, isComposing, isEditableTarget, mediaPlaying, useComparisonShortcut, useHotkeys } from "./hotkeys";
+import { arrowSeekTime, handleCutArrow, ignorePageShortcut, isAltClearRangeKey, isComposing, isEditableTarget, mediaPlaying, useComparisonShortcut, useHotkeys } from "./hotkeys";
 import { usePlayerStore } from "../stores/player";
 
 afterEach(() => {
@@ -199,4 +199,14 @@ it("runs a page's shortcut with its latest handler, skips typing, and stops when
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it("recognizes Option+X / Alt+X for clearing a range, including macOS ≈ with code KeyX", () => {
+  expect(isAltClearRangeKey({ key: "x", altKey: true, metaKey: false, ctrlKey: false, shiftKey: false })).toBe(true);
+  expect(isAltClearRangeKey({ key: "X", altKey: true, metaKey: false, ctrlKey: false, shiftKey: false })).toBe(true);
+  expect(isAltClearRangeKey({ key: "≈", code: "KeyX", altKey: true, metaKey: false, ctrlKey: false, shiftKey: false })).toBe(true);
+  expect(isAltClearRangeKey({ key: "x", altKey: false, metaKey: false, ctrlKey: false, shiftKey: false })).toBe(false);
+  expect(isAltClearRangeKey({ key: "x", altKey: true, metaKey: true, ctrlKey: false, shiftKey: false })).toBe(false);
+  expect(isAltClearRangeKey({ key: "x", altKey: true, metaKey: false, ctrlKey: true, shiftKey: false })).toBe(false);
+  expect(isAltClearRangeKey({ key: "x", altKey: true, metaKey: false, ctrlKey: false, shiftKey: true })).toBe(false);
 });
