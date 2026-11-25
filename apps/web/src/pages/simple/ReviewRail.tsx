@@ -185,10 +185,9 @@ export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow, 
   // One list of every request's low-risk rows, with nothing naming the request (the editor's choice, 2026-11-24).
   const lowSlots = threads.map(thread => <div key={thread.id} className="review-slot" data-thread={thread.id} ref={store.ref("low", thread.id)} />);
   const section = (name: "Working" | "Done", key: "working" | "done", count: number) => {
-    if (count === 0) return null;
-    const shown = open[key];
+    const shown = open[key] && count > 0;
     return <>
-      <button type="button" className="review-sec" aria-expanded={shown}
+      <button type="button" className={count ? "review-sec" : "review-sec is-none"} aria-expanded={shown} disabled={!count}
         onClick={letGo(() => onOpen(key, !open[key]))}>
         <span>{name}</span><b>{count}</b><Icon name="chevron" size={10} /></button>
       <div className="review-sec-body" role="group" aria-label={name} hidden={!shown}>{slots(key)}</div>
@@ -218,10 +217,10 @@ export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow, 
         <div className="review-low-body" role="group" aria-label="Low risk" hidden={!open.low}>{lowSlots}</div>
       </div>
     </div>
-    {(working > 0 || done > 0) && <div className="review-rail-foot">
+    <div className="review-rail-foot">
       {section("Working", "working", working)}
       {section("Done", "done", done)}
-    </div>}
+    </div>
     {tip && !nothing && <div ref={tipEl} id={tipId} role="tooltip" className="review-rail-tip"
       style={{ left: tipLeft ?? tip.left, ...(tip.top !== undefined ? { top: tip.top } : { bottom: tip.bottom }) }}>
       <span>{tip.text}</span>
