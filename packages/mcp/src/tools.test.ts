@@ -316,6 +316,36 @@ describe("timeline_framing", () => {
     } finally { await c.close(); }
   });
 
+  it("skips video-only beside picture reads for still image overlays", async () => {
+    mock.state.project.media.push({ id: "photo", kind: "image", name: "photo.jpg", path: "photo.jpg", width: 1200, height: 800, hasAudio: false });
+    const others = mock.state.extra!;
+    const photoReads: string[] = [];
+    mock.state.extra = (req, res) => {
+      if (req.method === "GET" && /^\/projects\/prj_test\/media\/photo\/(screen-text|screen-motion|picture-cuts|faces)$/.test(req.path)) {
+        photoReads.push(req.path);
+        return reply(res, { error: "no_picture", message: "Only a video has a picture to read." }, 400);
+      }
+      return others(req, res);
+    };
+    const c = await connect();
+    try {
+      await ok(c, "timeline_get");
+      const result = JSON.parse(textOf(await ok(c, "timeline_propose", {
+        description: "Place a framed still photo over the video.",
+        reason: "Highlight the photo beside the narration.",
+        ops: [
+          { op: "addTrack", track: { id: "v_photo", kind: "video", name: "Photo", muted: false, hidden: false, clips: [] } },
+          { op: "addClip", trackId: "v_photo", clip: {
+            kind: "media", id: "photo_clip", mediaId: "photo", sourceIn: 0, sourceOut: 4, timelineIn: 2,
+            transform: { x: 0, y: 0, scale: 1.2, rotation: 0, cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 },
+          } },
+        ],
+      })).split("\n")[0]!);
+      expect(result.framed?.some((f: { mediaId: string }) => f.mediaId === "photo")).toBe(true);
+      expect(photoReads).toEqual([]);
+    } finally { await c.close(); }
+  });
+
   it("saves a stretch as one edit in the agent's words, and a second framing of it as that edit revised", async () => {
     let saves = 0;
     const others = mock.state.extra!;

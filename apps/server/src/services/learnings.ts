@@ -9,6 +9,7 @@ import { badRequest, conflict, notFound } from "../errors.js";
 import { actorFor, logActivity, quote } from "./activity.js";
 import { latestSkillEdit } from "./skills.js";
 import { createTask, editsDialogue, FINISHED_TASK } from "./tasks.js";
+import { taskFailureReason } from "../telemetry/failureReason.js";
 
 /**
  * Learnings: standing rules Scarlet picked up from the editor's requests and decisions. Every request is read for one
@@ -42,6 +43,40 @@ const enabledSkills = (ctx: Ctx) => ctx.repos.skills.select("1=1", [], "name ASC
 /** A message that only names a skill to run ("/dialogue-pass") says nothing about how the editor wants it done. */
 const ONLY_A_SKILL = /^\/[\w-]+$/;
 
+/** Persistent assistant/account failure categories that make a background learning check doomed to repeat the error. */
+const PERSISTENT_ASSISTANT_FAILURES: ReadonlySet<string> = new Set([
+  "agent_not_installed",
+  "agent_not_signed_in",
+  "agent_incompatible",
+  "model_unavailable",
+  "rate_limited",
+]);
+const RECENT_ASSISTANT_FAILURE_MS = 15 * 60 * 1000;
+
+/**
+ * Skip spawning a background learning check when every registered host reports the assistant unavailable
+ * or when its latest finished task recently failed with a setup, model, or rate-limit error.
+ */
+function assistantUnavailableForLearning(ctx: Ctx, agent: string, model?: string): boolean {
+  const hosts = ctx.repos.hosts.select();
+  if (hosts.length > 0) {
+    const ready = hosts.some(h => h.agents.some(a => a.id === agent && a.installed && a.loggedIn !== false));
+    if (!ready) return true;
+  }
+  const latest = ctx.repos.tasks.select(
+    "agent = ? AND state IN ('done', 'failed') AND kind != 'transcribe'",
+    [agent],
+    "json_extract(json, '$.finishedAt') DESC, rowid DESC LIMIT 1",
+  )[0];
+  if (!latest || latest.state !== "failed") return false;
+  const finishedAt = Date.parse(latest.finishedAt ?? "");
+  if (!Number.isFinite(finishedAt) || Date.now() - finishedAt > RECENT_ASSISTANT_FAILURE_MS) return false;
+  const reason = taskFailureReason(latest);
+  if (!PERSISTENT_ASSISTANT_FAILURES.has(reason)) return false;
+  if (reason === "model_unavailable" && model && latest.model && latest.model !== model) return false;
+  return true;
+}
+
 /**
  * Read what the editor just asked for a standing rule. The check is a run of its own with the request's agent and
  * model: it starts with the request, outside the project's queue, and edits nothing. A request Scarlet made itself, a
@@ -52,6 +87,7 @@ export function startLearningCheck(ctx: Ctx, task: Task): Task | undefined {
   // The check is Scarlet's own. Whatever goes wrong starting it, the request it reads is already saved and runs.
   try {
     if (ONLY_A_SKILL.test(wordsOf(task)) || !enabledSkills(ctx).length) return;
+    if (assistantUnavailableForLearning(ctx, task.agent, task.model)) return;
     return createTask(ctx, {
       projectId: task.projectId, kind: "learning_check", agent: task.agent, model: task.model, fast: task.fast,
       instruction: wordsOf(task), context: { checksTaskId: task.id }, createdBy: task.createdBy,
@@ -351,6 +387,7 @@ export function startDecisionCheck(ctx: Ctx, projectId: string, threadId: string
     const latest = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.context.threadId') = ? AND kind IN ('edit', 'note', 'revise') AND json_extract(json, '$.createdBy.type') = 'human'",
       [projectId, threadId], "created_at DESC, rowid DESC LIMIT 1")[0] ?? asked;
     if (latest.agent === "api" || threadWaitsOnEditor(ctx, projectId, threadId)) return;
+    if (assistantUnavailableForLearning(ctx, latest.agent, latest.model)) return;
     if (ctx.repos.tasks.count("kind = 'learning_check' AND state = 'queued'")) return;
     const check = createTask(ctx, {
       projectId, kind: "learning_check", agent: latest.agent, model: latest.model, fast: latest.fast,

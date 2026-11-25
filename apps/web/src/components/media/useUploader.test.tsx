@@ -2,8 +2,9 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
-import type { ProjectSummary } from "@scarlet/shared";
+import { ScarletApiError, type ProjectSummary } from "@scarlet/shared";
 import { createProject, type MediaAsset, type Project } from "@scarlet/timeline";
+import { api } from "../../lib/client";
 
 const importLocalFile = vi.hoisted(() => vi.fn());
 const store = vi.hoisted(() => ({
@@ -13,11 +14,15 @@ const store = vi.hoisted(() => ({
 vi.mock("../../lib/upload", () => ({ importLocalFile, uploadMedia: vi.fn() }));
 vi.mock("../../stores/project", () => ({ useProjectStore: { getState: () => store } }));
 
+let expandMediaPaths: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
   localStorage.clear();
   importLocalFile.mockReset();
   store.updateProject.mockClear();
   store.current = null;
+  vi.restoreAllMocks();
+  expandMediaPaths = vi.spyOn(api, "expandMediaPaths").mockImplementation(async paths => ({ files: [...paths], folders: 0, emptyFolders: [] }));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 });
 
@@ -103,4 +108,59 @@ it("leaves the match to a new project's first files still waiting, so files adde
   await unmount();
   expect(store.updateProject).toHaveBeenCalledExactlyOnceWith(
     { settings: { width: 1280, height: 720, aspect: "16:9", fps: 24 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
+});
+
+it("expands a dropped folder into its video files, imports all of them, and sets the project format from the best video", async () => {
+  const project = createProject("Tier list");
+  store.current = { id: project.id, project, media: [] };
+  const folder = "D:\\Matt B\\tier list vid + kotlin\\raw";
+  const clipA = `${folder}\\a.mp4`;
+  const clipB = `${folder}\\b.mov`;
+  expandMediaPaths.mockResolvedValueOnce({ files: [clipA, clipB], folders: 1, emptyFolders: [] });
+  importLocalFile.mockResolvedValueOnce(video("a.mp4", 1080, 1920, 60))
+    .mockResolvedValueOnce(video("b.mov", 3840, 2160, 30));
+
+  await addFiles(project.id, [folder]);
+  expect(expandMediaPaths).toHaveBeenCalledExactlyOnceWith([folder]);
+  expect(importLocalFile.mock.calls.map(call => call[1])).toEqual([clipA, clipB]);
+  expect(store.updateProject).toHaveBeenCalledExactlyOnceWith(
+    { settings: { width: 3840, height: 2160, aspect: "16:9", fps: 30 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
+});
+
+it("reports a clear error when a dropped folder contains no video files", async () => {
+  const project = createProject("Empty folder");
+  store.current = { id: project.id, project, media: [] };
+  const folder = "D:\\Matt B\\tier list vid + kotlin\\docs";
+  expandMediaPaths.mockResolvedValueOnce({ files: [], folders: 1, emptyFolders: [{ path: folder, name: "docs" }] });
+
+  const { useUploader } = await import("./UploadDropzone");
+  let latest!: ReturnType<typeof useUploader>;
+  function Probe() { latest = useUploader(project.id); return null; }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Probe />));
+  await act(async () => { await latest.startPaths([folder]); });
+  expect(importLocalFile).not.toHaveBeenCalled();
+  expect(latest.items).toEqual([expect.objectContaining({
+    name: "docs",
+    state: "error",
+    error: "No video files found in “docs”.",
+  })]);
+  await act(async () => root.unmount());
+});
+
+it("expands a folder in place if enqueueImports receives a directory directly and the server replies path_is_directory", async () => {
+  const project = createProject("Resumed folder");
+  store.current = { id: project.id, project, media: [] };
+  const folder = "/footage/raw";
+  const clip = "/footage/raw/take1.mp4";
+  expandMediaPaths.mockResolvedValueOnce({ files: [clip], folders: 1, emptyFolders: [] });
+  importLocalFile.mockRejectedValueOnce(new ScarletApiError(400, "path_is_directory", "raw is a folder"))
+    .mockResolvedValueOnce(video("take1.mp4", 1920, 1080, 30));
+
+  const { enqueueImports } = await import("./UploadDropzone");
+  const { matchFirstClip } = await import("../../lib/firstClipFormat");
+  await enqueueImports(project.id, [folder], matchFirstClip(project));
+  expect(importLocalFile.mock.calls.map(call => call[1])).toEqual([folder, clip]);
+  expect(store.updateProject).toHaveBeenCalledExactlyOnceWith(
+    { settings: { width: 1920, height: 1080, aspect: "16:9", fps: 30 }, expectedFormat: { settings: project.settings, head: null } }, project.id);
 });

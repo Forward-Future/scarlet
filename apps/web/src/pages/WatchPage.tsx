@@ -41,7 +41,7 @@ import { editFocus } from "../lib/editKind";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
 import { momentRange } from "../lib/editMoments";
 import { editKey } from "../lib/keptEdits";
-import { MAX_RATE, MIN_RATE, PlaybackSpeed, RATE_STEP, stepPlaybackRate } from "./watch/PlaybackSpeed";
+import { MAX_RATE, MIN_RATE, PlaybackSpeed, RATE_STEP, stepPlaybackRate, toggleFastPlaybackRate } from "./watch/PlaybackSpeed";
 import { ImportPreview } from "./watch/ImportPreview";
 import { CutSide, SelectedCutFrame } from "./watch/SelectedCutFrame";
 
@@ -533,10 +533,14 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       if (playingBefore || !playable || isComposing(e)) return;
       e.preventDefault();
       if (!e.repeat) player.shuttleForward();
-    } else if (matchesShortcut(e, "speedUp") || matchesShortcut(e, "speedDown")) {
+    } else if (matchesShortcut(e, "speedDown")) {
       if (!playable || isComposing(e)) return;
       e.preventDefault();
-      stepPlaybackRate(matchesShortcut(e, "speedDown") ? -1 : 1, true);
+      stepPlaybackRate(-1, true);
+    } else if (matchesShortcut(e, "speedUp")) {
+      if (!playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) toggleFastPlaybackRate();
     } else if (matchesShortcut(e, "stepBack", { allowShift: true }) || matchesShortcut(e, "stepForward", { allowShift: true })) {
       e.preventDefault();
       if (!playable || duration <= 0) return;

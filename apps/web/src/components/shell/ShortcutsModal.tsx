@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
+import { usePlayerStore, type SpeedUpRate } from "../../stores/player";
 import {
   bindingTokens,
   isMacPlatform,
@@ -17,7 +18,7 @@ interface ModalRow {
   where: string;
 }
 
-function buildRows(bindings: BindingMap, mac: boolean): ModalRow[] {
+function buildRows(bindings: BindingMap, mac: boolean, speedUpRate: SpeedUpRate): ModalRow[] {
   const platformKey = mac ? "⌘" : "Ctrl";
   const single = (id: ShortcutActionId, what: string, where: string): ModalRow[] => {
     const tokens = bindingTokens(bindings[id], mac);
@@ -33,11 +34,11 @@ function buildRows(bindings: BindingMap, mac: boolean): ModalRow[] {
     const up = bindings.speedUp;
     const down = bindings.speedDown;
     if (up === "L" && down === "Shift+L") {
-      return [{ key: "speed", tokens: ["L"], what: "Faster playback, back to 0.5× after 2× (Shift for slower)", where: "Preview" }];
+      return [{ key: "speed", tokens: ["L"], what: `Speed up playback to ${speedUpRate}× (again for 1×, Shift slower)`, where: "Preview" }];
     }
     const rows: ModalRow[] = [];
     if (down) rows.push({ key: "speedDown", tokens: bindingTokens(down, mac), what: "Slower playback", where: "Preview" });
-    if (up) rows.push({ key: "speedUp", tokens: bindingTokens(up, mac), what: "Faster playback", where: "Preview" });
+    if (up) rows.push({ key: "speedUp", tokens: bindingTokens(up, mac), what: `Speed up playback to ${speedUpRate}× (again for 1×)`, where: "Preview" });
     return rows;
   };
 
@@ -93,6 +94,7 @@ export function ShortcutsModal() {
   const open = useUiStore((s) => s.shortcutsOpen);
   const setOpen = useUiStore((s) => s.setShortcutsOpen);
   const bindings = useShortcutsStore((s) => s.bindings);
+  const speedUpRate = usePlayerStore((s) => s.speedUpRate);
   const inRouter = useInRouterContext();
 
   // Page shortcuts stop while a dialog is open, this one included, so the list listens for the key that closes it.
@@ -110,7 +112,7 @@ export function ShortcutsModal() {
 
   // The list names the keys of the computer it is on.
   const mac = isMacPlatform();
-  const rows = buildRows(bindings, mac);
+  const rows = buildRows(bindings, mac, speedUpRate);
 
   return (
     <Modal

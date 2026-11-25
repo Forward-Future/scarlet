@@ -46,6 +46,58 @@ pub fn can_run_bare(env: &std::collections::HashMap<String, String>) -> bool {
     ["ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"].iter().any(|k| env.get(*k).is_some_and(|v| !v.is_empty()))
 }
 
+/// Optional flags Scarlet passes to newer Claude Code CLIs that older versions reject on startup.
+/// Each entry pairs the flag name with whether it takes a separate value argument.
+pub(super) const COMPAT_FLAGS: [(&str, bool); 4] = [
+    ("--restricted", false),
+    ("--bare", false),
+    ("--disable-slash-commands", false),
+    ("--effort", true),
+];
+
+/// If stderr says Claude Code rejected one of Scarlet's optional compatibility flags before starting a session,
+/// return that flag name so the runner can drop it and retry.
+pub(super) fn unsupported_compat_flag(stderr: &str) -> Option<&'static str> {
+    let lower = stderr.to_ascii_lowercase();
+    if !["unknown option", "unrecognized option", "unexpected argument", "unknown flag", "unrecognized flag"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return None;
+    }
+    COMPAT_FLAGS.iter().map(|(flag, _)| *flag).find(|flag| {
+        let needle = flag.to_ascii_lowercase();
+        lower.match_indices(&needle).any(|(idx, _)| {
+            let before = lower[..idx].chars().next_back();
+            let after = lower[idx + needle.len()..].chars().next();
+            before.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-')
+                && after.is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-')
+        })
+    })
+}
+
+/// Remove `flag` (and its value argument, when it takes one) from `args`. Returns true if anything was removed.
+pub(super) fn strip_compat_flag(args: &mut Vec<String>, flag: &str) -> bool {
+    let takes_value = COMPAT_FLAGS.iter().find(|(f, _)| *f == flag).is_some_and(|(_, v)| *v);
+    let before = args.len();
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == flag {
+            i += if takes_value { 2 } else { 1 };
+            continue;
+        }
+        if takes_value && args[i].starts_with(&format!("{flag}=")) {
+            i += 1;
+            continue;
+        }
+        out.push(args[i].clone());
+        i += 1;
+    }
+    *args = out;
+    args.len() < before
+}
+
 /// Put `env` in the command's `--settings`, where it wins over the editor's own Claude Code settings.
 pub fn add_settings_env(cmd: &mut RunnerCommand, env: &BTreeMap<String, String>) {
     let Some(at) = cmd.args.iter().position(|a| a == "--settings").map(|i| i + 1) else { return };

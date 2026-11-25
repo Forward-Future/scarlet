@@ -160,5 +160,5 @@ it("updates Keep and PlaybackSpeed buttons and handlers live when switching to J
 
   await click(el.querySelector<HTMLButtonElement>(".playback-speed-trigger")!);
   expect(el.querySelector('[aria-label="Decrease playback speed"]')?.getAttribute("title")).toBe("Decrease playback speed ([)");
-  expect(el.querySelector('[aria-label="Increase playback speed"]')?.getAttribute("title")).toBe("Increase playback speed (])");
+  expect(el.querySelector(".playback-speed-shortcut-label")?.textContent).toBe("] shortcut");
 });

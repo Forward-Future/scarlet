@@ -36,7 +36,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Paths;
-use crate::util::{engine_env, hide_console, lossy_lines};
+use crate::util::{engine_env, env_remove_ci, hide_console, lossy_lines};
 use launch::{bundled_chrome, dev_whisper_cli, engine_line_level, newest_mtime, set_chrome_env, set_dev_whisper_env};
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -413,10 +413,7 @@ impl EngineManager {
         env.insert("SCARLET_DATA".into(), self.paths.data_dir.to_string_lossy().to_string());
         // Only the public packages are built for a release feed. The engine reports usage under the `release` channel
         // only with it, so source, local-main and review builds count as `dev` (docs/telemetry.md).
-        match option_env!("SCARLET_RELEASE_CHANNEL").filter(|channel| !channel.is_empty()) {
-            Some(channel) => { env.insert("SCARLET_RELEASE_CHANNEL".into(), channel.into()); }
-            None => { env.remove("SCARLET_RELEASE_CHANNEL"); }
-        }
+        apply_release_channel(&mut env, option_env!("SCARLET_RELEASE_CHANNEL"));
         env
     }
 
@@ -548,6 +545,15 @@ impl EngineManager {
                 log::warn!("[desktop] engine-stop-timeout elapsedMs=8000");
             }
         });
+    }
+}
+
+/// Set or strip `SCARLET_RELEASE_CHANNEL` case-insensitively so Windows environment maps cannot keep a differently
+/// cased inherited entry beside it.
+fn apply_release_channel(env: &mut HashMap<String, String>, channel: Option<&str>) {
+    env_remove_ci(env, &["SCARLET_RELEASE_CHANNEL"]);
+    if let Some(channel) = channel.map(str::trim).filter(|channel| !channel.is_empty()) {
+        env.insert("SCARLET_RELEASE_CHANNEL".into(), channel.into());
     }
 }
 
@@ -726,5 +732,17 @@ mod tests {
             assert_eq!(failing.state, state, "after {failed} failed starts in a row");
         }
         assert_eq!((failing.restarts, failing.error.as_deref()), (5, Some("engine exited before reporting ready")));
+    }
+
+    #[test]
+    fn sets_or_clears_release_channel_case_insensitively() {
+        let mut env = HashMap::from([("scarlet_release_channel".to_string(), "".to_string())]);
+        apply_release_channel(&mut env, Some("stable"));
+        assert_eq!(env.len(), 1);
+        assert_eq!(env.get("SCARLET_RELEASE_CHANNEL").map(String::as_str), Some("stable"));
+
+        let mut dev_env = HashMap::from([("Scarlet_Release_Channel".to_string(), "stable".to_string())]);
+        apply_release_channel(&mut dev_env, None);
+        assert!(dev_env.is_empty());
     }
 }

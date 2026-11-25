@@ -265,6 +265,57 @@ describe("style_guide_edit authoring flow and project isolation", () => {
     workspace.ctx.repos.projects.insert(createProject("Another"));
     expect((await edit()).status).toBe(201);
   });
+
+  it("allows editing and answering a style guide with only attached files and no message text", async () => {
+    const guide = (await (await api("POST", "/style-guides", { name: "brand-doc" })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    // Empty prompt with no attachments (or unknown attachment IDs) is rejected.
+    expect((await api("POST", `/style-guides/${guide.id}/edit`, { prompt: "", agent: "claude" })).status).toBe(400);
+    expect((await api("POST", `/style-guides/${guide.id}/edit`, {
+      prompt: "   ",
+      attachments: [{ id: "sga_unknown", name: "ghost.md", size: 10 }],
+      agent: "claude",
+    })).status).toBe(400);
+
+    // Upload a brand guide markdown file, then start an edit with an empty prompt.
+    const form = new FormData();
+    form.append("file", new Blob(["# Forward Future\nUse matte black and terracotta."], { type: "text/markdown" }), "forward_future_brand_guide.md");
+    const upRes = await api("POST", `/style-guides/${guide.id}/assets`, form);
+    expect(upRes.status).toBe(201);
+    const { asset } = await upRes.json() as { asset: StyleGuideAsset };
+
+    const editRes = await api("POST", `/style-guides/${guide.id}/edit`, {
+      prompt: "",
+      attachments: [{ id: asset.id, name: asset.name, size: asset.size, mime: asset.mime }],
+      agent: "claude",
+    });
+    expect(editRes.status).toBe(201);
+    const { task } = await editRes.json() as { task: Task };
+    expect(task.instruction).toBe("");
+    expect(task.context.attachments).toEqual([expect.objectContaining({ id: asset.id, name: "forward_future_brand_guide.md" })]);
+
+    // Host prompt receives a non-empty fallback instruction referencing the attached file.
+    const promptRes = await api("GET", `/tasks/${task.id}/prompt`);
+    expect(promptRes.status).toBe(200);
+    const built = await promptRes.json() as TaskPrompt;
+    expect(built.instruction).toContain("forward_future_brand_guide.md");
+    expect(built.systemPrompt).toContain("forward_future_brand_guide.md");
+
+    // Answering a waiting question with only another file also succeeds.
+    const logoForm = new FormData();
+    logoForm.append("file", new Blob(["png"], { type: "image/png" }), "logo.png");
+    const { asset: logo } = await (await api("POST", `/style-guides/${guide.id}/assets`, logoForm)).json() as { asset: StyleGuideAsset };
+    const startedAt = "2026-11-25T08:00:00.000Z";
+    saveTask(workspace.ctx, { ...task, state: "waiting_for_user", hostId: "host_1", startedAt, question: "Drop your logo if you have one." });
+    const ansRes = await api("POST", `/tasks/${task.id}/answer`, {
+      text: "",
+      attachments: [{ id: logo.id, name: logo.name, size: logo.size, mime: logo.mime }],
+    });
+    expect(ansRes.status).toBe(200);
+    const answered = (await ansRes.json() as { task: Task }).task;
+    expect(answered.state).toBe("queued");
+    expect(answered.context.attachments?.map(a => a.name)).toEqual(["forward_future_brand_guide.md", "logo.png"]);
+  });
 });
 
 describe("prompt resolution priority (chat @mention > skill @mention > default)", () => {

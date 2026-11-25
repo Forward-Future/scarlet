@@ -536,7 +536,8 @@ async function writeFilterGraph(
  * `samples` samples when given. Silence when no clip sounds.
  */
 function audioMixLine(labels: string[], sampleRate: number, layout: string, duration: number, samples: number | undefined): string {
-  const tail = samples !== undefined ? `apad,atrim=end_sample=${samples},asetpts=PTS-STARTPTS[aout]` : `apad=whole_dur=${fnum(duration)},atrim=duration=${fnum(duration)},asetpts=PTS-STARTPTS[aout]`;
+  // Recompute monotonic sample timestamps with NB_CONSUMED_SAMPLES/SR/TB: adelay leading silence can emit AV_NOPTS_VALUE through amix.
+  const tail = samples !== undefined ? `apad,atrim=end_sample=${samples},asetpts=NB_CONSUMED_SAMPLES/SR/TB[aout]` : `apad=whole_dur=${fnum(duration)},atrim=duration=${fnum(duration)},asetpts=PTS-STARTPTS[aout]`;
   if (labels.length === 0) {
     return samples === undefined ? `anullsrc=r=${sampleRate}:cl=${layout}:d=${fnum(duration)}[aout]` : `anullsrc=r=${sampleRate}:cl=${layout},${tail}`;
   }

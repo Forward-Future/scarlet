@@ -468,6 +468,60 @@ mod runs {
         let run = run_claude(opts).await;
         assert!(!run.ok && run.error.is_some() && run.exit_code.is_none(), "{run:?}");
     }
+
+    #[tokio::test]
+    async fn retries_without_unsupported_optional_flags_and_remembers_for_that_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let count_file = dir.path().join("invocations");
+        let bin = dir.path().join("old-claude");
+        let done = r#"{"type":"result","subtype":"success","is_error":false,"result":"Cut the pause."}"#;
+        let script = format!(
+            r#"#!/bin/sh
+echo x >> '{count}'
+for arg in "$@"; do
+  if [ "$arg" = "--restricted" ]; then
+    echo "error: unknown option '--restricted'" >&2
+    exit 1
+  fi
+  if [ "$arg" = "--effort" ]; then
+    echo "error: unknown option '--effort'" >&2
+    exit 1
+  fi
+done
+printf '%s\n' '{INIT}'
+printf '%s\n' '{done}'
+"#,
+            count = count_file.display(),
+        );
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let (mut opts, _) = options("claude", dir.path(), Some(bin.to_string_lossy().into_owned()));
+        opts.effort = Some("high".into());
+        let first = run_claude(opts).await;
+        assert!(first.ok, "{first:?}");
+        assert_eq!(first.summary, "Cut the pause.");
+        // First run tried with both, dropped --restricted, dropped --effort + its value, then succeeded.
+        assert_eq!(std::fs::read_to_string(&count_file).unwrap().lines().count(), 3);
+
+        // Second run on the same binary skips the rejected flags immediately.
+        let (mut opts, _) = options("claude", dir.path(), Some(bin.to_string_lossy().into_owned()));
+        opts.effort = Some("high".into());
+        let second = run_claude(opts).await;
+        assert!(second.ok, "{second:?}");
+        assert_eq!(std::fs::read_to_string(&count_file).unwrap().lines().count(), 4);
+
+        // Non-optional flags (like --tools) still fail instead of retrying.
+        let strict_bin = dir.path().join("very-old-claude");
+        std::fs::write(&strict_bin, "#!/bin/sh\necho \"error: unknown option '--tools'\" >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&strict_bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (opts, _) = options("claude", dir.path(), Some(strict_bin.to_string_lossy().into_owned()));
+        let failed = run_claude(opts).await;
+        assert!(!failed.ok);
+        assert!(failed.error.as_deref().unwrap().contains("unknown option '--tools'"));
+    }
 }
 
 #[test]

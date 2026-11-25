@@ -285,6 +285,17 @@ it("accepts a full minute of speech analysis at a fractional source offset", asy
   await expect(scan(571.42)).rejects.toMatchObject({ code: "bad_speech_range" });
 });
 
+it("accepts speech analysis up to the container duration when audio ends slightly earlier", async () => {
+  const file = join(workspace.ctx.paths.media(projectId), "short-audio.wav");
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "4", file]);
+  // Container/video reports 4.15 s while the audio track is 4.00 s (150 ms shorter, beyond one 10 ms waveform bucket).
+  workspace.ctx.repos.projects.putMedia(projectId, { id: "short-audio", kind: "video", name: "Short Audio",
+    path: "short-audio.wav", duration: 4.15, hasAudio: true }, "ready");
+  expect(await client.waveform("short-audio", 2, 4.15, 50, false, true)).toMatchObject({ speechActivity: [] });
+  expect(await client.waveform("short-audio", 4.05, 4.15, 50, false, true)).toMatchObject({ speechActivity: [] });
+  await expect(client.waveform("short-audio", 2, 4.5, 50, false, true)).rejects.toMatchObject({ code: "bad_speech_range" });
+});
+
 it("compares both original boundaries to the proposed join and auditions its rendered mix", async () => {
   const { ctx } = workspace;
   const { change } = proposeChange(ctx, localUser(ctx), projectId, { fromVersion: base, description: "Remove ramp",

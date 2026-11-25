@@ -25,6 +25,7 @@ import { afterAudioTrackChange } from "../services/audioTrackChange.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
 import { framePriority, pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
+import { expandMediaPaths } from "../services/folderMedia.js";
 import { ingestMedia, removeUnreadableMedia, writeHashedFile } from "../services/ingest.js";
 import { settleAlignment, startTranscription, transcriptionHeld } from "../services/transcription.js";
 import { getWaveform, readWaveformCache } from "../services/waveforms.js";
@@ -242,6 +243,12 @@ export function mediaRoutes(ctx: Ctx) {
     }
   });
 
+  // Expand dropped folders into the video files inside them; individual files and URLs pass through unchanged.
+  r.post("/media/expand-paths", async (c) => {
+    const { paths } = await jsonBody(c, z.object({ paths: z.array(z.string().min(1).max(4096)).max(1000) }));
+    return c.json(await expandMediaPaths(paths, { signal: c.req.raw.signal }));
+  });
+
   // Show the first frame while a large original is still being copied into the project.
   r.post("/projects/:id/media/import-frame", async c => {
     requireProjectHeader(ctx, c.req.param("id"));
@@ -431,16 +438,22 @@ export function mediaRoutes(ctx: Ctx) {
     const points = Math.min(20000, Math.max(1, Math.floor(numberParam(c.req.query("points"), "points", 1000))));
     const wf = ctx.render.waveformFromCache(cache, from, to, points);
     if (c.req.query("speechActivity") === "1") {
-      if (from < 0 || to > duration + 0.000001 || to <= from || to > from + 60) {
+      // A video container can run slightly past its audio stream; accept ranges up to either duration and read speech up to the audio end.
+      const maxDuration = Math.max(duration, media.duration ?? duration);
+      if (from < 0 || to > maxDuration + 0.000001 || to <= from || to > from + 60) {
         throw badRequest("bad_speech_range", "Choose up to 60 seconds within the source audio.");
+      }
+      const speechTo = Math.min(to, cache.duration);
+      if (from >= speechTo) {
+        return c.json({ mediaId: media.id, from, to, ...wf, speechActivity: [] });
       }
       const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
       if (!file) throw notFound("source file");
       const info = await stat(file);
       const audio = heardAudio(media);
-      const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to, heardAudioKey(audio)]);
+      const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, speechTo, heardAudioKey(audio)]);
       // Up to a minute, read because someone asked: a running edit checks its joins with it while caching is paused too.
-      const spans = await speech.get(key, () => ctx.track(recordingSpeechActivity(ctx, file, from, to, ctx.projectSignal(media.projectId), audio), media.projectId));
+      const spans = await speech.get(key, () => ctx.track(recordingSpeechActivity(ctx, file, from, speechTo, ctx.projectSignal(media.projectId), audio), media.projectId));
       return c.json({ mediaId: media.id, from, to, ...wf, speechActivity: spans });
     }
     if (c.req.query("format") === "peaks-f64le") {
@@ -517,7 +530,8 @@ export function mediaRoutes(ctx: Ctx) {
     // A still has one picture, shown for as long as its clip is: any time in the clip is that picture. The asset says
     // it is a still, as the render reads it; the frame reader goes by the file's name alone, and found nothing later
     // than 2 s into a still it didn't know the spelling of (.jfif, .heif).
-    const t = isStillAsset(media) ? 0 : media.duration && media.duration > 0 ? Math.min(requested, media.duration) : requested;
+    const still = isStillAsset(media);
+    const t = still ? 0 : media.duration && media.duration > 0 ? Math.min(requested, media.duration) : requested;
     const w = Math.min(3840, Math.max(16, numberParam(c.req.query("w"), "w", 640)));
     const file = join(ctx.paths.media(media.projectId), media.path);
     // A recording moved or deleted outside Scarlet is asked for with every scrub.
@@ -550,7 +564,7 @@ export function mediaRoutes(ctx: Ctx) {
       const indexedMp4 = !!media.previewClock && hasIndexedAvc(media);
       // The original decodes on an NVIDIA GPU when there is one.
       const decoder = await pictureDecoder(ctx.settings().render.hwaccel) === "cuda" ? "cuda" as const : undefined;
-      return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps, hdr });
+      return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps, hdr, still });
     };
     try {
       // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.

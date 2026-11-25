@@ -224,6 +224,7 @@ export async function ingestMedia(
       if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
       throw error;
     });
+    if (info?.isDirectory()) throw badRequest("path_is_directory", `${basename(source.path)} is a folder`);
     if (!info?.isFile()) throw badRequest("path_not_found", `no file at ${source.path}`);
     if (!opts.name) name = basename(source.path);
     const destination = join(mediaDir, mediaId + safeExt(name));

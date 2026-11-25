@@ -107,6 +107,9 @@ export function styleGuideRoutes(ctx: Ctx) {
       if (!home) throw conflict("no_project", "Create a project first. Scarlet runs its requests from one.");
       const known = new Set(guide.assets.map(a => a.id));
       const attachments = body.attachments?.filter(a => known.has(a.id));
+      if (!body.prompt && !attachments?.length) {
+        throw badRequest("empty_prompt", "Describe a look or attach a file.");
+      }
       const task = createTask(ctx, {
         projectId: home.id,
         kind: "style_guide_edit",
@@ -122,11 +125,14 @@ export function styleGuideRoutes(ctx: Ctx) {
         },
         createdBy: actorFor(user),
       });
+      const detail = body.prompt
+        ? quote(body.prompt, 120)
+        : quote(attachments!.map(a => a.name).join(", "), 120);
       logActivity(ctx, {
         projectId: null,
         actor: actorFor(user),
         type: "style_guide.edit_requested",
-        summary: `${user.name} asked ${agentName(task.agent)} to update @${guide.name}: ${quote(body.prompt, 120)}`,
+        summary: `${user.name} asked ${agentName(task.agent)} to update @${guide.name}: ${detail}`,
         data: { styleGuideId: guide.id, taskId: task.id },
       });
       return task;

@@ -35,6 +35,44 @@ describe("task.finished", () => {
     recordTaskFinished(ctx, task({ state: "cancelled", error: "cancelled" }));
     for (const [, properties] of record.mock.calls) expect(properties).not.toHaveProperty("failureReason");
   });
+
+  it("reports clean interruptions as cancelled with interrupted: true instead of failed", () => {
+    const { ctx, record } = recorder();
+    recordTaskFinished(ctx, task({
+      kind: "transcribe", agent: "api", state: "failed", interrupted: true,
+      error: "Transcription was interrupted.",
+      createdAt: "2026-11-23T10:00:00.000Z", startedAt: "2026-11-23T10:05:00.000Z", finishedAt: "2026-11-23T10:05:12.000Z",
+    }));
+    expect(record).toHaveBeenCalledWith("task.finished", {
+      kind: "transcribe", agent: "api", state: "cancelled", changeCount: 0, interrupted: true, durationMs: 12_000,
+    });
+
+    // A lost worker or timeout is still a real failure even when marked interrupted.
+    record.mockClear();
+    recordTaskFinished(ctx, task({ state: "failed", interrupted: true, lostWorker: true, error: "The agent was interrupted." }));
+    recordTaskFinished(ctx, task({ state: "failed", interrupted: true, error: "stalled: the agent wrote nothing for 10 minutes" }));
+    expect(record.mock.calls[0]![1]).toMatchObject({ state: "failed", interrupted: true, failureReason: "crashed" });
+    expect(record.mock.calls[1]![1]).toMatchObject({ state: "failed", interrupted: true, failureReason: "timeout" });
+  });
+
+  it("measures transcription duration from active work start and omits duration if ended while queued", () => {
+    const { ctx, record } = recorder();
+    // Waited 1 hour in the audio queue, ran for 25 s.
+    recordTaskFinished(ctx, task({
+      kind: "transcribe", agent: "api", state: "done",
+      createdAt: "2026-11-23T10:00:00.000Z", startedAt: "2026-11-23T11:00:00.000Z", finishedAt: "2026-11-23T11:00:25.000Z",
+    }));
+    expect(record.mock.calls[0]![1]).toMatchObject({ state: "done", durationMs: 25_000 });
+
+    // Interrupted while still queued (startedAt unset): queue wait is not reported as work duration.
+    recordTaskFinished(ctx, task({
+      kind: "transcribe", agent: "api", state: "failed", interrupted: true, error: "Transcription was interrupted.",
+      createdAt: "2026-11-23T10:00:00.000Z", startedAt: undefined, finishedAt: "2026-11-23T11:00:00.000Z",
+    }));
+    expect(record.mock.calls[1]![1]).toEqual({
+      kind: "transcribe", agent: "api", state: "cancelled", changeCount: 0, interrupted: true,
+    });
+  });
 });
 
 describe("render.finished and export.finished", () => {

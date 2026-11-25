@@ -194,7 +194,7 @@ export interface CaptureOptions {
   /** Bounded input produced by the renderer, such as a set of thumbnails. */
   stdin?: Buffer;
   /** Consume stdout incrementally instead of retaining it in the result buffer. */
-  onStdoutChunk?: (chunk: Buffer) => void;
+  onStdoutChunk?: (chunk: Buffer) => void | Promise<void>;
   onStdoutBytes?: (total: number) => void;
   signal?: AbortSignal;
   /** Maximum stdout size in bytes before the process is killed (default 512 MiB). */
@@ -224,7 +224,9 @@ function countSpawn(bin: string): void {
 interface ManagedHooks<T> {
   onSpawn?: (child: ChildProcess) => void;
   getStderr: () => string;
-  onClose: (code: number | null) => T;
+  /** Awaited after process close before resolving or rejecting (including aborts). */
+  onSettled?: () => Promise<void>;
+  onClose: (code: number | null) => T | Promise<T>;
 }
 
 /** Shared subprocess lifecycle: abort check, spawn counting/observer, error wrapping, and cleanup. */
@@ -253,12 +255,13 @@ function spawnManaged<T>(
     });
     child.on("close", (code) => {
       signal?.removeEventListener("abort", onAbort);
-      if (aborted) return reject(new AbortError());
-      try {
-        resolve(hooks.onClose(code));
-      } catch (error) {
-        reject(error);
-      }
+      Promise.resolve()
+        .then(() => hooks.onSettled?.())
+        .then(() => {
+          if (aborted) throw new AbortError();
+          return hooks.onClose(code);
+        })
+        .then(resolve, reject);
     });
   });
 }
@@ -273,12 +276,16 @@ export function runCapture(bin: string, args: string[], opts: CaptureOptions = {
   let err = "";
   let errBytes = 0, partialLine = "";
   let failure: Error | undefined;
+  let chunkWork: Promise<void> = Promise.resolve();
+  let draining = false;
+  const pendingChunks: Buffer[] = [];
   const maxStdout = opts.maxStdout ?? (opts.onStdoutChunk ? Infinity : 512 * 1024 * 1024);
   const maxStderr = opts.maxStderr ?? 8 * 1024 * 1024;
   const exceeded = (message: string) => new FfmpegError(message, bin, args, null, err.slice(-8192));
 
   return spawnManaged(bin, args, [opts.stdin ? "pipe" : "ignore", "pipe", "pipe"], opts.signal, {
     getStderr: () => err,
+    onSettled: () => chunkWork,
     onSpawn(child) {
       if (child.stdin && opts.stdin) {
         // FFmpeg can close its input early on failure or cancellation. Its exit reports the cause.
@@ -291,15 +298,39 @@ export function runCapture(bin: string, args: string[], opts: CaptureOptions = {
         child.kill("SIGKILL");
       };
       child.stdout!.on("data", (chunk: Buffer) => {
-        if (failure) return;
+        if (failure || opts.signal?.aborted) return;
         outBytes += chunk.length;
         if (outBytes > maxStdout) {
           stop(exceeded(`stdout exceeded ${maxStdout} bytes`));
           return;
         }
         if (opts.onStdoutChunk) {
-          try { opts.onStdoutChunk(chunk); }
-          catch (error) { stop(error as Error); return; }
+          if (draining) {
+            pendingChunks.push(chunk);
+            opts.onStdoutBytes?.(outBytes);
+            return;
+          }
+          try {
+            const pending = opts.onStdoutChunk(chunk);
+            if (pending && typeof (pending as Promise<void>).then === "function") {
+              // Pause stdout and serialize any already-buffered chunks while an async consumer works or yields.
+              draining = true;
+              child.stdout!.pause();
+              chunkWork = (async () => {
+                try {
+                  await pending;
+                  while (pendingChunks.length && !failure && !opts.signal?.aborted) {
+                    await opts.onStdoutChunk!(pendingChunks.shift()!);
+                  }
+                } catch (error) {
+                  stop(error as Error);
+                } finally {
+                  draining = false;
+                  if (!failure && !opts.signal?.aborted && !child.stdout!.destroyed) child.stdout!.resume();
+                }
+              })();
+            }
+          } catch (error) { stop(error as Error); return; }
         } else out.push(chunk);
         opts.onStdoutBytes?.(outBytes);
       });

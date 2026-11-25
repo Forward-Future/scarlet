@@ -55,7 +55,7 @@ import { insertInDraft, markedRangeOf, pointOf, useUiStore, withMarkedRange, typ
 import { AimHostContext } from "../../../components/review/AimRow";
 import { CutPreview } from "../../WatchPage";
 import { EditHoverContext, type TimelineDot, type TimelineGap } from "../../../components/review/TimelineScrubber";
-import { aimedAtChange, approves, belongsTo, firstKey, isWorking, noEdits, noop, shortTitle, stepsOver, tagOf,
+import { aimedAtChange, approves, belongsTo, changeForEdit, firstKey, isWorking, noEdits, noop, shortTitle, stepsOver, tagOf,
   type ChatActions, type HoveredReviewRow, type Listening, type LocatedReview, type OpenList, type OpenPass, type Panel, type PassList, type ReportReviewMarkers } from "../types";
 import { WorkspaceComposer } from "./WorkspaceComposerBeta";
 import { SimpleHeader } from "../SimpleHeader";
@@ -814,6 +814,8 @@ export function SimpleWorkspaceBeta() {
   // or "Edit at 8:52" for one that took no footage out. The order they reached the editor in is kept, but never shown.
   const passRoot = pass ? (stagingTask(pass, changes, tasks) ?? tasks.find(t => t.id === pass.taskId)) : undefined;
   const { callNo, passEditNo } = usePassCallNumbers(current.id, pass, passThread, passRoot, allCalls, passEdits, passThread ? rejectedPassEdits : noEdits);
+  const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
+    ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
   const revisions = useMemo(() => pass ? callRevisions(pass, tasks, changes) : undefined, [pass, tasks, changes]);
   const queuedCuts = new Set(cutRuns.keys());
   const sentBack = (index: number) => index === revisingIndex || queuedCuts.has(index);
@@ -946,7 +948,7 @@ export function SimpleWorkspaceBeta() {
   const shownAt = shownEdit && (shownEdit.at ?? shownEdit.range.start);
   // The applied edit on screen, so Revise is about it and not a proposal still waiting.
   // An edit another request made is open here when this request flagged it (`Thread.flagged`).
-  const shownChange = shownEdit && focusChanges.find(c => belongsTo(shownEdit, c));
+  const shownChange = changeForEdit(focusChanges, shownEdit);
   // The card names voice cleanup only where its edit put it on or changed it, read against the version the edit was made on.
   const shownCleanup = !!shownChange?.ops?.some(o => o.op === "updateClip" && JSON.stringify(o.patch).includes("voiceCleanup"));
   const shownChangeBefore = useReviewTimeline(current.id, shownCleanup ? shownChange!.fromVersion : undefined, timeline).timeline;
@@ -1112,7 +1114,7 @@ export function SimpleWorkspaceBeta() {
     return { time: at, landed, landedAt: landed ? landedAt(e.changeId) : undefined, title, summary: e.label, edit: `${e.changeId}/${e.spot}`,
       detail: e.beforeCut ? `Took out ${lengthLabel(e.beforeCut.removed.end - e.beforeCut.removed.start)}`
         : e.at !== undefined ? editKindWord(e) ?? "Cut" : [editKindWord(e), span(e.range)].filter(Boolean).join(" · "),
-      context: [...thread.changes, ...thread.flagged ?? []].find(c => belongsTo(e, c))?.description,
+      context: changeForEdit([...thread.changes, ...thread.flagged ?? []], e)?.description,
       // A press on the edit's marker opens it, as its row in the chat does.
       open: () => actions.openEdit(thread, e) };
   };
@@ -1226,8 +1228,6 @@ export function SimpleWorkspaceBeta() {
   const passList = passThread ? lists[passThread.id] : undefined;
   const passIsFocus = !!pass && !!passThread && passThread.id === focusThread?.id;
   const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
-  const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
-    ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
   // The waiting pass's calls and flagged edits together, in the order For you lists them: by time, as its rows lead
   // with their times.
   const passForYouItems = pass && passThread ? passForYouOrder(

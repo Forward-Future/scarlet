@@ -1287,4 +1287,61 @@ describe("restart cuts that run past the restart", () => {
     expect(plan.decisions[0]!.end).toBeGreaterThanOrEqual(1.84);
     expect(plan.decisions[0]!.end).toBeLessThanOrEqual(1.90);
   });
+
+  it("chunks long pause kept-side speech checks within JOIN_WORD_SECONDS and still detects missed words", async () => {
+    const { tl, sources } = laidOut([take(0, 20, 0)]);
+    const transcript = [
+      { text: "one", start: 1.0, end: 1.4 },
+      { text: "two", start: 14.0, end: 14.4 },
+    ];
+    const spoken = [
+      { text: "one", start: 1.0, end: 1.4 },
+      { text: "actually", start: 6.2, end: 6.8 },
+      { text: "two", start: 14.0, end: 14.4 },
+    ];
+    const loud: Array<[number, number]> = [[1.0, 1.4], [6.2, 6.8], [14.0, 14.4]];
+    const rms = Array.from({ length: 1000 }, (_, i) => loud.some(([a, b]) => i / 50 >= a && i / 50 < b) ? .12 : .001);
+    const scanned: JoinPage = { mediaId: "mic", start: 0, end: 20, edges: joinEvidence(transcript, { from: 0, to: 20, rms, peaks: rms, speechActivity: loud.map(([start, end]) => ({ start, end })) }) };
+    sources.pages = () => [scanned];
+    sources.words = async () => transcript;
+    sources.sound = async (_id, range) => range.start <= 6.8 && range.end >= 6.2
+      ? { seconds: 0.6, runs: [{ start: 6.2, end: 6.8 }] } : { seconds: 0, runs: [] };
+    const windows: Array<[number, number]> = [];
+    sources.readKeptWords = async (_id, _stream, from, to) => {
+      windows.push([from, to]);
+      if (to - from > 8.05) throw new Error("A kept-side reading covers up to 8 seconds");
+      return spoken.filter(w => w.end > from && w.start < to);
+    };
+    const plan = await planDialogueCuts({ tl, localPauses: false, cuts: [cut({ kind: "pause", mediaId: "mic", afterWord: 0, leave: 0.2 })] }, sources);
+    expect(windows.length).toBeGreaterThan(1);
+    for (const [from, to] of windows) expect(to - from).toBeLessThanOrEqual(8 + 1e-6);
+    expect(plan.outcome).toBe("needsRevision");
+    if (plan.outcome === "needsRevision") {
+      expect(plan.disputedEdges[0]!.reason).toContain("actually");
+    }
+
+    // On a very long pause (3 minutes), skip silent middle stretches so only bounded active chunks are read.
+    const longTl = laidOut([take(0, 190, 0)]).tl;
+    const longTranscript = [{ text: "one", start: 1.0, end: 1.4 }, { text: "two", start: 181.0, end: 181.4 }];
+    const longSpoken = [{ text: "one", start: 1.0, end: 1.4 }, { text: "middle", start: 90.2, end: 90.8 }, { text: "two", start: 181.0, end: 181.4 }];
+    const longLoud: Array<[number, number]> = [[1.0, 1.4], [90.2, 90.8], [181.0, 181.4]];
+    const longRms = Array.from({ length: 9500 }, (_, i) => longLoud.some(([a, b]) => i / 50 >= a && i / 50 < b) ? .12 : .001);
+    const longPage: JoinPage = { mediaId: "mic", start: 0, end: 190, edges: joinEvidence(longTranscript, { from: 0, to: 190, rms: longRms, peaks: longRms, speechActivity: longLoud.map(([start, end]) => ({ start, end })) }) };
+    sources.pages = () => [longPage];
+    sources.words = async () => longTranscript;
+    sources.sound = async (_id, range) => range.start <= 90.8 && range.end >= 90.2
+      ? { seconds: 0.6, runs: [{ start: 90.2, end: 90.8 }] } : { seconds: 0, runs: [] };
+    windows.length = 0;
+    sources.readKeptWords = async (_id, _stream, from, to) => {
+      windows.push([from, to]);
+      if (to - from > 8.05) throw new Error("A kept-side reading covers up to 8 seconds");
+      return longSpoken.filter(w => w.end > from && w.start < to);
+    };
+    const longPlan = await planDialogueCuts({ tl: longTl, localPauses: false, cuts: [cut({ kind: "pause", mediaId: "mic", afterWord: 0, leave: 0.2 })] }, sources);
+    expect(windows.length).toBeLessThanOrEqual(4);
+    expect(longPlan.outcome).toBe("needsRevision");
+    if (longPlan.outcome === "needsRevision") {
+      expect(longPlan.disputedEdges[0]!.reason).toContain("middle");
+    }
+  });
 });

@@ -19,7 +19,7 @@ export const LEFT_OF_STAGED_CUT = 0.15;
  * What to do with a finding about a call the editor holds. The same pass asked "Scarlet has locked edit 5 for your
  * review. May I revise it…?" about a call that already waited on the editor's Approve, Skip and Revise (2026-11-16).
  */
-export const CALL_WITH_EDITOR = "The editor decides this call with Approve, Skip or Revise, so don’t ask them about it with task_question. "
+export const CALL_WITH_EDITOR = "The editor decides this call with Keep, Reject edit or Revise, so don’t ask them about it with task_question. "
   + "If they should know something before deciding, add it to the call’s note with dialogue_review_save and amend:true on that cut.";
 
 export function authorFor(user: User, override?: Partial<Author>): Author {

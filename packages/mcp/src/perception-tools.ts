@@ -148,10 +148,11 @@ export function registerPerception(deps: PerceptionDeps) {
   async function besideOn(tl: Timeline, project: Project, sources: Array<{ id: string; from: number; to: number }>, range: { start: number; end: number }, wait: number,
     clocks: Array<{ id: string; from: number; to: number }> = []) {
     const videos = new Set(project.media.filter(m => m.kind === "video").map(m => m.id));
+    const videoSources = sources.filter(s => videos.has(s.id));
     const [text, motion, cuts, transcripts, eyes] = await Promise.all([
-      readPictures<{ spans: ScreenLine[] }>("screen-text", sources, wait),
-      readPictures<{ seconds: MotionSecond[]; detail?: DetailFrame[] }>("screen-motion", sources, wait),
-      readPictures<{ cuts: RecordingCut[] }>("picture-cuts", sources, wait),
+      readPictures<{ spans: ScreenLine[] }>("screen-text", videoSources, wait),
+      readPictures<{ seconds: MotionSecond[]; detail?: DetailFrame[] }>("screen-motion", videoSources, wait),
+      readPictures<{ cuts: RecordingCut[] }>("picture-cuts", videoSources, wait),
       wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>()),
       // Where the speaker looks, in the picture of the recording heard beside each stretch: its face seen longest there.
       readPictures<{ tracks: Array<{ track: number; seconds: number }>; spans: Array<{ track: number; start: number; end: number; eyesDown?: number; box: number[] }> }>(
