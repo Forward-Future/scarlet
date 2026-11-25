@@ -195,8 +195,15 @@ export function taskRoutes(ctx: Ctx) {
   });
 
   r.post("/tasks/:taskId/answer", async (c) => {
-    const body = await jsonBody(c, RunChoice.extend({ text: z.string().min(1), skillIds: z.array(z.string().min(1)).optional(),
-      attachments: z.array(TaskAttachment).max(20).optional(), pictureMarks: PictureMarks.optional() }));
+    const body = await jsonBody(c, RunChoice.extend({
+      text: z.string().trim().max(8000).default(""),
+      skillIds: z.array(z.string().min(1)).optional(),
+      attachments: z.array(TaskAttachment).max(20).optional(),
+      pictureMarks: PictureMarks.optional(),
+    }).refine(
+      b => b.text.length > 0 || (b.attachments?.length ?? 0) > 0,
+      { message: "Write an answer or attach a file.", path: ["text"] },
+    ));
     if (body.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to run this request.");
     // Files sent with an answer are kept with the request as its own files are, so the run is told of them the same way.
     const answering = body.attachments?.length ? requireTask(c.req.param("taskId")) : undefined;
@@ -239,9 +246,10 @@ export function taskRoutes(ctx: Ctx) {
         // The request's own marked frame stays the one described. A frame marked for the answer is one of its files, with the marks drawn on it.
         prepared.context = { ...prepared.context, attachments: files, ...(body.pictureMarks && !prepared.context.pictureMarks && { pictureMarks: body.pictureMarks }) };
       }
-      const { task: updated } = appendTaskEvent(ctx, prepared, { type: "answer", text: body.text });
+      const answerText = body.text || (attached?.length ? `Attached ${attached.map(a => a.name).join(", ")}.` : "");
+      const { task: updated } = appendTaskEvent(ctx, prepared, { type: "answer", text: answerText });
       if (switched) ctx.log(`[task] ${task.id} switched ${task.agent}/${task.model ?? "default"} → ${updated.agent}/${updated.model ?? "default"} on answer`);
-      logActivity(ctx, { projectId: task.projectId, actor: actorFor(c.var.user), type: "question.answered", summary: `${c.var.user.name} answered ${agentName(updated.agent)}: ${quote(body.text, 120)}`, data: { taskId: task.id, threadId: task.context.threadId, question: task.question } });
+      logActivity(ctx, { projectId: task.projectId, actor: actorFor(c.var.user), type: "question.answered", summary: `${c.var.user.name} answered ${agentName(updated.agent)}: ${quote(answerText, 120)}`, data: { taskId: task.id, threadId: task.context.threadId, question: task.question } });
       return updated;
     }, "immediate")();
     return c.json({ task: updated });

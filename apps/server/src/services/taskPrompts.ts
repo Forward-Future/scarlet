@@ -79,7 +79,10 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
         earlier: styleGuideEdits(ctx, editGuideRecord.id)
           .filter(t => t.id !== task.id && (!task.createdAt || !t.createdAt || t.createdAt < task.createdAt))
           .slice(-6)
-          .map(t => ({ asked: clipped(t.instruction, CHAT.asked), ...(t.summary?.trim() && { replied: clipped(t.summary, CHAT.message) }) })),
+          .map(t => {
+            const asked = t.instruction.trim() || (t.context.attachments?.length ? `Attached ${t.context.attachments.map(a => a.name).join(", ")}` : "");
+            return { asked: clipped(asked, CHAT.asked), ...(t.summary?.trim() && { replied: clipped(t.summary, CHAT.message) }) };
+          }),
       }
     : undefined;
   // A run that edits no video is told nothing of the video's timeline, the edit it's about or the editor's skills: a
@@ -117,9 +120,13 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // a later part replaced while it was away.
   const recap = !!task.resumeRootId && !(resumeSession && answered);
   const before = recap ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, task.id])[0] : undefined;
+  const rawInstruction = task.instruction.trim()
+    || (isStyleGuideEdit(task) && c.attachments?.length
+      ? `Use the attached ${c.attachments.length === 1 ? "file" : "files"} (${c.attachments.map(a => a.name).join(", ")}) to update this style guide and render its preview.`
+      : task.instruction);
   const instruction = answered && !resumeSession
     ? answerHandoffInstruction(ctx, task, before)
-    : before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
+    : before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : rawInstruction;
   // The run is launched with its harness's to-do tool, and asked to lay out its steps, when the harness has one and the
   // chat will show the plan. A dialogue pass shows the stages Scarlet measures and a request about one staged cut its
   // own two, and a skill edit changes no video: none is given the tool or asked, so each runs exactly as it did.

@@ -700,7 +700,8 @@ export class MockClient implements ScarletApi {
       context: { styleGuideId: guide.id, ...(body.attachments?.length && { attachments: body.attachments }) },
     });
     setTimeout(() => {
-      guide.description = body.prompt.slice(0, 80);
+      guide.description = body.prompt.trim().slice(0, 80)
+        || (body.attachments?.length ? `Based on ${body.attachments.map(a => a.name).join(", ")}`.slice(0, 80) : guide.description);
       guide.updatedAt = new Date().toISOString();
       this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
       this.store.updateTask(task, { state: "done", resultStyleGuideId: guide.id, summary: `Updated @${guide.name}.`, finishedAt: new Date().toISOString() });
