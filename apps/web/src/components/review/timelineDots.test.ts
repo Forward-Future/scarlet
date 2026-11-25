@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { bandLabel, gapAt, gapLabel, layoutMarks, nearestMark, type TimelineDot, type TimelineGap } from "./timelineMarkerLayout";
+import { bandLabel, gapAt, gapLabel, isPill, layoutMarks, MARK_GAP, nearestMark, type TimelineDot, type TimelineGap } from "./timelineMarkerLayout";
 
-const dot = (time: number): TimelineDot => ({ time, title: `Edit at ${time}` });
+const dot = (time: number, extra: Partial<TimelineDot> = {}): TimelineDot => ({ time, title: `Edit at ${time}`, ...extra });
 /** Each marker by the times of the edits it stands for: one time is a dot, several a pill. */
 const shapes = (layout: ReturnType<typeof layoutMarks>) => layout.map(m => m.dots.map(d => d.time));
 
@@ -194,5 +194,58 @@ describe("gapAt", () => {
     expect(gapAt(gaps, 100, 10, 1000, 509)?.label).toBe("Tiny cut");
     expect(gapAt(gaps, 100, 10, 1000, 480)).toBeUndefined();
     expect(gapAt(gaps, 100, 10, 1000, 520)).toBeUndefined();
+  });
+});
+
+describe("layoutMarks across groups and dense tracks", () => {
+  it("keeps a dot and a call pill near 0:00 clear of each other and both clickable", () => {
+    const marks: TimelineDot[] = [
+      dot(0),
+      dot(0, { group: "call" }),
+      dot(0.03, { group: "call" }),
+    ];
+    const layout = layoutMarks(marks, 0, 16, 650);
+    expect(layout.map(m => m.key)).toEqual(["@0", "call@0"]);
+    const [editDot, callPill] = layout;
+    const gap = (callPill!.at - editDot!.at) / 100 * 650;
+    expect(gap).toBeGreaterThanOrEqual(editDot!.width / 2 + callPill!.width / 2 + MARK_GAP - 1e-6);
+    expect(nearestMark(layout, editDot!.at, 650)?.key).toBe("@0");
+    expect(nearestMark(layout, callPill!.at, 650)?.key).toBe("call@0");
+  });
+
+  it("holds non-overlap, bounds, group separation, and center hit-testing across crowded multi-group passes", () => {
+    const rng = (seed: number) => {
+      let s = seed >>> 0;
+      return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+    };
+    for (let seed = 1; seed <= 200; seed++) {
+      const r = rng(seed);
+      const span = [1.5, 16, 100, 600][Math.floor(r() * 4)]!;
+      const width = [320, 650, 900][Math.floor(r() * 3)]!;
+      const count = [2, 40, 150, 300][Math.floor(r() * 4)]!;
+      const open = Math.floor(r() * (count + 2));
+      const groups = r() < 0.5;
+      const marks = Array.from({ length: count }, (_, i) => {
+        const time = Math.round(r() * span * 30) / 30;
+        return dot(time, { current: i === open, ...(groups && r() < 0.4 && { group: "call" }) });
+      });
+      const layout = layoutMarks(marks, 0, span, width);
+      expect(layout.flatMap(m => m.dots)).toHaveLength(marks.length);
+      const sorted = [...layout].sort((a, b) => a.at - b.at);
+      for (let i = 0; i < sorted.length; i++) {
+        const m = sorted[i]!;
+        const x = m.at / 100 * width;
+        expect(x - m.width / 2).toBeGreaterThanOrEqual(-1e-6);
+        expect(x + m.width / 2).toBeLessThanOrEqual(width + 1e-6);
+        expect(new Set(m.dots.map(d => d.group ?? "")).size).toBe(1);
+        expect(m.dots.some(d => d.current) && isPill(m)).toBe(false);
+        expect(nearestMark(layout, m.at, width)?.key).toBe(m.key);
+        if (i > 0) {
+          const prev = sorted[i - 1]!;
+          const gap = (m.at - prev.at) / 100 * width;
+          expect(gap).toBeGreaterThanOrEqual(prev.width / 2 + m.width / 2 + MARK_GAP - 1e-6);
+        }
+      }
+    }
   });
 });

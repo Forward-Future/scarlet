@@ -99,6 +99,7 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
   const [live, setLive] = useState<PictureMark>();
   const [drag, setDrag] = useState<{ index: number; mark: PictureMark }>();
   const [hovered, setHovered] = useState<number>();
+  const [movedOutsideMarking, setMovedOutsideMarking] = useState(0);
   const drawing = useRef<{ start: FramePoint; points: FramePoint[]; id: number }>(undefined);
   const dragging = useRef<{ index: number; origin: PictureMark; start: FramePoint; id: number; moved: boolean }>(undefined);
   const surface = useRef<HTMLDivElement>(null);
@@ -120,7 +121,10 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
       setDrag(undefined);
       setHovered(undefined);
     }
-  }, [marking, playing, sameVideo, onFrame]);
+    if (marking || playing || !sameVideo || !onFrame || !frame?.marks.length) {
+      setMovedOutsideMarking(0);
+    }
+  }, [marking, playing, sameVideo, onFrame, frame?.marks.length]);
   // Seeking away from the marked frame while paused ends marking so strokes never attach to the wrong frame.
   useEffect(() => {
     if (!marking) return;
@@ -136,14 +140,16 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
   }, [marking, projectId, fps]);
   useEffect(() => () => { if (usePictureMarksStore.getState().marking === projectId) usePictureMarksStore.getState().stop("leave"); }, [projectId]);
 
-  // While marking (or dragging a mark), its keys come first, unless the editor is typing: Esc cancels a drag or leaves, ⌘Z takes the last mark off, D B P pick the tool.
+  // While marking (or dragging a mark, or right after moving one on the paused frame), its keys come first, unless the
+  // editor is typing: Esc cancels a drag or leaves, ⌘Z takes the last mark off or puts a moved mark back, D B P pick the tool.
   useEffect(() => {
-    if (!marking && !drag) return;
+    if (!marking && !drag && !movedOutsideMarking) return;
     const key = (e: KeyboardEvent) => {
       if (isInEditableElement(e.target) || e.isComposing) return;
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+      const overlayOpen = () => Boolean(document.querySelector('[role="menu"], [data-escape-owner], dialog[open], [role="dialog"]'));
       // A menu or a popover open over the picture closes on its own Esc first, and the marking stays.
-      if (e.key === "Escape" && plain && !dragging.current && document.querySelector('[role="menu"], [data-escape-owner], dialog[open], [role="dialog"]')) return;
+      if (e.key === "Escape" && plain && !dragging.current && overlayOpen()) return;
       let did: "stop" | "drop" | "undo" | "tool", tool: PictureMarkKind | undefined;
       if (e.key === "Escape" && plain) {
         if (dragging.current) {
@@ -156,11 +162,22 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
           usePictureMarksStore.getState().stop("key");
           did = "stop";
         } else return;
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+        const store = usePictureMarksStore.getState();
+        // While marking, ⌘Z is always the marks': with none left to take back it does nothing, rather than undo an edit.
+        if (marking) store.undo(projectId);
+        else {
+          // Off marking, it is theirs only to put back a mark just moved on the paused frame.
+          const canUndo = (store.byProject[projectId]?.marks.length ?? 0) > 0 || (store.past[projectId]?.length ?? 0) > 0;
+          if (e.altKey || overlayOpen() || !canUndo || !movedOutsideMarking) return;
+          store.undo(projectId);
+          setMovedOutsideMarking(n => Math.max(0, n - 1));
+        }
+        did = "undo";
       } else if (marking) {
         const store = usePictureMarksStore.getState();
         const pick = plain && TOOLS.find(t => t.key.toLowerCase() === e.key.toLowerCase());
-        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") { store.undo(projectId); did = "undo"; }
-        else if (pick) { store.setTool(pick.tool); did = "tool"; tool = pick.tool; }
+        if (pick) { store.setTool(pick.tool); did = "tool"; tool = pick.tool; }
         else return;
       } else return;
       e.preventDefault();
@@ -170,7 +187,7 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [marking, drag, projectId]);
+  }, [marking, drag, movedOutsideMarking, projectId]);
 
   if (!frame || !sameVideo || !(marking || (onFrame && !playing && frame.marks.length))) return null;
 
@@ -245,6 +262,7 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
           const [dx, dy] = dragDelta(move, e);
           if (move.moved || Math.hypot(dx, dy) >= DRAG_MIN) {
             usePictureMarksStore.getState().replace(projectId, move.index, translateMark(move.origin, dx, dy));
+            if (!marking) setMovedOutsideMarking(n => n + 1);
             appLog("marks", "move", { kind: move.origin.kind, count: frame.marks.length, frame: frame.time });
           }
           return;

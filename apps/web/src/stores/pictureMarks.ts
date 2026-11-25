@@ -62,8 +62,9 @@ export const usePictureMarksStore = create<PictureMarksState>((set, get) => ({
   setTool: tool => set({ tool }),
   add: (projectId, mark) => set(state => {
     const frame = state.byProject[projectId];
-    return frame ? { byProject: { ...state.byProject, [projectId]: { ...frame, marks: [...frame.marks, mark].slice(0, MAX_MARKS) } },
-      past: { ...state.past, [projectId]: [...state.past[projectId] ?? [], frame.marks] } } : {};
+    if (!frame || frame.marks.length >= MAX_MARKS) return {};
+    return { byProject: { ...state.byProject, [projectId]: { ...frame, marks: [...frame.marks, mark] } },
+      past: { ...state.past, [projectId]: [...state.past[projectId] ?? [], frame.marks] } };
   }),
   replace: (projectId, index, mark) => set(state => {
     const frame = state.byProject[projectId];
@@ -75,9 +76,9 @@ export const usePictureMarksStore = create<PictureMarksState>((set, get) => ({
   }),
   undo: projectId => set(state => {
     const frame = state.byProject[projectId];
-    if (!frame) return {};
     // The marks as they were before the last one drawn or moved; with nothing remembered, the last mark comes off.
     const past = state.past[projectId] ?? [];
+    if (!frame || (!frame.marks.length && !past.length)) return {};
     return { byProject: { ...state.byProject, [projectId]: { ...frame, marks: past.at(-1) ?? frame.marks.slice(0, -1) } },
       past: { ...state.past, [projectId]: past.slice(0, -1) } };
   }),

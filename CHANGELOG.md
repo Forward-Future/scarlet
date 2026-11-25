@@ -6,6 +6,12 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Pressing ⌘Z right after rejecting a cut now brings back its Keep and Revise card instead of leaving it saying Rejected.
+- Keep on the last flagged edit now goes on to an edit of the same request that needs your answer instead of closing the card.
+- Dots and pills from calls and applied edits near the start of the timeline or on a crowded pass no longer overlap or block clicks.
+- Moving a mark on a paused frame and pressing ⌘Z now puts the mark back even after you leave marking mode.
+- ⌘Z now puts back a chosen range that Esc took off an empty message box, as it does after Backspace.
+- Sending again after an error on a new style guide no longer creates a duplicate style guide or uploads attached files twice, and Esc moves to Send instead of discarding what you wrote.
 - Screen framing now cuts straight when the screen switches to a new page or demo, keeps video player controls out when playing a video, and checks for sliding zooms across screen changes, edge-clipped text, content under the camera inset, tiny text, visible player controls, and blank or loading screens before a pass finishes.
 - A request's token count in the chat now includes the tokens of work it handed to another model.
 - Work handed to a model that can't hear can now have a model that hears listen for it, when one is signed in.

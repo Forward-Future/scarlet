@@ -70,3 +70,26 @@ it("still makes a reply about the whole request once words are typed with nothin
   });
   expect(useUiStore.getState().agentContext).toBe("whole");
 });
+
+it("prevents Esc from bubbling unhandled when clearing a transcript range in an empty box and restores it on ⌘Z", async () => {
+  useUiStore.getState().setAgentContext({ time: 12, end: 18, version: project.head!, clipIds: [] });
+  await show();
+  const input = container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  let prevented = false;
+  const onWindowKey = (e: KeyboardEvent) => { if (e.key === "Escape") prevented = e.defaultPrevented; };
+  window.addEventListener("keydown", onWindowKey);
+  try {
+    await act(async () => {
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(prevented).toBe(true);
+    expect(useUiStore.getState().agentContext).toBeNull();
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(useUiStore.getState().agentContext).toMatchObject({ time: 12, end: 18 });
+  } finally {
+    window.removeEventListener("keydown", onWindowKey);
+  }
+});
