@@ -43,7 +43,7 @@ import { usePlayerStore } from "../../../stores/player";
 import type { JoinClock } from "../../../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, revisionTarget, stagedCuts, type Thread } from "../../../lib/threads";
 import { runIsActive } from "../../../lib/taskRun";
-import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, threadRuns, waitingToStart } from "../../../lib/requestRuns";
+import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, waitingToStart } from "../../../lib/requestRuns";
 import { callRevisions, decidedPassCalls, isOpenPass, noRevisions, openPass, passForYouOrder, passRevision, reviewCalls, revisedFrom, revisionCut, savedChoices,
   type Call, type CutChoice, type PassForYouItem } from "../../../lib/passCalls";
 import { callNow, carriedCall, carryingVersions, revisedCall } from "../../../lib/carriedCuts";
@@ -61,7 +61,7 @@ import { WorkspaceComposer } from "./WorkspaceComposerBeta";
 import { SimpleHeader } from "../SimpleHeader";
 import { TRANSCRIPT_RAIL_MIN, TranscriptRail } from "../TranscriptRail";
 import { savedRewording, saveRewording } from "../rewordingStorage";
-import { savedCollapsed, savedOpenLists, saveCollapsed, saveOpenLists } from "../openListsStorage";
+import { savedOpenLists, saveOpenLists } from "../openListsStorage";
 import { REVIEW_RAIL_MIN, ReviewRail } from "../ReviewRail";
 import { RailStore, ReviewRailContext } from "../railStore";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError, WorkingEditCard } from "../ReviewCards";
@@ -178,24 +178,6 @@ export function SimpleWorkspaceBeta() {
   const reportForYouRows = useCallback((threadId: string, rows: number) =>
     setForYouRows(was => (was[threadId] ?? 0) === rows ? was : { ...was, [threadId]: rows }), []);
   const rowsForYou = Object.values(forYouRows).reduce((sum, rows) => sum + rows, 0);
-  // The requests folded to their headings with the arrow at a heading's left, kept across a restart as the lists are.
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => savedCollapsed(current.id));
-  const collapsedOf = useRef(current.id);
-  useEffect(() => {
-    if (collapsedOf.current === current.id) return saveCollapsed(current.id, collapsed);
-    collapsedOf.current = current.id;
-    setCollapsed(savedCollapsed(current.id));
-  }, [current.id, collapsed]);
-  const collapse = useCallback((run: string) => setCollapsed(all => {
-    const next = new Set(all);
-    if (!next.delete(run)) next.add(run);
-    return next;
-  }), []);
-  // A request whose cut or edit is opened is unfolded, so the row that says which one is open is in view.
-  const unfold = useCallback((thread: Thread) => setCollapsed(all => {
-    const runs = new Set(threadRuns(thread).map(run => run.root));
-    return [...runs].some(run => all.has(run)) ? new Set([...all].filter(run => !runs.has(run))) : all;
-  }), []);
   // One list of every edit is open at a time, so two "Hide" links never stand for one timeline: opening another
   // request's closes it. The list of what needs the editor is a review list, and leaves the others as they are.
   const listOf = (threadId: string): PassList => [lists[threadId], next => {
@@ -670,7 +652,6 @@ export function SimpleWorkspaceBeta() {
   // when the editor opens it again. A card that only reloads under them, as when a new working cut lands, keeps both.
   const startVisit = () => { setCutSide(undefined); setScriptFor(undefined); };
   function listenCall(change: Change, a: CutAssessment) {
-    if (passThread) unfold(passThread);
     // The same call opened again while it's open keeps its words where they are.
     if (listening?.changeId !== change.id || listening.index !== a.index) startVisit();
     setSourceChoice({ id: "", play: false });
@@ -714,7 +695,6 @@ export function SimpleWorkspaceBeta() {
     setAimAgain(n => n + 1);
   }
   function openEdit(thread: Thread, ref: EditRef, from?: string, single?: boolean) {
-    unfold(thread);
     // The edit that's open, pressed again, plays again from the top: its card and the timeline's zoom stay. A cut
     // starts over as the video runs, unlit; any other edit keeps its side. Esc is what closes it. A cut plays under
     // this view's own listen; any other edit under the player's. A moment's main edit picked on its own from under
@@ -888,8 +868,6 @@ export function SimpleWorkspaceBeta() {
     showing,
     showingSingle: threadTimeline.single,
     showingFrom: openedFrom && showing && matchesEdit(showing, openedFrom.ref) ? openedFrom.run : undefined,
-    collapsed,
-    collapse,
     fitTimeline() { setFitTimeline(n => n + 1); },
     reviewingId: suggestion?.id,
     listening,

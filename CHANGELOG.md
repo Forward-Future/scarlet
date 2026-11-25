@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- In the beta layout, removed the stray collapse arrow beside chat bubbles and fixed token usage stats popping up in the top-left corner so they appear right over the message you hover.
 - In the beta layout, Scarlet’s chat replies now show up to three lines without expanding, and Scarlet keeps its written replies to three lines at most.
 - In the beta layout, Working and Done at the bottom of the edits column are now separated by a divider line.
 - Fixed playback gradually becoming poppy and laggy on longer edited videos by using one continuous audio track for cached previews and sweeping old streamed buffer edges cleanly behind the playhead.

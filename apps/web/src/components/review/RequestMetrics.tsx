@@ -40,9 +40,9 @@ export function Tokens({ usage, className, time, details = [], quiet = false }: 
   // Quiet, the count isn't in view, so the note also opens with the active time alone.
   const hasButton = !!usage?.totalTokens || (quiet && !!time);
   const open = mode !== null && hasButton;
-  // Quiet, the heading the count sits in opens the note once the pointer rests on it, and closes it as it leaves.
+  // Quiet, the bubble (in beta) or heading the count sits in opens the note once the pointer rests on it, and closes it as it leaves.
   useEffect(() => {
-    const host = quiet && hasButton ? ref.current?.closest<HTMLElement>(".unit-msg, .subunit-msg") : null;
+    const host = quiet && hasButton ? ref.current?.closest<HTMLElement>(".unit-bubble, .unit-msg, .subunit-msg") : null;
     if (!host) return;
     let timer = 0;
     const enter = (event: PointerEvent) => {
