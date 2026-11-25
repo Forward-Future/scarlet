@@ -11,7 +11,7 @@ import { useAttachmentsStore } from "../../../stores/attachments";
 import { usePictureMarksStore } from "../../../stores/pictureMarks";
 import { player } from "../../../lib/player";
 import { toggleMarking } from "../../../components/player/PictureMarks";
-import { isAltClearRangeKey, isComposing } from "../../../lib/hotkeys";
+import { isComposing, matchesClearRangeKey } from "../../../lib/hotkeys";
 import { clock, clockRange, playbackClock, preciseRange } from "../../../lib/format";
 import type { RecorderResult } from "../../../lib/recorder";
 import { useSpeech } from "../../../lib/speech";
@@ -655,7 +655,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
           e.preventDefault();
           rangeTakenOff.current = takeOffRange();
         }
-        if (isAltClearRangeKey(e) && emptyBox && (shownRange || marked) && !document.querySelector("[data-escape-owner]")) {
+        if (matchesClearRangeKey(e) && emptyBox && (shownRange || marked) && !document.querySelector("[data-escape-owner]")) {
           e.preventDefault();
           rangeTakenOff.current = takeOffRange();
         }

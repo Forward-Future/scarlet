@@ -742,3 +742,62 @@ it("tells who listens for the editor's pause, with the clock on the frame it sto
   player.toggle();
   expect(heard).toEqual([4.3]);
 });
+
+it("shuttles forward (1×, 2×, 4×), rewinds with muted stepping (−1×, −2×, −4×), and restores saved speed on stop", () => {
+  vi.useFakeTimers();
+  try {
+    let paused = true;
+    vi.spyOn(video, "paused", "get").mockImplementation(() => paused);
+    vi.spyOn(video, "play").mockImplementation(async () => { paused = false; });
+    vi.spyOn(video, "pause").mockImplementation(() => { paused = true; });
+    const heard: number[] = [];
+    const off = player.onEditorPause(() => heard.push(usePlayerStore.getState().time));
+
+    player.setRate(1.25);
+    player.seek(20, true);
+
+    // L: 1× -> 2× -> 4× without overwriting the saved 1.25× preference.
+    player.shuttleForward();
+    expect(usePlayerStore.getState().shuttleRate).toBe(1);
+    expect(video.playbackRate).toBe(1);
+    expect(paused).toBe(false);
+    player.shuttleForward();
+    expect(usePlayerStore.getState().shuttleRate).toBe(2);
+    expect(video.playbackRate).toBe(2);
+    player.shuttleForward();
+    expect(usePlayerStore.getState().shuttleRate).toBe(4);
+    expect(video.playbackRate).toBe(4);
+    expect(usePlayerStore.getState().rate).toBe(1.25);
+
+    // K stops shuttle, restores 1.25×, and notifies editor pause listeners.
+    player.shuttleStop();
+    expect(paused).toBe(true);
+    expect(usePlayerStore.getState().shuttleRate).toBe(0);
+    expect(video.playbackRate).toBe(1.25);
+    expect(heard).toHaveLength(1);
+
+    // J steps backward at −1×, then −2×, then −4×, and stops cleanly on shuttleStop.
+    const before = usePlayerStore.getState().time;
+    player.shuttleReverse();
+    expect(usePlayerStore.getState().shuttleRate).toBe(-1);
+    expect(usePlayerStore.getState().playing).toBe(true);
+    vi.advanceTimersByTime(300);
+    const afterOneX = usePlayerStore.getState().time;
+    expect(afterOneX).toBeLessThan(before);
+
+    player.shuttleReverse();
+    expect(usePlayerStore.getState().shuttleRate).toBe(-2);
+    player.shuttleReverse();
+    expect(usePlayerStore.getState().shuttleRate).toBe(-4);
+    vi.advanceTimersByTime(300);
+    expect(usePlayerStore.getState().time).toBeLessThan(afterOneX);
+
+    player.shuttleStop();
+    expect(usePlayerStore.getState().shuttleRate).toBe(0);
+    expect(usePlayerStore.getState().playing).toBe(false);
+    expect(heard).toHaveLength(2);
+    off();
+  } finally {
+    vi.useRealTimers();
+  }
+});

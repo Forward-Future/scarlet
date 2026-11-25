@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { usePlayerStore } from "../stores/player";
+import { matchesBinding, matchesShortcut, SHORTCUT_ACTIONS, useShortcutsStore } from "../stores/shortcuts";
 import { markedRangeOf, useUiStore } from "../stores/ui";
 
 export function isEditableTarget(t: EventTarget | null): boolean {
@@ -78,6 +79,18 @@ export type KeyHandler = (e: KeyboardEvent) => void;
  * Handlers always see the latest closure (ref-backed) so callers can pass
  * inline functions without re-subscribing.
  */
+function isModifiedWorkspaceShortcut(e: KeyboardEvent, owner?: Element | null): boolean {
+  if (e.defaultPrevented || isEditableTarget(e.target) || !(e.metaKey || e.ctrlKey || e.altKey)) return false;
+  const dialog = owner?.closest("dialog[open]");
+  if (dialog && e.target instanceof Element && e.target.closest("dialog[open]") === dialog) {
+    if (dialog.querySelector('[role="menu"], [data-shortcut-overlay]')) return false;
+  } else if (document.querySelector('dialog[open], [role="dialog"], [role="menu"], [data-shortcut-overlay]')) {
+    return false;
+  }
+  const { bindings } = useShortcutsStore.getState();
+  return SHORTCUT_ACTIONS.some(a => a.scope === "workspace" && a.id !== "clearRange" && !!bindings[a.id] && (bindings[a.id]!.includes("Mod+") || bindings[a.id]!.includes("Alt+")) && matchesBinding(e, bindings[a.id]));
+}
+
 export function useHotkeys(onDown: KeyHandler, onUp?: KeyHandler, owner?: RefObject<HTMLElement | null>) {
   const down = useRef(onDown);
   const up = useRef(onUp);
@@ -85,7 +98,7 @@ export function useHotkeys(onDown: KeyHandler, onUp?: KeyHandler, owner?: RefObj
   up.current = onUp;
   useEffect(() => {
     const d = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e, owner?.current)) return;
+      if (ignorePageShortcut(e, owner?.current) && !isModifiedWorkspaceShortcut(e, owner?.current)) return;
       down.current(e);
     };
     const u = (e: KeyboardEvent) => {
@@ -102,17 +115,18 @@ export function useHotkeys(onDown: KeyHandler, onUp?: KeyHandler, owner?: RefObj
 
 export const COMPARE_KEY = "\\";
 
-/** Step between cuts once per plain ↑ or ↓ press. ← and → are the player's. */
+/** Step between cuts once per plain previous/next edit shortcut (↑ / ↓ by default). ← and → are the player's. */
 export function handleCutArrow(e: KeyboardEvent, step: (direction: -1 | 1) => void) {
-  if (e.shiftKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return false;
+  const direction: -1 | 1 | 0 = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
+  if (!direction) return false;
   e.preventDefault();
-  if (!e.repeat && !isComposing(e)) step(e.key === "ArrowDown" ? 1 : -1);
+  if (!e.repeat && !isComposing(e)) step(direction);
   return true;
 }
 
 export function useComparisonShortcut(enabled: boolean, toggle: () => void, owner?: RefObject<HTMLElement | null>) {
   useHotkeys(e => {
-    if (!enabled || e.key !== COMPARE_KEY || e.shiftKey || isComposing(e)) return;
+    if (!enabled || !matchesShortcut(e, "compare") || isComposing(e)) return;
     e.preventDefault();
     if (!e.repeat) toggle();
   }, undefined, owner);
@@ -121,6 +135,11 @@ export function useComparisonShortcut(enabled: boolean, toggle: () => void, owne
 /** True for Option+X / Alt+X (standard Clear In/Out). Checks `code` too because macOS reports `≈` for Option+X. */
 export function isAltClearRangeKey(e: { key: string; code?: string; altKey: boolean; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): boolean {
   return e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.code === "KeyX" || e.key.toLowerCase() === "x");
+}
+
+/** True when `e` matches the user's configured Clear Marked Range shortcut (Option+X / Alt+X by default). */
+export function matchesClearRangeKey(e: { key: string; code?: string; altKey: boolean; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): boolean {
+  return matchesShortcut(e, "clearRange");
 }
 
 /** Stands in the list for a shortcut's own key, which is ⌘ on a Mac and Ctrl on Windows. The list shows the one in use. */

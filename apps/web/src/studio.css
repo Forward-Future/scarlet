@@ -377,7 +377,8 @@
 .media-thumb-button:hover .media-thumb-play, .media-thumb-button:focus-visible .media-thumb-play { opacity: 1; }
 .media-thumb { flex: none; width: 68px; height: 40px; border-radius: 5px; }
 .media-glyph { display: grid; place-items: center; background: var(--color-raised); color: var(--color-muted); }
-.settings-page { max-width: 930px; }
+.settings-page { max-width: 980px; }
+.settings-page .heading-actions { gap: 6px; }
 .transcription-preferences { container-type: inline-size; }
 .transcription-header {
   display: grid;
@@ -1220,4 +1221,84 @@
 @container (max-width: 480px) {
   .usage-band { padding: 16px; }
   .usage-storage-row { flex-wrap: wrap; gap: 6px 12px; }
+}
+
+/* Settings → Shortcuts: preset picker + click-to-rebind key table in Scarlet's achromatic studio palette. */
+.shortcuts-editor-card { overflow: hidden; }
+.shortcuts-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px 14px; padding: 12px 20px; border-bottom: 1px solid var(--color-line);
+}
+.shortcuts-categories { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; }
+.shortcuts-cat-pill {
+  padding: 5px 9px; border-radius: 7px; border: 1px solid transparent; background: transparent;
+  color: var(--color-muted); font-size: 12px; font-weight: 500; line-height: 1; transition: background .12s ease, color .12s ease;
+}
+.shortcuts-cat-pill:hover { color: var(--color-fg); }
+.shortcuts-cat-pill[aria-pressed="true"] { background: var(--color-raised); color: var(--color-fg); border-color: var(--color-line); }
+.shortcuts-toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shortcuts-search { width: 175px; min-height: 32px; padding: 5px 10px; font-size: 12.5px; border: 1px solid var(--color-line); }
+.shortcuts-body { padding: 6px 20px 14px; }
+.shortcuts-group + .shortcuts-group { margin-top: 10px; }
+.shortcuts-group-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 10px 0 4px;
+}
+.shortcuts-group-detail { font-size: 11.5px; color: var(--color-dim); }
+.shortcuts-row { border-bottom: 1px solid color-mix(in srgb, var(--color-line) 55%, transparent); padding: 6px 0; }
+.shortcuts-row:last-child { border-bottom: 0; }
+.shortcuts-row-main {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 28px;
+}
+.shortcuts-row-label { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; min-width: 0; font-size: 13px; color: var(--color-fg); }
+.shortcuts-row.is-fixed .shortcuts-row-label { color: var(--color-muted); }
+.shortcuts-row-detail { font-size: 11.5px; color: var(--color-dim); }
+.shortcuts-row-where { font-size: 12px; color: var(--color-dim); white-space: nowrap; text-align: right; }
+.shortcuts-mod-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--color-warn); align-self: center; flex: none; }
+.shortcuts-preset-tag {
+  font-size: 10px; line-height: 1; padding: 2px 6px; border-radius: 999px;
+  background: var(--color-raised); border: 1px solid var(--color-line); color: var(--color-muted); align-self: center;
+}
+.shortcuts-row-keys { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; min-width: 118px; }
+.shortcuts-key-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-height: 26px; padding: 3px 7px; border-radius: 7px; border: 1px solid transparent; background: transparent;
+  color: var(--color-fg); transition: background .12s ease, border-color .12s ease;
+}
+.shortcuts-key-btn:hover { background: var(--color-raised); border-color: var(--color-line); }
+.shortcuts-key-btn.is-recording {
+  background: var(--color-raised); border-color: var(--color-muted);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-muted) 25%, transparent);
+}
+.shortcuts-key-static { padding: 3px 7px; opacity: .72; }
+.shortcuts-unbound {
+  font-size: 11.5px; color: var(--color-dim); padding: 2px 7px;
+  border-radius: 5px; border: 1px dashed var(--color-line);
+}
+.shortcuts-recording-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--color-fg); }
+.shortcuts-rec-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--color-warn); animation: pulse-dot 1.1s ease-in-out infinite; }
+.shortcuts-row-reset {
+  display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  color: var(--color-dim); font-size: 13px; transition: background .12s ease, color .12s ease;
+}
+.shortcuts-row-reset:hover { background: var(--color-raised); color: var(--color-fg); }
+.shortcuts-fixed-tag { font-size: 11px; color: var(--color-dim); }
+.shortcuts-inline-btn { min-height: 24px; padding: 3px 8px; font-size: 11.5px; border-radius: 6px; }
+.shortcuts-notice {
+  margin-top: 6px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-warn) 42%, transparent);
+  background: color-mix(in srgb, var(--color-warn) 9%, var(--color-bg));
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px; color: var(--color-fg);
+}
+.shortcuts-notice-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.shortcuts-footer {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 20px; border-top: 1px solid var(--color-line);
+  background: color-mix(in srgb, var(--color-bg) 38%, transparent);
+  font-size: 12px; color: var(--color-dim);
+}
+@media (max-width: 640px) {
+  .shortcuts-row-where, .shortcuts-group-detail { display: none; }
+  .shortcuts-row-keys { min-width: auto; }
 }

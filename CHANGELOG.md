@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 25, 2026
+
+- Settings › Shortcuts lets you customize keyboard shortcuts, switch in one click to classic video-editor J/K/L shuttle playback (moving Keep to A and speed to [ / ]), and move or pause the playhead while typing in chat with ⌘J, ⌘K, and ⌘L (Ctrl on Windows and Linux).
+
 ## November 24, 2026
 
 - Pressing ⌘Z right after rejecting a cut now brings back its Keep and Revise card instead of leaving it saying Rejected.
