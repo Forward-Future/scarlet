@@ -12,13 +12,16 @@ import {
   type Task,
 } from "@scarlet/shared";
 import {
+  applyOps,
   CaptionStyle,
   captionsFromWords,
   carriesAudio,
+  clipEnd,
   newId,
   timelineFromKeepRanges,
   Transform,
   type CaptionClip,
+  type MediaClip,
   type Timeline,
   type TimelineOp,
   type Track,
@@ -32,8 +35,10 @@ import {
   round2,
   round3,
 } from "./analysis.js";
+import type { RecordingCut } from "./brief-pictures.js";
 import { firstCutRanges } from "./first-cut-ranges.js";
-import { boxInCorner, cornerOf, CORNERS, coverOnText, framingOps, MOVE_EASES, type Box, type Corner } from "./framing.js";
+import { boxInCorner, cornerOf, CORNERS, coverOnText, framingOps, frameShown, MOVE_EASES, type Box, type Corner } from "./framing.js";
+import { moveCrossesScreenChange } from "./framing-report.js";
 import {
   editReasonInput,
   makeIntentInput,
@@ -74,7 +79,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
   let framed: Array<{ changeId: string; mediaId: string; trackId?: string; from: number; to: number }> = [];
   tool(
     "timeline_framing",
-    "Frame a recording's picture on an area of it over a stretch of the edit: a zoom in on a pane, a move from one subject to the next, a pull back out. Each framing names the area that must be seen (`show`) from a timeline second (`at`), as [left, top, right, bottom] in percent of the SOURCE picture: the units of screen_text's boxes" + (caps.images ? " and media_frame's grid" : "") + ". Scarlet places the tightest frame of the video's shape around it, so the picture always fills the video with no background beside it, and keeps the area clear of any picture laid over the recording, such as a camera inset. `within` is the area the frame may show, one window for example: the frame grows into it and goes past it only when it has to. The same `show`, `within` and inset place the same frame again, so a framing you resend unchanged stays as it was while you change others. `inset` moves the picture laid over the recording to another corner of the video from that framing on, at the size and margins it has, travelling with the frame's move; it stays there through `to` unless a later framing moves it again. `inset` as `clear` leaves the choice of corner to what is on screen: the picture's own corner when it sits on none of the frame's text there, else a corner where it sits on none, and the result says which (`inset`) or that no corner is clear (`noCornerClearOfText`). The picture moves to each frame over `over` seconds (default 1; 0 is a straight cut), eased as `ease` says (in and out by default), and holds until the next framing or `to`; a move runs on across the cuts that split the footage into clips. The first framing moves from the frame already there when the footage plays on from before it, and otherwise starts on its frame. Clips of the recording outside the stretch keep their framing. The result gives each frame as placed: `frame` in percent of the source, `zoom`, `sourcePixels` (source pixels per pixel of the video; under 1 the picture is enlarged past its own detail), `holds` seconds, `hidden` (percent of `show` that a cover or the frame's edge hides), `beyondWithin` (percent of the frame past `within`, by side) with `insideWithin` (the largest frame that stays inside it, and the percent of `show` that one hides), `covers` (other pictures over the video there, in percent of the video), `notOnPicture` when another picture fills the video there, and `text` where the recording's text has been read (screen_text reads it): the lines in `show`, their smallest and usual height in pixels of the video, any a cover sits on (`underCover`), and the corners where the cover would sit on none (`cornersClearOfText`); `textUnderCover` lists the framings that have such lines." + (caps.images ? ` With a picture of the video at each frame's settled moment, ${FRAMING_PICTURES} a call starting at \`picturesFrom\`.` : "") + " `preview` works all of this out and shows it without saving. A framing saved over a stretch this request already framed takes that edit's place in the editor's list, unless you give `timelineEdits`. For a crop with the background showing, an inset or a rotation, use timeline_propose's updateClip.",
+    "Frame a recording's picture on an area of it over a stretch of the edit: a zoom in on a pane, a move from one subject to the next, a pull back out. Each framing names the area that must be seen (`show`) from a timeline second (`at`), as [left, top, right, bottom] in percent of the SOURCE picture: the units of screen_text's boxes" + (caps.images ? " and media_frame's grid" : "") + ". Scarlet places the tightest frame of the video's shape around it, so the picture always fills the video with no background beside it, and keeps the area clear of any picture laid over the recording, such as a camera inset. `within` is the area the frame may show, one window for example: the frame grows into it and goes past it only when it has to. The same `show`, `within` and inset place the same frame again, so a framing you resend unchanged stays as it was while you change others. `inset` moves the picture laid over the recording to another corner of the video from that framing on, at the size and margins it has, travelling with the frame's move; it stays there through `to` unless a later framing moves it again. `inset` as `clear` leaves the choice of corner to what is on screen: the picture's own corner when it sits on none of the frame's text there, else a corner where it sits on none, and the result says which (`inset`) or that no corner is clear (`noCornerClearOfText`). The picture moves to each frame over `over` seconds (default 1; 0 is a straight cut), eased as `ease` says (in and out by default), and holds until the next framing or `to`; a move runs on across the cuts that split the footage into clips. The first framing moves from the frame already there when the footage plays on from before it, and otherwise starts on its frame. Clips of the recording outside the stretch keep their framing. The result gives each frame as placed: `frame` in percent of the source, `zoom`, `sourcePixels` (source pixels per pixel of the video; under 1 the picture is enlarged past its own detail), `holds` seconds, `hidden` (percent of `show` that a cover or the frame's edge hides), `beyondWithin` (percent of the frame past `within`, by side) with `insideWithin` (the largest frame that stays inside it, and the percent of `show` that one hides), `covers` (other pictures over the video there, in percent of the video), `notOnPicture` when another picture fills the video there, `screenChanged` (with `screenChangeAt`) when a move glides across a cut where the screen itself changes to something new (`over: 0` cuts straight with it; `movesAcrossScreenChange` lists those framings), and `text` where the recording's text has been read (screen_text reads it): the lines in `show`, their smallest and usual height in pixels of the video, any a cover sits on (`underCover`), and the corners where the cover would sit on none (`cornersClearOfText`); `textUnderCover` lists the framings that have such lines." + (caps.images ? ` With a picture of the video at each frame's settled moment, ${FRAMING_PICTURES} a call starting at \`picturesFrom\`.` : "") + " `preview` works all of this out and shows it without saving. A framing saved over a stretch this request already framed takes that edit's place in the editor's list, unless you give `timelineEdits`. For a crop with the background showing, an inset or a rotation, use timeline_propose's updateClip.",
     {
       intent: intentInput,
       mediaId: z.string().describe("The recording whose picture to frame"),
@@ -148,6 +153,31 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         if (!moved) break;
         plan = place();
       }
+      // Check whether any gliding move runs across a screen change (recording cut or clip source jump across one).
+      const mediaRun = (() => {
+        const laid = (() => { try { return applyOps(before, plan.ops); } catch { return before; } })();
+        return laid.tracks
+          .filter(t => t.kind === "video" && !t.hidden && (!trackId || t.id === trackId))
+          .flatMap(t => t.clips.filter((c): c is MediaClip => c.kind === "media" && c.enabled !== false && c.mediaId === mediaId))
+          .sort((a, b) => a.timelineIn - b.timelineIn);
+      })();
+      const hasMoves = plan.frames.some(f => f.arrives === "move");
+      const mediaAsset = project.media.find(m => m.id === mediaId);
+      const mediaSize = { width: mediaAsset?.width || project.settings.width, height: mediaAsset?.height || project.settings.height };
+      const cuts = hasMoves && mediaRun.length ? await (async () => {
+        const srcMin = Math.max(0, Math.floor(Math.min(...mediaRun.map(c => c.sourceIn))) - 1);
+        const srcMax = Math.ceil(Math.max(...mediaRun.map(c => c.sourceOut))) + 1;
+        try {
+          const read = await client.get<{ done: boolean; cuts: RecordingCut[] }>(
+            `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/picture-cuts?from=${srcMin}&to=${srcMax}&wait=2`);
+          return read.cuts;
+        } catch { return undefined; }
+      })() : undefined;
+      const beforeClip = before.tracks
+        .filter(t => t.kind === "video" && !t.hidden && (!trackId || t.id === trackId))
+        .flatMap(t => t.clips.filter((c): c is MediaClip => c.kind === "media" && c.enabled !== false && c.mediaId === mediaId))
+        .find(c => c.timelineIn <= framings[0]!.at + 1e-6 && framings[0]!.at < clipEnd(c) - 1e-6);
+      const initialFrame = beforeClip ? frameShown(beforeClip, Math.max(0, framings[0]!.at - beforeClip.timelineIn), mediaSize, project.settings) : null;
       const report = plan.frames.map((f, i) => {
         const show = fraction(framings[i]!.show);
         const [, ft, , fb] = f.frame, fh = fb - ft;
@@ -158,8 +188,12 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         const under = spans?.filter(s => coverOnText(f.frame, f.covers, [s]));
         // The corners the covers could sit in with no line of the frame's text under them.
         const clear = !under?.length ? undefined : CORNERS.filter(corner => !coverOnText(f.frame, f.covers.map(c => boxInCorner(c, corner)), spans!));
+        const prevFrame = i ? plan.frames[i - 1]!.frame : initialFrame;
+        const screenHit = f.arrives === "move" && prevFrame && cuts
+          ? moveCrossesScreenChange(mediaRun, f.at, f.settles, prevFrame, f.frame, { cuts }) : undefined;
         return {
           at: f.at, arrives: f.arrives, settles: f.settles, holds: f.holds, frame: percent(f.frame), zoom: round2(f.zoom), sourcePixels: round2(f.sourcePixels),
+          ...(screenHit && { screenChanged: true as const, screenChangeAt: screenHit.at }),
           ...(f.hidden >= 0.005 && { hidden: Math.round(f.hidden * 100) }),
           ...(f.beyondWithin && { beyondWithin: Object.fromEntries(Object.entries(f.beyondWithin).map(([side, share]) => [side, Math.round(share * 100)])) }),
           ...(f.insideWithin && { insideWithin: { frame: percent(f.insideWithin.frame), hidden: Math.round(f.insideWithin.hidden * 100) } }),
@@ -176,6 +210,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
 
       const unread = plan.frames.filter((f, i) => !f.notOnPicture && !lines[i]).length;
       const covered = report.flatMap((f, i) => typeof f.text === "object" && "underCover" in f.text && f.text.underCover ? [i] : []);
+      const acrossChange = report.flatMap((f, i) => "screenChanged" in f && f.screenChanged ? [i] : []);
       // One edit for the stretch, in the model's own words, unless it listed its own. A run looks at a framing once it
       // is saved and frames the stretch again: 16 saves for 11 demos on one run (2026-11-16), each a row in the editor's
       // list. A save over a stretch an earlier one of this run framed revises that row.
@@ -199,8 +234,10 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       }
       const content: ToolResult["content"] = [...(saved?.content ?? []),
         { type: "text", text: JSON.stringify({ ...(preview && { preview: true, saved: false }), mediaId, clips: plan.clips, ...(plan.insetClips && { insetClips: plan.insetClips }),
-          // Named once ahead of the list: among a hundred framings, the few with text under a cover were read past.
-          ...(covered.length && { textUnderCover: covered }), video: `${project.settings.width}x${project.settings.height}`, framings: report,
+          // Named once ahead of the list: among a hundred framings, the few with text under a cover or a glide across a screen change were read past.
+          ...(covered.length && { textUnderCover: covered }),
+          ...(acrossChange.length && { movesAcrossScreenChange: acrossChange }),
+          video: `${project.settings.width}x${project.settings.height}`, framings: report,
           ...(unread && { textUnread: `The recording's text at ${unread} of these frames isn't read yet. It is being read now: a later call, or a preview, reports it.` }) }) }];
       if (caps.images && !saved?.isError) {
         const shown = plan.frames.map((f, index) => ({ f, index })).slice(picturesFrom, picturesFrom + FRAMING_PICTURES);

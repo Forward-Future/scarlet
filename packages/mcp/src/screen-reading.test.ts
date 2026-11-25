@@ -252,6 +252,29 @@ describe("framingReport", () => {
     // clip's clock, the screen there read as source 59, with the post on it.
     expect(report[0]!.shownBefore).toBeUndefined();
   });
+
+  it("marks a gliding move that runs across a recording cut inside a clip or right after a clip jump, and ignores a straight cut", () => {
+    // One continuous clip with a recording cut at source 20 (timeline 10), and a 1 s glide across it.
+    const continuous = applyOps(emptyTimeline("p"), [
+      { op: "addTrack", track: { id: "scr", kind: "video", name: "Screen", clips: [] } },
+      { op: "addClip", trackId: "scr", clip: { id: "s1", kind: "media", mediaId: "screen", sourceIn: 10, sourceOut: 30, timelineIn: 0,
+        transform: { scale: 2, x: 0.5, y: 0.5 },
+        keyframes: [
+          { time: 9.8, transform: { scale: 2, x: 0.5, y: 0.5 }, ease: "easeInOut" },
+          { time: 10.8, transform: { scale: 2, x: -0.5, y: -0.5 }, ease: "easeInOut" },
+        ] } },
+    ]);
+    const report = framingReport(null, continuous, media, canvas, [], [], { lines: new Map(), seconds: new Map(), cuts: new Map([["screen", [wholeCut(20)]]]), words: [] });
+    expect(report[0]!.moves[0]).toMatchObject({ screenChanged: true, screenChangeAt: 10 });
+    // A straight cut at the recording cut (hold keyframe / clip split with no glide) is not marked.
+    const straight = applyOps(emptyTimeline("p"), [
+      { op: "addTrack", track: { id: "scr", kind: "video", name: "Screen", clips: [] } },
+      { op: "addClip", trackId: "scr", clip: { id: "s1", kind: "media", mediaId: "screen", sourceIn: 10, sourceOut: 20, timelineIn: 0, transform: { scale: 2, x: 0.5, y: 0.5 } } },
+      { op: "addClip", trackId: "scr", clip: { id: "s2", kind: "media", mediaId: "screen", sourceIn: 25, sourceOut: 35, timelineIn: 10, transform: { scale: 2, x: -0.5, y: -0.5 } } },
+    ]);
+    const straightReport = framingReport(null, straight, media, canvas, [], [], { lines: new Map(), seconds: new Map(), cuts: new Map([["screen", [wholeCut(22)]]]), words: [] });
+    expect(straightReport[0]!.moves[0]!.screenChanged).toBeUndefined();
+  });
 });
 
 describe("motionSpans", () => {
