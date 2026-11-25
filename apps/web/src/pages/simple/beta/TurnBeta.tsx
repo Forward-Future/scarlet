@@ -99,7 +99,7 @@ function ChangeReply({ thread, entry, actions }: { thread: Thread; entry: Extrac
  * `pinHost`, and takes its place in the chat when it's done. A request still waiting its turn isn't here at all; it's in
  * the tray on the message box.
  */
-export function Turn({ projectId, thread, actions, pinned, pinHost, list: passList, reportReviewMarkers, reportEvery, askingRowKey }: { projectId: string; thread: Thread; actions: ChatActions; pinned?: string; pinHost: HTMLElement | null;
+export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinHost, list: passList, reportReviewMarkers, reportEvery, askingRowKey }: { projectId: string; thread: Thread; threadOrder?: number; actions: ChatActions; pinned?: string; pinHost: HTMLElement | null;
   reportReviewMarkers?: ReportReviewMarkers;
   /** With no request picked the timeline marks every request's edits, so this one reports them all, not only the ones that wait. */
   reportEvery?: boolean;
@@ -151,7 +151,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   const inView = useNearView(section, ".simple-chat");
   const asksForALook = useRef(false);
   const { listed, rejected, located, head } = useThreadEdits(projectId, thread, inView || !!passList[0] || actions.marked === thread.id
-    || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && (!!reportEvery || asksForALook.current || !!rail)));
+    || (!!pinned && thread.tasks.some(t => t.id === pinned)) || !!rail || (!!reportReviewMarkers && (!!reportEvery || asksForALook.current)));
   asksForALook.current = listed.some(edit => !!edit.check);
   const reviewed = useReviewed(projectId, thread);
   const revising = useRevising(thread);
@@ -415,10 +415,26 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // The requests about one of this block's cuts or edits, each drawn under its row.
     // One that asks a question, or stopped early and offers its one action, itself waits on the editor.
     const below = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, run: runs.find(r => r.root === root)! })) : [];
-    const nests: Nest[] = below.map(({ key, run: about }) => ({ key, node: unit(about, true), needs: about.task.state === "waiting_for_user" || !runIsActive(about.task) }));
+    const nests: Nest[] = below.map(({ key, run: about }) => {
+      const runEvents = events[about.task.id] ?? [];
+      const lastEv = runEvents.at(-1);
+      const runFinal = finalOf(about);
+      const runHeld = about.task.state === "queued" ? actions.waitsOn?.(about.task)?.words ?? "" : "";
+      const version = [
+        about.root, about.task.id, about.task.state, about.task.question ?? "", about.task.summary ?? "",
+        about.attempts.map(t => `${t.id}:${t.state}`).join(","),
+        runEvents.length, lastEv ? `${lastEv.id}:${lastEv.type}` : "",
+        runFinal ? `${runFinal.id}:${runFinal.state}` : "",
+        failed?.run === about.root ? failed.text : "",
+        editingPaused ? "1" : "0", actions.nextQueuedId === about.task.id ? "1" : "0",
+        actions.answering === about.task.id ? "1" : "0", runHeld,
+        showTokens ? JSON.stringify(usage?.[about.task.id] ?? null) : "",
+      ].join("|");
+      return { key, node: unit(about, true), needs: about.task.state === "waiting_for_user" || !runIsActive(about.task), version };
+    });
     const rows = run === owner && hasRows ? (aside: ReactNode) => summed
-      ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />
-      : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} /> : undefined;
+      ? <PassSummary projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />
+      : <ThreadResult projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} /> : undefined;
     // A request about one cut or edit says what it did there, and its row opens that cut or edit on the timeline.
     const target = targets.get(run.root);
     const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
@@ -567,8 +583,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   for (const run of runs) if (!placed.has(run.root) && !settled(run) && !nested.has(run.root)) nodes.push(unit(run));
   // Edits with no request behind them, such as an older change, still list in a card of their own.
   if (!owner && hasRows) nodes.push(<div key="edits" className="req">{summed
-    ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />
-    : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />}</div>);
+    ? <PassSummary projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />
+    : <ThreadResult projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />}</div>);
   return <section ref={section} className="simple-turn" data-log-label="Edit thread" aria-label={thread.title} data-thread={thread.id}>
     {nodes}
   </section>;

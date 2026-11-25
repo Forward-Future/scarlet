@@ -176,7 +176,7 @@ export type PassList = [open: OpenList, setOpen: Dispatch<SetStateAction<OpenLis
  * row's. `needs`: the request itself waits on the editor (it asks a question, or stopped early and offers Resume or
  * Retry), so its row stays in For you with it.
  */
-export interface Nest { key: string; node: ReactNode; needs?: boolean }
+export interface Nest { key: string; node: ReactNode; needs?: boolean; version?: string }
 export const noNests: readonly Nest[] = [];
 /** What the requests about each row's cut or edit took, by the row's key, for the hover of the word the row ends on. */
 export type Spent = ReadonlyMap<string, string>;

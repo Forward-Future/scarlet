@@ -15245,10 +15245,10 @@ it("keeps ↑ and ↓ within Done in the new layout's column: past its last row 
     idle();
     await showFolded();
     await act(async () => {});
-    // The pass has two calls that wait and a later request has a flagged edit: three rows in For you.
-    expect(columnRows("For you").map(columnWords)).toEqual(["Breath before the price.", "The corrected image-input take belongs here.", "wrap"]);
-    // The first call is kept: it is Done's only row, and the card went on to the next call.
-    await click(columnRows("For you")[0]!);
+    // The pass has two calls that wait (0:18, 0:48) and a later request has a flagged edit (0:11): unified For you sorts them by video time.
+    expect(columnRows("For you").map(columnWords)).toEqual(["wrap", "Breath before the price.", "The corrected image-input take belongs here."]);
+    // The first call is kept: it is Done's only row, and the card went on to the next waiting row.
+    await click(columnRows("For you").find(row => columnWords(row) === "Breath before the price.")!);
     await press("k");
     await act(async () => {});
     await click(columnPart("Done"));
@@ -15263,11 +15263,13 @@ it("keeps ↑ and ↓ within Done in the new layout's column: past its last row 
     await press("ArrowUp");
     await act(async () => {});
     expect(columnOpen()).toBe("Breath before the price.");
-    // The same from an edit: the flagged edit kept, opened from Done, stays on ↑ though the pass above it has a call waiting.
+    // Done is one unified list sorted by video time: ↑ from "wrap" (0:11) stops at Done's top without jumping to For you,
+    // ↓ steps to the later Done row ("Breath before the price.", 0:18), and ↓ again stays at Done's bottom.
     await click(columnRows("For you").find(row => columnWords(row) === "wrap")!);
     await act(async () => {});
     await press("k");
     await act(async () => {});
+    expect(columnRows("Done").map(columnWords)).toEqual(["wrap", "Breath before the price."]);
     await click(columnRows("Done").find(row => columnWords(row) === "wrap")!);
     await act(async () => {});
     expect(columnOpen()).toBe("wrap");
@@ -15276,7 +15278,10 @@ it("keeps ↑ and ↓ within Done in the new layout's column: past its last row 
     expect(columnOpen()).toBe("wrap");
     await press("ArrowDown");
     await act(async () => {});
-    expect(columnOpen()).toBe("wrap");
+    expect(columnOpen()).toBe("Breath before the price.");
+    await press("ArrowDown");
+    await act(async () => {});
+    expect(columnOpen()).toBe("Breath before the price.");
   });
 });
 
@@ -15434,8 +15439,8 @@ it("goes on from the last edit kept to another request's edit that says Needs yo
     await showFolded();
     await act(async () => {});
     const rows = () => columnRows("For you").map(row => [columnWords(row), row.querySelector(".simple-edit-check")?.textContent]);
-    expect([rows(), editsColumn().querySelector(".review-rail-count")?.textContent]).toEqual([[["wrap", "Needs your answer"], ["false start", undefined]], "2"]);
-    await click(columnRows("For you")[1]!);
+    expect([rows(), editsColumn().querySelector(".review-rail-count")?.textContent]).toEqual([[["false start", undefined], ["wrap", "Needs your answer"]], "2"]);
+    await click(columnRows("For you")[0]!);
     await act(async () => {});
     expect(columnOpen()).toBe("false start");
     // Kept, it is the last that simply waits. The card goes on to the one row left in For you, which asks for an answer.
