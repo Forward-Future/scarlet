@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentId, UsageGroup, UsageResponse } from "@scarlet/shared";
 import { api, errorMessage } from "../../lib/client";
 import { plural, relTime, tokenBreakdown, tokenLabel } from "../../lib/format";
@@ -142,9 +142,12 @@ function SubscriptionLimits() {
     [subscriptionAgents],
   );
 
-  // Quietly refresh stale subscription quota when opening Settings → Usage.
+  const checkedQuotaRef = useRef(false);
+
+  // Quietly check stale subscription quota once per mount, after subscription agents load.
   useEffect(() => {
-    if (!subscriptionAgents.length) return;
+    if (checkedQuotaRef.current || !subscriptionAgents.length) return;
+    checkedQuotaRef.current = true;
     const stale = subscriptionAgents.some(a => {
       if (!a.quota) return true;
       const ms = Date.parse(a.quota.fetchedAt);

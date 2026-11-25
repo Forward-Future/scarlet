@@ -2,8 +2,9 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { UsageResponse, UsageTotals } from "@scarlet/shared";
+import type { AgentAvailability, AgentHost, UsageResponse, UsageTotals } from "@scarlet/shared";
 import { api } from "../../lib/client";
+import { desktop } from "../../lib/desktop";
 import { useHostsStore } from "../../stores/hosts";
 import { UsageSettings } from "./UsageSettings";
 
@@ -129,6 +130,40 @@ it("shows live subscription plan limits only for subscription providers", async 
     expect(limits.textContent).toContain("14%");
     expect(limits.textContent).toContain("Low");
     expect(limits.textContent).not.toContain("Codex");
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("checks plan limits once when Usage opens, not again after each refresh", async () => {
+  const host = (agents: AgentAvailability[]): AgentHost => ({ id: "h1", userId: "u1", name: "Mac", platform: "darwin", online: true, agents });
+  const probed = (): AgentAvailability[] => [
+    { id: "claude", installed: true, loggedIn: true, auth: "subscription", quota: { fetchedAt: new Date().toISOString(), buckets: [{ id: "session", label: "5-hour window", remainingPercent: 60 }] } },
+    // Gemini's /usage couldn't be read, so its quota stays missing after every probe.
+    { id: "gemini", installed: true, loggedIn: true, auth: "subscription" },
+  ];
+  useHostsStore.setState({ status: "ready", hosts: [host(probed())] });
+  // The desktop host answers the probe, then its heartbeat reaches the window again through the engine's socket.
+  vi.stubGlobal("__TAURI_INTERNALS__", {});
+  const probe = vi.spyOn(desktop, "hostRefreshQuota").mockImplementation(async () => {
+    const agents = probed();
+    setTimeout(() => useHostsStore.getState().apply(host(agents)), 0);
+    return { hostId: "h1", agents } as unknown as Awaited<ReturnType<typeof desktop.hostRefreshQuota>>;
+  });
+  vi.spyOn(api, "usage").mockImplementation(async (by = "project"): Promise<UsageResponse> => ({
+    by, total: totals(0, { inputTokens: 0, outputTokens: 0, totalTokens: 0, firstAt: null, lastAt: null }), groups: [],
+  }));
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: [] } as unknown as Awaited<ReturnType<typeof api.projects>>);
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+
+  const view = await renderUsage();
+  try {
+    for (let i = 0; i < 5; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalledWith(false);
+    const refresh = view.container.querySelector<HTMLButtonElement>(".usage-refresh")!;
+    expect(refresh.textContent).toBe("Refresh");
+    expect(refresh.disabled).toBe(false);
   } finally {
     await view.unmount();
   }
