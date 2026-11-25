@@ -74,7 +74,7 @@ function useTranscriptionRun(asset: MediaAsset) {
   const tasks = current ? transcriptionTasks(current.tasks, current.media, asset) : [];
   const running = tasks.findLast(isRunningTranscriptionTask);
   const latest = tasks.reduce<(typeof tasks)[number] | undefined>((a, b) => !a || (b.createdAt ?? "") > (a.createdAt ?? "") ? b : a, undefined);
-  const mediaPaused = !!current?.project.mediaPaused;
+  const mediaPaused = !!current?.project?.mediaPaused;
   return { running, latest, mediaPaused, paused: transcriptionPaused(latest, mediaPaused) };
 }
 
@@ -121,8 +121,10 @@ function ReplaceTranscript({ asset, retry, cloud, start }: { asset: MediaAsset; 
  */
 export function TranscriptLine({ asset, available, cloud = false }: { asset: MediaAsset; available?: boolean | null; cloud?: boolean }) {
   const transcribe = useProjectStore((s) => s.transcribe);
+  const cancelTask = useProjectStore((s) => s.cancelTask);
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   const pending = useRef(false);
   const { running, latest, paused, mediaPaused } = useTranscriptionRun(asset);
   const { name, transcriptId } = asset;
@@ -131,8 +133,26 @@ export function TranscriptLine({ asset, available, cloud = false }: { asset: Med
     const waiting = running?.progress?.stage === "queued";
     const progress = transcriptionProgressLabel(running?.progress);
     const text = waiting ? "Waiting to transcribe" : progress ? "Transcribing" : "Transcribing…";
+    const cancelling = Boolean(running && cancellingId === running.id);
+    async function cancel() {
+      if (!running || cancelling) return;
+      setError("");
+      setCancellingId(running.id);
+      try {
+        await cancelTask(running.id);
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setCancellingId(id => (id === running.id ? null : id));
+      }
+    }
     return <MediaStatusLine name={name} status={{ text, tone: "busy" }}
-      bar={waiting ? undefined : { label: `Transcribing ${name}`, fraction: running?.progress?.fraction, percent: progress }} />;
+      bar={waiting ? undefined : { label: `Transcribing ${name}`, fraction: running?.progress?.fraction, percent: progress }}>
+      {running && <button type="button" className="simple-link" disabled={cancelling}
+        aria-label={`Cancel transcription for ${name}`} onClick={() => void cancel()}>
+        {cancelling ? "Cancelling…" : "Cancel"}
+      </button>}
+    </MediaStatusLine>;
   }
   const savedStatus = transcriptId ? { text: "Transcribed", tone: "done" as const } : { text: "No transcript", tone: "idle" as const };
   if (isPreparingMedia(asset) || (transcriptId && asset.status === "failed")) return transcriptId ? <MediaStatusLine name={name} status={savedStatus} /> : null;

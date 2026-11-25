@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { TASK_MODELS_MAX, taskModelChoice, taskModelId, type AgentHost, type AgentId, type TaskModelType } from "@scarlet/shared";
 import { AGENT_LABEL, onlineAgents, useHostsStore, type OnlineAgent } from "../../stores/hosts";
-import { isModelHidden, modelChoices, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
+import { isChoiceHidden, modelChoices, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
 import { TaskModelPicker } from "../agent/TaskModelPicker";
 import { isComposing } from "../../lib/hotkeys";
 import { Icon, InlineError } from "../ui/primitives";
@@ -34,7 +34,7 @@ export function TaskModelsSettings() {
     setFocusId(id);
     save([...value, { id, name: "New task", description: "", model: "same" }]);
   };
-  const choicesFor = (type: TaskModelType) => all.filter(c => !isModelHidden(prefs, c.key) || c.key === type.model);
+  const choicesFor = (type: TaskModelType) => all.filter(c => !isChoiceHidden(prefs, c, all) || c.key === type.model);
   // A model chosen that isn't signed in now stays chosen, and says so. While the models are read, it isn't called missing.
   const missingFor = (type: TaskModelType) => {
     const saved = type.model !== "same" && status !== "loading" && !all.some(c => c.key === type.model) ? taskModelChoice(type) : undefined;

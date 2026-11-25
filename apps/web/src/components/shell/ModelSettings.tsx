@@ -4,7 +4,7 @@ import { ModelProviders } from "../agent/ModelProviders";
 import { Link } from "react-router-dom";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "../agent/ModelRefresh";
 import { AGENT_LABEL, onlineAgents, useHostsStore } from "../../stores/hosts";
-import { isModelHidden, modelChoices, OPT_IN_PROVIDERS, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
+import { isChoiceHidden, modelChoices, OPT_IN_PROVIDERS, RECOMMENDED_MODELS, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
 import { FavoriteButton } from "../agent/FavoriteButton";
 import { Icon, Loading, SectionTitle, Toggle } from "../ui/primitives";
 
@@ -63,13 +63,13 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
   const providers = agents.filter(a => choices.some(m => m.agent === a.id)).map(a => a.id);
   const active = providers.find(id => id === provider) ?? providers[0];
   const catalog = choices.filter(m => m.agent === active);
-  const isHidden = (key: string) => isModelHidden(prefs, key);
-  const visible = catalog.filter(m => !isHidden(m.key)).length;
+  const isHidden = (choice: ModelChoice) => isChoiceHidden(prefs, choice, choices);
+  const visible = catalog.filter(m => !isHidden(m)).length;
   const matches = catalog.filter(m => `${m.label} ${m.model ?? ""}`.toLowerCase().includes(query));
 
-  const favoriteRows = matches.filter(m => !isHidden(m.key) && favorites.includes(m.key));
-  const activeRows = matches.filter(m => !isHidden(m.key) && !favorites.includes(m.key));
-  const hiddenRows = matches.filter(m => isHidden(m.key));
+  const favoriteRows = matches.filter(m => !isHidden(m) && favorites.includes(m.key));
+  const activeRows = matches.filter(m => !isHidden(m) && !favorites.includes(m.key));
+  const hiddenRows = matches.filter(m => isHidden(m));
   const sections: { id: "favorites" | "models" | "hidden"; label: string; count?: number; rows: ModelChoice[] }[] = [
     { id: "favorites" as const, label: "Favorites", rows: favoriteRows },
     { id: "models" as const, label: "Models", rows: activeRows },
@@ -170,7 +170,7 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
           <span className="text-xs text-dim">{visible} of {catalog.length} shown</span>
           <button className="btn-quiet" aria-label={`${visible ? "Hide" : "Show"} all ${AGENT_LABEL[active]} models`} onClick={() => setVisible(catalog.map(m => m.key), visible === 0)}>{visible ? "Hide all" : "Show all"}</button>
         </div>
-        {OPT_IN_PROVIDERS.includes(active) && !visible && !query && <p className="pb-3 text-[13px] text-muted">{AGENT_LABEL[active]} offers {catalog.length} models. Turn on the models you want to see in the selector.</p>}
+        {(OPT_IN_PROVIDERS.includes(active) || Boolean(RECOMMENDED_MODELS[active])) && !visible && !query && <p className="pb-3 text-[13px] text-muted">{AGENT_LABEL[active]} offers {catalog.length} models. Turn on the models you want to see in the selector.</p>}
         {!matches.length && <p className="py-4 text-[13px] text-muted">No matching models.</p>}
         {matches.length > 0 && <>
           <div className="relative">

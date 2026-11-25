@@ -7569,8 +7569,9 @@ it("opens the model selector from the header button, keeps it in the window, and
     await key("ArrowDown");
     expect(focused()).toBe("Claude Code · Opus 5.5");
     await key("ArrowDown");
-    expect(focused()).toBe("Claude Code · Sonnet 5.5");
+    expect(focused()).toBe("Claude Code · Fable 5.1");
     await key("ArrowUp");
+    expect(focused()).toBe("Claude Code · Opus 5.5");
     await key("ArrowUp");
     expect(focused()).toBe("Claude Code · Fable 5.1");
     for (const name of ["Home", "End"]) { await key(name); expect(focused()).toBe("Claude Code · Fable 5.1"); }

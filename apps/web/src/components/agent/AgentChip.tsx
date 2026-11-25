@@ -4,7 +4,7 @@ import { Link, useMatch } from "react-router-dom";
 import type { RunChoice, Task } from "@scarlet/shared";
 import { isDesktop, type HostStatus } from "../../lib/desktop";
 import { AGENT_LABEL, isConfiguredAgent, onlineAgents, useHostsStore } from "../../stores/hosts";
-import { isModelHidden, modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
+import { isChoiceHidden, modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
 import { ProviderIcon, type ModelScope } from "./ModelProviders";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "./ModelRefresh";
 import { ModelRow, ModelScopeBar, ModelSearch, scopeModels } from "./ModelSelectorParts";
@@ -52,7 +52,7 @@ export function useAgentAvailability() {
   const favorites = useModelPreferences((s) => s.favorites);
   const tuningByModel = useModelPreferences((s) => s.tuningByModel);
   const available = modelChoices(agents);
-  const choices = available.filter((m) => !isModelHidden({ hidden, shown, favorites }, m.key));
+  const choices = available.filter((m) => !isChoiceHidden({ hidden, shown, favorites }, m, available));
   const selected = selectVisibleModel(choices, pick, agents);
   const same = pick.agent === selected?.agent && pick.model === selected?.model;
   const remembered = selected ? tuningByModel[selected.key] : undefined;

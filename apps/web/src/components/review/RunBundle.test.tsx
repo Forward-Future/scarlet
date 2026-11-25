@@ -312,7 +312,7 @@ it("says how far the transcripts it waits on are, and keeps file progress in Med
   expect(activity()).toBe("Transcribing the recordings · 30%");
   act(() => vi.advanceTimersByTime(30_000));
   view.rerender(run([wait, answer]));
-  expect(view.host.querySelector("[data-media]")?.textContent).toBe("Transcribing10%");
+  expect(view.host.querySelector("[data-media]")?.textContent).toBe("Transcribing10%Cancel");
   expect(activity()).toBe("Reading your answer");
 
   // A fresh transcript request can block the edit again.

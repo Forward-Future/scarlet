@@ -102,6 +102,13 @@ export function MicButton({ onResult, onStart, onRecording, onError, disabled, d
     return () => { discards.delete(discard); };
   }, [recording, stop]);
 
+  const discard = () => {
+    heldRef.current = false;
+    useUiStore.getState().setVoiceHold(false);
+    appLog("voice", "discard-button");
+    stop(true);
+  };
+
   const unsupported = rec.state === "unsupported";
   const isDisabled = disabled || unsupported;
   const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? SEND_RECORDING : followHold ? `${label} (hold V)` : label;
@@ -121,11 +128,22 @@ export function MicButton({ onResult, onStart, onRecording, onError, disabled, d
         <Icon name={rec.recording ? "stop" : "mic"} size={15} />
       </button>
       {rec.recording && (
-        <span className="inline-flex items-center gap-1.5 text-[12px] tnum" aria-live="polite">
-          <span className="size-2 rounded-full bg-bad pulse" aria-hidden />
-          {Math.floor(rec.elapsed / 60)}:{String(Math.floor(rec.elapsed % 60)).padStart(2, "0")}
-          <span className="text-dim">/ {MAX_RECORD_SECONDS / 60}:00</span>
-        </span>
+        <>
+          <span className="inline-flex items-center gap-1.5 text-[12px] tnum" aria-live="polite">
+            <span className="size-2 rounded-full bg-bad pulse" aria-hidden />
+            {Math.floor(rec.elapsed / 60)}:{String(Math.floor(rec.elapsed % 60)).padStart(2, "0")}
+            <span className="text-dim">/ {MAX_RECORD_SECONDS / 60}:00</span>
+          </span>
+          <button
+            type="button"
+            aria-label="Cancel recording"
+            title="Discard recording (Esc)"
+            onClick={discard}
+            className="btn-quiet shrink-0 text-[12px] text-muted hover:text-fg"
+          >
+            Cancel
+          </button>
+        </>
       )}
       {rec.state === "requesting" && <span className="text-[12px] text-muted">Waiting for microphone…</span>}
       {rec.error && !rec.recording && !onError && (
