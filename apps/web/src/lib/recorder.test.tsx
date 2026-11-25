@@ -402,3 +402,28 @@ it("sends nothing when V is let go after Esc threw the held recording away, and 
   await key("keyup");
   expect(result).toHaveBeenCalledOnce();
 });
+
+it("shows a visible Cancel button during active dictation that discards the recording without sending", async () => {
+  const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+  const el = document.createElement("div");
+  document.body.append(el);
+  const host = createRoot(el);
+  await act(async () => host.render(<MicButton onResult={result} label="Talk to Scarlet" />));
+  const mic = () => el.querySelector<HTMLButtonElement>("button[aria-pressed]")!;
+  const cancelBtn = () => el.querySelector<HTMLButtonElement>('button[aria-label="Cancel recording"]');
+
+  expect(cancelBtn()).toBeNull();
+  await act(async () => { mic().click(); });
+  await act(async () => { grant(stream); });
+  expect(cancelBtn()?.textContent).toBe("Cancel");
+
+  now.mockReturnValue(3500);
+  await act(async () => { cancelBtn()!.click(); });
+  expect(result).not.toHaveBeenCalled();
+  expect(stopTrack).toHaveBeenCalled();
+  expect(mic().getAttribute("aria-pressed")).toBe("false");
+  expect(cancelBtn()).toBeNull();
+
+  await act(async () => host.unmount());
+  el.remove();
+});

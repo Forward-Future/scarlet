@@ -198,11 +198,11 @@ it("shows a video's cache and its transcription the same way, at the right of it
     });
     expect(lines(first!)).toEqual([
       { text: "Caching | 4%", said: "first.mov: Caching · 4%", bar: ["activity-progress", "Caching first.mov", 0.04] },
-      { text: "Transcribing | 10%", said: "first.mov: Transcribing · 10%", bar: ["activity-progress", "Transcribing first.mov", 0.1] },
+      { text: "Transcribing | 10% | Cancel", said: "first.mov: Transcribing · 10%", bar: ["activity-progress", "Transcribing first.mov", 0.1] },
     ]);
     expect(lines(second!)).toEqual([
       { text: "Waiting to cache", said: "second.mov: Waiting to cache", bar: null },
-      { text: "Waiting to transcribe", said: "second.mov: Waiting to transcribe", bar: null },
+      { text: "Waiting to transcribeCancel", said: "second.mov: Waiting to transcribe", bar: null },
     ]);
     // The file is at the left: its name, and under it its length. Nothing sits alone at the row's far right, and no time left is given.
     expect([...first!.children].map(part => part.className)).toEqual(["media-thumb-button", "media-file", "media-jobs"]);
@@ -216,7 +216,7 @@ it("shows a video's cache and its transcription the same way, at the right of it
       tasks: [{ ...task("first", { stage: "aligning", fraction: 0.4, remainingSeconds: 300 }), state }, s.current!.tasks[1]!] } })));
     await aligning("running");
     expect(lines(container.querySelector(".media-row")!)[1]).toEqual(
-      { text: "Transcribing | 40%", said: "first.mov: Transcribing · 40%", bar: ["activity-progress", "Transcribing first.mov", 0.4] });
+      { text: "Transcribing | 40% | Cancel", said: "first.mov: Transcribing · 40%", bar: ["activity-progress", "Transcribing first.mov", 0.4] });
     // Once alignment finishes, the row offers to replace its saved transcript.
     await aligning("done");
     expect(lines(container.querySelector(".media-row")!)[1]).toEqual({ text: "Transcribed", said: "first.mov: Transcribed", bar: null });
@@ -226,6 +226,38 @@ it("shows a video's cache and its transcription the same way, at the right of it
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   }
+});
+
+it("lets the editor cancel an in-progress or queued file transcription without marking it as failed", async () => {
+  const first = fixtureVideo({ id: "first", name: "first.mov" });
+  const second = fixtureVideo({ id: "second", name: "second.mov" });
+  const activeTask: Task = {
+    ...buildDb().tasks[0]!, id: "tr_active", projectId: PRJ, kind: "transcribe", agent: "api", state: "running",
+    context: { mediaId: first.id }, instruction: "Transcribe first.mov", progress: { stage: "transcribing", fraction: 0.42 },
+  };
+  const queuedTask: Task = {
+    ...buildDb().tasks[0]!, id: "tr_queued", projectId: PRJ, kind: "transcribe", agent: "api", state: "running",
+    context: { mediaId: second.id }, instruction: "Transcribe second.mov", progress: { stage: "queued", fraction: 0 },
+  };
+  const cancel = vi.spyOn(api, "cancelTask").mockImplementation(async (taskId) => {
+    const task = useProjectStore.getState().current!.tasks.find(t => t.id === taskId)!;
+    return { task: { ...task, state: "cancelled" } };
+  });
+  await showMedia({ media: [first, second], tasks: [activeTask, queuedTask] }, async container => {
+    const firstCancel = container.querySelector<HTMLButtonElement>('button[aria-label="Cancel transcription for first.mov"]')!;
+    const secondCancel = container.querySelector<HTMLButtonElement>('button[aria-label="Cancel transcription for second.mov"]')!;
+    expect(firstCancel.textContent).toBe("Cancel");
+    expect(secondCancel.textContent).toBe("Cancel");
+
+    await act(async () => firstCancel.click());
+    expect(cancel).toHaveBeenCalledWith("tr_active", undefined);
+    const [firstRow, secondRow] = [...container.querySelectorAll(".media-row")];
+    expect(jobs(firstRow!)).toEqual({ lines: [["No transcript", "media-cache is-idle"]], actions: ["Transcribe"] });
+
+    await act(async () => secondCancel.click());
+    expect(cancel).toHaveBeenCalledWith("tr_queued", undefined);
+    expect(jobs(secondRow!)).toEqual({ lines: [["No transcript", "media-cache is-idle"]], actions: ["Transcribe"] });
+  });
 });
 
 it("shows each video's playback cache and starts one on request", async () => {
@@ -424,7 +456,7 @@ it("confirms a saved recording's replacement, shows its progress, and lets a fai
     expect(job().textContent).toContain("Transcribing");
     expect(job().querySelector("button")).toBeNull();
     await act(async () => accept());
-    expect(job().querySelector("button")).toBeNull();
+    expect(job().querySelector("button")?.textContent).toBe("Cancel");
     await act(() => useProjectStore.setState(s => ({ current: { ...s.current!, tasks: [{ ...task, state: "failed", error: "Model could not be opened." }] } })));
     expect(job().querySelector('[role="status"]')?.textContent).toBe("Model could not be opened.");
     expect(action().textContent).toBe("Retry");

@@ -368,6 +368,7 @@
 .media-jobs:empty { display: none; }
 .media-jobs .media-cache-line { flex-wrap: nowrap; min-width: 0; margin-top: 0; }
 .media-status.has-bar { display: grid; grid-template-columns: minmax(74px, max-content) minmax(0, 1fr) 30px; align-items: center; gap: 8px; }
+.media-status.has-bar.has-action { grid-template-columns: minmax(74px, max-content) minmax(0, 1fr) 30px auto; }
 .media-status.has-bar .activity-progress { max-width: none; margin-top: 0; }
 .media-pct { text-align: right; font-size: 11.5px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 /* A failure keeps to its line, cut short with the whole reason on hover, so Retry stays beside it. */
