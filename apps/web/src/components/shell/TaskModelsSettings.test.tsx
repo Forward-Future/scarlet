@@ -137,3 +137,26 @@ it("keeps a task added while a rename is still being saved, whichever answer com
     expect(names(container)).toEqual(["Dialogue", "Motion graphics", "New task"]);
   } finally { await cleanup(); }
 });
+
+it("leaves Enter and Esc to an input method that is composing a task's name", async () => {
+  const { container, update, cleanup } = await setup();
+  try {
+    const name = container.querySelectorAll<HTMLInputElement>(".task-model-name")[0]!;
+    const key = (init: KeyboardEventInit) => act(async () => { name.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+    await act(async () => name.focus());
+    await typeInto(name, "カット");
+    // The Enter that commits a composition (keyCode 229 in WebKit) doesn't save the half-written name.
+    await key({ key: "Enter", keyCode: 229 });
+    await key({ key: "Enter", isComposing: true });
+    expect(document.activeElement).toBe(name);
+    expect(update).not.toHaveBeenCalled();
+    // Its Esc closes the input method's list, and the words stay.
+    await key({ key: "Escape", isComposing: true });
+    expect(name.value).toBe("カット");
+    await key({ key: "Enter" });
+    expect(document.activeElement).not.toBe(name);
+    expect(update).toHaveBeenLastCalledWith({ taskModels: [{ ...DEFAULT_TASK_MODELS[0]!, name: "カット" }, ...DEFAULT_TASK_MODELS.slice(1)] });
+  } finally {
+    await cleanup();
+  }
+});

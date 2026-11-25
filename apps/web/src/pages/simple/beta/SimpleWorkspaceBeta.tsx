@@ -171,6 +171,12 @@ export function SimpleWorkspaceBeta() {
   const [rail] = useState(() => new RailStore());
   const railVersion = useSyncExternalStore(rail.subscribe, rail.snapshot, rail.snapshot);
   const [railOpen, setRailOpen] = useState({ working: true, done: false, low: true });
+  // The rows each request draws under For you there. They can be more than `rail` counts as waiting on the editor: a
+  // request about a cut or edit that stopped early keeps its row in For you, so the column stays to show it.
+  const [forYouRows, setForYouRows] = useState<Readonly<Record<string, number>>>({});
+  const reportForYouRows = useCallback((threadId: string, rows: number) =>
+    setForYouRows(was => (was[threadId] ?? 0) === rows ? was : { ...was, [threadId]: rows }), []);
+  const rowsForYou = Object.values(forYouRows).reduce((sum, rows) => sum + rows, 0);
   // The requests folded to their headings with the arrow at a heading's left, kept across a restart as the lists are.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => savedCollapsed(current.id));
   const collapsedOf = useRef(current.id);
@@ -1453,13 +1459,14 @@ export function SimpleWorkspaceBeta() {
   // The column lists every request's rows as one list, the latest request first, so Keep and ↑ ↓ go on from one
   // request's last row that waits to the next request's first (or, going up, the one before's last). Low risk, under
   // For you's rows, is one list the same way: ↓ past the last row that waits goes on to its first row, and ↑ above its
-  // first row goes back to the last row that waits; from Working or Done (`onward` false) neither does. `wrap` goes
-  // round to the requests before, for Keep.
+  // first row goes back to the last row that waits. From Working or Done (`onward` false) they go nowhere: ↑ and ↓
+  // stay within that part, and another request's row that waits is For you's. `wrap` goes round to the requests
+  // before, for Keep.
   function openElsewhere(from: string | undefined, delta: number, wrap = false, section: "you" | "low" = "you", onward = true) {
+    if (!onward) return false;
     const ids = railThreads.map(thread => thread.id), at = from ? ids.indexOf(from) : -1;
     const others = delta > 0 ? [...ids.slice(at + 1), ...(wrap ? ids.slice(0, Math.max(at, 0)) : [])] : ids.slice(0, Math.max(at, 0)).reverse();
     if (openIn(section, delta, others)) return true;
-    if (!onward) return false;
     if (section === "you" && delta > 0 && !wrap) return openIn("low", 1, ids);
     if (section === "low" && delta < 0) return openIn("you", -1, [...ids].reverse());
     return false;
@@ -2012,7 +2019,8 @@ export function SimpleWorkspaceBeta() {
     if (pass && cutIndex !== undefined) {
       const idx = callNow(pass, { changeId, cutIndex }, passThread?.changes ?? [], changes, tasks, footage);
       const call = idx !== undefined ? allCalls.find(a => a.index === idx) : undefined;
-      if (call) return { rowKey: `call/${call.index}`, subject: { time: clockLabel(listedAt.get(call.index) ?? call.start), label: call.summary || call.reason } };
+      // Its row goes by the order the call reached the editor in (`callRowKey`), not by its place in the pass.
+      if (call) return { rowKey: `call/${callNo.get(call.index)}`, subject: { time: clockLabel(listedAt.get(call.index) ?? call.start), label: call.summary || call.reason } };
     }
     if (changeId && editIndex !== undefined) {
       const ownPool = focusThread?.id === replyThread.id && threadEdits.length ? threadEdits
@@ -2151,7 +2159,7 @@ export function SimpleWorkspaceBeta() {
     const words = editingPaused ? undefined : waitsOnEditor(task);
     return words ? { words, startNow: waitFor(task)?.kind === "review" ? () => void queueAction(startBeforeCalls(task.id)).catch(() => {}) : undefined } : undefined;
   };
-  const chatActions: ChatActions = { ...actions, waitsOn, ...(nextQueuedId && { nextQueuedId }) };
+  const chatActions: ChatActions = { ...actions, waitsOn, forYouRows: reportForYouRows, ...(nextQueuedId && { nextQueuedId }) };
   // The queued request whose words are in the message box to change, and the words as they stand there. Scarlet
   // doesn't start it meanwhile. A message being written waits, and is in the box again once these words are done.
   // They are kept as they are typed, as an unsent message is: after a quit the request is in the box again with the
@@ -2356,7 +2364,7 @@ export function SimpleWorkspaceBeta() {
     // paused while requests wait their turn, does the tray hold Resume.
     />;
 
-  const reviewVisible = rail.total("you") + rail.total("optional") + rail.total("working") + rail.total("done") > 0;
+  const reviewVisible = rail.total("you") + rowsForYou + rail.total("optional") + rail.total("working") + rail.total("done") > 0;
   return <ReviewRailContext.Provider value={rail}><AimHostContext.Provider value={aimHost}><EditHoverContext.Provider value={hoveredEdit}>
     <main className="min-h-0 flex flex-1 flex-col" data-new-layout="">
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
@@ -2405,7 +2413,7 @@ export function SimpleWorkspaceBeta() {
             {composer}
           </div>
         </ChatRail>
-        <ReviewRail store={rail} threads={railThreads} compact={compact} reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}
+        <ReviewRail store={rail} threads={railThreads} forYouRows={rowsForYou} compact={compact} reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}
           open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
           selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined} onDoneLow={keepLowRisk} />
         <div className="workspace-stage simple-stage">

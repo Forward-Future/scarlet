@@ -809,6 +809,16 @@ describe("hand_off", () => {
       expect(told.map(r => (r.body as { text: string }).text)).toEqual(["Handed motion graphics to gemini-3-pro."]);
     } finally { await c.close(); }
   });
+  it("doesn't say the work was handed over again when a resumed run asks after a hand-off it already started", async () => {
+    mock.state.extra = (req, res) => req.path === "/projects/prj_test/hand-off"
+      ? reply(res, { state: "done", handoffId: "hand-task", summary: "Saved chg_1.", changeIds: ["chg_1"], by: { agent: "gemini", model: "gemini-3-pro" } }) : false;
+    // A run that carries on after a restart is a new session: it knows the hand-off only by its id.
+    const c = await connect({ taskId: edit.id, task: edit, taskModels: offers });
+    try {
+      expect(JSON.parse(textOf(await ok(c, "hand_off", { handoffId: "hand-task" })))).toMatchObject({ saved: ["chg_1"] });
+      expect(mock.requests.filter(r => r.path.endsWith("/tasks/edit-task/events")).map(r => (r.body as { text?: string }).text)).toEqual([]);
+    } finally { await c.close(); }
+  });
   it("is offered only to a request with work given to another model, and a hand-off can't ask the editor or hand off again", async () => {
     const sessions = [await connect({ taskId: edit.id, task: edit }), await connect({ taskId: helper.id, task: helper, taskModels: offers })];
     try {

@@ -595,7 +595,9 @@ export class AgentHost {
     if (signal.aborted) return complete("cancelled", undefined, "cancelled");
     const runner = this.opts.runner ?? defaultRunAgent;
     const timeoutMs = this.runTimeoutMs;
-    const stallMs = this.opts.stallMs ?? (positive(this.config.stallMinutes) ?? DEFAULT_STALL_MS / 60_000) * 60_000;
+    // 0 turns the stall limit off, as it does in the desktop's own host (desktop.json). Anything else that isn't a positive number is the default.
+    const stallMinutes = this.config.stallMinutes === 0 ? 0 : positive(this.config.stallMinutes) ?? DEFAULT_STALL_MS / 60_000;
+    const stallMs = this.opts.stallMs ?? stallMinutes * 60_000;
     const liveUsage = createLiveUsageReporter(this.client, task, signal, this.log);
     let questionSeen: string | undefined;
     // A runner that returns says whether its run ended on a question. Only one that threw leaves the question it saw.

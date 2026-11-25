@@ -123,13 +123,22 @@ export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean,
   }, [closing]); // eslint-disable-line react-hooks/exhaustive-deps
   // Included again from somewhere else while they close (an edit opened from the timeline): they stay.
   if (on && closing) setClosing(false);
-  // A row on its way out of For you closes as it fades, so the rows under it don't jump up when it goes.
+  // A row on its way out of For you closes as it fades, so the rows under it don't jump up when it goes. One that
+  // stays after all (⌘Z took its Keep back while it faded) is its own height again.
+  const leaving = useRef(new Map<HTMLElement, Animation>());
   useLayoutEffect(() => {
+    for (const [row, room] of leaving.current) {
+      if (row.isConnected && row.classList.contains("is-leaving")) continue;
+      room.cancel();
+      delete row.dataset.closing;
+      row.style.overflowY = "";
+      leaving.current.delete(row);
+    }
     if (!canMove()) return;
     for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-leaving:not([data-closing])") ?? []) {
       row.dataset.closing = "";
       row.style.overflowY = "clip";
-      row.animate([{ height: `${row.getBoundingClientRect().height}px` }, { height: "0px" }], { duration: LINGER_FADE_MS - 40, easing: EASE, fill: "forwards" });
+      leaving.current.set(row, row.animate([{ height: `${row.getBoundingClientRect().height}px` }, { height: "0px" }], { duration: LINGER_FADE_MS - 40, easing: EASE, fill: "forwards" }));
     }
   });
   const toggle = () => {

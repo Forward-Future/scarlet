@@ -61,7 +61,8 @@ impl McpLauncher {
         }
 
         let probes = agents.iter().filter(|a| a.installed && a.logged_in != Some(false)).map(|a| async move {
-            let Some(file) = spawn::find_on_path(detect::cli_binary(&a.id), env) else {
+            // The copy a run starts, so the models listed are the ones it has.
+            let Ok(file) = spawn::resolve_cli(detect::cli_binary(&a.id), env) else {
                 log::warn!("[host] model-catalog provider={} reason=cli_unavailable", a.id);
                 return None;
             };
@@ -111,7 +112,7 @@ impl McpLauncher {
     /// Query zero-token subscription quota for eligible providers via the engine CLI.
     pub(super) async fn load_quotas(&self, agents: &[AgentAvailability], env: &HashMap<String, String>) -> Vec<(String, SubscriptionQuota)> {
         let probes = agents.iter().filter(|a| is_quota_eligible(a)).map(|a| async move {
-            let file = spawn::find_on_path(detect::cli_binary(&a.id), env)?;
+            let file = spawn::resolve_cli(detect::cli_binary(&a.id), env).ok()?;
             let mut args = self.prefix_args.clone();
             args.extend(["subscription-quota".into(), a.id.clone(), file]);
             let probe_env = detect::runner_env(&a.id, std::slice::from_ref(a), env);

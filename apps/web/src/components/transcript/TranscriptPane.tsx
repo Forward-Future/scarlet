@@ -245,6 +245,8 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
           <input ref={searchInputRef} type="search" value={query} placeholder="Search the transcript" aria-label="Search the transcript"
             onChange={e => { setQuery(e.target.value); setHit(0); placed.current = false; }}
             onKeyDown={e => {
+              // While an input method composes, Enter and Esc are its own.
+              if (isComposing(e)) return;
               if (e.key === "Enter") { e.preventDefault(); goToHit(e.shiftKey ? -1 : 1); }
               else if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); setQuery(""); }
               // With nothing to clear, Esc isn't the field's to keep. The field lets go and hands the page an Esc as one

@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 
 use super::super::runner::RunnerCommand;
 use super::super::types::{
-    brief, brief_input, is_question_tool, non_empty_str, pretty_tool_name, question_words, record_plan, trimmed_str,
-    McpSpec, PlanStep, RunnerEvent,
+    brief, brief_input, is_question_tool, non_empty_str, pretty_tool_name, question_words, record_plan, tool_call_target,
+    trimmed_str, McpSpec, PlanStep, RunnerEvent,
 };
 use super::super::usage::{add_usage, gemini_usage, AgentUsage};
 
@@ -168,20 +168,30 @@ pub fn is_scarlet_mcp_permission(params: &Value) -> bool {
     names.into_iter().any(names_scarlet_tool)
 }
 
+/// Whether `v` reads as a path from a root rather than from the task folder: `/…`, `~/…`, a drive's (`C:\…`), and on
+/// Windows one that starts with a backslash, which is the current drive's root (`\Users\…`) or a share's
+/// (`\\server\share`). Elsewhere a backslash is a character like any other, in a file's name or in a search's pattern.
+pub(super) fn absolute_path(v: &str, windows: bool) -> bool {
+    let v = v.trim();
+    v.starts_with('/') || v.starts_with("~/") || drive(v) || (windows && v.starts_with('\\'))
+}
+
+/// Whether one of a call's input values is a path to check: one from a root, or one that climbs out of the folder it
+/// is read from (`../`). Text with a line break in it is what a file holds, not where it is: a `// comment` or a
+/// `/* rule */` at the top of a file's content is no path. Breaks at its ends don't count, as the path is read trimmed.
+pub(super) fn names_path(v: &str, windows: bool) -> bool {
+    let trimmed = v.trim();
+    let climbs = trimmed.split(['/', '\\']).any(|part| part == "..");
+    (absolute_path(trimmed, windows) || climbs) && v.len() < 4096 && !trimmed.contains(['\n', '\r'])
+}
+
 /// Every path a permission request names: its locations, and any absolute path among its input's values, or any that
 /// climbs out of the folder it is read from (`../`).
 fn named_paths(params: &Value) -> Vec<String> {
-    fn absolute(v: &str) -> bool {
-        let v = v.trim();
-        v.starts_with('/') || v.starts_with("~/") || drive(v)
-    }
-    fn climbs(v: &str) -> bool {
-        v.trim().split(['/', '\\']).any(|part| part == "..")
-    }
     fn visit(value: &Value, depth: usize, out: &mut Vec<String>) {
         if depth > 4 { return; }
         match value {
-            Value::String(v) if (absolute(v) || climbs(v)) && v.len() < 4096 => out.push(v.trim().to_string()),
+            Value::String(v) if names_path(v, cfg!(windows)) => out.push(v.trim().to_string()),
             Value::Array(items) => items.iter().for_each(|v| visit(v, depth + 1, out)),
             Value::Object(map) => map.values().for_each(|v| visit(v, depth + 1, out)),
             _ => {}
@@ -265,22 +275,9 @@ fn first<'a>(obj: &'a Value, keys: &[&str]) -> Option<&'a Value> {
 /// the call it makes: the tool it names, with that tool's arguments, so the run's history says what Scarlet did. A
 /// question stays as it is: the server refuses one asked through `tool_call`, so it was never asked.
 pub(super) fn through_tool_call(raw_name: String, input: Option<&Value>) -> (String, Option<Value>) {
-    if pretty_tool_name(&raw_name) != "scarlet.tool_call" {
-        return (raw_name, input.cloned());
-    }
-    let named = input.and_then(|i| i.get("name")).and_then(Value::as_str).map(|n| n.trim().to_ascii_lowercase());
-    let tool = named.map(|n| {
-        ["mcp__scarlet__", "mcp_scarlet_", "scarlet__", "scarlet.", "scarlet/", "scarlet:"]
-            .iter()
-            .find_map(|prefix| n.strip_prefix(prefix).map(str::to_string))
-            .unwrap_or(n)
-    });
-    match tool {
-        Some(tool) if !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !is_question_tool(Some(&tool)) => {
-            let args = input.and_then(|i| i.get("arguments")).cloned().unwrap_or_else(|| json!({}));
-            (format!("scarlet.{tool}"), Some(args))
-        }
-        _ => (raw_name, input.cloned()),
+    match tool_call_target(&raw_name, input) {
+        Some((tool, arguments)) => (format!("scarlet.{tool}"), Some(arguments)),
+        None => (raw_name, input.cloned()),
     }
 }
 

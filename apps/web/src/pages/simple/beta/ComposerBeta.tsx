@@ -203,7 +203,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const removeTarget = displayAnchor?.changeId ? "Remove revision target" : "Remove timestamp";
   // A reply keeps its original edit if the selection changes while the editor types or dictates.
   const captureTarget = () => {
-    if (replying && !context) setContext(selectedEdit ?? "whole");
+    // Read as the box is aimed now: a stretch marked on the ruler aims it and writes its times in the same moment,
+    // before this render knows of it.
+    if (replying && !useUiStore.getState().agentContext) setContext(selectedEdit ?? "whole");
     return displayAnchor;
   };
 

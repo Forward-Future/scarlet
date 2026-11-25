@@ -77,11 +77,11 @@ export function fmtBytes(n: number): string {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-/** A token count at a glance: 850 tokens, 48.2K tokens, 312K tokens, 1.2M tokens. */
+/** A token count at a glance: 850 tokens, 48.2K tokens, 312K tokens, 1.2M tokens, 1.2B tokens. */
 export function tokenLabel(n: number): string {
   if (n === 1) return "1 token";
   if (n < 1000) return `${n} tokens`;
-  const [value, unit] = n < 999_500 ? [n / 1000, "K"] : [n / 1_000_000, "M"];
+  const [value, unit] = n < 999_500 ? [n / 1000, "K"] : n < 999_500_000 ? [n / 1_000_000, "M"] : [n / 1_000_000_000, "B"];
   const shown = value >= 100 ? Math.round(value).toString() : (Math.round(value * 10) / 10).toString();
   return `${shown}${unit} tokens`;
 }

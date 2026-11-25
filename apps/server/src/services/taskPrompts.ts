@@ -262,7 +262,9 @@ export function earlierRequests(ctx: Ctx, task: Task): EarlierRequest[] {
  * person reads as what it asked: its name in the chat, "Undo", doesn't say which edit was put back.
  */
 export function followUpInstruction(ctx: Ctx, projectId: string, threadId: string, text: string, before?: string): string {
-  const thread = ctx.repos.tasks.select("project_id = ? AND coalesce(json_extract(json, '$.context.threadId'), id) = ?", [projectId, threadId], "created_at ASC, rowid ASC");
+  // The editor's requests only: a hand-off shares its request's thread, and what it did is in that request's reply.
+  const thread = ctx.repos.tasks.select("project_id = ? AND coalesce(json_extract(json, '$.context.threadId'), id) = ? AND kind IN (SELECT value FROM json_each(?))",
+    [projectId, threadId, JSON.stringify(PROJECT_EDIT_TASK_KINDS)], "created_at ASC, rowid ASC");
   // A request reworded in the queue is told what came before it, as it was when first asked.
   const at = before ? thread.findIndex(t => t.id === before) : -1;
   const tasks = at < 0 ? thread : thread.slice(0, at);

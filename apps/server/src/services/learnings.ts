@@ -347,7 +347,8 @@ export function startDecisionCheck(ctx: Ctx, projectId: string, threadId: string
     if (!project || project.editingPaused || !enabledSkills(ctx).length) return;
     const asked = ctx.repos.tasks.get(threadId);
     if (!asked || asked.projectId !== projectId || !editsDialogue(asked.kind) || asked.createdBy.type !== "human") return;
-    const latest = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.context.threadId') = ? AND json_extract(json, '$.createdBy.type') = 'human'",
+    // The editor's own requests: a hand-off shares the thread, and runs on the model a kind of work was given to, not the chat's.
+    const latest = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.context.threadId') = ? AND kind IN ('edit', 'note', 'revise') AND json_extract(json, '$.createdBy.type') = 'human'",
       [projectId, threadId], "created_at DESC, rowid DESC LIMIT 1")[0] ?? asked;
     if (latest.agent === "api" || threadWaitsOnEditor(ctx, projectId, threadId)) return;
     if (ctx.repos.tasks.count("kind = 'learning_check' AND state = 'queued'")) return;

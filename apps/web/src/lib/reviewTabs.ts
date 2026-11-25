@@ -102,6 +102,11 @@ export class ReviewLinger {
   private held = new Map<string, Held>();
   private listeners = new Set<() => void>();
   private version = 0;
+  /**
+   * Whether For you's low risk switch was on when For you was last the tab shown. Working and Done have no switch, so
+   * it is kept here for the way back: For you pressed leaves the switch as it was.
+   */
+  lowRisk = false;
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.version;

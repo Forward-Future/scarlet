@@ -25,7 +25,8 @@ const GROUP_KEY: Record<UsageGroupBy, string> = {
   task: "task_id",
   agent: "agent",
   model: "model",
-  day: "substr(at, 1, 10)",
+  // The day on the engine's own clock, which is the editor's: `at` is UTC, and their evening isn't tomorrow.
+  day: "date(at, 'localtime')",
 };
 
 const SUMS = `count(*) AS runs,

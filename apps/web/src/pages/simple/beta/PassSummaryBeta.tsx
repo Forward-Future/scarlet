@@ -510,8 +510,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       openFirst: () => waits()[0]?.row.open?.(), openLast: () => waits().at(-1)?.row.open?.(),
       openFirstLow: () => lowRisk()[0]?.row.open?.(), openLastLow: () => lowRisk().at(-1)?.row.open?.(),
       lowRiskEdits: () => { const keys = new Set(optional.flatMap(keysOf)); return edits.filter(e => keys.has(editKey(e))); } });
+    // The rows drawn under For you, which `need` doesn't all count: one whose request stopped early is there too.
+    if (rail) actions.forYouRows?.(thread.id, empty ? 0 : inPlace("you").length);
   });
-  useEffect(() => () => rail?.report(thread.id), [rail, thread.id]);
+  useEffect(() => () => { rail?.report(thread.id); if (rail) actions.forYouRows?.(thread.id, 0); }, [rail, thread.id]); // eslint-disable-line react-hooks/exhaustive-deps
   if (empty) return null;
   // A request whose row is under a tab is drawn there, under that row, and nowhere else. One about a cut or edit with
   // no row at all still shows, under what the pass made.
@@ -769,15 +771,20 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   const optional = countOf("optional");
   // The low-risk rows' edits, top to bottom: the first edit of each row of the edits Scarlet didn't flag.
   const lowRisk = () => groups.flatMap(({ members }) => placeOf.get(editKey(members[0]!.edit)) === "optional" ? [members[0]!.edit] : []);
+  // The edits of the rows For you counts (`need`), top to bottom: one whose revision has stopped to ask the editor
+  // something waits on them too, so Keep and ↑ ↓ coming from another request reach it.
+  const waits = () => edits.filter(e => !!e.check && (asksEditor(revising(e)) || (!reviewed(e) && !revising(e))));
   useEffect(() => {
     rail?.report(thread.id, { you: need, optional, working: countOf("working"), done: countOf("done"),
       edits,
-      openFirst: () => { if (flagged[0]) actions.openEdit(thread, flagged[0]); }, openLast: () => { const last = flagged.at(-1); if (last) actions.openEdit(thread, last); },
+      openFirst: () => { const first = waits()[0]; if (first) actions.openEdit(thread, first); }, openLast: () => { const last = waits().at(-1); if (last) actions.openEdit(thread, last); },
       openFirstLow: () => { const first = lowRisk()[0]; if (first) actions.openEdit(thread, first); },
       openLastLow: () => { const last = lowRisk().at(-1); if (last) actions.openEdit(thread, last); },
       lowRiskEdits: () => groups.flatMap(({ members }) => placeOf.get(editKey(members[0]!.edit)) === "optional" ? members.map(m => m.edit) : []) });
+    // The rows drawn under For you, which `need` doesn't all count: one whose request stopped early is there too.
+    if (rail) actions.forYouRows?.(thread.id, countOf("you"));
   });
-  useEffect(() => () => rail?.report(thread.id), [rail, thread.id]);
+  useEffect(() => () => { rail?.report(thread.id); if (rail) actions.forYouRows?.(thread.id, 0); }, [rail, thread.id]); // eslint-disable-line react-hooks/exhaustive-deps
   if (rail) {
     const into = (section: RailSection, node: ReactNode) => { const at = rail.host(section, thread.id); return at && node ? createPortal(node, at) : null; };
     return <div ref={host} className="simple-pass" role="group" aria-label="Edits" data-thread={thread.id}>

@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -61,6 +61,23 @@ export async function writeArtifact(workDir: string, output: string, data: strin
   } finally {
     await rm(temp, { force: true });
   }
+}
+
+/**
+ * Remove a session's own temporary folder when the session ends, all but the files in `keep` (as `writeArtifact`
+ * returned them) and the folders that hold them. With nothing to keep, the folder goes too.
+ */
+export async function removeSessionFiles(dir: string, keep: ReadonlySet<string>): Promise<void> {
+  if (!keep.size) return rm(dir, { recursive: true, force: true });
+  const clear = async (folder: string): Promise<void> => {
+    for (const entry of await readdir(folder, { withFileTypes: true })) {
+      const path = join(folder, entry.name);
+      if (keep.has(path)) continue;
+      if (entry.isDirectory() && [...keep].some(file => file.startsWith(path + sep))) await clear(path);
+      else await rm(path, { recursive: true, force: true });
+    }
+  };
+  await clear(await realpath(dir));
 }
 
 export function guessKind(name: string): "video" | "audio" | "image" | "graphic" {

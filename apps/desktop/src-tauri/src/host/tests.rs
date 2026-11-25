@@ -5,7 +5,7 @@ use super::task_runner::{drain_events, log_completion, outcome, stalled_reason, 
 use super::types::{CompleteTaskRequest, RunResult, RunnerEvent};
 use super::workspace::{claude_config_dir, claude_project_dir, real_path, remove_claude_sessions, remove_control_files};
 use super::*;
-use super::manager::{remember_host_id, run_limits, DEFAULT_STALL_MINUTES};
+use super::manager::{remember_host_id, run_limits, runs_on, DEFAULT_STALL_MINUTES};
 use crate::config::AppConfig;
 use crate::util::now_iso;
 
@@ -962,6 +962,19 @@ fn keeps_one_host_id_however_many_ports_the_engine_has_had() {
     cfg.host_ids.insert("http://127.0.0.1:50000".into(), "host_old".into());
     assert!(remember_host_id(&mut cfg, "http://127.0.0.1:51000", "host_new"));
     assert_eq!(cfg.host_ids.len(), 1);
+}
+
+/// Claude Code was updated under a run with Ollama, LM Studio or OpenRouter, which is filed under the provider's name.
+#[test]
+fn a_run_with_another_provider_has_claude_code_running() {
+    for provider in types::EXTRA_PROVIDERS {
+        assert!(runs_on(provider, "claude"), "{provider}");
+        assert!(!runs_on(provider, "codex") && !runs_on(provider, "gemini"), "{provider}");
+    }
+    for cli in types::CLI_AGENTS {
+        assert!(runs_on(cli, cli), "{cli}");
+    }
+    assert!(!runs_on("codex", "claude") && !runs_on("gemini", "claude") && !runs_on("claude", "codex") && !runs_on("claude", "ollama"));
 }
 
 #[test]

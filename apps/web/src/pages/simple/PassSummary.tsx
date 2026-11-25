@@ -238,6 +238,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const hasForYou = (pass?.calls.length ?? 0) > 0 || forYouEdits.length > 0 || forYouRejected.length > 0 || decidedCallRows.length > 0;
   const tab = tabShown(open);
   const optionalOpen = hasForYou && open === "all";
+  // Working and Done have no low risk switch: For you comes back with it as it was left.
+  if (hasForYou && tab === "you") linger.lowRisk = optionalOpen;
   useLayoutEffect(() => { onTabs?.(hasForYou); }, [hasForYou]); // eslint-disable-line react-hooks/exhaustive-deps
   // Low risk rows open into the list and close out of it: `low.shown` while the list still draws them.
   const low = useLowRiskFold(host, optionalOpen && tab === "you", on => setOpen(on ? "all" : undefined));
@@ -439,7 +441,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
   // For you opens the first waiting row on the timeline, or leaves it open if the editor is already on one.
   const showNeeded = () => {
-    setOpen(was => was === "all" ? was : undefined);
+    setOpen(was => was === "all" || linger.lowRisk ? "all" : undefined);
     if (!rows.some(row => row.on && row.needs)) inListOrder(inPlace("you"), order).find(e => e.row.needs)?.row.open?.();
   };
   // An edit or a call opened from somewhere else (the timeline, ⌘Z) shows the tab that holds it. One opened from the
@@ -455,7 +457,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     if (!onEntry || openId === was) return;
     // A row still in For you only for the moment after it was decided is Working's or Done's.
     const shown = tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalOpen) : onEntry.place === tab;
-    if (!shown) setOpen(onEntry.place === "you" ? undefined : onEntry.place === "optional" ? "all" : onEntry.place);
+    if (!shown) setOpen(onEntry.place === "you" ? linger.lowRisk ? "all" : undefined : onEntry.place === "optional" ? "all" : onEntry.place);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
   // While the pass's calls are listed, what is outside the list comes after it.
   const callsListed = hasForYou && !!pass && calls.length > 0;
@@ -505,7 +507,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         const { row, members, more, moment, unfolded: open } = entry;
         // Under the tabs a decided row says how it was decided; the list of every edit keeps its amount, ticked.
         const value = id === "all" ? row.value : row.decision ?? row.value;
-        return <li key={row.key} className={linger.of(entry.key)?.leaving ? "is-leaving" : undefined} data-low-risk={id === "you" && lowKeys.has(entry.key) ? "" : undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
+        // Only For you's rows fade and leave: a row looked at under Working or Done meanwhile is where it belongs.
+        return <li key={row.key} className={id === "you" && linger.of(entry.key)?.leaving ? "is-leaving" : undefined} data-low-risk={id === "you" && lowKeys.has(entry.key) ? "" : undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
           data-log-control="open-pass-item" data-log-label={moment ? "Moment" : "Pass item"} disabled={!row.open} title={row.title || row.label} onClick={letGo(() => row.open?.())}
           aria-label={more ? `${clockLabel(row.displayAt)} ${row.label}, ${more.replace("+ ", "and ")}` : row.rejected ? `${clockLabel(row.displayAt)} ${row.label}, rejected` : undefined}
           onPointerEnter={() => actions.lightMark(row.mark, row.hover)} onPointerLeave={() => actions.lightMark()}>
@@ -613,6 +616,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   const hasForYou = forYouGroups.length > 0 || forYouRejected.length > 0;
   const tab = tabShown(open);
   const optionalOpen = hasForYou && open === "all";
+  // Working and Done have no low risk switch: For you comes back with it as it was left.
+  if (hasForYou && tab === "you") linger.lowRisk = optionalOpen;
   useLayoutEffect(() => { onTabs?.(hasForYou); }, [hasForYou]); // eslint-disable-line react-hooks/exhaustive-deps
   // Low risk rows open into the list and close out of it: `low.shown` while the list still draws them.
   const low = useLowRiskFold(host, optionalOpen && tab === "you", on => setOpen(on ? "all" : undefined));
@@ -692,7 +697,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     // A row still in For you only for the moment after it was decided is Working's or Done's.
     const shown = tab === "you" ? at === "you" || (at === "optional" && optionalOpen) : at === tab;
     if (shown) { if (at === "you") setOpen(o => o ?? "need"); }
-    else if (at) setOpen(at === "you" ? "need" : at === "optional" ? "all" : at);
+    else if (at) setOpen(at === "you" ? linger.lowRisk ? "all" : "need" : at === "optional" ? "all" : at);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
   // The For you list closes only if there are no For you items at all.
   useEffect(() => { if (open === "need" && !hasForYou) setOpen(undefined); }, [open, hasForYou]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -721,12 +726,13 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   const seeEvery = !hasForYou && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !hasForYou && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const showNeeded = () => {
-    setOpen(was => was === "all" ? was : undefined);
+    setOpen(was => was === "all" || linger.lowRisk ? "all" : undefined);
     if (flagged.length && !flagged.some(edit => !!actions.showing && matchesEdit(actions.showing, edit))) actions.openEdit(thread, flagged[0]!);
   };
   const rows = (label: string | undefined, only?: (e: Omit<ThreadEdit, "at">) => boolean) =>
     <ThreadEdits projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
-      leaving={only && (edit => !!held(edit)?.leaving)} low={only && tab === "you" ? lowRow : undefined}
+      // Only For you's rows fade and leave: a row looked at under Working or Done meanwhile is where it belongs.
+      leaving={only && tab === "you" ? edit => !!held(edit)?.leaving : undefined} low={only && tab === "you" ? lowRow : undefined}
       nextQueuedId={actions.nextQueuedId}
       onPlay={ref => actions.openEdit(thread, ref)}
       onHover={ref => actions.lightMark(undefined, ref && { threadId: thread.id, editKey: editKey(ref) })}

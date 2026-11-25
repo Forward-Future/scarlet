@@ -252,6 +252,19 @@ describe("style_guide_edit authoring flow and project isolation", () => {
     );
     expect(projectWrite.status).toBe(403);
   });
+
+  it("stops a style guide's waiting update when the project it borrowed goes to the trash, so the guide can be updated again", async () => {
+    const guide = (await (await api("POST", "/style-guides", { name: "editorial-look" })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    const edit = () => api("POST", `/style-guides/${guide.id}/edit`, { prompt: "Make it warm cream.", agent: "claude" });
+    const { task } = await (await edit()).json() as { task: Task };
+    expect([task.projectId, task.state]).toEqual([project.id, "queued"]);
+    expect((await edit()).status).toBe(409);
+    // No host takes a request in the trash: left waiting there, it would hold the guide until the project came back.
+    expect((await api("DELETE", `/projects/${project.id}`)).status).toBeLessThan(300);
+    expect(workspace.ctx.repos.tasks.get(task.id)?.state).toBe("cancelled");
+    workspace.ctx.repos.projects.insert(createProject("Another"));
+    expect((await edit()).status).toBe(201);
+  });
 });
 
 describe("prompt resolution priority (chat @mention > skill @mention > default)", () => {

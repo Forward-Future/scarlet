@@ -6,6 +6,30 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- A row you just kept or sent back no longer vanishes from Done or Working if you switch tabs while it fades, and ⌘Z during the fade brings it back in view.
+- Looking at Working or Done and coming back to For you leaves the low risk switch as it was.
+- A stretch marked on the ruler now stays when you open an edit from the timeline or step to one with ↑ ↓.
+- Switching apps in the middle of marking a stretch no longer leaves a stale one to land on your next click.
+- In the new layout, an edit whose revision stopped early stays in the edits column with its Resume or Retry, without "Nothing waits on you." beside it.
+- In the new layout, ↑ and ↓ on the last Working or Done row stay there instead of jumping to another request's row.
+- In the new layout, the row lit for Scarlet's question is the cut the question is about.
+- In the new layout, Keep on the last waiting edit goes on to an edit that needs your answer instead of leaving the card stuck.
+- In the new layout, a stretch marked while answering Scarlet or replying stays on the message.
+- Typing Japanese, Chinese or Korean in the transcript search, a task's name, a style guide's name or a model search no longer saves, jumps or closes on the Enter or Esc that belongs to the keyboard.
+- Settings › Usage counts Today by your own clock, so an evening's work no longer lands on tomorrow.
+- Token totals past a billion read as 1.2B instead of 1235M.
+- Plan limits in Settings › Usage are checked once when you open it, and Refresh no longer keeps flipping to Refreshing….
+- A note written on a file while it is still being added is kept.
+- A still saved as .jfif or .heif shows its picture all the way through its clip.
+- Pause now also stops work handed to another model.
+- A look at a frame left waiting by work handed to another model no longer holds up later framing edits.
+- The chat no longer repeats that work was handed to another model after a restart.
+- A style guide can be updated again after the project its update was waiting in goes to the trash.
+- With Ollama, LM Studio or OpenRouter, the chat now says what Scarlet is doing as it works.
+- Scarlet no longer updates Claude Code while an edit with Ollama, LM Studio or OpenRouter is using it.
+- Gemini no longer stops an edit when a file it writes begins with a comment.
+- On Windows, updating or installing Claude Code, Codex or Gemini now works when another copy sits ahead of it on your PATH.
+- A timeline exported for Resolve from another app is no longer deleted when that app disconnects.
 - On Windows, installing Gemini, Codex, or Claude Code from Scarlet now keeps the Windows system info their installers need and finds Codex where its installer puts it, instead of failing with a connection error.
 - Switching between For you, Working and Done now keeps the request's heading and tabs steady instead of jumping up and down, and smoothly folds back to the active tab's height once you click elsewhere, finish the request, or start a new one.
 - In the beta three-column layout, the Working banner now stays visible above the Done banner at the bottom of the edits column even when no edits are working.

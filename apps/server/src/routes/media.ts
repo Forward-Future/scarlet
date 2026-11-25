@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { MultipartParseError, parseMultipartRequest } from "@remix-run/multipart-parser/future";
-import { fileInDirectoryAsync, hasIndexedAvc, heardAudio, heardAudioKey } from "@scarlet/render";
+import { fileInDirectoryAsync, hasIndexedAvc, heardAudio, heardAudioKey, isStillAsset } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { AudioTrackSelection, DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance, WebSource } from "@scarlet/timeline";
@@ -514,7 +514,10 @@ export function mediaRoutes(ctx: Ctx) {
     if (media.kind === "audio") throw badRequest("no_video", "audio media has no frames");
     // A time past the end shows the last frame, as one before the start shows the first, rather than finding none.
     const requested = numberParam(c.req.query("t"), "t", 0);
-    const t = media.duration && media.duration > 0 ? Math.min(requested, media.duration) : requested;
+    // A still has one picture, shown for as long as its clip is: any time in the clip is that picture. The asset says
+    // it is a still, as the render reads it; the frame reader goes by the file's name alone, and found nothing later
+    // than 2 s into a still it didn't know the spelling of (.jfif, .heif).
+    const t = isStillAsset(media) ? 0 : media.duration && media.duration > 0 ? Math.min(requested, media.duration) : requested;
     const w = Math.min(3840, Math.max(16, numberParam(c.req.query("w"), "w", 640)));
     const file = join(ctx.paths.media(media.projectId), media.path);
     // A recording moved or deleted outside Scarlet is asked for with every scrub.

@@ -65,6 +65,27 @@ fn maps_text_tools_errors_and_the_result() {
     assert_eq!(st.session_id.as_deref(), Some("s1"));
 }
 
+/// A run with Ollama, LM Studio or OpenRouter reaches most tools through tool_call: each call reads as the call it
+/// makes, named as Claude Code names that tool, with that tool's arguments. A question asked through it, which the
+/// MCP server refuses, stays a tool_call and never becomes the editor's question.
+#[test]
+fn a_call_through_tool_call_reads_as_the_tool_it_calls() {
+    let mut st = ClaudeState::default();
+    let evs = feed(&[
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"mcp__scarlet__tool_call","input":{"name":"transcript_get","arguments":{"mediaId":"m1"}}}]}}"#,
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":true,"content":"no such media"}]}}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"mcp__scarlet__tool_call","input":{"name":"mcp__scarlet__timeline_get"}}]}}"#,
+        r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_3","name":"mcp__scarlet__tool_call","input":{"name":"task_question","arguments":{"text":"Which take?"}}}]}}"#,
+        r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_3","is_error":true,"content":"Ask with task_question itself."}]}}"#,
+    ], &mut st);
+    assert_eq!(evs.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), ["tool", "error", "tool", "tool", "error"]);
+    assert_eq!(evs[0], RunnerEvent::with("tool", r#"scarlet.transcript_get {"mediaId":"m1"}"#, json!({"tool":"mcp__scarlet__transcript_get","input":{"mediaId":"m1"},"toolUseId":"toolu_1"})));
+    assert_eq!(evs[2], RunnerEvent::with("tool", "scarlet.timeline_get", json!({"tool":"mcp__scarlet__timeline_get","input":{},"toolUseId":"toolu_2"})));
+    assert_eq!(evs[3].data.as_ref().unwrap()["tool"], "mcp__scarlet__tool_call");
+    assert_eq!(evs[3].data.as_ref().unwrap()["input"], json!({"name":"task_question","arguments":{"text":"Which take?"}}));
+    assert!(st.question.is_none() && st.pending_question.is_none() && !st.should_stop && !st.question_posted);
+}
+
 #[test]
 fn sees_a_resume_that_found_no_session_as_never_started() {
     // Recorded from claude 2.1.316 with --resume <unknown id>.

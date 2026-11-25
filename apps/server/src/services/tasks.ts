@@ -2,6 +2,7 @@ import {
   AgentId,
   dialogueCommand,
   isAsideTask,
+  isHandOff,
   isLearningCheck,
   isProjectEditTask,
   isSkillEdit,
@@ -415,17 +416,21 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
     if (needsTranscripts.length) ctx.log(`[task] completion_deferred task=${logId(task.id)} project=${logId(task.projectId)} outcome=awaiting_transcripts reason=transcripts remaining=${needsTranscripts.length}`);
   });
   const asked = saved.context.message ?? saved.instruction.split("\n").pop() ?? saved.instruction;
+  // A hand-off is told the editor's words, but its end is its own, not the request's: it is logged as the kind of work
+  // it did and its brief, so the request reads as finished once.
+  const handOff = isHandOff(saved);
+  const did = handOff ? `${saved.context.handOff?.name ?? "a hand-off"}: ${quote(saved.instruction)}` : quote(asked);
   // A learning check is Scarlet's own reading of a request. What it offers is in Learnings; the run itself is no one's news.
   if (!isLearningCheck(saved)) logActivity(ctx, {
     projectId: isSkillEdit(saved) || isStyleGuideEdit(saved) ? null : saved.projectId,
     actor: { type: "agent", id: saved.agent, name: saved.agent, model: saved.model },
-    type: `request.${body.state}`,
+    type: `${handOff ? "hand_off" : "request"}.${body.state}`,
     summary:
       body.state === "done"
-        ? `${agentName(saved.agent)} finished ${quote(asked)}${changeIds.length ? ` and saved ${changeIds.length} edit${changeIds.length === 1 ? "" : "s"}` : ""}`
+        ? `${agentName(saved.agent)} finished ${did}${changeIds.length ? ` and saved ${changeIds.length} edit${changeIds.length === 1 ? "" : "s"}` : ""}`
         : body.state === "failed"
-          ? `${agentName(saved.agent)} couldn’t finish ${quote(asked)}${body.error ? `: ${body.error.slice(0, 160)}` : ""}`
-          : `${agentName(saved.agent)} stopped working on ${quote(asked)}`,
+          ? `${agentName(saved.agent)} couldn’t finish ${did}${body.error ? `: ${body.error.slice(0, 160)}` : ""}`
+          : `${agentName(saved.agent)} stopped working on ${did}`,
     data: { taskId: saved.id, threadId: saved.context.threadId, changeIds },
   });
   // A rule the editor approved is saved now, or goes back to them, and the skill's next one starts.
@@ -443,7 +448,8 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
 
 /** The side checks of one kind a request started that haven't finished. */
 function openChecks(ctx: Ctx, task: Task, kind: "learning_check" | "area_check" | "listen_check" | "hand_off"): Task[] {
-  if (!editsDialogue(task.kind)) return [];
+  // A hand-off's saves ask for looks at frames as a request's do, in its own name.
+  if (!editsDialogue(task.kind) && !isHandOff(task)) return [];
   return ctx.repos.tasks.select("project_id = ? AND kind = ? AND json_extract(json, '$.context.checksTaskId') = ?", [task.projectId, kind, task.id])
     .filter(check => !FINISHED_TASK.has(check.state));
 }
@@ -459,6 +465,21 @@ export function dropWaitingLooks(ctx: Ctx, task: Task): void {
   // run that handed it the work, which is over.
   for (const check of openChecks(ctx, task, "listen_check")) cancelTask(ctx, check);
   for (const check of openChecks(ctx, task, "hand_off")) cancelTask(ctx, check);
+}
+
+/**
+ * A look, a listen or a hand-off still waiting to start for a run that is over, or gone, never starts: it is claimed
+ * only while that run is at work. Left waiting, a look holds back every later ask about its recording until the ask
+ * gives up (a hand-off's looks were left so until 2026-11-24). Run as the engine starts.
+ */
+export function dropOrphanedChecks(ctx: Ctx): void {
+  const orphans = ctx.db.prepare(`SELECT q.id FROM tasks q LEFT JOIN tasks asker ON asker.id = json_extract(q.json, '$.context.checksTaskId')
+    WHERE q.state = 'queued' AND q.kind IN ('area_check', 'listen_check', 'hand_off')
+    AND (asker.id IS NULL OR asker.state IN ('done', 'failed', 'cancelled'))`).all() as Array<{ id: string }>;
+  for (const { id } of orphans) {
+    const check = ctx.repos.tasks.get(id);
+    if (check) cancelTask(ctx, check);
+  }
 }
 
 /**

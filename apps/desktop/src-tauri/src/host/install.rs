@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::detect::cli_binary;
-use super::spawn::{find_on_path, spawn_lines, SpawnLinesOptions};
+use super::spawn::{find_on_path, resolve_cli, spawn_lines, SpawnLinesOptions};
 use crate::util::{assistant_prefix, child_env};
 
 /// An official installer script, shipped inside Scarlet as a reviewed copy. Scarlet never runs a script it just
@@ -103,6 +103,12 @@ pub enum InstallResult {
     NeedsNode,
 }
 
+/// Whether a copy of the CLI is installed that Scarlet can start, as the assistant check and the runs read it
+/// (`resolve_cli`). A Windows shim they pass over doesn't count: the check would go on saying it isn't installed.
+fn is_installed(binary: &str, env: &HashMap<String, String>) -> bool {
+    resolve_cli(binary, env).is_ok()
+}
+
 pub async fn install(agent: &str, home: &Path) -> Result<InstallResult, String> {
     let Some(native) = native_installer(agent) else {
         return Err("This assistant cannot be installed by Scarlet.".into());
@@ -110,7 +116,7 @@ pub async fn install(agent: &str, home: &Path) -> Result<InstallResult, String> 
     let _guard = INSTALL_LOCK.lock().await;
     let env = child_env(home);
     let binary = cli_binary(agent);
-    if find_on_path(binary, &env).is_some() {
+    if is_installed(binary, &env) {
         log::info!("{agent} ({binary}) is already installed");
         return Ok(InstallResult::Installed);
     }
@@ -153,7 +159,7 @@ async fn install_via_npm(
         log::warn!("cannot install {agent}: npm did not start: {e:#}");
         "Could not start npm. Check your Node.js installation and try again.".to_string()
     })?;
-    let found = find_on_path(binary, &child_env(home)).is_some();
+    let found = is_installed(binary, &child_env(home));
     if outcome.code != Some(0) || !found {
         // npm's own line, just above, has its exit code and the end of what it said.
         log::warn!("{agent} install failed (npm exit code {:?}; {binary} {} on PATH)", outcome.code, if found { "is" } else { "is not" });
@@ -217,7 +223,7 @@ async fn install_via_script(
         format!("Could not start the {label} installer. Try again.")
     })?;
 
-    let found = find_on_path(binary, &child_env(home)).is_some();
+    let found = is_installed(binary, &child_env(home));
     if outcome.code != Some(0) || !found {
         log::warn!(
             "{agent} install failed (exit code {:?}; {binary} {} on PATH)",
@@ -300,6 +306,19 @@ mod tests {
                 assert_eq!(verified_body(script), Some(script.body));
             }
         }
+    }
+
+    /// A shim Scarlet can't start a run with, first on a Windows PATH, read as an install: Settings said Installed
+    /// while the assistant check went on saying it wasn't.
+    #[test]
+    fn counts_only_a_copy_scarlet_can_start_as_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (env, program) = crate::host::runner::testing::shadowed_cli(dir.path(), "claude");
+        assert!(is_installed("claude", &env));
+        // With the program gone, only what was ahead of it on PATH is left: the shim on Windows, nothing elsewhere.
+        std::fs::remove_file(&program).unwrap();
+        assert!(!is_installed("claude", &env));
+        assert_eq!(find_on_path("claude", &env).is_some(), cfg!(windows));
     }
 
     #[test]

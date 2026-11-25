@@ -105,6 +105,10 @@ it("counts tokens at a glance and in full", () => {
   expect(tokenLabel(999_499)).toBe("999K tokens");
   expect(tokenLabel(999_500)).toBe("1M tokens");
   expect(tokenLabel(1_240_000)).toBe("1.2M tokens");
+  // Past a billion it counts in billions, as the figures beside it in Settings → Usage do, not "1235M".
+  expect(tokenLabel(999_499_999)).toBe("999M tokens");
+  expect(tokenLabel(999_500_000)).toBe("1B tokens");
+  expect(tokenLabel(1_235_000_000)).toBe("1.2B tokens");
   const usage = { inputTokens: 1200, outputTokens: 340, cacheReadTokens: 0, cacheWriteTokens: 0 };
   expect(tokenBreakdown(usage)).toBe(`${(1200).toLocaleString()} input · 340 output`);
   expect(tokenBreakdown({ ...usage, cacheReadTokens: 50, cacheWriteTokens: 7, runs: 3 })).toBe(`${(1200).toLocaleString()} input · 340 output · 50 cache read · 7 cache write · 3 runs`);

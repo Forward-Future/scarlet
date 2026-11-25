@@ -158,6 +158,22 @@ export function prettyToolName(name: string): string {
   return name.replace(/^scarlet(?:__|\/|:)/, "scarlet.");
 }
 
+/**
+ * The Scarlet tool a call through `tool_call` makes, by its bare name ("transcript_get"), with that tool's arguments.
+ * `tool_call` is how the MCP server gives a run with brief tools (Gemini, and Ollama, LM Studio and OpenRouter through
+ * Claude Code) the tools it doesn't list on their own, so read this way the run's history says what Scarlet did.
+ * Undefined for any other call, and for a question: the server refuses one asked through `tool_call`, so it was never
+ * asked. The desktop host reads it the same way (`tool_call_target`).
+ */
+export function toolCallTarget(rawName: string, input: unknown): { name: string; input: unknown } | undefined {
+  if (prettyToolName(rawName) !== "scarlet.tool_call" || !input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const call = input as { name?: unknown; arguments?: unknown };
+  if (typeof call.name !== "string") return undefined;
+  const name = call.name.trim().toLowerCase().replace(/^(?:mcp__scarlet__|mcp_scarlet_|scarlet__|scarlet[./:])/, "");
+  if (!name || !/^[a-z0-9_]+$/.test(name) || isQuestionTool(name)) return undefined;
+  return { name, input: call.arguments ?? {} };
+}
+
 export function briefInput(input: unknown, max = 160): string {
   if (input === undefined || input === null) return "";
   if (typeof input === "object" && !Array.isArray(input) && Object.keys(input as object).length === 0) return "";

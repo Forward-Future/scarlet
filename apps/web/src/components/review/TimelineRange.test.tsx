@@ -293,3 +293,25 @@ it("clears the range on ruler double-click, right-click menu, Delete, Backspace,
     expect(marked).toHaveBeenCalledExactlyOnceWith(undefined);
   }
 });
+
+// ⌘Tab or a system dialog in the middle of a drag takes the release with it: the drag ends there, as a cancelled one.
+it("drops a drag whose release was lost with the window, so the next click doesn't land a stale stretch", async () => {
+  const released = vi.fn();
+  await act(async () => root.render(
+    <TimelineScrubber start={0} duration={3000} playhead={100} frameAt={() => undefined} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)}
+      onScrubStart={() => released} onRange={marked} fps={30} marks={[]} />));
+  await press(".timeline-range-zone", 100);
+  await move(150);
+  expect(container.querySelector(".timeline-range")).not.toBeNull();
+  await act(async () => { window.dispatchEvent(new Event("blur")); });
+  expect(container.querySelector(".timeline-range")).toBeNull();
+  expect(released).toHaveBeenLastCalledWith({ marked: false });
+  // The next click, anywhere, is no end of that drag.
+  await release(400);
+  expect(marked).not.toHaveBeenCalled();
+  // And the ruler takes a new drag.
+  await press(".timeline-range-zone", 100);
+  await move(150);
+  await release(150);
+  expect(marked).toHaveBeenCalledExactlyOnceWith({ start: 300, end: 450 });
+});

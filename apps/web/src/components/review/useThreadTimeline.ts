@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { matchesEdit, type EditRef, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { errorMessage } from "../../lib/client";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
-import { useUiStore, type AgentContext } from "../../stores/ui";
+import { markedRangeOf, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { useProjectStore } from "../../stores/project";
 import { takeUpLatest } from "../../stores/shownCut";
 import { editGroups } from "./threadEditState";
@@ -130,7 +130,8 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
       const moment = !single && found && found.edits.length > 1 && found.main === edit ? found : undefined;
       const alone = !moment && !!found && found.edits.length > 1;
       // Timeline selections explicitly target the reply. Chat previews preserve a draft already in progress.
-      if (origin === "timeline" || !ui.agentDraft.trim()) ui.setAgentContext(ui.agentDraft.trim() ? replyTarget(edit, moment) : null);
+      // A stretch marked on the ruler stays with the box either way: the workspace aims it at the edit that opens.
+      if (origin === "timeline" || !ui.agentDraft.trim()) ui.setAgentContext(withMarkedRange(ui.agentDraft.trim() ? replyTarget(edit, moment) : null, markedRangeOf(ui.agentContext)));
       setPicked(prev => ({ owner, ref: { changeId: edit.changeId, spot: edit.spot }, request: (prev?.request ?? 0)+1, ...alone && { single: true } }));
     },
     /**
