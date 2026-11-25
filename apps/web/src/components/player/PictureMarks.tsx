@@ -376,7 +376,7 @@ export function toggleMarking(projectId: string, at: Omit<MarkedFrame, "marks">)
   if (store.marking === projectId) return store.stop("toggle");
   // A video that was playing has run on past the frame by the time it stops: it goes back to the frame marked.
   const wasPlaying = usePlayerStore.getState().playing;
-  player.pause();
+  player.pause(true);
   const frame = store.start(projectId, at);
   if (wasPlaying || Math.abs(frame.time - at.time) > 1e-6) player.seek(frame.time, true);
 }

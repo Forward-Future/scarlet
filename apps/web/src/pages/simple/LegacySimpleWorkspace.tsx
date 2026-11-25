@@ -476,7 +476,7 @@ export function LegacySimpleWorkspace() {
     // A message being spoken is in the box until it is out. Aiming the box builds it again, which would drop the
     // recording without a word: Revise waits, as the tag's × does.
     if (useUiStore.getState().speaking) return;
-    player.pause();
+    player.pause(true);
     aimAt(thread, target, label);
     setWriteRequest(n => n + 1);
     useUiStore.getState().focusComposer();

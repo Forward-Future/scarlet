@@ -319,6 +319,68 @@ it("opens the speed popover, lets the editor pick a custom L shortcut speed (def
   expect(panel()).toBeNull();
 });
 
+it("resets playback speed to 1× on pause while keeping the L shortcut speed ready for the next speed-up", async () => {
+  vi.spyOn(HTMLMediaElement.prototype, "readyState", "get").mockReturnValue(4);
+  await show();
+  const video = container.querySelector<HTMLVideoElement>(".watch-monitor video")!;
+  let paused = true;
+  vi.spyOn(video, "paused", "get").mockImplementation(() => paused);
+  vi.spyOn(video, "play").mockImplementation(async () => { paused = false; video.dispatchEvent(new Event("play")); });
+  vi.spyOn(video, "pause").mockImplementation(() => { paused = true; video.dispatchEvent(new Event("pause")); });
+
+  const trigger = container.querySelector<HTMLButtonElement>('.monitor-controls button[title="Playback speed"]')!;
+  const panel = () => container.querySelector<HTMLElement>('[role="group"][aria-label="Playback speed"]');
+  const shortcutPicker = () => panel()!.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Speed-up shortcut speed"]')!;
+  const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
+  const key = (target: HTMLElement, init: KeyboardEventInit) => act(async () => {
+    target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+  });
+
+  // The speed popover keeps the L shortcut picker with no reset-on-pause checkbox.
+  await click(trigger);
+  expect(panel()!.querySelector('input[type="checkbox"]')).toBeNull();
+  await click(shortcutPicker());
+  const option2x = [...document.querySelectorAll<HTMLElement>('[role="listbox"] [role="option"]')].find(o => o.textContent === "2×")!;
+  await act(async () => {
+    option2x.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    option2x.click();
+  });
+  await key(panel()!, { key: "Escape" });
+
+  // Play at 1×, press L to jump to 2×, then pause: playback resets to 1× while L shortcut stays 2×.
+  await act(async () => slider.focus());
+  await key(slider, { key: " " });
+  expect(paused).toBe(false);
+  await key(slider, { key: "l" });
+  expect([usePlayerStore.getState().rate, video.playbackRate, trigger.textContent]).toEqual([2, 2, "2×"]);
+
+  await key(slider, { key: " " });
+  expect([paused, usePlayerStore.getState().rate, video.playbackRate, trigger.textContent, usePlayerStore.getState().speedUpRate])
+    .toEqual([true, 1, 1, "1×", 2]);
+
+  // Next press of Play resumes in real time (1×), and pressing L jumps straight back to 2×.
+  await key(slider, { key: " " });
+  expect([paused, usePlayerStore.getState().rate, video.playbackRate]).toEqual([false, 1, 1]);
+  await key(slider, { key: "l" });
+  expect([usePlayerStore.getState().rate, video.playbackRate, trigger.textContent]).toEqual([2, 2, "2×"]);
+
+  // Pausing via N while playing at 2× also resets to 1× and leaves L shortcut at 2×.
+  await key(slider, { key: "n" });
+  expect([paused, usePlayerStore.getState().rate, usePlayerStore.getState().speedUpRate]).toEqual([true, 1, 2]);
+  await act(async () => slider.focus());
+  await key(slider, { key: "l" });
+  expect(usePlayerStore.getState().rate).toBe(2);
+
+  // Pausing from a slower speed (0.5×) resets to 1× and L still jumps to the chosen 2×.
+  await act(async () => player.setRate(0.5));
+  await key(slider, { key: " " });
+  expect([paused, usePlayerStore.getState().rate]).toEqual([false, 0.5]);
+  await key(slider, { key: " " });
+  expect([paused, usePlayerStore.getState().rate]).toEqual([true, 1]);
+  await key(slider, { key: "l" });
+  expect(usePlayerStore.getState().rate).toBe(2);
+});
+
 it("turns the play button while the picture loads, in place of its icon, with nothing drawn under it", async () => {
   await show();
   const monitor = container.querySelector(".watch-monitor")!;
