@@ -592,7 +592,8 @@ describe("gemini ACP parser", () => {
     try {
       const long = { toolCall: { name: "read_file", kind: "read", rawInput: { path: join(task, "a".repeat(300), "b.txt") } } };
       expect(() => workspacePermission(long, [task])).not.toThrow();
-      expect(workspacePermission(long, [task])).toBe(false);
+      // Windows takes long names, so there it is only a file not written yet, inside the task folder.
+      expect(workspacePermission(long, [task])).toBe(process.platform === "win32");
     } finally {
       rmSync(task, { recursive: true, force: true });
     }

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -23,7 +23,8 @@ it("wraps a caption written without spaces between characters, never inside one,
 });
 
 it("picks a font with Chinese, Japanese, Korean or Thai glyphs for such a caption when its family isn't installed", () => {
-  const fonts = mkdtempSync(join(tmpdir(), "scarlet-fonts-"));
+  // Font files come back by their real path: on a Mac the temporary folder is /var, a link to /private/var.
+  const fonts = realpathSync(mkdtempSync(join(tmpdir(), "scarlet-fonts-")));
   dirs.push(fonts);
   writeFileSync(join(fonts, "arial.ttf"), "");
   writeFileSync(join(fonts, "msyh.ttc"), "");
