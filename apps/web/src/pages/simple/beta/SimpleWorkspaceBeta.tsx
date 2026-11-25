@@ -31,7 +31,7 @@ import { Loading } from "../../../components/ui/primitives";
 import { api, errorMessage } from "../../../lib/client";
 import { readTimeline } from "../../../lib/timelineCache";
 import { appLog } from "../../../lib/appLog";
-import { clock as clockLabel, lengthLabel, parseTimestamp, plural, preciseRange, removedSeconds, distinctClock } from "../../../lib/format";
+import { clock as clockLabel, lengthLabel, parseTimestamp, plural, preciseRange, distinctClock } from "../../../lib/format";
 import { editPlaybackRange } from "../../../lib/editPlaybackRange";
 import { listMoments, momentRange } from "../../../lib/editMoments";
 import { inListOrder, reviewStops, rowAfter, rowBeside, rowPlace, rowsOfTab, sectionStops, stopsShown, tabShown, type ListOrder, type ReviewStop } from "./reviewTabsBeta";
@@ -855,7 +855,7 @@ export function SimpleWorkspaceBeta() {
       const edit = overrideForCall(a.index);
       const at = edit ? (edit.version === head ? edit.range.start : undefined) : placeCut(a)?.start;
       return { index: a.index, askOrder: a.askOrder, n: callNo.get(a.index)!, start: listedAt.get(a.index)!, at, summary: a.summary || a.reason, version: past.length + 1, earlier: past.at(-1),
-        tag: approves(a) === "cut" ? removedSeconds(a.end - a.start) : "Check",
+        tag: approves(a) === "cut" ? "Cut" : "Check",
         run: cutRuns.get(a.index),
         state: sentBack(a.index) ? "revising" : passChoices[a.index] === undefined ? "open" : passChoices[a.index] === approves(a) ? "approved" : "skipped" };
     }),

@@ -178,6 +178,20 @@ describe("RailStore", () => {
     expect(view.sections.low[0]!.members).toHaveLength(2);
   });
 
+  it("prefers a specific kind tag over a generic Edit follow-up when combining rows across requests", () => {
+    const store = new RailStore();
+    store.report("t1", {
+      you: 0, optional: 1, working: 0, done: 0, threadOrder: 0,
+      rows: [makeRow({ key: "c1/0", threadId: "t1", threadOrder: 0, at: 18, label: "Opus 5.5 title", place: "optional", editKind: "graphic", value: "Graphic", clipIds: ["g1"], overlayClipIds: ["g1"] })],
+    });
+    store.report("t2", {
+      you: 0, optional: 1, working: 0, done: 0, threadOrder: 1,
+      rows: [makeRow({ key: "c2/0", threadId: "t2", threadOrder: 1, at: 18, label: "Adjusted title timing", rawLabel: "Opus 5.5 title", place: "optional", value: "Edit", clipIds: ["g1"], overlayClipIds: ["g1"] })],
+    });
+    const view = store.view();
+    expect(view.sections.low[0]!.value).toBe("Graphic");
+  });
+
   it("refreshes row callbacks without notifying listeners when the reported row data is unchanged", () => {
     const store = new RailStore();
     const heard = vi.fn();

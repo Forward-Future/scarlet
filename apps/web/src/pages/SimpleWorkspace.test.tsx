@@ -1863,9 +1863,9 @@ it("takes the card off an edit sent back for revision until its new version land
   expect(editPanel()!.querySelector(".edit-card-title")?.textContent).toBe("Kept the wrap's last word");
   expect(editPanel()!.querySelector(".edit-card-count")?.textContent).toBe("1 of 1");
   expect(forYouTab()?.getAttribute("title")).toBe("3 unreviewed (1 needs you)");
-  // Its row is amber again, as v2, and says it came back revised.
-  expect([wrap().getAttribute("aria-label"), wrap().querySelector(".simple-pass-label small.edit-version")?.textContent, wrap().querySelector(".simple-pass-check")?.textContent])
-    .toEqual(["0:11: wrap, check", "v2", "Revised"]);
+  // Its row is amber again, as v2, and keeps its type tag rather than replacing it with Revised.
+  expect([wrap().getAttribute("aria-label"), wrap().querySelector(".simple-pass-label small.edit-version")?.textContent, wrap().querySelector(".simple-pass-value")?.textContent, wrap().querySelector(".simple-pass-check")])
+    .toEqual(["0:11: wrap, check", "v2", "Edit", null]);
   await click(buttonIn(editPanel()!, "Keep")!);
   expect(forYouTab()?.getAttribute("title")).toBe("2 confident edits");
   expect(ticked(wrap())).toBe(true);
@@ -3326,8 +3326,8 @@ it("sums a dialogue pass up on one card, and makes its calls in the card on the 
   expect(passRows().map(r => [r.querySelector(".simple-pass-time")?.textContent, r.querySelector(".simple-pass-time")?.classList.contains("is-need"), r.querySelector(".simple-pass-label")?.textContent]))
     .toEqual([["3:50, needs you", true, "Breath before the price."], ["9:58, needs you", true, "The corrected image-input take belongs here."]]);
   expect(passCard().querySelector(".simple-pass-list :is(.edit-badge, .simple-pass-tick, small)")).toBeNull();
-  // Every call ends on a word: what its cut takes out (2026-11-21).
-  expect(passRows().every(r => /^−/.test(r.querySelector(".simple-pass-value")?.textContent ?? ""))).toBe(true);
+  // Every call ends on a consistent word: "Cut" for a cut (never a bare duration).
+  expect(passRows().every(r => r.querySelector(".simple-pass-value")?.textContent === "Cut")).toBe(true);
   expect(passRows().map(r => r.getAttribute("aria-current"))).toEqual([null, null]);
   // "2 need you" opens the first of them: one click reaches the cut. Its row is lit.
   await click(passCard().querySelector(".simple-pass-need")!);
@@ -3391,7 +3391,7 @@ it("sums a dialogue pass up on one card, and makes its calls in the card on the 
   expect([...passCard().querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["For you5·1", "Working", "Done1"]);
   expect(passRows().map(r => [r.querySelector(".simple-pass-time")?.textContent, r.querySelector(".simple-pass-time")?.classList.contains("is-need"),
     r.querySelector(".simple-pass-tick")?.getAttribute("aria-label"), r.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([["3:50", false, "Decided", "Kept"], ["9:58, needs you", true, undefined, expect.stringMatching(/^−/)]]);
+    .toEqual([["3:50", false, "Decided", "Kept"], ["9:58, needs you", true, undefined, "Cut"]]);
   expect(approve).not.toHaveBeenCalled();
   // "1 needs you" leaves the call that's open where it is. A decided call's row opens it again, under Done, where it
   // is the only row, and For you goes back to the one that waits.
@@ -3538,8 +3538,8 @@ it("keeps a pass's non-overlapping edits as separate rows even when they share a
   // In the Priority list, the flagged fade at 0:13 is pinned first, then the confident edits in timeline order.
   expect(rows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.querySelector(".simple-pass-value")?.textContent])).toEqual([
     ["Softened every dialogue join", "Audio"],
-    ["Softened every dialogue join", "Audio"], ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"],
-    ["Cut", "−30 s"], ["Softened every dialogue join", "Audio"]]);
+    ["Softened every dialogue join", "Audio"], ["Cut", "Cut"], ["Softened every dialogue join", "Audio"],
+    ["Cut", "Cut"], ["Softened every dialogue join", "Audio"]]);
   // Opening one fade lights only its own row, not other non-overlapping places with the same name.
   await click(rows()[3]!);
   await act(async () => {});
@@ -3564,11 +3564,11 @@ it("keeps a cut and a partially overlapping ranged edit separate, and keeps only
   await act(async () => {});
   const rows = () => [...dockFor(pass).querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")];
   const lit = () => rows().map(r => r.getAttribute("aria-current") ? r.querySelector(".simple-pass-value")?.textContent : null);
-  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["Audio", "−30 s", "Audio", "−30 s"]);
+  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["Audio", "Cut", "Audio", "Cut"]);
   // The cut at 3 s inside the 2–4 s fade does not overlap it exactly, so it opens alone.
   await click(rows()[1]!);
   await act(async () => {});
-  expect(lit()).toEqual([null, "−30 s", null, null]);
+  expect(lit()).toEqual([null, "Cut", null, null]);
   expect(editPanel()?.querySelector(".edit-card-length")?.textContent ?? "").not.toMatch(/edits$/);
   // ↑ goes to the first fade, and Keep keeps only that fade — never the second place at 8–10 s.
   await press("ArrowUp");
@@ -3603,7 +3603,7 @@ it("puts a request about one place of a repeated pass edit under that place's ow
   await act(async () => {});
   const items = [...dockFor(pass()).querySelectorAll<HTMLElement>(".simple-pass-list > li")];
   expect(items.map(li => [li.querySelector(".simple-pass-value")?.textContent, li.querySelector(".simple-pass-check")?.textContent])).toEqual([
-    ["Audio", undefined], [undefined, "Revising…"], ["Audio", undefined], ["−30 s", undefined]]);
+    ["Audio", undefined], [undefined, "Revising…"], ["Audio", undefined], ["Cut", undefined]]);
   expect(wordsOf(items[1]!.querySelector(".subunit .subunit-msg > p"))).toBe("Make this one shorter");
   expect(dockFor(pass()).querySelectorAll(".subunit")).toHaveLength(1);
 });
@@ -4130,10 +4130,10 @@ it("appends published calls while holding back provisional notes and keeps the o
   expect(container.querySelectorAll(".simple-timeline-mark")).toHaveLength(1);
   await reviewCalls();
   const card = call(), first = passRows()[0];
-  expect(first?.textContent).toBe(`0:11, needs you${late!.reason}−1.0 s`);
+  expect(first?.textContent).toBe(`0:11, needs you${late!.reason}Cut`);
   await update([{ ...early!, verdict: "keep" }, { ...middle!, askOrder: 2 }, { ...late!, askOrder: 1 }]);
   // The list goes by time: the call published second sits before the first, which keeps its row.
-  expect(passRows().map(r => r.textContent?.replace(/−[\d:.]+(?: s)?$/, ""))).toEqual([`0:06, needs you${middle!.reason}`, `0:11, needs you${late!.reason}`]);
+  expect(passRows().map(r => r.textContent?.replace(/Cut$/, ""))).toEqual([`0:06, needs you${middle!.reason}`, `0:11, needs you${late!.reason}`]);
   expect(passRows()[1]).toBe(first);
   expect(markStates()).toEqual(["check", "check"]);
   expect(call()).toBe(card);
@@ -4154,7 +4154,7 @@ it("appends published calls while holding back provisional notes and keeps the o
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready_part2" ? { ...c,
     cutAssessments: c.cutAssessments!.map(a => a.index === 1 ? { ...a, verdict: "keep" } : a) } : c) }));
   expect(passRows()[1]).toBe(first);
-  expect(passRows().map(r => r.textContent?.replace(/−[\d:.]+(?: s)?$/, ""))).toEqual([`0:05, needs you${middle!.reason}`, `0:10${late!.reason}Rejected`]);
+  expect(passRows().map(r => r.textContent?.replace(/Cut$/, ""))).toEqual([`0:05, needs you${middle!.reason}`, `0:10${late!.reason}Rejected`]);
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 0:05");
 });
 
@@ -4176,7 +4176,7 @@ it("keeps a newly published call when an earlier decision's HTTP response arrive
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === saved.change.id ? { ...saved.change, cutAssessments: asks } : c) }));
   const third = passRows()[2];
   const card = call();
-  expect(third?.textContent).toBe(`0:11, needs you${asks[2]!.reason}−1.0 s`);
+  expect(third?.textContent).toBe(`0:11, needs you${asks[2]!.reason}Cut`);
   await act(async () => respond());
   expect(passRows()[2]).toBe(third);
   expect(call()).toBe(card);
@@ -4190,10 +4190,10 @@ it.each(["done", "failed", "cancelled"] as const)("hands provisional and uncheck
   await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_ready"
     ? { ...c, cutAssessments: [{ ...early!, provisional: true }, { ...late!, askOrder: 1 }] } : c) }));
   await showFolded();
-  expect(passRows().map(r => r.textContent)).toEqual([`0:11, needs you${late!.reason}−1.0 s`]);
+  expect(passRows().map(r => r.textContent)).toEqual([`0:11, needs you${late!.reason}Cut`]);
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_done" ? { ...t, state } : t) }));
   // Handed over, the cuts it never checked join its ask, each in its place in the video, on the list and the timeline.
-  expect(passRows().map(r => r.textContent?.replace(/−[\d:.]+(?: s)?$/, ""))).toEqual([`0:02, needs you${early!.reason}`, `0:06, needs you${STAGED[1]!.reason}`, `0:11, needs you${late!.reason}`]);
+  expect(passRows().map(r => r.textContent?.replace(/Cut$/, ""))).toEqual([`0:02, needs you${early!.reason}`, `0:06, needs you${STAGED[1]!.reason}`, `0:11, needs you${late!.reason}`]);
   expect(markStates()).toEqual(["check", "check", "check"]);
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("7 unreviewed (3 need you)");
   await click(passRows()[0]!);
@@ -5187,7 +5187,7 @@ it("marks the right call Revising… when its revision named an earlier part who
   await nextPart({ cutReasons: [...PAIR, STAGED[1]!, STAGED[2]!, { start: 14, end: 15, reason: "A cough." }] });
   await act(async () => {});
   // The call that waits is For you's, and the one sent back is Working's.
-  expect(passRows().find(r => r.textContent?.includes("Breath before the price."))!.querySelector(".simple-pass-value")?.textContent).toBe("−1.0 s");
+  expect(passRows().find(r => r.textContent?.includes("Breath before the price."))!.querySelector(".simple-pass-value")?.textContent).toBe("Cut");
   await click(tabNamed(passCard(), "Working"));
   expect(passRows().map(r => [r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent])).toEqual([["Repeated aside.", "Up next"]]);
 });
@@ -5795,7 +5795,7 @@ it("keeps the right call Revising… when a part moved it in the cut list before
   await act(async () => {});
   // The other call waits in For you; the aside is Working's.
   const other = passRows().find(r => r.textContent?.includes("A second try at the line."))!;
-  expect([other.querySelector(".simple-pass-value")?.textContent ?? null, other.disabled]).toEqual(["−1.0 s", false]);
+  expect([other.querySelector(".simple-pass-value")?.textContent ?? null, other.disabled]).toEqual(["Cut", false]);
   await click(tabNamed(passCard(), "Working"));
   const aside = passRows().find(r => r.textContent?.includes("The aside, from the breath."))!;
   expect([aside.querySelector(".simple-pass-value")?.textContent, aside.disabled]).toEqual(["Revising…", true]);
@@ -5821,8 +5821,8 @@ it("keeps a request about a cut on the cut that takes in most of its footage whe
   expect(passRows().map(r => r.querySelector(".simple-pass-label")?.textContent)).toEqual(["Only the aside itself."]);
   expect(marked("Only the aside itself.")).toEqual(["Revising…", true]);
   await click(passCard().querySelector(".simple-pass-need")!);
-  expect(marked("The breath.")).toEqual(["−0.1 s", false]);
-  expect(marked("The click after it.")).toEqual(["−0.2 s", false]);
+  expect(marked("The breath.")).toEqual(["Cut", false]);
+  expect(marked("The click after it.")).toEqual(["Cut", false]);
   // The calls that are the editor's don't apply the pass over the note.
   await click(passRows().find(r => !r.disabled)!);
   for (let n = 0; n < 4; n++) await press("k");
@@ -5846,7 +5846,7 @@ it("finds the footage a waiting request named where it sits after a part applied
   await click(passCard().querySelector(".simple-pass-need")!);
   const marked = (reason: string) => { const row = passRows().find(r => r.textContent?.includes(reason))!; return [row.querySelector(".simple-pass-value")?.textContent ?? null, row.disabled]; };
   expect(marked("Only the breath itself.")).toEqual(["Revising…", true]);
-  expect(marked("A line that came in late.")).toEqual(["−1.0 s", false]);
+  expect(marked("A line that came in late.")).toEqual(["Cut", false]);
 });
 
 it("marks no call for a request about footage the pass no longer stages, though a staged cut starts right where it ended", async () => {
@@ -5861,7 +5861,7 @@ it("marks no call for a request about footage the pass no longer stages, though 
   await passEnds("chg_ready_part2", cuts, "task_note1");
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("7 unreviewed (3 need you)");
   await click(passCard().querySelector(".simple-pass-need")!);
-  expect(passRows().map(r => [r.querySelector(".simple-pass-value")?.textContent ?? null, r.disabled])).toEqual([["−0.5 s", false], ["−1.0 s", false], ["−1.0 s", false]]);
+  expect(passRows().map(r => [r.querySelector(".simple-pass-value")?.textContent ?? null, r.disabled])).toEqual([["Cut", false], ["Cut", false], ["Cut", false]]);
 });
 
 it("moves a second thought still in the box onto the revised cut, whichever kind of run revised it", async () => {
@@ -6340,10 +6340,10 @@ it("marks a revised call v2 in the list and in its card, with the earlier versio
   useProjectStore.setState({ current: data });
   await show();
   await act(async () => {});
-  // Among the calls, a revised one has its version after its note, as an edit's row has, and still ends on its amount.
+  // Among the calls, a revised one has its version after its note, as an edit's row has, and keeps its Cut tag.
   await click(passCard().querySelector(".simple-pass-need")!);
   expect(passRows().map(r => r.querySelector(".simple-pass-label > small.edit-version")?.textContent ?? "")).toEqual(["", "v2"]);
-  expect(passRows().map(r => r.querySelector(".simple-pass-value")?.textContent ?? "")).toEqual(["−3.0 s", "−4.5 s"]);
+  expect(passRows().map(r => r.querySelector(".simple-pass-value")?.textContent ?? "")).toEqual(["Cut", "Cut"]);
   await click(passRows()[1]!);
   // On the card it is the mark an edit's row has after its words, here before the note.
   const version = call().querySelector(".edit-version")!;
@@ -6378,7 +6378,7 @@ it("says what the requests about a cut took on the hover of the word its row end
   expect(passRows().map(r => r.getAttribute("title"))).toEqual(["Breath before the price.", "v1: The corrected image-input take belongs here.\nYou: “The words don't line up.”"]);
   expect(passRows()[0]!.querySelector("[title]")).toBeNull();
   // The word it ends on says the revision's active time, and nothing else.
-  expect([word().textContent, word().getAttribute("title")]).toEqual(["−4.5 s", "42s"]);
+  expect([word().textContent, word().getAttribute("title")]).toEqual(["Cut", "42s"]);
   // With tokens shown (Settings → Usage), its tokens too: the revision's own, not the pass's.
   await act(async () => useUiStore.getState().setShowRunTokens(true));
   expect(word().getAttribute("title")).toBe("42s · 1.1M tokens");
@@ -6726,11 +6726,10 @@ it("says on a pass's row when its cut is being revised, kept or not, and that it
   const pass = () => reviewDock()!;
   const row = (label: string) => [...pass().querySelectorAll<HTMLElement>(".simple-pass-list > li > button")]
     .find(b => b.querySelector(".simple-pass-label")?.textContent?.startsWith(label))!;
-  // The row of the cut being revised says so, though the editor had kept it. The one that came back revised says it
-  // did, as a row in any other request's list does, until the editor keeps it (2026-11-10: the pass's rows said neither).
-  // Each ends on that word alone, where its figure was: quiet while Scarlet is on it, amber once it is back.
+  // The row of the cut being revised says so, though the editor had kept it. Once revised, v2 stays beside the
+  // title and the edit keeps its type tag on the right instead of replacing it with Revised.
   const stands = (label: string) => [...row(label).children].slice(-2).map(el => [el.className, el.textContent]);
-  expect(stands("wrap")).toEqual([["simple-pass-label", "wrapv2"], ["simple-pass-check", "Revised"]]);
+  expect(stands("wrap")).toEqual([["simple-pass-label", "wrapv2"], ["simple-pass-value", "Audio"]]);
   expect(row("wrap").querySelector(".simple-pass-label small")?.textContent).toBe("v2");
   expect(row("music bed").querySelector(".simple-pass-check")).toBeNull();
   // The cut that is with Scarlet is Working's row.
@@ -6803,8 +6802,8 @@ it("marks a call v2 when the request that revised it waited its turn behind the 
   // The cut is a call again, and says it is its second version, in the list and on its card, with what it was and the
   // note that sent it back on hover: the same as a call revised from its card once the pass had finished.
   const row = passRow("Starts in the pause.");
-  expect([row.querySelector(".simple-pass-label > small.edit-version")?.textContent, row.querySelector(".simple-pass-value")?.textContent]).toEqual(["v2", "−1.5 s"]);
-  expect(passRows().filter(r => r !== row).map(r => r.querySelector(".simple-pass-value")?.textContent ?? "")).toEqual(["−1.0 s", "−1.0 s"]);
+  expect([row.querySelector(".simple-pass-label > small.edit-version")?.textContent, row.querySelector(".simple-pass-value")?.textContent]).toEqual(["v2", "Cut"]);
+  expect(passRows().filter(r => r !== row).map(r => r.querySelector(".simple-pass-value")?.textContent ?? "")).toEqual(["Cut", "Cut"]);
   await click(row);
   const version = call().querySelector(".edit-version")!;
   expect([version.textContent, version.getAttribute("title")]).toEqual(["v2", "v1: A clean retake.\nYou: “Start it later.”"]);
@@ -7228,7 +7227,7 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   expect(container.querySelector('[aria-label="Suggestion"]')).toBeNull();
   const bar = editPanel()!;
   expect(buttonIn(bar, "Apply")).toBeUndefined();
-  expect(reviewDock()!.querySelector(".simple-pass-list button.is-on .simple-pass-value")?.textContent).toBe("−2.4 s");
+  expect(reviewDock()!.querySelector(".simple-pass-list button.is-on .simple-pass-value")?.textContent).toBe("Cut");
   expect(container.textContent).toContain("Took out · 2.4 s");
   // It quotes what the cut took out, struck through, and plays on the version before it: the timeline shades what came out
   // and After steps over it.
@@ -9158,7 +9157,7 @@ it("opens a call that's with Scarlet: its card says so, and its revision is at w
   const rows = () => passRows().map(r => [r.querySelector(".simple-pass-time")?.textContent, r.querySelector(".simple-pass-time")?.classList.contains("is-need"), r.querySelector(".simple-pass-value")?.textContent]);
   expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("5 unreviewed (1 needs you)");
   await click(passCard().querySelector(".simple-pass-need")!);
-  expect(rows()).toEqual([["9:58, needs you", true, expect.stringMatching(/^−/)]]);
+  expect(rows()).toEqual([["9:58, needs you", true, "Cut"]]);
   // "1 needs you" opened the one call still waiting.
   expect(passRow("The corrected image-input take belongs here.").getAttribute("aria-current")).toBe("true");
   await click(tabNamed(passCard(), "Working"));
@@ -9452,7 +9451,7 @@ it("says Queued on the card of a cut sent back until Scarlet starts on it, and s
   // The two that have just gone to Scarlet are Working's, and stay in For you for their moment with their new word.
   // Each call leads with its time, amber only on the one that still waits.
   const rows = () => passRows().map(r => [r.querySelector(".simple-pass-time")?.textContent, r.querySelector(".simple-pass-time")?.classList.contains("is-need"), r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent]);
-  expect(rows()).toEqual([["0:02", false, "A clean retake.", "Revising…"], ["0:06, needs you", true, "Breath before the price.", expect.stringMatching(/^−/)], ["0:11", false, "Repeated aside.", "Up next"]]);
+  expect(rows()).toEqual([["0:02", false, "A clean retake.", "Revising…"], ["0:06, needs you", true, "Breath before the price.", "Cut"], ["0:11", false, "Repeated aside.", "Up next"]]);
   // "1 needs you" opened the call still waiting.
   expect(passRow("Breath before the price.").getAttribute("aria-current")).toBe("true");
   await click(tabNamed(passCard(), "Working"));
@@ -9699,10 +9698,10 @@ it("keeps an open call in place when the engine publishes an earlier cut and bac
   await showFolded();
   await reviewCalls();
   const first = passRows()[0], card = call();
-  expect(first?.textContent).toBe(`0:11, needs you${later!.reason}−1.0 s`);
+  expect(first?.textContent).toBe(`0:11, needs you${later!.reason}Cut`);
   await update([{ ...early!, askOrder: 2 }, { ...later!, askOrder: 1 }]);
   // The earlier cut takes its place in time before it; the open call keeps its row and its name.
-  expect(passRows().map(r => r.textContent?.replace(/−[\d:.]+(?: s)?$/, ""))).toEqual([`0:02, needs you${early!.reason}`, `0:11, needs you${later!.reason}`]);
+  expect(passRows().map(r => r.textContent?.replace(/Cut$/, ""))).toEqual([`0:02, needs you${early!.reason}`, `0:11, needs you${later!.reason}`]);
   expect(passRows()[1]).toBe(first);
   expect(call()).toBe(card);
   expect(card.querySelector(".edit-card-count")?.textContent).toBe("Cut 0:11");
@@ -11531,7 +11530,7 @@ it("keeps a pass's calls where they are, the made ones in their place, when Scar
   const rows = () => passRows().slice(0, 3).map(r => [r.querySelector(".simple-pass-time")?.textContent,
     r.querySelector(".simple-pass-time")?.classList.contains("is-need"), r.querySelector(".simple-pass-value")?.textContent]);
   expect(pass().querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Calls and edits for you");
-  expect(rows()).toEqual([["0:00", false, "Kept"], ["3:50, needs you", true, expect.stringMatching(/^−/)], ["9:58, needs you", true, expect.stringMatching(/^−/)]]);
+  expect(rows()).toEqual([["0:00", false, "Kept"], ["3:50, needs you", true, "Cut"], ["9:58, needs you", true, "Cut"]]);
   // The editor sends the last call back. Scarlet starts on it inside the dock, under that call's row, so no new block joins the conversation.
   const base = data.tasks.find(t => t.id === "task_done")!;
   const revision = { ...base, id: "task_revise", kind: "revise" as const, state: "running" as const, finishedAt: undefined, changeIds: [], expectedSeconds: undefined,
@@ -11546,7 +11545,7 @@ it("keeps a pass's calls where they are, the made ones in their place, when Scar
     .toEqual(["9:58", ["Cut at 9:58"]]);
   // The calls are as they were: the same ones, the decided one in its place.
   expect(pass().querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Calls and edits for you");
-  expect(rows()).toEqual([["0:00", false, "Kept"], ["3:50, needs you", true, expect.stringMatching(/^−/)], ["9:58", false, "Revising…"]]);
+  expect(rows()).toEqual([["0:00", false, "Kept"], ["3:50, needs you", true, "Cut"], ["9:58", false, "Revising…"]]);
   expect(pass().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("5 unreviewed (1 needs you)");
 });
 
@@ -11817,7 +11816,7 @@ it("says a stopped pass's cut wasn't checked, lists a skipped call as Skipped, a
   expect(passCard().querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Calls and edits for you");
   expect(passRows().map(r => [r.querySelector(".simple-pass-time")?.textContent, r.querySelector(".simple-pass-time")?.classList.contains("is-need"),
     r.querySelector(".simple-pass-label")?.textContent, r.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([["0:04", false, "Repeated aside.", "Rejected"], ["3:50, needs you", true, "Breath before the price.", expect.stringMatching(/^−/)]]);
+    .toEqual([["0:04", false, "Repeated aside.", "Rejected"], ["3:50, needs you", true, "Breath before the price.", "Cut"]]);
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 3:50");
   expect(buttonIn(call(), "Keep")?.getAttribute("aria-pressed")).toBe("false");
   // The last call applies the pass, leaving in what was skipped. The working cut had moved on, so the engine refused
@@ -13206,8 +13205,8 @@ it("says a cut's length the same way in its row, its mark and on the timeline", 
   vi.spyOn(api, "timeline").mockResolvedValue({ timeline: { ...data.timeline!, version: "v_before" } } as never);
   await show();
   const rows = () => [...editRowsIn(turnFor("chg_approved_2"))];
-  // A cut of 9.97 s is "10 s" in its row, and one of 3:41 isn't "221 s" there while its mark says 3:41.
-  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["−10 s", "−3:41"]);
+  // Cut rows use the consistent "Cut" tag while the timeline band and passage show the rounded length ("10 s").
+  expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["Cut", "Cut"]);
   await click(rows()[0]!);
   await act(async () => {});
   expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Took out · 10 s");
@@ -14807,10 +14806,9 @@ it("says v2 on a flagged edit that came back revised with Scarlet's own reason, 
   const row = (label: string) => passRows().find(r => r.textContent?.includes(label))!;
   const word = (label: string) => row(label).querySelector(".simple-pass-value, .simple-pass-check")?.textContent;
   const version = (label: string) => row(label).querySelector(".simple-pass-label > small.edit-version")?.textContent;
-  // A revised one has its version after its words, as a revised call's row does. Each ends on where it stands:
-  // Revised, or else what it is.
+  // A revised one keeps its v2 after its words and keeps its type tag on the right instead of replacing it with Revised.
   expect([version("wrap"), version("intro music"), version("captions")]).toEqual(["v2", "v2", undefined]);
-  expect([word("wrap"), word("intro music"), word("captions")]).toEqual(["Audio", "Revised", "Audio"]);
+  expect([word("wrap"), word("intro music"), word("captions")]).toEqual(["Audio", "Audio", "Audio"]);
   // Kept, it says so.
   await click(passRows().find(r => r.textContent?.includes("wrap"))!);
   await act(async () => {});
@@ -14945,7 +14943,7 @@ it("ticks in Done the cuts that went in with a pass through its calls, Scarlet's
   // need the editor.
   expect(listed()).toEqual([
     ["mid check", false, false, "0:05, needs you", "Audio"],
-    [CUTS[3]!.reason, false, false, "0:12, needs you", "−1.0 s"],
+    [CUTS[3]!.reason, false, false, "0:12, needs you", "Cut"],
   ]);
   // The timeline marks the two that wait, in amber.
   expect(markStates()).toEqual(["check", "check"]);

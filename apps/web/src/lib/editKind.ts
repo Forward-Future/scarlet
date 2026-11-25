@@ -12,11 +12,12 @@ export function editKindWord(edit: Pick<ThreadEdit, "kind">): string | undefined
 }
 
 /**
- * The word at the end of an edit's row in a list, so every row has one: what it did, "To do" for a marker left for the
- * editor, "Check" for a spot Scarlet changed nothing at and asks the editor to check, or "Edit" for an assembly or a mix
- * of several things.
+ * The word at the end of an edit's row in a list, so every row has one: what it did ("Cut", "Audio", "B-roll"…),
+ * "To do" for a marker left for the editor, "Check" for a spot Scarlet changed nothing at and asks the editor to
+ * check, or "Edit" for an assembly or a mix of several things.
  */
-export function editRowWord(edit: Pick<ThreadEdit, "kind" | "marker" | "onlyCheck">): string {
+export function editRowWord(edit: Pick<ThreadEdit, "kind" | "marker" | "onlyCheck" | "beforeCut">): string {
+  if (edit.beforeCut) return "Cut";
   return editKindWord(edit) ?? (edit.marker ? "To do" : edit.onlyCheck ? "Check" : "Edit");
 }
 

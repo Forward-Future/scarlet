@@ -143,9 +143,10 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-rail-list .edit-row-time")?.textContent).toMatch(/^\d+:\d\d$/);
     expect(container.querySelector(".review-low-body .edit-badge")).toBeNull();
     expect(container.querySelector(".review-low-body .edit-row-time")?.textContent).toBe("0:00");
-    // Generic fallback "Edit" word is omitted from row ends, and clicking a message bubble never turns it violet.
+    // Every edit row keeps a consistent word tag on the right (including "Edit" fallback), and clicking a message bubble never turns it violet.
     const rowValues = [...container.querySelectorAll(".review-rail .simple-edit-value")].map(el => el.textContent?.trim());
-    expect(rowValues).not.toContain("Edit");
+    expect(rowValues.length).toBeGreaterThan(0);
+    expect(rowValues.every(v => !!v && !/^−/.test(v))).toBe(true);
     const bubble = container.querySelector<HTMLElement>("#simple-chat .unit-msg");
     if (bubble) await act(async () => bubble.click());
     expect(container.querySelector("#simple-chat .unit-msg.is-marked")).toBeNull();
