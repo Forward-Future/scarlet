@@ -1,6 +1,7 @@
 import { agentCapabilities, canHear, isHandOff, isProjectEditTask, chooseListener, workspaceCapabilities, type AgentId, type Listener, type ListenResult, type Task } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest } from "../errors.js";
+import { waitFor } from "../events.js";
 import { FINISHED_TASK, createTask } from "./tasks.js";
 
 /** How long since a host's last heartbeat it still counts as online (`ONLINE_WINDOW_MS` in routes/hosts.ts). */
@@ -70,6 +71,7 @@ export async function listenFor(ctx: Ctx, askerId: string, ask: ListenAsk, waitM
       return answer ? { state: "heard", answer, by } : { state: "failed", error: "The model that listens said nothing.", by };
     }
     if (FINISHED_TASK.has(now.state) || Date.now() >= deadline) return { state: "listening", by };
-    await new Promise(done => setTimeout(done, 500));
+    // Woken as the listen's state changes in this engine; read again every half second for one another engine runs.
+    await waitFor(ctx.bus, "ws", Math.min(500, deadline - Date.now()), e => e.type === "task.updated" && e.task.id === check.id);
   }
 }
