@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- A revised edit's card now describes what its latest version actually changed instead of the earlier version it replaced, and added clips show their readable label instead of raw camera or screen-recording file names.
 - Dropping a folder into Scarlet now detects the video files inside, imports them, and starts caching them automatically.
 - Dropping a file into a style guide chat now lets you send it right away without typing a message, and the style guide page shows Scarlet's working status once in the chat instead of repeating it under the preview.
 
