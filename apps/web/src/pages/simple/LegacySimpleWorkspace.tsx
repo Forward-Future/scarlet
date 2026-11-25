@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { ChatRail } from "../../components/shell/ChatRail";
 import { appliedReviewChange, timelineDuration, type Change, type CutAssessment, type TimeRange } from "@scarlet/timeline";
 import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
-import { editGroups, listPlaces, useReviewed, useRevising } from "../../components/review/threadEditState";
+import { useReviewed, useRevising } from "../../components/review/threadEditState";
 import { QueueTray, useRewordingHold, type QueuedRequest } from "../../components/chat/QueueTray";
 import { recordEditReview } from "../../lib/editReviews";
 import { forgetCalls, recordUndo, undoLast, type CallStep } from "../../lib/undo";
@@ -31,7 +31,7 @@ import { Loading } from "../../components/ui/primitives";
 import { api, errorMessage } from "../../lib/client";
 import { readTimeline } from "../../lib/timelineCache";
 import { appLog } from "../../lib/appLog";
-import { clock as clockLabel, lengthLabel, parseTimestamp, plural, removedSeconds } from "../../lib/format";
+import { clock as clockLabel, lengthLabel, parseTimestamp, plural, removedSeconds, distinctClock } from "../../lib/format";
 import { editPlaybackRange } from "../../lib/editPlaybackRange";
 import { listMoments, momentRange } from "../../lib/editMoments";
 import { reviewStops, rowAfter, rowBeside, rowPlace, rowsOfTab, stopsShown, tabShown, type ListOrder, type ReviewStop } from "../../lib/reviewTabs";
@@ -44,7 +44,7 @@ import type { JoinClock } from "../../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, revisionTarget, stagedCuts, type Thread } from "../../lib/threads";
 import { runIsActive } from "../../lib/taskRun";
 import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, threadRuns, waitingToStart } from "../../lib/requestRuns";
-import { callRevisions, decidedPassCalls, isOpenPass, keepGoesTo, noRevisions, openPass, passForYouOrder, passRevision, rejectedCallIndex, reviewCalls, revisedFrom, revisionCut, savedChoices,
+import { callRevisions, decidedPassCalls, isOpenPass, keepGoesTo, noRevisions, openPass, passForYouOrder, passRevision, reviewCalls, revisedFrom, revisionCut, savedChoices,
   type Call, type CutChoice, type PassForYouItem } from "../../lib/passCalls";
 import { callNow, carriedCall, carryingVersions, revisedCall } from "../../lib/carriedCuts";
 import { canPreviewMedia } from "../../lib/upload";
@@ -822,14 +822,11 @@ export function LegacySimpleWorkspace() {
   const allCalls = useMemo(() => pass ? reviewCalls(pass, passCuts, passOver,
     revisionInput && { ...revisionInput.call, index: revisionInput.index }) : [], [pass, passCuts, passOver, revisionInput]);
   const passEdits = passThread ? listedPassEdits : noEdits;
-  // While a pass waits on the editor, its calls and the edits of its request that ask for a look are one run of
-  // numbers: each says the same number in the list, on the timeline and on its card, and is named as what it is,
-  // "Cut 6", or "Edit 6" for one that took no footage out.
+  // While a pass waits on the editor, its calls and the edits of its request that ask for a look go by their times:
+  // each is named the same in the list, on its card and in the box's tag, as what it is and where it is, "Cut at 8:52",
+  // or "Edit at 8:52" for one that took no footage out. The order they reached the editor in is kept, but never shown.
   const passRoot = pass ? (stagingTask(pass, changes, tasks) ?? tasks.find(t => t.id === pass.taskId)) : undefined;
   const { callNo, passEditNo } = usePassCallNumbers(current.id, pass, passThread, passRoot, allCalls, passEdits, passThread ? rejectedPassEdits : noEdits);
-  // A call says its place among the calls ("Cut 2 of 5") while its number is one of theirs. A call that arrived after
-  // the edits were numbered has a number past them, and says the number alone.
-  const ofCalls = (n?: number) => n !== undefined && n <= allCalls.length ? ` of ${allCalls.length}` : "";
   const revisions = useMemo(() => pass ? callRevisions(pass, tasks, changes) : undefined, [pass, tasks, changes]);
   const queuedCuts = new Set(cutRuns.keys());
   const sentBack = (index: number) => index === revisingIndex || queuedCuts.has(index);
@@ -840,18 +837,19 @@ export function LegacySimpleWorkspace() {
   const waiting = (a: Call) => !sentBack(a.index) && passChoices[a.index] === undefined;
   const waitingCalls = allCalls.filter(waiting);
   const remainingCalls = listening ? waitingCalls.filter(a => a.index !== listening.index) : [];
-  // A call's number is the order it reached the editor in: a later ask, or the cuts the pass hands over
-  // when it ends, never renumber the calls the editor has seen. A request about that cut, its card, its line in the
-  // list and its dot on the timeline all say "Cut 2".
-  const callNumber = (about: { changeId?: string; cutIndex?: number }) => {
+  // A call goes by its time on the working cut, where its row is in the list. A request about that cut, its card, its
+  // row and its tag in the box all say "Cut at 2:47".
+  const callAtTime = (about: { changeId?: string; cutIndex?: number }) => {
     if (!pass) return undefined;
     const index = callNow(pass, about, passThread?.changes ?? [], changes, tasks, footage);
-    return index === undefined ? undefined : callNo.get(index);
+    const call = index === undefined ? undefined : allCalls.find(a => a.index === index);
+    return call && (listedAt.get(call.index) ?? call.start);
   };
   const cutName = (about: { changeId?: string; cutIndex?: number; editIndex?: number }) => {
     if (about.editIndex !== undefined && about.changeId) return passEditNo.get(`${about.changeId}/${about.editIndex}`)?.name;
-    const n = callNumber(about);
-    return n ? `Cut ${n}` : undefined;
+    const at = callAtTime(about);
+    // Two calls in one second are told apart to the millisecond.
+    return at !== undefined ? `Cut at ${distinctClock(at, [...listedAt.values()])}` : undefined;
   };
   // Where each call goes in the list: at its time on the working cut, among the edits made there. One that isn't there
   // as it was staged goes where what is left of its footage sits, or else with the call before it, so the calls keep
@@ -911,7 +909,7 @@ export function LegacySimpleWorkspace() {
     answering: replyThread?.question && !replyThread.question.cutConflict?.range && (!agentContext || agentContext === "whole")
       && tasks.filter(t => t.kind !== "transcribe" && t.state === "waiting_for_user" && !!t.question).length === 1 ? replyThread.question.id : undefined,
     cutName,
-    callNumber: (changeId, cutIndex) => callNumber({ changeId, cutIndex }),
+    callTime: (changeId, cutIndex) => callAtTime({ changeId, cutIndex }),
   };
   // The pass goes in once nothing is left to decide: no call waits on the editor and no cut is with Scarlet. The editor's
   // last call does this itself; this covers a pass that gets there another way, such as a run that ends with every
@@ -929,8 +927,8 @@ export function LegacySimpleWorkspace() {
     else void approveReview(pass);
   }, [autoApply]); // eslint-disable-line react-hooks/exhaustive-deps
   const span = (r: { start: number; end: number }) => `${clockLabel(r.start)}–${clockLabel(r.end)} · ${lengthLabel(r.end - r.start)}`;
-  // Only the calls still waiting on the editor are marked, each with its number, amber as in the chat. A decided call's dot goes.
-  // A call's dot never shares a pill with an edit's: the two count apart.
+  // Only the calls still waiting on the editor are marked, each with an amber dot. A decided call's dot goes.
+  // A call's dot never shares a pill with an edit's.
   // A dot sits where the cut's footage is on the working cut. A cut that can't be placed there has no dot.
   // While a suggestion plays the timeline is the suggestion's, as it is a call's or an edit's while that is open: After
   // is on the version it proposes, where the pass's cuts sit elsewhere. The calls' dots are back when it closes.
@@ -944,8 +942,8 @@ export function LegacySimpleWorkspace() {
       const at = sentBack(a.index) || passChoices[a.index] !== undefined ? undefined
         : override ? override.version === (pinnedCallVersion ?? head) ? override.range : undefined
         : pinnedCallVersion ? undefined : placeCut(a);
-      return at ? [{ time: at.start, n: callNo.get(a.index), group: "call", title: `Cut ${callNo.get(a.index)}${ofCalls(callNo.get(a.index))} · ${clockLabel(at.start)}`, summary: a.reason,
-        detail: `Takes out ${lengthLabel(a.end - a.start)}`, context: pass.description, state: "check" as const, need: `Cut ${callNo.get(a.index)}`,
+      return at ? [{ time: at.start, group: "call", title: `Cut at ${clockLabel(at.start)}`, summary: a.reason,
+        detail: `Takes out ${lengthLabel(a.end - a.start)}`, context: pass.description, state: "check" as const, need: `Cut at ${clockLabel(at.start)}`,
         current: listening?.changeId === pass.id && listening.index === a.index, open: () => actions.listen(pass, a) }] : [];
     })
     // A suggestion's band is on the place the player is on. Each of its other places is a dot beside it, and a press
@@ -957,7 +955,7 @@ export function LegacySimpleWorkspace() {
   const openCall = listening && listening.changeId === pass?.id ? allCalls.find(a => a.index === listening.index) : undefined;
   const openCallBack = !!openCall && sentBack(openCall.index);
   // What the video shows of the open call. Nothing, while its cut isn't on the working cut to be shown.
-  const cutPosition = openCall && heard ? `cut at ${clockLabel(heard.start)} · ${callNo.get(openCall.index)}${ofCalls(callNo.get(openCall.index))}` : "";
+  const cutPosition = openCall && heard ? `cut at ${clockLabel(heard.start)}` : "";
   const shownEdit = actions.showing;
   const reviewed = useReviewed(current.id, focusThread);
   const revisingEdit = useRevising(focusThread);
@@ -973,19 +971,19 @@ export function LegacySimpleWorkspace() {
   const reviewingEdit = shownEdit && shownChange && focusThread ? shownEdit : undefined;
   const threadEdits = threadTimeline.edits;
   // While another edit is open, the calls still waiting on the editor play as Scarlet staged them, their footage
-  // stepped over on After, and the timeline shows each as a gap with its number: the video round the edit is the one
+  // stepped over on After, and the timeline shows each as a gap at its time: the video round the edit is the one
   // it will be, and a retake a call takes out doesn't look missed (the editor asked for it, 2026-11-23). A call Scarlet
   // would leave in, one revised into an edit of its own, or one that can't be placed on the video now plays as it is.
   const stagedKey = reviewingEdit && pass && !suggestion && !listening && !pinnedCallVersion && !placing
     ? waitingCalls.flatMap(a => {
       if (approves(a) !== "cut" || pass.cutEdits?.some(c => c.index === a.index)) return [];
       const at = placeCut(a);
-      return at && at.end > at.start ? [`${a.index}:${callNo.get(a.index) ?? ""}:${at.start}:${at.end}`] : [];
+      return at && at.end > at.start ? [`${a.index}:${at.start}:${at.end}`] : [];
     }).join(",") : "";
   const stagedCalls = useMemo<StagedCall[]>(() => !stagedKey || !pass ? [] : stagedKey.split(",").map(part => {
-    const [index, n, start, end] = part.split(":");
+    const [index, start, end] = part.split(":");
     const call = allCalls.find(a => a.index === Number(index));
-    return { n: n ? Number(n) : undefined, removed: { start: Number(start), end: Number(end) },
+    return { removed: { start: Number(start), end: Number(end) },
       open: () => { if (call) actions.listen(pass, call); } };
   }), [stagedKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const {
@@ -1010,11 +1008,11 @@ export function LegacySimpleWorkspace() {
     title: `Cut at ${at} · ${lengthLabel(removed.end - removed.start)}`, summary: label, label: `Cut at ${at}`, shortLabel: at,
     skipped: appliedSide === "after",
     open: edit && focusThread ? () => actions.openEdit(focusThread, edit, undefined, true) : undefined }));
-  // A waiting call's cut round the open edit, played as staged: grey as a cut, edged in amber, named by its number.
+  // A waiting call's cut round the open edit, played as staged: grey as a cut, edged in amber, named by its time.
   // A press opens the call, on either side.
   const stagedGap = (c: StagedCall, skipped: boolean): TimelineGap => ({ start: c.removed.start, end: c.removed.end,
-    title: `${c.n ? `Cut ${c.n}` : "Cut"} · ${lengthLabel(c.removed.end - c.removed.start)}`, summary: "Waits for your call",
-    label: c.n ? `Cut ${c.n}` : "Cut", shortLabel: c.n ? String(c.n) : undefined, skipped, call: true, open: c.open });
+    title: `Cut at ${clockLabel(c.removed.start)} · ${lengthLabel(c.removed.end - c.removed.start)}`, summary: "Waits for your call",
+    label: `Cut at ${clockLabel(c.removed.start)}`, shortLabel: clockLabel(c.removed.start), skipped, call: true, open: c.open });
   const stagedGaps = cutKey ? stagedAround.map(c => stagedGap(c, appliedSide === "after"))
     : !callView ? stagedCalls.map(c => stagedGap(c, true)) : [];
   // A call shown where the cuts around it still have their footage marks them the same way, by their time on the
@@ -1137,11 +1135,7 @@ export function LegacySimpleWorkspace() {
   };
   /** A pass's edit by its time, as its row in the pass's list and the message box's tag say it: "Cut at 2:05". */
   const passEditName = (e: ThreadEdit, at: number) => `${e.beforeCut ? "Cut" : "Edit"} at ${clockLabel(at)}`;
-  /** One that asks for a look while the pass waits has its number, counted on from the calls: "Cut 6 · 8:52". */
-  const passEditDot = (thread: Thread, e: ThreadEdit, at: number) => {
-    const numbered = passEditNo.get(editKey(e));
-    return numbered ? { ...editDot(thread, e, `${numbered.name} · ${clockLabel(at)}`, at), n: numbered.n } : editDot(thread, e, passEditName(e, at), at);
-  };
+  const passEditDot = (thread: Thread, e: ThreadEdit, at: number) => editDot(thread, e, passEditName(e, at), at);
 
   const [compareHost, setCompareHost] = useState<HTMLElement | null>(null);
 
@@ -1155,32 +1149,27 @@ export function LegacySimpleWorkspace() {
     else next.delete(id);
     return next;
   }), []);
-  // The timeline numbers the edits of the request picked in the chat, or of the one that's open, as the chat does:
+  // The timeline marks the edits of the request picked in the chat, or of the one that's open, as the chat does:
   // filled once kept and amber while it asks for a look. With nothing picked it marks nothing, and another request's
   // edits draw nothing. An edit sent back for revision doesn't ask for a look until its new version arrives.
   const onLatest = !firstCuts?.size && marked?.id === focusThread?.id;
   const listShown = !!focusThread && openList === focusThread.id;
-  // A pass's edits are numbered in timeline order, as its list goes, except while the pass waits on the editor: then
-  // only the ones that ask for a look are marked, with the numbers they have among its calls, and its other edits go
-  // in with the last call. They share a pill only with others like them.
-  // An edit made in several places is one edit: each of its places carries the number its row has in the chat.
+  // A pass's edits are all marked, except while the pass waits on the editor: then only the ones that ask for a look
+  // are, and its other edits go in with the last call. They share a pill only with others like them.
   const passWaits = !!passThread && passThread.id === focusThread?.id && (waitingCalls.length > 0 ||
     passEdits.some(e => e.check && !passReviewed(e) && !passRevising(e)));
-  // Each dot has its row's number, which an edit keeps when another of the request's is rejected.
-  const dotOrder = playerView && focusThread && !passFocused ? listPlaces(focusThread, playerView.edits, playerView.rejected.filter(e => rejectedCallIndex(e) === undefined)) : undefined;
-  const dotNumbers = new Map((dotOrder ? editGroups(playerView!.edits) : []).flatMap(g => g.members.map(m => [m.edit, dotOrder!.number(g.members[0]!.edit)!] as const)));
-  const numberedDots: TimelineDot[] = playerView && focusThread ? playerView.edits.flatMap((e, i): TimelineDot[] => {
+  const numberedDots: TimelineDot[] = playerView && focusThread ? playerView.edits.flatMap((e): TimelineDot[] => {
     const state = reviewed(e) ? "kept" as const : e.check && !revisingEdit(e) ? "check" as const : undefined;
     const current = e === shownEdit;
     const at = (state === "check" ? e.reviewRange?.start : undefined) ?? e.at ?? e.range.start;
     const need = state === "check" ? passEditNo.get(editKey(e))?.name ?? passEditName(e, at) : undefined;
     if (passWaits) return state === "check" || current ? [{ ...passEditDot(focusThread, e, at), group: "pass", state, current, need }] : [];
-    // The hover note names the request first: "Edit 3" alone would read as the chat's third request.
-    const dot = editDot(focusThread, e, `${shortTitle(focusThread.title)} · ${dotNumbers.get(e) ?? i + 1} of ${dotOrder?.total ?? playerView.edits.length} · ${clockLabel(at)}`, at);
-    return [{ ...dot, n: dotNumbers.get(e) ?? i + 1, state, current, need }];
+    // The hover note names the request, then where the edit is.
+    const dot = editDot(focusThread, e, `${shortTitle(focusThread.title)} · ${clockLabel(at)}`, at);
+    return [{ ...dot, state, current, need }];
   }) : [];
-  // The waiting pass's edits that ask for a look are with its calls when the timeline is on another request, numbered
-  // after the calls as For you counts them. While the timeline is the pass's own, its dots above draw them.
+  // The waiting pass's edits that ask for a look are with its calls when the timeline is on another request. While the
+  // timeline is the pass's own, its dots above draw them.
   const passDots: TimelineDot[] = !callsShown || !passThread || suggestion || (playerView && focusThread?.id === passThread.id) ? []
     : passEdits.flatMap(e => {
       if (!e.check || passReviewed(e) || passRevising(e)) return [];
@@ -1190,21 +1179,21 @@ export function LegacySimpleWorkspace() {
   // In the default full timeline, unresolved flags from older requests also need a way in. Their chat lists already
   // load positions on the current working cut. Use those positions only, so old versions cannot put a dot at the wrong time.
   const showOtherFlags = picked === undefined && !focus && !suggestion && !listening && !source;
-  // With no request picked, the timeline marks every request's edits, each numbered as its own request's list has it:
+  // With no request picked, the timeline marks every request's edits:
   // the editor let go of the picked band to see them all (2026-11-23). The waiting pass keeps its calls' dots.
   const showEvery = picked === null && !focus && !suggestion && !listening && !source;
   const drawnChecks = new Set([...numberedDots, ...passDots].filter(dot => dot.state === "check").map(dot => dot.edit));
   const otherFlags = showOtherFlags || showEvery ? [...ordered].reverse().flatMap(thread => {
     const review = backgroundReview.get(thread.id);
     if (!review || review.head !== head || thread.id === focusThread?.id || thread.id === passThread?.id) return [];
-    return review.markers.flatMap(({ edit, number, total, state }) => {
+    return review.markers.flatMap(({ edit, state }) => {
       if (!showEvery && state !== "check") return [];
       const key = editKey(edit);
       if (drawnChecks.has(key)) return [];
       drawnChecks.add(key);
       const at = (state === "check" ? edit.reviewRange?.start : undefined) ?? edit.at ?? edit.range.start;
-      return [{ ...editDot(thread, edit, `${shortTitle(thread.title)} · ${number} of ${total} · ${clockLabel(at)}`, at),
-        n: number, group: thread.id, state, need: state === "check" ? passEditName(edit, at) : undefined }];
+      return [{ ...editDot(thread, edit, `${shortTitle(thread.title)} · ${clockLabel(at)}`, at),
+        group: thread.id, state, need: state === "check" ? passEditName(edit, at) : undefined }];
     });
   }) : [];
   const olderFlaggedEdits = new Set(otherFlags.map(dot => dot.edit));
@@ -1297,7 +1286,6 @@ export function LegacySimpleWorkspace() {
   const editPlace = reviewingEdit && waitingEdit(reviewingEdit)
     ? (passIsFocus ? waitingPassForYouEdits.findIndex(item => matchesEdit(item.edit, reviewingEdit)) : flaggedRows.indexOf(editsByRow[shownRow]!))
     : -1;
-  const shownPassNo = reviewingEdit ? passEditNo.get(editKey(reviewingEdit))?.name : undefined;
   const closeEdit = () => { player.pause(); threadTimeline.clear(); };
   // Every row of a request's lists is under exactly one tab (`rowPlace`), and the stops below are those rows as ↑ ↓
   // and Keep go through them: the chat draws its tabs by the same rule, so both agree on a tab's rows. A request that
@@ -1704,7 +1692,7 @@ export function LegacySimpleWorkspace() {
   const rejectedCard = reviewingEdit && (reviewingEdit.rejected || leavingNow) && focusThread
     ? <RejectedEditCard edit={reviewingEdit} /> : undefined;
   const editCard = reviewingEdit && !reviewingEdit.rejected && !leavingNow && shownChange && focusThread && !editSentBack
-    ? <AppliedEditCard projectId={current.id} focusThread={focusThread} reviewingEdit={reviewingEdit} shownPassNo={shownPassNo}
+    ? <AppliedEditCard projectId={current.id} focusThread={focusThread} reviewingEdit={reviewingEdit}
         editPlace={editPlace} flaggedCount={passIsFocus ? waitingPassForYouEdits.length : flaggedRows.length} editDid={editDid} selectedMoment={threadTimeline.selectedMoment}
         shownKind={shownKind} shownMarker={shownMarker} reviewRange={reviewRange} onPlayCheck={playCheck} visiting={visiting}
         beforeCut={beforeCut} cutBeforeTimeline={cutBefore.timeline} cutBeforeError={cutBefore.error} onRetryCutBefore={cutBefore.retry}
@@ -1764,11 +1752,11 @@ export function LegacySimpleWorkspace() {
     : heard && (timeline.version === pass.fromVersion || toWorkingCut) ? { timeline, range: heard }
     : stagedOn.timeline && !heard ? { timeline: stagedOn.timeline, range: listening.cut } : undefined;
   const callScriptOpen = !!callKey && scriptFor === callKey && (!conflict || !!heard);
-  // Where the call's cut is in the video, as its dot on the timeline says.
-  const callAt = openCall ? (heard ?? placeCut(openCall))?.start : undefined;
+  // Where the call's cut is in the video: the time its row in the list leads with, so its card names it the same way.
+  const callAt = openCall ? listedAt.get(openCall.index) ?? (heard ?? placeCut(openCall))?.start : undefined;
   const callCard = !editOpen && pass && openCall && listening
-    ? <CallCard projectId={current.id} pass={pass} openCall={openCall} listening={listening} callNum={callNo.get(openCall.index)}
-        callAt={callAt} callHistory={callHistory} callWords={callWords} callLength={callLength!} callKey={callKey}
+    ? <CallCard projectId={current.id} pass={pass} openCall={openCall} listening={listening}
+        callAt={callAt !== undefined ? distinctClock(callAt, [...listedAt.values()]) : undefined} callHistory={callHistory} callWords={callWords} callLength={callLength!} callKey={callKey}
         callScriptOpen={callScriptOpen} media={media} conflict={!!conflict} heard={heard} visit={visit} decideError={decideError}
         placing={placing} stagedOnError={stagedOn.error} onRetryStagedOn={stagedOn.retry} workspaceActive={workspaceActive}
         onToggleSide={() => listenSide(listening.side === "after" ? "before" : "after")}
@@ -2017,9 +2005,9 @@ export function LegacySimpleWorkspace() {
   // chosen in its passage has the words' times, not the cut's.
   const aimedCall = pass && aimed && aimed.changeId === pass.id && aimed.cutIndex !== undefined
     ? allCalls.find(a => a.index === aimed.cutIndex) ?? (aimed.end !== undefined ? { start: aimed.time, end: aimed.end } : undefined) : undefined;
-  // A call's tag is only its number ("Cut 3"), so the box's tag line says where that cut is.
-  const aimTime = boxTag && aimedCall && aimed && cutName(aimed) === boxTag ? (placeCut(aimedCall) ?? aimedCall).start : undefined;
-  const targetTime = aimed && replyThread && boxTag && aimTime === undefined ? targetTimeOf(aimed) : undefined;
+  // A call's tag is its time ("Cut at 2:47"), to the millisecond on a click, where its row is in the list.
+  const targetTime = aimed && replyThread && boxTag
+    ? (aimedCall && cutName(aimed) === boxTag ? callAtTime(aimed) : undefined) ?? targetTimeOf(aimed) : undefined;
   const aimLabel = !replyThread ? "Starting a new edit"
     : aimedCall && (targetLabel || aimedAtItem) ? `Revising the cut at ${clockLabel((placeCut(aimedCall) ?? aimedCall).start)}`
     : targetLabel ? `Revising ${targetLabel}`
@@ -2271,7 +2259,7 @@ export function LegacySimpleWorkspace() {
     onCreated={() => { follow.current = true; }} onSent={sentUnder(aims.current)}
     // The box carries a tag naming the cut or edit it revises, or the point a new edit is about. Taking the tag off
     // makes the message a new edit about the whole video.
-    messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime} targetTime={targetTime}
+    messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} targetTime={targetTime}
     targetTag={boxTag} targetTagNote={answerNote} onClearTarget={clearTarget} onRestoreTarget={restoreTarget}
     // A queued request's words have the box to themselves: its row in the tray, lit, says which request they are.
     rewording={rewordingItem && { id: rewordingItem.id, text: rewording!.text,
@@ -2323,8 +2311,8 @@ export function LegacySimpleWorkspace() {
               {current.reviewStatus === "loading" ? <Loading label="Loading edits…" />
                 : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}{" "}
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
-                : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
-                  pinned={pinned} pinHost={pinHost} list={listOf(thread.id)}
+                : ordered.length ? ordered.map((thread, i) => <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
+                  pinned={pinned} pinHost={pinHost} list={listOf(thread.id)} laterRequests={ordered.length - 1 - i}
                   reportReviewMarkers={(showOtherFlags || showEvery) && thread.id !== focusThread?.id && thread.id !== passThread?.id
                     ? reportReviewMarkers : undefined} reportEvery={showEvery} />)
                 : !media.length ? <p className="simple-empty">Drop footage here, then say what you want.</p>

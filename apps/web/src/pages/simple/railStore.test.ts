@@ -37,15 +37,3 @@ it("adds up what every request has in a list, and says so only when a count chan
   store.report("a");
   expect(heard).toHaveBeenCalledTimes(3);
 });
-
-it("assigns sequential rail-wide For you numbers after reserved pass numbers without colliding", () => {
-  const store = new RailStore();
-  store.setNumbering(["t2", "t1"], 3);
-  store.report("t1", { you: 1, optional: 2, working: 0, done: 0, numberedKeys: ["c1/0"] });
-  store.report("t2", { you: 2, optional: 1, working: 0, done: 0, numberedKeys: ["c2/0", "c2/1"] });
-  // Latest thread t2 gets 4 and 5 after reserved 1..3; older thread t1 gets 6. Low-risk keys have no number.
-  expect(store.numberOf("t2", "c2/0")).toBe(4);
-  expect(store.numberOf("t2", "c2/1")).toBe(5);
-  expect(store.numberOf("t1", "c1/0")).toBe(6);
-  expect(store.numberOf("t1", "low-risk-key")).toBeUndefined();
-});

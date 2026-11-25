@@ -25,6 +25,7 @@ import {
   isDip,
   joinEvidence,
   keptSoundsPast,
+  levelBars,
   levelStrip,
   onWordOnset,
   padEdge,
@@ -182,8 +183,9 @@ function findTrough(
   const options = [floorOf(narrowing), floorOf(-narrowing as 1 | -1)].filter((i): i is number => i !== undefined)
     .map(i => ({ i, distance: Math.abs(centre(i) - s.at) }));
   // Nearest first; on a tie keep the material.
+  const dipBar = levelBars(levels).dip;
   for (const { i } of options.sort((a, b) => a.distance - b.distance)) {
-    const floor = db[i]! <= DIP_DBFS ? DIP_DBFS : db[i]! + 6;
+    const floor = db[i]! <= dipBar ? dipBar : db[i]! + 6;
     let first = i, last = i;
     while (first > 0 && db[first - 1]! <= floor) first--;
     while (last + 1 < db.length && db[last + 1]! <= floor) last++;
@@ -211,7 +213,7 @@ function findTrough(
     const move = Math.abs(best - at), side = direction === 1 ? "start" : "end";
     return { at: best, dip: true, snapped: move <= snapLimit + 1e-7,
       note: side + (move < 1e-6 ? " stays" : " moved " + move.toFixed(2) + " s " + (best > at ? "later" : "earlier")) +
-        (db[i]! <= DIP_DBFS ? ` onto the lowest level between the words in the recording (${Math.round(db[i]!)} dBFS)`
+        (db[i]! <= dipBar ? ` onto the lowest level between the words in the recording (${Math.round(db[i]!)} dBFS)`
           : ` onto the trough between the words in the recording (${Math.round(db[i]!)} dBFS, ${Math.round(troughDepth(levels, i))} dB under the sound either side)`) };
   }
 }
@@ -405,12 +407,13 @@ function inSoundEvidence(sources: SourceEdge[], at: number, direction: 1 | -1) {
   if (here < 0 || here >= levels.db.length) return;
   const speed = s.clip.speed ?? 1, k = Math.round(reach / levels.step);
   const centre = (i: number) => levels.from + (i + .5) * levels.step;
+  const dipBar = levelBars(levels).dip;
   const point = (way: 1 | -1) => {
     for (let d = 1; d <= k; d++) {
       let i = here + way * d;
       const t = centre(i);
       if (i < 0 || i >= levels.db.length || t < s.clip.sourceIn || t > s.clip.sourceOut) return;
-      const quiet = soundAt(s.page, t) === "quiet" || levels.db[i]! <= DIP_DBFS;
+      const quiet = soundAt(s.page, t) === "quiet" || levels.db[i]! <= dipBar;
       if (!quiet && !isDip(levels, i, LOW_POINT_DBFS)) continue;
       // A trough's floor, where the sound either side is furthest. Room tone's near side, where the sound stops.
       if (!quiet) while (i + way >= 0 && i + way < levels.db.length && levels.db[i + way]! < levels.db[i]!) i += way;

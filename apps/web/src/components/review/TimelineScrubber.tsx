@@ -219,22 +219,19 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     const closing = (id: string, left: number, delay: number) =>
       <i key={id} aria-hidden="true" className="simple-timeline-closing" style={{ left: `${left}%`, animationDelay: `${-delay}ms` }} />;
     return <>{markLayout.map(mark => {
-      const { key, times, dots, at, label, width: size } = mark;
+      const { key, times, dots, at } = mark;
       const on = dots.some(dot => dot.current);
       const hot = key === hotMark || (litMark !== undefined && times.includes(litMark));
       // Only a marker that is new arrives: one made of edits that all just landed. A pill that was already there takes
-      // a newer edit in quietly, its run of numbers widening, and only that cut's red closes up, where it is.
+      // a newer edit in quietly, and only that cut's red closes up, where it is.
       const arrived = dots.filter(fresh);
       const isNew = arrived.length > 0 && arrived.length === dots.length;
       const landed = !isNew ? undefined : arrived.some(dot => dot.landed === "cut") ? "cut" : "edit";
       const landedAt = Math.max(...arrived.map(dot => dot.landedAt ?? now));
       const delay = isNew ? elapsed(`${key}|${landedAt}`, landedAt) : 0;
       const node = <i key={key} aria-hidden="true" data-state={dotState(dots)} data-landed={landed} data-leaving={dots.length === 1 && dots[0]!.leaving ? "" : undefined}
-        className={`simple-timeline-mark ${label ? "is-numbered" : "is-dot"}${isPill(mark) ? " is-pill" : ""}${on ? " is-on" : ""}${hot ? " is-hot" : ""}`}
-        style={{ left: `${at}%`, ...label && { width: size, marginLeft: -size / 2 },
-          ...landed && delay > 0 && { animationDelay: `${(landed === "cut" ? 260 : 0) - delay}ms` } }}>
-        {label && <span className="simple-timeline-number">{label}</span>}
-      </i>;
+        className={`simple-timeline-mark is-dot${isPill(mark) ? " is-pill" : ""}${on ? " is-on" : ""}${hot ? " is-hot" : ""}`}
+        style={{ left: `${at}%`, ...landed && delay > 0 && { animationDelay: `${(landed === "cut" ? 260 : 0) - delay}ms` } }} />;
       // A cut just applied: a sliver of its red closes up where the footage came out, then its marker arrives.
       if (landed === "cut") return [closing(`${key}-closing`, at, delay), node];
       const cuts = arrived.filter(dot => dot.landed === "cut" && dot.time >= from && dot.time <= from + span);
@@ -291,7 +288,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   })}</>, [gaps, from, span, width, onGap, hotGap]); // eslint-disable-line react-hooks/exhaustive-deps
   // Hovering reaches a marker from further away than a press does, so a press beside one still scrubs.
   const [aimed, setAimed] = useState(false);
-  // A pill opens into its edits: a press zooms to its run, where each has its own number, and opens nothing. Zoomed in
+  // A pill opens into its edits: a press zooms to its run, where each has its own dot, and opens nothing. Zoomed in
   // as far as the timeline goes, it opens its first. A marker of one edit opens it.
   const openMark = (mark: MarkLayout) => {
     const first = mark.dots.find(dot => dot.open)?.open;

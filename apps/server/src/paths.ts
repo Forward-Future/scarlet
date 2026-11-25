@@ -55,6 +55,20 @@ export class Paths {
   get skills() {
     return join(this.root, "skills");
   }
+  /** Reusable visual style guides: assets (fonts, logos, references) and rendered previews. */
+  get styleGuidesLibrary() {
+    return join(this.root, "style-guides");
+  }
+  styleGuideDir(id: string) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Invalid style guide directory.");
+    return join(this.styleGuidesLibrary, id);
+  }
+  styleGuideAssets(id: string) {
+    return join(this.styleGuideDir(id), "assets");
+  }
+  styleGuidePreview(id: string) {
+    return join(this.styleGuideDir(id), "preview");
+  }
   get tmp() {
     return join(this.root, "tmp");
   }
@@ -127,5 +141,6 @@ export class Paths {
     }
     ensureDirectory(this.tmp);
     ensureDirectory(this.skills);
+    ensureDirectory(this.styleGuidesLibrary);
   }
 }

@@ -3,9 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileInDirectory, heardAudio, heardAudioKey, speechActivityOf, speechActivityStart, type HeardAudio } from "@scarlet/render";
-import type { DialogueDetections, ServerSettings } from "@scarlet/shared";
+import { isHandOff, type DialogueDetections, type ServerSettings } from "@scarlet/shared";
 import type { MediaAsset, TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
+import { logId } from "../logText.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { UhmDetector } from "../transcribe/uhm.js";
 import { getTranscriptionProvider } from "../transcribe/index.js";
@@ -112,8 +113,8 @@ export function dialogueDetector(ctx: Ctx) {
   const unalignedPages = new WeakSet<DialogueDetections>();
   function scanEdit(projectId: string, taskId: string, startedAt?: string): ScanEdit {
     const owner = ctx.repos.tasks.get(taskId);
-    // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does.
-    if (!owner || owner.projectId !== projectId || !editsDialogue(owner.kind)) throw notFound("edit in this project");
+    // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does, and a hand-off does a request's cutting, so it scans as the request would.
+    if (!owner || owner.projectId !== projectId || !(editsDialogue(owner.kind) || isHandOff(owner))) throw notFound("edit in this project");
     return { taskId, startedAt: startedAt ?? owner.startedAt };
   }
   function activeEdit(edit: ScanEdit) {
@@ -205,7 +206,9 @@ export function dialogueDetector(ctx: Ctx) {
     // recording's speakers as its own page would, and reads the page itself only if that one stops, as the pause stops it.
     const ahead = edit && policy.settings.provider !== "openai" ? pending.get(JSON.stringify([...params, keptSide, false])) : undefined;
     if (ahead) {
-      void ctx.track(ctx.speakers.turns(ctx, projectId, media, undefined, true).catch(() => {}), projectId);
+      void ctx.track(ctx.speakers.turns(ctx, projectId, media, undefined, true).catch(error => {
+        if (!ctx.mediaSignal(projectId).aborted) ctx.log(`[dialogue] speaker-turns-failed media=${logId(media.id)} project=${logId(projectId)} ${error instanceof Error ? error.message : String(error)}`);
+      }), projectId);
       const ready = ahead.ready.catch(() => openPage(projectId, media, from, to, edit, policy, keptSide).then(page => page.ready));
       return { analyzed: ready, ready, work: ahead.work };
     }

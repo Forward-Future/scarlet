@@ -26,6 +26,9 @@ export function requireProjectEditAttempt(ctx: Ctx, attempt: TaskAttempt | undef
   if (task?.kind === "skill_from_change" || task?.kind === "skill_edit" || task?.kind === "learning_check") {
     throw forbidden("This task works on skills and cannot change the project.");
   }
+  if (task?.kind === "style_guide_edit") {
+    throw forbidden("This task works on a style guide and cannot change the project.");
+  }
   if (task?.kind === "area_check") {
     throw forbidden("This task says what of a recording viewers may see and cannot change the project.");
   }

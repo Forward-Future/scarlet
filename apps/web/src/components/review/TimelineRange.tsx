@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from "react-dom";
 import type { TimeRange } from "@scarlet/timeline";
 import { lengthLabel, playbackClock, preciseRange } from "../../lib/format";
+import { appLog } from "../../lib/appLog";
 import { isAltClearRangeKey } from "../../lib/hotkeys";
 import type { ScrubRelease } from "../../lib/player";
 import { DimMs, Icon } from "../ui/primitives";
@@ -221,8 +222,11 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       g.marked = drawn;
       g.stop();
       setLive(undefined);
-      if (drawn && g.last) now.current.onRange(g.last);
-      else if (!cancelled && !edge) {
+      if (drawn && g.last) {
+        // Once, as it is let go: the moves on the way are the seeks the player logs.
+        appLog("timeline", "range-set", { start: g.last.start, end: g.last.end, via: edge ? "handle" : "drag" });
+        now.current.onRange(g.last);
+      } else if (!cancelled && !edge) {
         const at = clampTime(pressed, now.current.start, now.current.end);
         if (shift && now.current.onShiftPress) now.current.onShiftPress(toFrame(at, now.current.fps)); else now.current.onPress(at);
       }
@@ -261,11 +265,17 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
   const lit = useUiStore(s => s.aimLit);
   const nudge = (edge: "start" | "end", e: KeyboardEvent<HTMLButtonElement>) => {
     if (!range) return;
-    if (isAltClearRangeKey(e)) { e.preventDefault(); e.stopPropagation(); onRange(undefined); return; }
+    if (isAltClearRangeKey(e)) {
+      e.preventDefault(); e.stopPropagation();
+      appLog("timeline", "range-cleared", { via: "key", key: "alt+x" });
+      onRange(undefined);
+      return;
+    }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape" || (!e.shiftKey && (e.key === "Delete" || e.key === "Backspace"))) {
       e.preventDefault();
       e.stopPropagation();
+      appLog("timeline", "range-cleared", { via: "key", key: e.key });
       onRange(undefined);
       return;
     }

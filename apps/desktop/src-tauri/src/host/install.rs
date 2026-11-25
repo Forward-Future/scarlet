@@ -192,7 +192,9 @@ async fn install_via_script(
             log::warn!("cannot install {agent}: failed to write temp script: {e}");
             "Scarlet could not write the assistant files. Check your folder permissions and try again.".to_string()
         })?;
-        let script_path = tmp.path().to_string_lossy().into_owned();
+        // Close the write handle before PowerShell opens the script, while still removing the temp file on drop.
+        let script_file = tmp.into_temp_path();
+        let script_path = script_file.to_string_lossy().into_owned();
         let args = [
             "-NoProfile",
             "-NonInteractive",
@@ -244,8 +246,10 @@ pub(super) fn install_spawn_options(cwd: std::path::PathBuf, env: HashMap<String
 /// inherited reaches it, so no token or registry setting from the environment does.
 pub(super) fn install_env(env: HashMap<String, String>, prefix: &Path) -> HashMap<String, String> {
     const ALLOWED: &[&str] = &[
-        "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP", "TMPDIR",
-        "APPDATA", "LOCALAPPDATA", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS",
+        "PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
+        "OS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432",
+        "TEMP", "TMP", "TMPDIR", "APPDATA", "LOCALAPPDATA",
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS",
     ];
     let mut install_env = crate::util::env_filter_allowlist(env, ALLOWED);
     install_env.insert("npm_config_prefix".into(), prefix.to_string_lossy().into_owned());
@@ -294,6 +298,54 @@ mod tests {
                 // A changed copy must be reviewed and its pin updated on purpose (installers/README.md).
                 assert_eq!(sha256_hex(script.body.as_bytes()), script.sha256, "{agent}: {} changed", script.source);
                 assert_eq!(verified_body(script), Some(script.body));
+            }
+        }
+    }
+
+    #[test]
+    fn finds_gemini_where_its_windows_installer_puts_it() {
+        // Otherwise the install works, but Scarlet can't see agy.exe and says the installation did not finish.
+        let ps1 = native_installer("gemini").unwrap().ps1.body;
+        let line = ps1
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("$TARGET_DIR = Join-Path $env:LOCALAPPDATA"))
+            .expect("the Gemini installer names its folder under LOCALAPPDATA");
+        let local = Path::new("C:/Users/editor/AppData/Local");
+        let target = line.split('"').nth(1).unwrap().split('\\').fold(local.to_path_buf(), |dir, part| dir.join(part));
+        assert_eq!(target, local.join("agy").join("bin"));
+        assert!(crate::util::windows_local_app_dirs(local).contains(&target), "Scarlet does not look in {}", target.display());
+    }
+
+    #[test]
+    fn finds_codex_where_its_windows_installer_puts_it() {
+        let ps1 = native_installer("codex").unwrap().ps1.body;
+        let line = ps1
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("$defaultVisibleBinDir = Join-Path $env:LOCALAPPDATA"))
+            .expect("the Codex installer names its folder under LOCALAPPDATA");
+        let local = Path::new("C:/Users/editor/AppData/Local");
+        let target = line.split('"').nth(1).unwrap().split('\\').fold(local.to_path_buf(), |dir, part| dir.join(part));
+        assert_eq!(target, local.join("Programs").join("OpenAI").join("Codex").join("bin"));
+        assert!(crate::util::windows_local_app_dirs(local).contains(&target), "Scarlet does not look in {}", target.display());
+    }
+
+    #[test]
+    fn keeps_every_windows_system_variable_the_bundled_installers_read() {
+        // Stripping OS or PROCESSOR_ARCHITECTURE makes gemini.ps1 and codex.ps1 fail at once on Windows.
+        let env_ref = regex::Regex::new(r"\$env:([A-Za-z0-9_]+)").unwrap();
+        for agent in ["claude", "codex", "gemini"] {
+            let ps1 = native_installer(agent).unwrap().ps1.body;
+            for cap in env_ref.captures_iter(ps1) {
+                let name = &cap[1];
+                // Optional Codex installer overrides are deliberately kept out of the child environment.
+                if name.starts_with("CODEX_") {
+                    continue;
+                }
+                let inherited = HashMap::from([(name.to_string(), "value".to_string())]);
+                let filtered = install_env(inherited, Path::new("C:/Users/editor/.scarlet/assistants"));
+                assert!(filtered.contains_key(name), "{agent}.ps1 reads $env:{name}, but install_env stripped it");
             }
         }
     }

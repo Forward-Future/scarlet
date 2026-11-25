@@ -106,7 +106,7 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
     // A rejected call is no edit of the engine's: a message about it names its cut of the pass, as a note on a call does.
     changeId: edit.changeId, cutIndex: rejectedCallIndex(edit), version: head ?? undefined, time: edit.range.start, end: edit.range.end, clipIds: [], label: edit.label,
   } : ({
-    changeId: edit.changeId, editIndex: edit.spot, reviewRef: reviewRefs.get(edit), editNumber: edits.indexOf(edit) + 1,
+    changeId: edit.changeId, editIndex: edit.spot, reviewRef: reviewRefs.get(edit),
     version: head ?? undefined, time: edit.range.start, end: edit.range.end, clipIds: [], label: edit.label,
     // A moment is about all of its edits: its stretch is theirs, and Scarlet is told the others.
     ...moment && { time: Math.min(...moment.edits.map(e => e.range.start)), end: Math.max(...moment.edits.map(e => e.range.end)),

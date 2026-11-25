@@ -23,12 +23,12 @@ const show = (playhead: number, marks?: TimelineDot[]) =>
 
 it("lands a just-applied edit with a moment: a cut's red closes up first, any other edit only pops in", async () => {
   await show(0, [
-    { time: 20, title: "Edit 1 of 3 · 0:20", n: 1, landed: "cut" },
-    { time: 60, title: "Edit 2 of 3 · 1:00", n: 2, landed: "edit" },
-    { time: 100, title: "Edit 3 of 3 · 1:40", n: 3 },
+    { time: 20, title: "Edit at 0:20", landed: "cut" },
+    { time: 60, title: "Edit at 1:00", landed: "edit" },
+    { time: 100, title: "Edit at 1:40" },
   ]);
   const marks = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
-  expect(marks.map(m => [m.textContent, m.dataset.landed])).toEqual([["1", "cut"], ["2", "edit"], ["3", undefined]]);
+  expect(marks.map(m => [m.textContent, m.dataset.landed])).toEqual([["", "cut"], ["", "edit"], ["", undefined]]);
   const closing = container.querySelectorAll<HTMLElement>(".simple-timeline-closing");
   expect(closing).toHaveLength(1);
   expect(closing[0]!.style.left).toBe(marks[0]!.style.left);
@@ -37,7 +37,7 @@ it("lands a just-applied edit with a moment: a cut's red closes up first, any ot
 it("plays an edit's arrival once: a marker drawn again picks it up where it is, and one drawn after is simply there", async () => {
   let now = 1_000_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
-  const cut = (time: number): TimelineDot => ({ time, title: "Edit 1", n: 1, landed: "cut", landedAt: 1_000_000 });
+  const cut = (time: number): TimelineDot => ({ time, title: "Edit 1", landed: "cut", landedAt: 1_000_000 });
   await show(0, [cut(20)]);
   const mark = () => container.querySelector<HTMLElement>(".simple-timeline-mark")!;
   expect(mark().dataset.landed).toBe("cut");
@@ -60,12 +60,12 @@ it("takes a newer cut into a pill already there quietly: only that cut's red clo
   const now = 1_000_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
   await show(0, [
-    { time: 21, title: "Edit 1", n: 1 },
-    { time: 21, title: "Edit 2", n: 2 },
-    { time: 21, title: "Edit 3", n: 3, landed: "cut", landedAt: now, edit: "c3/0" },
+    { time: 21, title: "Edit 1" },
+    { time: 21, title: "Edit 2" },
+    { time: 21, title: "Edit 3", landed: "cut", landedAt: now, edit: "c3/0" },
   ]);
   const marks = [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
-  expect(marks.map(m => [m.textContent, m.dataset.landed])).toEqual([["1–3", undefined]]);
+  expect(marks.map(m => [m.classList.contains("is-dot"), m.dataset.landed])).toEqual([[true, undefined]]);
   const closing = [...container.querySelectorAll<HTMLElement>(".simple-timeline-closing")];
   expect(closing.map(c => c.style.left)).toEqual([`${21 / 120 * 100}%`]);
   vi.restoreAllMocks();

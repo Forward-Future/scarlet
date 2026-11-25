@@ -13,6 +13,7 @@ import { createProject, hasInitialTimeline } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { resolveTimeline } from "../services/timeline.js";
+import { createSampleProject } from "../services/sampleProject.js";
 import { jsonBody, requireProject, requireProjectHeader } from "./util.js";
 import { actorFor, logActivity, quote } from "../services/activity.js";
 
@@ -37,6 +38,11 @@ export function projectRoutes(ctx: Ctx) {
     const project = ctx.repos.projects.insert(createProject(body.name, body.settings ?? {}), !!body.settings && Object.keys(body.settings).length > 0);
     ctx.paths.ensureProject(project.id);
     ctx.bus.publish({ type: "project.updated", projectId: project.id, project });
+    return c.json({ project }, 201);
+  });
+
+  r.post("/projects/sample", async (c) => {
+    const project = await createSampleProject(ctx, c.get("user"));
     return c.json({ project }, 201);
   });
 

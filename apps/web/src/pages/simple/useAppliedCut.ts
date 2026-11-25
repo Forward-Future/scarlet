@@ -22,7 +22,7 @@ import { afterPlayerMount, firstKey, type Side } from "./types";
 export interface AppliedCutSide { key: string; side: Side; take: number; at?: number; picked?: boolean; visit?: { at: string; start: number; end: number } }
 
 /** A cut of a call still waiting on the editor, where it sits on the video as it runs now. */
-export interface StagedCall { n?: number; removed: TimeRange; open(): void }
+export interface StagedCall { removed: TimeRange; open(): void }
 
 /** The version an applied cut's After plays, and the removals saved with it. */
 interface AfterSource { version: string; removed?: TimeRange[] }

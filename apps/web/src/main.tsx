@@ -40,9 +40,10 @@ async function launch() {
       enableUpdateStatus(updates);
     }
     restoreLastProject();
-    const [{ App }, { restoreAgentSelection }, hosts] = await Promise.all([
+    const [{ App }, { restoreAgentSelection, useUiStore }, { startRequestLog }, hosts] = await Promise.all([
       import("./App"),
       import("./stores/ui"),
+      import("./lib/requestLog"),
       customOpenaiModels?.length || customClaudeModels?.length || customGeminiModels?.length ? import("./stores/hosts") : undefined,
     ]);
     hosts?.useHostsStore.setState({
@@ -51,6 +52,7 @@ async function launch() {
       customGeminiModels: customGeminiModels ?? [],
     });
     restoreAgentSelection(editorModel);
+    startRequestLog(useUiStore);
     view.render(<StrictMode>
       {updates ? <UpdateButton /> : __SCARLET_RELEASE_CHANNEL__ && <ReleaseUpdateNotice channel={__SCARLET_RELEASE_CHANNEL__} />}
       <App platform={platform} />

@@ -5,7 +5,7 @@ import { appLog } from "../../lib/appLog";
 import { api, errorMessage, UNEXPLAINED } from "../../lib/client";
 import { editKindWord } from "../../lib/editKind";
 import type { Moment } from "../../lib/editMoments";
-import { parseTimestamp } from "../../lib/format";
+import { distinctClock, parseTimestamp } from "../../lib/format";
 import { ignorePageShortcut, isAltClearRangeKey, isComposing, isEditableTarget } from "../../lib/hotkeys";
 import { editKey, keepEdits } from "../../lib/keptEdits";
 import { needNumbers } from "../../lib/needNumbers";
@@ -211,9 +211,11 @@ export function usePassCallNumbers(
     const editKeyOf = (e: (typeof edits)[number]) => `edit/${editKey(e.previous[0] ?? e)}`;
     const numbers = needNumbers(projectId, passThread.id, passRoot?.resumeRootId ?? passRoot?.id ?? pass.id, [...callKeys, ...edits.map(editKeyOf)]);
     allCalls.forEach((call, i) => callNo.set(call.index, numbers.get(callKeys[i]!.key)!));
+    const times = [...allCalls.map(a => a.start), ...edits.map(at)];
     for (const e of edits) {
       const n = numbers.get(editKeyOf(e))!;
-      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} ${n}`;
+      // It goes by its time, as its row does: "Cut at 0:11", or "Edit at 0:11" for one that took no footage out.
+      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} at ${distinctClock(at(e), times)}`;
       for (const ref of [e, ...e.previous]) passEditNo.set(editKey(ref), { n, name });
     }
     return { callNo, passEditNo };
@@ -297,7 +299,11 @@ export function useUndoShortcut(workspaceActive: boolean, projectId: string, und
       const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value && !emptiedByHand.has(e.target);
       if (isEditableTarget(e.target) && !box) return;
       if (document.querySelector('dialog[open], [role="dialog"], [role="menu"]')) return;
-      if (!lastStep(useUndoStore.getState().steps, projectId)) return;
+      if (!lastStep(useUndoStore.getState().steps, projectId)) {
+        // The key is left to the page, and nothing is taken back: said so the log shows the press did nothing.
+        appLog("action", "undo-skipped", { project: projectId, reason: "empty" });
+        return;
+      }
       e.preventDefault();
       if (!e.repeat) void undoRef.current.undo();
     };
@@ -395,7 +401,10 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
     const release = (e: PointerEvent) => {
       const was = down;
       down = undefined;
-      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) clearRef.current();
+      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) {
+        appLog("timeline", "range-cleared", { via: "click-away" });
+        clearRef.current();
+      }
     };
     const key = (e: KeyboardEvent) => {
       if (e.defaultPrevented || isEditableTarget(e.target) || isComposing(e)) return;
@@ -408,6 +417,7 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
       if (!escape && !erase && !clearInOut) return;
       if ((escape && inFullScreen()) || marksTakeEscape(e)) return;
       e.preventDefault();
+      appLog("timeline", "range-cleared", { via: "key", key: clearInOut ? "alt+x" : e.key });
       clearRef.current();
     };
     document.addEventListener("pointerdown", press, true);
