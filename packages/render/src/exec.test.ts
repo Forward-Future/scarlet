@@ -20,6 +20,8 @@ import {
   parseProgressLine,
   requireDrawtext,
   mediaToolLaunchError,
+  resolveFfmpeg,
+  resolveFfprobe,
   runCapture,
   runFfmpeg,
   stderrTail,
@@ -167,7 +169,7 @@ describe("failures", () => {
 
   it("names the cause of a refused encode, which ffmpeg writes first and follows with what came of it", async () => {
     // The one-frame encoder test, at a size libx264 refuses.
-    const encode = () => runCapture("ffmpeg", ["-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=15x15:r=30",
+    const encode = () => runCapture(resolveFfmpeg(), ["-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=15x15:r=30",
       "-frames:v", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-f", "null", "-"]).catch(e => e);
     const refused = await encode();
     expect(refused).toBeInstanceOf(FfmpegError);
@@ -179,7 +181,7 @@ describe("failures", () => {
   });
 
   it("rejects with the exit code and error output of a command that fails, and with an abort when cancelled", async () => {
-    const failed = await runCapture("ffmpeg", ["-v", "error", "-i", join(tmpdir(), "scarlet-no-such-file.mp4"), "-f", "null", "-"]).catch(e => e);
+    const failed = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", join(tmpdir(), "scarlet-no-such-file.mp4"), "-f", "null", "-"]).catch(e => e);
     expect(failed).toBeInstanceOf(FfmpegError);
     expect(failed.code).not.toBe(0);
     expect(failed.stderr).toMatch(/no such file/i);
@@ -194,7 +196,7 @@ describe("failures", () => {
 
     const cancelled = new AbortController();
     cancelled.abort();
-    await expect(runCapture("ffmpeg", ["-version"], { signal: cancelled.signal })).rejects.toBeInstanceOf(AbortError);
+    await expect(runCapture(resolveFfmpeg(), ["-version"], { signal: cancelled.signal })).rejects.toBeInstanceOf(AbortError);
     await expect(runFfmpeg(["-version"], { signal: cancelled.signal })).rejects.toBeInstanceOf(AbortError);
     const running = new AbortController();
     const endless = runFfmpeg(["-f", "lavfi", "-i", "color=c=black:s=16x16:r=10", "-f", "null", "-"], { signal: running.signal, onProgress: () => running.abort() });
@@ -202,7 +204,7 @@ describe("failures", () => {
   });
 
   it("stops a command whose output passes the limit", async () => {
-    const flood = runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=10:d=1", "-f", "rawvideo", "-"], { maxStdout: 1000 });
+    const flood = runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=10:d=1", "-f", "rawvideo", "-"], { maxStdout: 1000 });
     await expect(flood).rejects.toThrow(/stdout exceeded 1000 bytes/);
   });
 

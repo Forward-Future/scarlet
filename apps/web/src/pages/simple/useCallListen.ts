@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
-import { makeTimeMap, mapStagedCut, timelineDuration, type Change, type TimeRange, type Timeline } from "@scarlet/timeline";
+import { makeTimeMap, mapStagedCut, removedJoins, timelineDuration, type Change, type TimeRange, type Timeline } from "@scarlet/timeline";
 import type { Task, ThreadEdit } from "@scarlet/shared";
 import { useThreadEdits } from "../../components/review/threadEditState";
 import { usePlaybackCache } from "../../components/player/usePlaybackCache";
@@ -24,6 +24,25 @@ import { afterPlayerMount, type JoinedListen, type Listening, type Side } from "
 
 /** A revision of one call that is still at work: the call as the editor sent it back, and where it sits in the pass now. */
 interface RevisionInput { call: Call; index: number; previous: Change }
+
+/**
+ * A pass's cuts, staged on `stagedOn`, placed on `shownOn` by their footage. A cut that another edit already took
+ * whole out of `shownOn` sits at the join it left there; one whose footage was only partly changed is undefined, and
+ * so is the whole list until `stagedOn` is known.
+ */
+export function cutsOnVersion(cuts: readonly TimeRange[], stagedOn: Timeline | undefined, shownOn: Timeline, fps: number): (TimeRange | undefined)[] | undefined {
+  if (!stagedOn) return undefined;
+  if (stagedOn.version === shownOn.version) return [...cuts];
+  const onto = { map: makeTimeMap(stagedOn, shownOn, fps), timeline: shownOn };
+  let joins: ReturnType<typeof removedJoins> | undefined;
+  return cuts.map(cut => {
+    const placed = cutOnWorkingCut(cut, onto, fps);
+    if (placed) return placed;
+    joins ??= removedJoins(stagedOn, shownOn, fps);
+    const gone = joins.find(j => j.removed.start <= cut.start + 1e-6 && cut.end <= j.removed.end + 1e-6);
+    return gone && { start: gone.at, end: gone.at };
+  });
+}
 
 interface CallListenInputs {
   current: Pick<ProjectData, "id" | "project" | "renderSettingsRevision">;
@@ -125,6 +144,19 @@ export function useCallListen({ current, pass, passThread, revisionInput, listen
   }, [conflict, cutOverride, placed, timeline, head, savedBefore.timeline, fps]);
   const callTimeline = conflict ? (timeline && head === timeline.version ? timeline : undefined)
     : versionBefore ? savedBefore.timeline ?? undefined : timeline ?? undefined;
+  // The pass's other cuts where the open call's cut is, so its edges stop short of them: on the working cut as the call
+  // is placed, or on the version a changed call is heard on.
+  const callSiblings = useMemo(() => {
+    if (!passRemovals) return;
+    if (!versionBefore) {
+      if (placing) return;
+      if (!toWorkingCut || !stagedOn.timeline || !timeline) return passRemovals.map(r => placeCut(r));
+      return cutsOnVersion(passRemovals, stagedOn.timeline, timeline, fps);
+    }
+    if (!callTimeline) return;
+    const staged = stagedOn.timeline ?? (liveReview && liveReview.original.version === pass?.fromVersion ? liveReview.original : undefined);
+    return cutsOnVersion(passRemovals, staged, callTimeline, fps);
+  }, [passRemovals, versionBefore, callTimeline, stagedOn.timeline, timeline, liveReview, pass?.fromVersion, toWorkingCut, placing, fps]); // eslint-disable-line react-hooks/exhaustive-deps
   const callDuration = useMemo(() => callTimeline && timelineDuration(callTimeline), [callTimeline]);
   const pinnedCallVersion = versionBefore && (head !== versionBefore || timeline?.version !== versionBefore) ? versionBefore : undefined;
   const versionAfter = !conflict ? cutOverride?.previewVersion : undefined;
@@ -319,7 +351,7 @@ export function useCallListen({ current, pass, passThread, revisionInput, listen
   // A click inside the call's cut on the timeline: After steps over that footage, so it plays in Before from there.
   const listenFrom = (time: number) => { player.pause(); setListening(l => l && { ...l, side: "before", take: l.take + 1, at: time }); };
   return {
-    returningCall, review, liveReview, passRemovals, listenRemovals, stagedOn, toWorkingCut, placing, placeCut, placed,
+    returningCall, review, liveReview, passRemovals, listenRemovals, callSiblings, stagedOn, toWorkingCut, placing, placeCut, placed,
     overrideForCall, cutOverride, rechecking, conflict, answeringCut, versionBefore, callPlaybackKey, beforeVersion, preparedCall, savedBefore,
     callTimeline, callDuration, pinnedCallVersion, versionAfter, savedAfter, needsSingleCut, single, heard, audition, listenJoined,
     listedPassEdits, rejectedPassEdits, locatedPassEdits, callView, visit, viewAudition, viewJoined, playedAudition, callViewNow,

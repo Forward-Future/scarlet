@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { cutText } from "@scarlet/shared";
 
 /** Elapsed time for log lines: "850ms", "12s", "45m 2s", "1h 3m". Matches the desktop host's log. */
 export function humanDuration(ms: number): string {
@@ -40,7 +41,7 @@ export function throttledLog(log: (line: string) => void, everyMs = 60_000, capa
 /** One line of a request or error for the log. */
 export function clip(text: string, max = 160): string {
   const line = text.replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  return line.length > max ? `${cutText(line, max - 1)}…` : line;
 }
 export const REQUEST_ID_HEADER = "x-scarlet-request-id";
 const requestIds = new WeakMap<Request, string>();

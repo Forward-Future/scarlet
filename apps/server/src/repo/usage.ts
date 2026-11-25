@@ -30,7 +30,7 @@ const GROUP_KEY: Record<UsageGroupBy, string> = {
   agent: "agent",
   model: "model",
   // The day on the engine's own clock, which is the editor's: `at` is UTC, and their evening isn't tomorrow.
-  day: "date(at, 'localtime')",
+  day: "local_day(at)",
 };
 
 const SUMS = `count(*) AS runs,

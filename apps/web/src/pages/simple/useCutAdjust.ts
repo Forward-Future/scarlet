@@ -58,8 +58,13 @@ interface UseCutAdjustInputs {
     toWorking: { toMedia(t: number): number };
     shown: readonly { removed: TimeRange }[];
   };
-  passRemovals?: readonly TimeRange[];
-  onSkipCall(): void;
+  /**
+   * The pass's cuts by index, placed on the version `heard` is on. One that can't be placed there is undefined, and
+   * then the call's edges don't move: there is nothing to stop them short of it.
+   */
+  passRemovals?: readonly (TimeRange | undefined)[];
+  /** Decides the open call. Pulling its cut to nothing puts the whole cut back: the footage stays, whatever the call proposes. */
+  onDecideCall(choice: CutChoice): void;
 }
 
 function clipIdsOf(change: Change | undefined): string[] | undefined {
@@ -86,7 +91,7 @@ function clipIdsOf(change: Change | undefined): string[] | undefined {
 export function useCutAdjust({
   projectId, head, timeline, media, fps,
   focusThread, shownChange, reviewingEdit, selectedMoment, hasReviewRange, singleEdit, leaving, cutKey, appliedCut, beforeTimeline, otherCuts, stagedAround, setCutSide, onAppliedRejected, onEngineLeave, cutName,
-  pass, openCall, listening, setListening, conflict, openCallBack, deciding, heard, callTimeline, callView, passRemovals, onSkipCall,
+  pass, openCall, listening, setListening, conflict, openCallBack, deciding, heard, callTimeline, callView, passRemovals, onDecideCall,
 }: UseCutAdjustInputs): CutAdjustOptions | undefined {
   const busy = useRef(false);
 
@@ -205,20 +210,33 @@ export function useCutAdjust({
 
   // 3. Waiting dialogue-pass call bounds (clamped between neighboring staged cuts and any already-applied cuts).
   const callBounds = useMemo(() => {
-    if (activeMode !== "call" || !pass || !openCall || !heard || !displayedTimeline || !displayedBand) return;
+    if (activeMode !== "call" || !pass || !openCall || !heard || !displayedTimeline || !displayedBand || !passRemovals) return;
     const dur = timelineDuration(displayedTimeline);
     const pad = 1 / fps;
     let minStart = 0, maxEnd = dur;
-    const siblings = passRemovals ?? [];
-    for (let i = 0; i < siblings.length; i++) {
-      if (i === openCall.index) continue;
-      const other = siblings[i]!;
+    let boundedLeft = false, boundedRight = false;
+    for (let i = openCall.index - 1; i >= 0; i--) {
+      const other = passRemovals[i];
+      if (!other) {
+        if (!boundedLeft) return;
+        continue;
+      }
       if (other.end <= heard.start + 0.5 / fps) {
         const delta = heard.start - other.end - pad;
         minStart = Math.max(minStart, displayedBand.start - Math.max(0, delta));
-      } else if (other.start >= heard.end - 0.5 / fps) {
+        boundedLeft = true;
+      }
+    }
+    for (let i = openCall.index + 1; i < passRemovals.length; i++) {
+      const other = passRemovals[i];
+      if (!other) {
+        if (!boundedRight) return;
+        continue;
+      }
+      if (other.start >= heard.end - 0.5 / fps) {
         const delta = other.start - heard.end - pad;
         maxEnd = Math.min(maxEnd, displayedBand.end + Math.max(0, delta));
+        boundedRight = true;
       }
     }
     if (callView) {
@@ -350,7 +368,7 @@ export function useCutAdjust({
   const commitCall = useCallback(async (next: TimeRange) => {
     if (busy.current || !pass || !openCall || !listening || !heard) return;
     if (next.end - next.start <= 0.5 / fps) {
-      onSkipCall();
+      onDecideCall("keep");
       return;
     }
     busy.current = true;
@@ -390,7 +408,7 @@ export function useCutAdjust({
     } finally {
       busy.current = false;
     }
-  }, [pass, openCall, listening, heard, callView, callTimeline?.version, fps, projectId, cutName, onSkipCall, setListening]);
+  }, [pass, openCall, listening, heard, callView, callTimeline?.version, fps, projectId, cutName, onDecideCall, setListening]);
 
   return useMemo<CutAdjustOptions | undefined>(() => {
     if (activeMode === "applied" && appliedBounds) {

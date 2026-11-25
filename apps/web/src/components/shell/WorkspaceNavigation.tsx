@@ -99,7 +99,9 @@ export function Dropdown({ button, children, align = "left", width = 260, label,
         e.preventDefault();
         e.stopPropagation();
         const index = items.indexOf(document.activeElement as HTMLElement);
+        // With the focus still on the menu's button, ↑ goes to the last row and ↓ to the first.
         const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 :
+          index < 0 ? (e.key === "ArrowUp" ? items.length - 1 : 0) :
           (index + (e.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
         items[next]?.focus();
       }

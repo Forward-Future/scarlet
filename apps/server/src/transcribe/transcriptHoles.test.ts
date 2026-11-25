@@ -150,6 +150,21 @@ it("only fits the words to their sound when there is no reader for the holes", a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+it("takes out a line with no words Whisper wrote over a wait, and still fits the other words to their sound", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-holes-"));
+  try {
+    await recording(join(dir, "a.wav"), 22, spoke);
+    const log: string[] = [];
+    const wordless: TranscriptSegment = { id: "quiet", start: 14, end: 15, text: "Thank you.", words: [] };
+    const out = await fillTranscriptHoles({ wav: join(dir, "a.wav"), segments: [seg(["that", 8.4, 9.6]), wordless], tmpDir: dir,
+      signal: new AbortController().signal, log: m => log.push(m), align: async () => { throw new Error("not aligned"); } });
+    expect(out.map(s => s.text)).toEqual(["that"]);
+    expect(out[0]!.words[0]).toMatchObject({ start: 9, end: 9.6 });
+    expect(log[0]).toContain("“Thank you.” at 14.0 s");
+    expect(log[1]).toBe("[transcribe] brought 1 word in from the quiet beside it");
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 /** Levels in 20 ms steps: `db` wherever a range in `at` says so, the room's floor elsewhere. */
 function levelsOf(seconds: number, at: Array<[number, number, number]>, floorDb = -70) {
   const rms = Array.from({ length: seconds * 50 }, (_, i) => {

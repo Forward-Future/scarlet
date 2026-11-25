@@ -370,11 +370,7 @@ impl EngineManager {
             let delay = Duration::from_millis((1000u64 * 2u64.pow(attempt.min(5))).min(30_000));
             log::warn!("engine exited; restarting in {delay:?} (attempt {attempt})");
             self.update(|s| restarting(s, failed_starts));
-            // A dev rebuild (e.g. fixing the crash) cuts the wait short.
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = self.reload_now.notified() => { self.reload.store(false, Ordering::SeqCst); }
-            }
+            backoff(&self.reload, &self.reload_now, delay).await;
         }
     }
 
@@ -604,11 +600,48 @@ fn read_stdout(stdout: ChildStdout, pid: u32, ready_tx: tokio::sync::oneshot::Se
     })
 }
 
+/// The wait before a crashed engine starts again. A dev rebuild (e.g. fixing the crash) cuts it short, but only one
+/// that set `reload`: the permit an earlier rebuild left on `notify` while the engine ran doesn't skip the wait.
+async fn backoff(reload: &AtomicBool, notify: &Notify, delay: Duration) {
+    let deadline = tokio::time::Instant::now() + delay;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => break,
+            _ = notify.notified() => if reload.swap(false, Ordering::SeqCst) { break },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(unix)]
     use tokio::io::{AsyncBufReadExt, BufReader};
+
+    #[tokio::test]
+    async fn a_rebuild_signal_left_over_from_a_healthy_run_does_not_skip_the_crash_backoff() {
+        let (reload, notify) = (AtomicBool::new(false), Notify::new());
+        // A rebuild while the engine ran: its reload was handled through the flag, its permit is still stored.
+        notify.notify_one();
+        let started = Instant::now();
+        backoff(&reload, &notify, Duration::from_millis(300)).await;
+        assert!(started.elapsed() >= Duration::from_millis(300));
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_during_the_crash_backoff_cuts_it_short() {
+        let state = Arc::new((AtomicBool::new(false), Notify::new()));
+        let rebuild = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            rebuild.0.store(true, Ordering::SeqCst);
+            rebuild.1.notify_one();
+        });
+        let started = Instant::now();
+        backoff(&state.0, &state.1, Duration::from_secs(10)).await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(!state.0.load(Ordering::SeqCst));
+    }
 
     #[cfg(unix)]
     #[tokio::test]

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createProject, makeMediaClip, type MediaClip, type Project, type Timeline, type Transition } from "@scarlet/timeline";
 import { buildFilterGraph, ffColor, renderFullCached, renderPlaybackSegment, runCapture, segmentKey, type GraphOptions } from "./index.js";
 import { planTransitions } from "./transitions.js";
+import { resolveFfmpeg } from "./exec.js";
 
 let dir: string;
 const size = 64 * 64 * 3;
@@ -22,7 +23,7 @@ const join = (transition?: Transition, blueIn = 1) => edit([
 async function pictures(timeline: Timeline, range: { start: number; end: number }, extra?: Partial<GraphOptions>) {
   const graph = await buildFilterGraph(project, timeline, range, { mediaRoot: dir, pictureOnly: true, ...extra });
   try {
-    const { stdout } = await runCapture("ffmpeg", ["-v", "error", ...graph.args, "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
+    const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", ...graph.args, "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
     return Array.from({ length: stdout.length / size }, (_, frame) => stdout.subarray(frame * size, (frame + 1) * size));
   } finally { await graph.cleanup(); }
 }
@@ -33,12 +34,12 @@ const at = (frame: Buffer, x: number, y = 32) => {
 };
 const frameAt = async (timeline: Timeline, t: number) => (await pictures(timeline, { start: t, end: t + 1 / 30 }))[0]!;
 const fileFrame = async (file: string, time: number) =>
-  (await runCapture("ffmpeg", ["-v", "error", "-ss", String(time), "-i", file, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])).stdout;
+  (await runCapture(resolveFfmpeg(), ["-v", "error", "-ss", String(time), "-i", file, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])).stdout;
 
 beforeAll(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "scarlet-transitions-"));
   for (const colour of ["red", "blue"]) {
-    await runCapture("ffmpeg", ["-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", `color=c=${colour}:s=64x64:r=30:d=4`,
+    await runCapture(resolveFfmpeg(), ["-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", `color=c=${colour}:s=64x64:r=30:d=4`,
       "-f", "lavfi", "-i", `sine=frequency=${colour === "red" ? 400 : 800}:sample_rate=48000:d=4`,
       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", path.join(dir, `${colour}.mp4`)]);
   }
@@ -110,7 +111,7 @@ describe("transitions", () => {
     const file = path.join(dir, "dissolve.mp4");
     const options = { mediaRoot: dir, hwaccel: "none" } as const;
     const pictureAt = async (time: number) => at(await fileFrame(file, time), 32);
-    const audio = async () => (await runCapture("ffmpeg", ["-v", "error", "-i", file, "-map", "0:a:0", "-f", "s16le", "-"])).stdout;
+    const audio = async () => (await runCapture(resolveFfmpeg(), ["-v", "error", "-i", file, "-map", "0:a:0", "-f", "s16le", "-"])).stdout;
 
     const result = await renderFullCached(project, timeline, cache, file, { ...options, segmentSeconds: 2, quality: "delivery" });
     expect(result.segments.map(segment => segment.range)).toEqual([{ start: 0, end: 2 }, { start: 2, end: 4 }]);

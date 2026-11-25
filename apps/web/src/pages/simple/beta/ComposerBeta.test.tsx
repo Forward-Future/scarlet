@@ -4,8 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildDb, PRJ } from "../../../lib/mock/fixtures";
+import { api } from "../../../lib/client";
+import * as markedFrame from "../../../lib/markedFrame";
 import { buildThreads } from "../../../lib/threads";
+import { useAttachmentsStore, type PendingAttachment } from "../../../stores/attachments";
 import { useHostsStore } from "../../../stores/hosts";
+import { usePictureMarksStore } from "../../../stores/pictureMarks";
 import { usePlayerStore } from "../../../stores/player";
 import { useProjectStore, type ProjectData } from "../../../stores/project";
 import { insertInDraft, markedRangeOf, useUiStore, withMarkedRange, type MarkedRange } from "../../../stores/ui";
@@ -36,6 +40,8 @@ afterEach(async () => {
   useUiStore.setState(stores[1], true);
   usePlayerStore.setState(stores[2], true);
   useHostsStore.setState(stores[3], true);
+  useAttachmentsStore.setState({ byProject: {} });
+  usePictureMarksStore.setState({ marking: null, byProject: {} });
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -92,4 +98,31 @@ it("prevents Esc from bubbling unhandled when clearing a transcript range in an 
   } finally {
     window.removeEventListener("keydown", onWindowKey);
   }
+});
+
+it("refuses twenty attached files plus a marked frame in the beta composer before uploading the frame", async () => {
+  const frameSpy = vi.spyOn(markedFrame, "markedFramePicture").mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+  const upload = vi.spyOn(api, "uploadAttachment");
+  const createTask = vi.fn();
+  useProjectStore.setState({ createTask });
+  const twenty: PendingAttachment[] = Array.from({ length: 20 }, (_, i) => ({
+    key: `k${i}`, name: `shot-${i}.png`, state: "ready",
+    attachment: { id: `att_${i}`, name: `shot-${i}.png`, size: 10 },
+  }));
+  useAttachmentsStore.setState({ byProject: { [PRJ]: twenty } });
+  usePictureMarksStore.setState({
+    marking: null,
+    byProject: { [PRJ]: { time: 7, version: project.head!, picture: "frame://7", marks: [{ kind: "box", box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } }] } },
+  });
+  useUiStore.setState({ agentDraft: "Match these shots" });
+  await show();
+  const input = container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  await act(async () => {
+    input.focus();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  });
+  expect(frameSpy).not.toHaveBeenCalled();
+  expect(upload).not.toHaveBeenCalled();
+  expect(createTask).not.toHaveBeenCalled();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("A message can carry 20 files, the marked frame included. Remove one.");
 });

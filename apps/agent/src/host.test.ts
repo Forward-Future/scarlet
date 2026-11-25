@@ -1291,3 +1291,34 @@ it("keeps the engine hearing from a request it runs on its own, through a long t
   await delay(100);
   expect(heartbeat.mock.calls.length).toBeLessThanOrEqual(after + 1);
 });
+
+
+it("gives up a heartbeat that hangs, so the next one still reaches the engine", async () => {
+  let beats = 0;
+  const client = new ScarletClient({
+    baseUrl: "https://fixture.test",
+    fetch: async (input, init) => {
+      const { pathname } = new URL(String(input));
+      if (pathname.endsWith("/hosts/register")) return Response.json({ host: { id: "host_1", userId: "u1", name: "one", platform: "test", agents: [], online: true } });
+      if (pathname.endsWith("/heartbeat")) {
+        beats++;
+        // A half-open connection: no answer ever comes, until the request is given up.
+        return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }));
+      }
+      if (pathname.endsWith("/claim")) return Response.json({ task: null });
+      return Response.json({});
+    },
+  });
+  const host = new AgentHost({
+    client, config: { server: "https://fixture.test", token: "fixture" }, workRoot, mcpCliPath: "fixture-mcp",
+    runner: async () => ({ ok: true, summary: "" }), ws: false, heartbeatMs: 20, heartbeatTimeoutMs: 40, idlePollMs: 10, log: () => undefined,
+    detect: async () => [],
+  });
+  const started = host.start();
+  try {
+    await vi.waitFor(() => expect(beats).toBeGreaterThanOrEqual(3), { timeout: 2000 });
+  } finally {
+    await host.stop();
+    await started;
+  }
+});

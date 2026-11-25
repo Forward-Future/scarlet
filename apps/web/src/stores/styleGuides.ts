@@ -35,8 +35,10 @@ export async function commandStyleGuideIds(draft: string): Promise<string[] | un
   const names = styleGuideMentions(draft);
   if (!names.length) return;
   const store = useStyleGuidesStore.getState();
-  if (store.status === "idle") await store.load();
-  const { styleGuides } = useStyleGuidesStore.getState();
+  // A read under way is waited for, and one that failed is tried again: a guide named isn't left off unsaid.
+  if (store.status !== "ready") await store.load();
+  const { styleGuides, error } = useStyleGuidesStore.getState();
+  if (error) throw new Error(error);
   const byName = new Map(styleGuides.map(g => [g.name.toLowerCase(), g.id]));
   const ids = names.flatMap(name => {
     const id = byName.get(name);

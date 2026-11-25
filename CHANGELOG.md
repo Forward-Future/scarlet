@@ -6,6 +6,24 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Pulling a suggested cut down to nothing to put it back now always keeps the footage, even on a cut Scarlet had suggested keeping.
+- Dragging the edge of a suggested cut now stops short of the next suggested cut, even after the video changed while the cuts waited.
+- "Ask about this" in the Transcript now goes to the words you chose, even while newer edits are waiting to show.
+- Marking a frame on a message that already has 20 files now says to remove one, instead of failing with an unclear error.
+- Naming a style guide with @ right away no longer sends the message without it while the list is still loading.
+- Pressing ↑ in a ⋯ menu now goes to the last item.
+- Settings › Usage shows the right icon for models run through Ollama, LM Studio or OpenRouter.
+- Exported videos and captions can now be opened by others on a shared folder or network drive.
+- A downloaded SVG or HTML file from a style guide keeps its own name.
+- Saving a graphic as a style keeps every picture link working when one file's name is part of another's.
+- Cutting from a selected passage that spans two clips is no longer refused as outside the selection.
+- A recording being imported is no longer deleted when a second Scarlet starts on the same library.
+- If Scarlet quits while reading your decisions for a lasting rule, it reads them again when it reopens.
+- Gemini's file tools can no longer reach files outside their work folder through links, or change the folders FFmpeg lives in.
+- A message with an emoji in it no longer stops later requests or rule checks from starting.
+- Exported captions in Chinese, Japanese, Korean or Thai now wrap inside the frame and use a font that has their characters.
+- Transcript search in Hindi, Thai and similar languages no longer matches words that differ only by a vowel or tone mark.
+- Scarlet running on another computer keeps its edits going through a brief network drop, and shows as back online as soon as it returns.
 - Combined For you and low-risk edits into one unified Priority list in both the default and beta layouts: edits that need your call stay pinned at the top, confident edits sit right below under a thin Confident edits divider (newest request first), with an inline All / Needs you filter, a Keep N confident button (with ⌘Z undo), and Show → links in chat to jump straight to a request's edits.
 - In the default layout, For you, Working, Done, and edit lists now stay fixed at the bottom above the message box while new messages appear above them.
 - Exported Final Cut Pro XML files now include standard format names (such as 4K 30p and 1080p 29.97p) so Final Cut Pro imports them cleanly.

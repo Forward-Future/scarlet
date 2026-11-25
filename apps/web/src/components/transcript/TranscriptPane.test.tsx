@@ -245,6 +245,20 @@ it("asks about words in the edit by the clips they play from", async () => {
   useUiStore.setState(ui, true);
 });
 
+it("labels words asked about in the edit with the version they were read on, while a newer one isn't on screen yet", async () => {
+  const ui = useUiStore.getState();
+  useUiStore.setState({ agentContext: null, composerFocus: 0, notePopover: null });
+  // The head moved on, but its timeline isn't here yet: the words and their times are the older version's.
+  const older = { ...timelineFromKeepRanges(PRJ, source.id, [{ start: 10, end: 60 }]), version: "old" };
+  useProjectStore.setState({ current: { ...useProjectStore.getState().current!, timeline: older, project: { ...project, head: "new" } } });
+  await act(async () => root.render(<MemoryRouter><TranscriptPane onAsk={() => {}} /></MemoryRouter>));
+  expect(at(0).textContent).toBe("word10");
+  await act(async () => at(0).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight", shiftKey: true })));
+  await act(async () => button("Ask about this")!.click());
+  expect(useUiStore.getState().agentContext).toMatchObject({ version: "old", time: 0, end: 2 });
+  useUiStore.setState(ui, true);
+});
+
 it("lets Shift+Tab leave the words, and still takes a Tab in from outside, or a press between the words, to a word", async () => {
   await mount();
   const list = container.querySelector<HTMLElement>(".reading-scroll")!;

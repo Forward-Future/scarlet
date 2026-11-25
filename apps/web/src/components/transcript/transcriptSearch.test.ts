@@ -25,3 +25,12 @@ it("finds a word with either apostrophe, whichever one the search was typed with
   expect(findWords(words("她说‘你好’然后走了"), "你好然后")).toEqual([0]);
   expect(findWords(words("她说‘Wendy’吗"), "她说wendy吗")).toEqual([0]);
 });
+
+it("keeps the marks that make a word in Hindi or Thai, so a different word isn't matched", () => {
+  // काम (work) is not कम (less): the vowel sign is part of the word.
+  expect(findWords(words("काम"), "कम")).toEqual([]);
+  expect(findWords(words("काम"), "काम")).toEqual([0]);
+  expect(findWords(words("ไก่"), "ไก่")).toEqual([0]);
+  // An accent written as a letter and a mark finds the same word written as one letter.
+  expect(findWords(words("cafe\u0301"), "café")).toEqual([0]);
+});

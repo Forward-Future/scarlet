@@ -115,6 +115,9 @@ it("serves an original as what it is only when a browser can't run it", () => {
   expect(describe(still)).toEqual(["image/png", null, ...locked]);
   expect(describe(page)).toEqual(["application/octet-stream", "attachment", ...locked]);
   expect(describe(vector)).toEqual(["application/octet-stream", "attachment", ...locked]);
+  // A download keeps its own name, however it is spelled.
+  const named = serveOriginal(get(), vector, { downloadName: "Café \"logo\".svg" });
+  expect(named.headers.get("Content-Disposition")).toBe(`attachment; filename="Caf_ _logo_.svg"; filename*=UTF-8''Caf%C3%A9%20%22logo%22.svg`);
 });
 
 it("names a file's type from its extension, whatever its case", () => {
