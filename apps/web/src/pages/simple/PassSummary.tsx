@@ -247,7 +247,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   if (hasForYou && tab === "you") linger.lowRisk = optionalOpen;
   useLayoutEffect(() => { onTabs?.(hasForYou); }, [hasForYou]); // eslint-disable-line react-hooks/exhaustive-deps
   // Low risk rows open into the list and close out of it: `low.shown` while the list still draws them.
-  const low = useLowRiskFold(host, optionalOpen && tab === "you", on => setOpen(on ? "all" : undefined));
+  const low = useLowRiskFold(host, optionalOpen && tab === "you", on => setOpen(on ? "all" : undefined), hasForYou && tab === "you");
   // While the pass makes its final check of the finished cut, the fixes it applies are marked New in the list: nothing
   // else tells them from the cuts that went in before (2026-11-14).
   const rerun = working ? thread.tasks.find(t => !!t.repeatAudit?.returns && !!t.startedAt && isWorking(t.state)) : undefined;
@@ -661,7 +661,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   if (hasForYou && tab === "you") linger.lowRisk = optionalOpen;
   useLayoutEffect(() => { onTabs?.(hasForYou); }, [hasForYou]); // eslint-disable-line react-hooks/exhaustive-deps
   // Low risk rows open into the list and close out of it: `low.shown` while the list still draws them.
-  const low = useLowRiskFold(host, optionalOpen && tab === "you", on => setOpen(on ? "all" : undefined));
+  const low = useLowRiskFold(host, optionalOpen && tab === "you", on => setOpen(on ? "all" : undefined), hasForYou && tab === "you");
   // Where each row is: every edit and every rejected one is under exactly one tab. A request that itself waits on the
   // editor (a question, or one that stopped early) keeps its row in For you.
   const asks = new Set(nests.flatMap(nest => nest.needs ? [nest.key] : []));
