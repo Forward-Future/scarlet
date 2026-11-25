@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { AGENT_LABEL, type AgentAvailability, type AgentHost, type AgentId, type ModelOptions, type SubscriptionQuota } from "@scarlet/shared";
+import { AGENT_LABEL, isExtraProvider, type AgentAvailability, type AgentHost, type AgentId, type ModelOptions, type SubscriptionQuota } from "@scarlet/shared";
 import { api, errorMessage, IS_MOCK } from "../lib/client";
 import { desktop, isDesktop } from "../lib/desktop";
 import { changedDuringLoad } from "./changedDuringLoad";
@@ -43,7 +43,8 @@ export const useHostsStore = create<HostsState>((set, get) => ({
   async load() {
     clearTimeout(retryTimer);
     retryTimer = undefined;
-    set({ status: "loading" });
+    // A list already read stays ready while it is read again, so what waits on it doesn't close and reopen.
+    if (get().status !== "ready") set({ status: "loading" });
     const read = reports.begin();
     const seq = ++started;
     try {
@@ -135,7 +136,8 @@ export interface OnlineAgent {
   quota?: SubscriptionQuota;
 }
 
-export const isConfiguredAgent = (agent: AgentAvailability) => agent.id !== "api" && agent.installed && agent.loggedIn !== false;
+export const isConfiguredAgent = (agent: AgentAvailability) =>
+  agent.id !== "api" && agent.installed && agent.loggedIn !== false && (!isExtraProvider(agent.id) || (agent.models?.length ?? 0) > 0);
 
 function isNewerQuota(next: SubscriptionQuota, prev?: SubscriptionQuota): boolean {
   if (!prev) return true;

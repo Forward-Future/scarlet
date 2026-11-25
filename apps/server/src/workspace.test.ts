@@ -19,7 +19,7 @@ import { RecordingSpeakers } from "./services/recordingSpeakers.js";
 import { CLASSES, SAMPLE_RATE, SEPARATOR, CTC_LETTERS } from "./transcribe/ctcAlign.js";
 import { EmissionFile } from "./transcribe/emissions.js";
 import { AnalysisCache } from "./services/analysisCache.js";
-import { resolveFfmpeg, runCapture } from "@scarlet/render";
+import { heardAudioKey, resolveFfmpeg, runCapture } from "@scarlet/render";
 import { previewPictures } from "./services/previewPictures.js";
 import { createTask, migrateDialogueOperations, appendTaskEvent, cancelTask, saveTask } from "./services/tasks.js";
 import { continueReadyRuns, continueWhenReady, recoverTasks } from "./services/taskRecovery.js";
@@ -524,8 +524,8 @@ it("returns legacy edit history immediately and backfills only open proposals", 
 });
 
 it.each([
-  { updateRoles: false, expectedStreams: [undefined] },
-  { updateRoles: true, expectedStreams: [undefined, 2] },
+  { updateRoles: false, expectedStreams: [null] },
+  { updateRoles: true, expectedStreams: [null, 2] },
 ])("retains the Whisper decode through speaker analysis and respects stream selection (%j)", async ({ updateRoles, expectedStreams }) => {
   const { ctx } = workspace;
   ctx.paths.ensureProject(project.id);
@@ -546,7 +546,7 @@ it.each([
   try {
     expect(await transcribeMedia(ctx, project.id, media)).toBeTruthy();
     while (ctx.pending.size) await Promise.all([...ctx.pending]);
-    expect(decode.mock.calls.map(([, , options]) => options?.audioStream)).toEqual(expectedStreams);
+    expect(decode.mock.calls.map(([, , options]) => heardAudioKey(options?.audio))).toEqual(expectedStreams);
     expect(speaker).toHaveBeenCalledTimes(1);
     for (const [, wav] of decode.mock.calls) expect(existsSync(wav)).toBe(false);
   } finally {
@@ -1776,6 +1776,33 @@ it("reads the footage a change left out as it built the video, when it is applie
   expect(ctx.repos.changes.get(change.id)!.updatedAt).toBe(stamp);
 });
 
+it("reads what a first cut saved whole left out of the recording, the end it didn't use too", async () => {
+  // Matt's 28-minute talking head was cut to 15 by saving the pieces to keep as the whole video. A first cut was
+  // skipped as having nothing to read, so none of its 104 cuts were listed and the request said 20 s came out (2026-11-23).
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "take", kind: "video", name: "Take", path: "take.mp4", duration: 60, hasAudio: true }, "ready");
+  const whole = timelineFromKeepRanges(project.id, "take", [{ start: 5, end: 10 }, { start: 20, end: 30 }]);
+  const saved = await api("POST", projectsPath() + "/changes", { description: "First cut", firstCut: true, autoApprove: true, skipRender: true, timeline: whole });
+  expect(saved.status).toBe(201);
+  const { change } = await saved.json();
+  expect(change.leftOut.joins).toEqual([{ at: 0, removed: { start: 0, end: 5 } }, { at: 5, removed: { start: 10, end: 20 } }, { at: 15, removed: { start: 30, end: 60 } }]);
+  expect(change.leftOut.reading).toBe(LEFT_OUT_READING);
+  // The version that plays it all is the recording, whole.
+  const full = resolveTimeline(ctx, project, change.leftOut.version);
+  expect(timelineDuration(full)).toBeCloseTo(60);
+  // One an earlier build applied has nothing read. Starting Scarlet reads it, once.
+  ctx.repos.changes.put({ ...change, leftOut: undefined });
+  recordLeftOutFootage(ctx);
+  expect(ctx.repos.changes.get(change.id)!.leftOut).toEqual(change.leftOut);
+  const read = vi.spyOn(ctx.repos.changes, "parse");
+  recordLeftOutFootage(ctx);
+  expect(read).not.toHaveBeenCalled();
+  // A first cut that replaces a video already there took nothing from an empty timeline: nothing is read for it.
+  const again = await api("POST", projectsPath() + "/changes", { description: "First cut again", firstCut: true, autoApprove: true, skipRender: true,
+    timeline: timelineFromKeepRanges(project.id, "take", [{ start: 5, end: 10 }, { start: 22, end: 30 }]) });
+  expect((await again.json()).change.leftOut).toEqual({ joins: [] });
+});
+
 it("fills in legacy history metadata once and serves the same version summaries thereafter", async () => {
   const { ctx } = workspace;
   const { head } = ensureHead(ctx, project.id);
@@ -1977,6 +2004,12 @@ it("marks a run that ended without the transcripts it waited for, and resumes it
   expect(resumed).toMatchObject({ state: "queued", resumeRootId: task.id });
   expect(resumed.instruction).toContain("ended without the transcript of camera, screen. Ready now: camera, screen.");
   expect(continueReadyRuns(ctx)).toEqual([]);
+  // An answer to the resumed run's question starts it in a session that never read that: it is told again.
+  appendTaskEvent(ctx, resumed, { type: "question", text: "Keep the cold open?" });
+  appendTaskEvent(ctx, ctx.repos.tasks.get(resumed.id)!, { type: "answer", text: "Yes." });
+  const answered = await (await api("GET", `/tasks/${resumed.id}/prompt`)).json();
+  expect(answered.resumeSession).toBeUndefined();
+  expect(answered.instruction).toContain("ended without the transcript of camera, screen. Ready now: camera, screen.");
   // The finished run no longer offers to wait.
   expect((await api("POST", `/tasks/${task.id}/continue-when-ready`, { on: true })).status).toBe(200);
   expect(ctx.repos.tasks.select("project_id = ? AND kind = 'edit'", [project.id])).toHaveLength(2);
@@ -2021,6 +2054,26 @@ it("stops waiting for multiple transcripts as soon as one fails, even while anot
   expect(ctx.repos.tasks.get(task.id)?.continueWhenReady).toBeUndefined();
   expect(ctx.repos.tasks.get(task.id)?.retryTaskId).toBeUndefined();
   expect(ctx.repos.tasks.get(transcribing[1]!.id)?.state).toBe("running");
+});
+
+it("stops waiting after a few tries when a run whose transcripts are ready can't resume, instead of trying every half minute", () => {
+  const { ctx } = workspace;
+  const task = createTask(ctx, { projectId: project.id, agent: "codex", kind: "edit", instruction: "Tighten",
+    createdBy: { type: "human", name: "Editor" } });
+  saveTask(ctx, { ...task, state: "done", needsTranscripts: ["camera"], continueWhenReady: true });
+  ctx.repos.transcripts.put({ id: "tr_camera", projectId: project.id, mediaId: "camera", segments: [] });
+  const put = ctx.repos.tasks.put.bind(ctx.repos.tasks);
+  vi.spyOn(ctx.repos.tasks, "put").mockImplementation(t => {
+    if (t.resumeRootId === task.id && t.id !== task.id) throw new Error("disk full");
+    return put(t);
+  });
+  const logged = vi.spyOn(ctx, "log");
+  for (let sweep = 0; sweep < 5; sweep++) expect(continueReadyRuns(ctx, project.id)).toEqual([]);
+  const failures = logged.mock.calls.filter(([line]) => line.includes(task.id) && line.includes("disk full"));
+  expect(failures).toHaveLength(3);
+  expect(ctx.repos.tasks.get(task.id)).toMatchObject({ state: "done", needsTranscripts: ["camera"] });
+  expect(ctx.repos.tasks.get(task.id)?.continueWhenReady).toBeUndefined();
+  expect(ctx.repos.tasks.get(task.id)?.retryTaskId).toBeUndefined();
 });
 
 it("honors Don't wait if the editor turns it off after the recovery sweep has listed a ready request", () => {
@@ -4019,6 +4072,19 @@ it("tells a dialogue pass how many of its cuts the editor's setting asks them to
   ctx.repos.settings.update({ checkIn: "balanced" });
 });
 
+it("tells every request how the editor wants Scarlet to write to them, in their own words, once they've said", async () => {
+  const { ctx } = workspace;
+  const request = (await (await api("POST", projectsPath() + "/tasks", { agent: "gemini", instruction: "Tighten the intro" })).json()).task as Task;
+  const prompt = async () => (await (await api("GET", `/tasks/${request.id}/prompt`)).json()).systemPrompt as string;
+  // Nothing is added until the editor writes something in Settings.
+  expect(ctx.settings().talkingToYou).toBe("");
+  expect(await prompt()).not.toContain("How the editor wants you to write to them");
+  expect((await api("PATCH", "/settings", { talkingToYou: "Say times as 1:05, not 65 seconds." })).status).toBe(200);
+  expect(await prompt()).toMatch(/# How the editor wants you to write to them\n\n[^]*\n\nSay times as 1:05, not 65 seconds\.$/m);
+  expect((await api("PATCH", "/settings", { talkingToYou: "x".repeat(2001) })).status).toBe(400);
+  ctx.repos.settings.update({ talkingToYou: "" });
+});
+
 it("holds new requests while a dialogue pass's staged cuts wait for the editor, except ones about that pass", async () => {
   const { ctx } = workspace;
   vi.spyOn(ctx.render, "renderRange").mockImplementation(async (_project, _timeline, _range, file) => { writeFileSync(file, "preview"); });
@@ -4518,15 +4584,18 @@ it("applies a pass when its run finishes with every staged cut settled by Scarle
     expect((await api("POST", `/tasks/${task.id}/complete`, { state: "done", summary: "Done." })).status).toBe(200);
     return ctx.repos.changes.get(staged!.id)!;
   };
-  // Scarlet asked about one: the pass waits for the editor.
-  const waiting = await pass(["cut", "ask"]);
-  expect(waiting.state).toBe("ready");
+  // Scarlet asked about one: the pass waits for the editor. The cut it settled went into the video as the run finished.
+  const staged = await pass(["cut", "ask"]);
+  expect(staged).toMatchObject({ state: "rejected", replacedBy: expect.any(String) });
+  const waiting = ctx.repos.changes.get(staged.replacedBy!)!;
+  expect(waiting).toMatchObject({ state: "ready", cutReasons: [{ start: 4, end: 5, reason: "a held aside" }] });
+  expect(timelineDuration(ensureHead(ctx, project.id).timeline)).toBeCloseTo(19);
   expect((await api("POST", `/changes/${waiting.id}/reject`, {})).status).toBe(200);
   // Scarlet cut one and kept the other, and asked nothing: the pass goes in with its verdicts.
   const applied = await pass(["cut", "keep"]);
   expect(applied).toMatchObject({ state: "approved", restoredCuts: [1] });
   expect(ctx.repos.projects.get(project.id)!.head).toBe(applied.appliedVersion);
-  expect(timelineDuration(ctx.repos.versions.get(project.id, applied.appliedVersion!)!.timeline)).toBeCloseTo(19);
+  expect(timelineDuration(ctx.repos.versions.get(project.id, applied.appliedVersion!)!.timeline)).toBeCloseTo(18);
 });
 
 /** A dialogue pass on a 20 s recording (or one of another length) that saves its cuts in parts, with the cut list, calls and notes of each part's review. */
@@ -4604,6 +4673,52 @@ function dialoguePassInParts(length = 20) {
     assess: (review: Change, assessments: object[]) => api("POST", `/changes/${review.id}/cut-assessments`, { ...versions(review), assessments }),
   };
 }
+
+it("puts the cuts Scarlet settled into the video with the pass's next save and as it finishes, while its calls wait", async () => {
+  const { ctx } = workspace;
+  const { task, base, staged, submit, listed, assess } = dialoguePassInParts();
+  const length = () => timelineDuration(ensureHead(ctx, project.id).timeline);
+  const one = await submit(base, [staged(2, 3), staged(6, 7), staged(10, 11), staged(14, 15)]);
+  expect((await assess(one.review, [{ index: 0, start: 2, end: 3, verdict: "cut", reason: "A clean retake, checked by ear." },
+    { index: 1, start: 6, end: 7, verdict: "ask", reason: "Both takes land." }, { index: 2, start: 10, end: 11, verdict: "keep", reason: "A beat." }])).status).toBe(200);
+  // Saving the assessment doesn't move the review Scarlet is working through.
+  expect(ctx.repos.changes.get(one.review.id)!.state).toBe("ready");
+  expect(length()).toBeCloseTo(20);
+  // The next part puts the settled retake in with its own cut. The call, the kept cut and the unchecked one wait.
+  const res = await api("POST", projectsPath() + "/dialogue-cuts", { taskId: task.id, fromVersion: base, description: "Part",
+    cuts: [{ start: 17, end: 18, review: false, reason: "Dead air." }] });
+  expect(res.status).toBe(201);
+  const two = await res.json() as { changes: Change[]; settledApplied?: { cuts: number } };
+  expect(two.settledApplied).toMatchObject({ cuts: 1 });
+  expect(two.changes.map(c => c.state)).toEqual(["approved", "ready"]);
+  expect(ctx.repos.changes.get(two.changes[0]!.id)!.cutReasons).toMatchObject([
+    { start: 2, end: 3, reason: "A clean retake, checked by ear." }, { start: 17, end: 18, reason: "Dead air." }]);
+  expect(length()).toBeCloseTo(18);
+  const review = ctx.repos.changes.get(two.changes[1]!.id)!;
+  expect(await listed(review)).toEqual([[5, 6], [9, 10], [13, 14]]);
+  expect(review.cutAssessments).toEqual([{ index: 0, start: 5, end: 6, verdict: "ask", reason: "Both takes land.", askOrder: 1 },
+    { index: 1, start: 9, end: 10, verdict: "keep", reason: "A beat." }]);
+  // Scarlet checks the last cut after its last save. It goes in as the run finishes; the call still waits for the editor.
+  expect((await assess(review, [{ index: 2, start: 13, end: 14, verdict: "cut", reason: "A false start." }])).status).toBe(200);
+  expect(length()).toBeCloseTo(18);
+  await checkPassAudio(task.id);
+  expect((await api("POST", `/tasks/${task.id}/complete`, { state: "done" })).status).toBe(200);
+  expect(length()).toBeCloseTo(17);
+  const after = ctx.repos.changes.get(ctx.repos.changes.get(review.id)!.replacedBy!)!;
+  expect(after.state).toBe("ready");
+  expect(await listed(after)).toEqual([[5, 6], [9, 10]]);
+  expect(after.cutAssessments?.map(a => [a.verdict, a.askOrder])).toEqual([["ask", 1], ["keep", undefined]]);
+});
+
+it("leaves settled cuts in the review when its next part decides one of the cuts their note was about", async () => {
+  const { base, staged, submit, listed, assess } = dialoguePassInParts();
+  const one = await submit(base, [staged(2, 4), staged(4, 6)]);
+  expect((await assess(one.review, [{ index: 0, start: 2, end: 6, verdict: "cut", reason: "Both retakes are clean." }])).status).toBe(200);
+  // The note was about one join, at 2 | 6. Part two decides inside the second again, so no part of the note goes in alone.
+  const two = await submit(base, [staged(4.5, 5)]);
+  expect(two.changes.map(c => c.state)).toEqual(["ready"]);
+  expect(await listed(two.review)).toEqual([[2, 4], [4.5, 5]]);
+});
 
 /**
  * A track's clips as straight cuts: the requested crossfade on a dialogue join (two clips overlapping by the fades
@@ -4707,8 +4822,8 @@ it("hands off one call while the pass can still trim and assess its other cuts",
   const direct = (start: number, end: number) => proposeChange(ctx, localUser(ctx), project.id,
     { intent: "requested", taskId: task.id, description: "Trim", ops: [{ op: "rippleDelete", start, end }] });
   // The engine's index names the cut for the tools, and the editor's number for Scarlet's words to them.
-  expect(() => direct(8.5, 9)).toThrow(/cut 1 \(the editor’s “Cut 1”\).*with the editor.*don’t ask them about it.*amend:true/);
-  expect(() => direct(3, 8)).toThrow(/would join cut 0 and cut 1 \(the editor’s “Cut 1”\)/);
+  expect(() => direct(8.5, 9)).toThrow(/cut 1 \(one of the editor’s calls, which they know by its time\).*with the editor.*don’t ask them about it.*amend:true/);
+  expect(() => direct(3, 8)).toThrow(/would join cut 0 and cut 1 \(one of the editor’s calls, which they know by its time\)/);
   const ownTrim = (index: number, start: number, end: number) => api("POST", `/changes/${review.id}/staged-cuts/${index}`,
     { taskId: task.id, start, end, reason: "Start after the breath." });
   expect((await ownTrim(1, 8.5, 10)).status).toBe(409);
@@ -5312,10 +5427,11 @@ it("keeps calls and notes on their cuts when the pass's next part applies a cut 
   // Part two applies a second of earlier footage, so every staged cut moves up by it.
   const two = await submit(base, [{ start: 1, end: 2, review: false, reason: "false start" }]);
   expect(two.changes.map(c => c.state)).toEqual(["approved", "ready"]);
-  expect(await listed(two.review)).toEqual([[3, 5], [9, 10], [13, 14]]);
-  expect(two.review.cutAssessments).toEqual([{ index: 0, start: 3, end: 5, verdict: "cut", reason: "Both retakes are clean." },
-    { index: 1, start: 9, end: 10, verdict: "ask", reason: "Both takes land.", askOrder: 1 }]);
-  expect(two.review.cutChoices).toEqual([{ index: 0, start: 3, end: 5, choice: "cut" }, { index: 2, start: 13, end: 14, choice: "keep" }]);
+  // The touching cuts Scarlet settled as one go into the video with it, and leave the review; the call and the skip stay.
+  expect(workspace.ctx.repos.changes.get(two.changes[0]!.id)!.cutReasons?.map(({ start, end }) => [start, end])).toEqual([[1, 2], [4, 5], [5, 6]]);
+  expect(await listed(two.review)).toEqual([[7, 8], [11, 12]]);
+  expect(two.review.cutAssessments).toEqual([{ index: 0, start: 7, end: 8, verdict: "ask", reason: "Both takes land.", askOrder: 1 }]);
+  expect(two.review.cutChoices).toEqual([{ index: 1, start: 11, end: 12, choice: "keep" }]);
 });
 
 it("asks the editor again about a cut they approved once the pass's next part stages a cut that touches it", async () => {
@@ -5325,27 +5441,23 @@ it("asks the editor again about a cut they approved once the pass's next part st
   expect((await assess(one.review, [{ index: 0, start: 8, end: 9, verdict: "cut", reason: "A clean retake." }])).status).toBe(200);
   // The editor approves two cuts and asks for the result once the pass is done.
   expect((await choose(one.review, [{ index: 0, choice: "cut" }, { index: 2, choice: "cut" }], true)).status).toBe(200);
-  // Part two stages the second after the first cut. The two are one cut now, which neither the approval nor the note was about.
+  // Part two stages a cut right after the first. The first is settled, by Scarlet's note and the editor's approval, so it
+  // goes into the video with this part, and the new cut waits on its own.
   const two = await submit(base, [staged(9, 10)]);
+  expect(two.changes.map(c => c.state)).toEqual(["approved", "ready"]);
   expect(two.editorDecided).toBeUndefined();
-  expect(await listed(two.review)).toEqual([[8, 10], [12, 13], [16, 17]]);
-  // It waits for the editor, under what Scarlet staged there.
-  expect(two.review.cutAssessments).toEqual([{ index: 0, start: 8, end: 10, verdict: "ask", provisional: true, reason: "Retake at 8 s. Retake at 9 s." }]);
-  expect(two.review.cutChoices).toEqual([{ index: 2, start: 16, end: 17, choice: "cut" }]);
-  // With an approval open again the pass waits for the editor instead of applying itself.
-  expect(two.review.applyWhenDone).toBeUndefined();
-  // The same for an approved cut Scarlet had no note on. The cut that already waits carries its note.
-  const three = await submit(base, [staged(17, 18)]);
-  expect(await listed(three.review)).toEqual([[8, 10], [12, 13], [16, 18]]);
-  expect(three.review.cutAssessments).toEqual([{ index: 0, start: 8, end: 10, verdict: "ask", provisional: true, reason: "Retake at 8 s. Retake at 9 s." },
-    { index: 2, start: 16, end: 18, verdict: "ask", provisional: true, reason: "Retake at 16 s. Retake at 17 s." }]);
+  expect(await listed(two.review)).toEqual([[8, 9], [11, 12], [15, 16]]);
+  expect(two.review.cutChoices).toEqual([{ index: 2, start: 15, end: 16, choice: "cut" }]);
+  // An approved cut Scarlet had no note on isn't settled: once the next part stages a cut that touches it, it waits for the editor again.
+  const three = await submit(two.changes[0]!.toVersion, [staged(16, 17)]);
+  expect(await listed(three.review)).toEqual([[8, 9], [11, 12], [15, 17]]);
+  expect(three.review.cutAssessments).toEqual([{ index: 0, start: 8, end: 9, verdict: "ask", provisional: true, reason: "Retake at 9 s." },
+    { index: 1, start: 11, end: 12, verdict: "ask", provisional: true, reason: "Retake at 12 s." },
+    { index: 2, start: 15, end: 17, verdict: "ask", provisional: true, reason: "Retake at 16 s." }]);
   expect(three.review.cutChoices).toBeUndefined();
+  expect(three.review.applyWhenDone).toBeUndefined();
   expect((await api("POST", `/tasks/${task.id}/complete`, { state: "done" })).status).toBe(200);
   expect(ctx.repos.changes.get(three.review.id)?.state).toBe("ready");
-  // Scarlet's recommendation replaces the temporary note on the new footage.
-  const note = { index: 0, start: 8, end: 10, verdict: "cut", reason: "One long retake." };
-  expect((await assess(ctx.repos.changes.get(three.review.id)!, [note])).status).toBe(200);
-  expect(ctx.repos.changes.get(three.review.id)!.cutAssessments).toEqual([note, { index: 2, start: 16, end: 18, verdict: "ask", provisional: true, reason: "Retake at 16 s. Retake at 17 s." }]);
 });
 
 it("leaves an approved cut for the editor without a note in a pass Scarlet hasn't assessed, as a revised cut is left", async () => {
@@ -5482,11 +5594,11 @@ it("doesn't apply a scheduled pass by itself while a cut that changed waits for 
   const { ctx } = workspace;
   const { task, base, staged, submit, listed, choose, assess } = dialoguePassInParts();
   const one = await submit(base, [staged(8, 9), staged(12, 13)]);
-  expect((await assess(one.review, [{ index: 0, start: 8, end: 9, verdict: "cut", reason: "A clean retake." },
+  expect((await assess(one.review, [{ index: 0, start: 8, end: 9, verdict: "keep", reason: "The pause is a beat." },
     { index: 1, start: 12, end: 13, verdict: "ask", reason: "Both takes land." }])).status).toBe(200);
-  // The editor answers the one call, which schedules the pass. Done now, it would take the retake out.
+  // The editor answers the one call, which schedules the pass. Done now, it would leave the pause in.
   expect((await choose(one.review, [{ index: 1, choice: "keep" }], true)).status).toBe(200);
-  // Part two stages a cut against the retake. Scarlet's note was about the retake alone, so the cut they make waits for the editor.
+  // Part two stages a cut against the pause. Scarlet's note was about the pause alone, so the cut they make waits for the editor.
   const two = await submit(base, [staged(9, 10)]);
   expect(await listed(two.review)).toEqual([[8, 10], [12, 13]]);
   expect(two.review.cutAssessments).toEqual([{ index: 0, start: 8, end: 10, verdict: "ask", provisional: true, reason: "Retake at 8 s. Retake at 9 s." },
@@ -5507,16 +5619,18 @@ it("keeps a pass's cut list, calls and notes when a staged cut at the very end o
   expect((await choose(one.review, [{ index: 1, choice: "keep" }], true)).status).toBe(200);
   // Its last 30 ms hold no whole frame, and the frame nearest their end is past the end of the edit. The cut stops at the end.
   const two = await submit(base, [staged(19.99, 20.02)]);
-  expect(await listed(two.review)).toEqual([[8, 9], [12, 13], [20, 20.02]]);
-  expect(two.review.cutChoices).toEqual([{ index: 1, start: 12, end: 13, choice: "keep" }]);
-  expect(two.review.cutAssessments).toHaveLength(2);
-  // The cut Scarlet never checked waits for the editor. They skip it, and the pass applies with their calls and Scarlet's
-  // note: the retake comes out, the skipped cuts stay.
+  // The retake Scarlet settled goes into the video with this part; the call and the new cut wait.
+  expect(two.changes.map(c => c.state)).toEqual(["approved", "ready"]);
+  expect(await listed(two.review)).toEqual([[11, 12], [19, 19.02]]);
+  expect(two.review.cutChoices).toEqual([{ index: 0, start: 11, end: 12, choice: "keep" }]);
+  expect(two.review.cutAssessments).toHaveLength(1);
+  // The cut Scarlet never checked waits for the editor. They skip it, and the pass applies with their calls: the retake
+  // is out, the skipped cuts stay.
   await checkPassAudio(task.id);
   expect((await api("POST", `/tasks/${task.id}/complete`, { state: "done" })).status).toBe(200);
   expect(ctx.repos.changes.get(two.review.id)?.state).toBe("ready");
-  expect((await choose(two.review, [{ index: 1, choice: "keep" }, { index: 2, choice: "keep" }])).status).toBe(200);
-  expect(ctx.repos.changes.get(two.review.id)).toMatchObject({ state: "approved", restoredCuts: [1, 2] });
+  expect((await choose(two.review, [{ index: 0, choice: "keep" }, { index: 1, choice: "keep" }])).status).toBe(200);
+  expect(ctx.repos.changes.get(two.review.id)).toMatchObject({ state: "approved", restoredCuts: [0, 1] });
   const applied = ctx.repos.versions.get(project.id, ctx.repos.projects.get(project.id)!.head!)!.timeline;
   expect(straightCuts(applied.tracks.find(t => t.id === "a1")!.clips)).toMatchObject([{ sourceIn: 0, sourceOut: 8 }, { sourceIn: 9, sourceOut: 20.02 }]);
 });
@@ -5527,7 +5641,7 @@ it("keeps the note on a cut that waits for the editor within a note's length, an
   // Eight touching staged cuts under one note, then a ninth that joins them.
   const one = await submit(base, Array.from({ length: 8 }, (_, n) => ({ start: 2 + n, end: 3 + n, review: true, reason: long(n + 1) })));
   expect(await listed(one.review)).toEqual([[2, 10]]);
-  expect((await assess(one.review, [{ index: 0, start: 2, end: 10, verdict: "cut", reason: "Eight tries at one line." }])).status).toBe(200);
+  expect((await assess(one.review, [{ index: 0, start: 2, end: 10, verdict: "keep", reason: "Eight tries at one line, kept as a bit." }])).status).toBe(200);
   const two = await submit(base, [{ start: 10, end: 11, review: true, reason: long(9) }]);
   expect(await listed(two.review)).toEqual([[2, 11]]);
   const waits = two.review.cutAssessments![0]!;
@@ -5537,7 +5651,7 @@ it("keeps the note on a cut that waits for the editor within a note's length, an
   expect(waits.reason.startsWith(`${long(1)} ${long(2)}`)).toBe(true);
   // Staged cuts whose reasons are blank: the cut that waits says what the app says of a cut without a reason.
   const three = await submit(base, [{ start: 14, end: 15, review: true, reason: " " }]);
-  expect((await assess(three.review, [{ index: 1, start: 14, end: 15, verdict: "cut", reason: "A breath." }])).status).toBe(200);
+  expect((await assess(three.review, [{ index: 1, start: 14, end: 15, verdict: "keep", reason: "A breath." }])).status).toBe(200);
   const four = await submit(base, [{ start: 15, end: 16, review: true, reason: " " }]);
   expect(await listed(four.review)).toEqual([[2, 11], [14, 16]]);
   expect(four.review.cutAssessments).toEqual([waits, { index: 1, start: 14, end: 16, verdict: "ask", provisional: true, reason: "No note was saved for this cut." }]);
@@ -5605,7 +5719,7 @@ it("tells Scarlet when a cut it staged earlier ends up against footage the edito
   const { ctx } = workspace;
   const { task, base, staged, submit, listed, choose, assess } = dialoguePassInParts();
   const one = await submit(base, [staged(2, 3), staged(5, 6)]);
-  expect((await assess(one.review, [{ index: 0, start: 2, end: 3, verdict: "cut", reason: "A clean retake." }])).status).toBe(200);
+  expect((await assess(one.review, [{ index: 0, start: 2, end: 3, verdict: "keep", reason: "The restart reads as emphasis." }])).status).toBe(200);
   // The editor skips the second cut and asks for the result once the pass is done.
   expect((await choose(one.review, [{ index: 1, choice: "keep" }], true)).status).toBe(200);
   // Part two takes out everything between them, so the first cut is one cut with the skipped footage and stays in with it.
@@ -5711,7 +5825,7 @@ it("carries a note saved with its range rounded to five decimals, on the cuts it
   const frame = (n: number) => n / fps;
   const one = await submit(base, [staged(frame(61), frame(89)), staged(frame(89), frame(121)), staged(frame(250), frame(260))]);
   const rounded = (t: number) => Math.round(t * 1e5) / 1e5;
-  const note = { index: 0, start: rounded(frame(61)), end: rounded(frame(121)), verdict: "cut", reason: "Both retakes are clean." };
+  const note = { index: 0, start: rounded(frame(61)), end: rounded(frame(121)), verdict: "keep", reason: "Both takes are worth keeping." };
   expect(note.start).not.toBe(frame(61));
   expect((await assess(one.review, [note])).status).toBe(200);
   const two = await submit(base, [staged(frame(400), frame(410))]);
@@ -5828,17 +5942,28 @@ it.each(["applied from its line", "applied when Scarlet finished"] as const)("ap
     await checkPassAudio(task.id);
     expect((await api("POST", `/tasks/${task.id}/complete`, { state: "done" })).status).toBe(200);
   };
-  if (!scheduled) await finish();
-  // Meanwhile the editor trims inside the footage two of the pass's cuts take out: the call's, then Scarlet's own.
   const trim = (start: number, end: number) => proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", autoApprove: true,
     description: "Trim", ops: [{ op: "rippleDelete", start, end }] }).change;
-  trim(10.3, 10.6);
-  trim(6.2, 6.4);
-  if (scheduled) await finish();
-  else expect((await api("POST", `/changes/${pass.id}/approve`, { restoredCuts: [] })).status).toBe(200);
-  const approved = ctx.repos.changes.get(pass.id)!;
-  expect(approved).toMatchObject({ state: "approved", cutChoices: [{ index: 2, choice: "cut" }] });
-  expect(approved.appliedReview?.joins).toHaveLength(3);
+  let approved: Change;
+  if (scheduled) {
+    // Meanwhile the editor trims inside the footage two of the pass's cuts take out: the call's, then Scarlet's own.
+    trim(10.3, 10.6);
+    trim(6.2, 6.4);
+    await finish();
+    approved = ctx.repos.changes.get(pass.id)!;
+    expect(approved.appliedReview?.joins).toHaveLength(3);
+  } else {
+    // Scarlet finishes first: the two cuts it settled go into the video, and the call waits on its own.
+    await finish();
+    const live = ctx.repos.changes.get(ctx.repos.changes.get(pass.id)!.replacedBy!)!;
+    expect(live).toMatchObject({ state: "ready", cutChoices: [{ index: 0, start: 8, end: 9, choice: "cut" }] });
+    // The editor then trims inside the call's footage, and applies the pass from its line.
+    trim(8.3, 8.6);
+    expect((await api("POST", `/changes/${live.id}/approve`, { restoredCuts: [] })).status).toBe(200);
+    approved = ctx.repos.changes.get(live.id)!;
+    expect(approved.appliedReview?.joins).toHaveLength(1);
+  }
+  expect(approved).toMatchObject({ state: "approved", cutChoices: [{ choice: "cut" }] });
   const timeline = ctx.repos.versions.get(project.id, approved.appliedVersion!)!.timeline;
   expect(straightCuts(timeline.tracks.find(t => t.id === "a1")!.clips)).toMatchObject([
     { sourceIn: 0, sourceOut: 2 }, { sourceIn: 3, sourceOut: 6 }, { sourceIn: 7, sourceOut: 10 }, { sourceIn: 11, sourceOut: 20 }]);
@@ -7060,7 +7185,7 @@ it("keeps a pass's own later save from changing footage under a cut that waits f
   // timeline over its four staged cuts left the editor's calls with nothing under them (2026-11-11).
   const rewrite = () => proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, fromVersion: staged.fromVersion,
     description: "Complete the pass", ops: [{ op: "rippleDelete", start: 11, end: 14 }] });
-  expect(rewrite).toThrow(/takes away the footage of a staged cut that waits for the editor’s call.*cut 0 (\(the editor’s “Cut 1”\) )?at 12\.00–13\.00 s.*dialogue_apply_cuts/s);
+  expect(rewrite).toThrow(/takes away the footage of a staged cut that waits for the editor’s call.*cut 0 (\(one of the editor’s calls, which they know by its time\) )?at 12\.00–13\.00 s.*dialogue_apply_cuts/s);
   expect(ctx.repos.projects.get(project.id)!.head).toBe(staged.fromVersion);
   expect(ctx.repos.changes.get(staged.id)!.state).toBe("ready");
   // Leaving a sliver of the cut is taking it away all the same.

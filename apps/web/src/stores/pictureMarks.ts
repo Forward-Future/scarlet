@@ -19,6 +19,8 @@ interface PictureMarksState {
   tool: PictureMarkKind;
   /** By project: the marked frame the next message carries, as files dropped on the box do. */
   byProject: Record<string, MarkedFrame | undefined>;
+  /** By project: the frame's marks as they were before each mark drawn or moved, for Undo to go back to. */
+  past: Record<string, PictureMark[][] | undefined>;
   /**
    * Start marking this frame. Marks already made on another frame of the same video stay theirs: the editor goes back
    * to that frame. Marks made on another video are replaced.
@@ -28,6 +30,7 @@ interface PictureMarksState {
   setTool(tool: PictureMarkKind): void;
   add(projectId: string, mark: PictureMark): void;
   replace(projectId: string, index: number, mark: PictureMark): void;
+  /** Take back the last mark drawn, or put a moved mark back where it was. */
   undo(projectId: string): void;
   /** Take every mark off, and the frame with them. */
   clear(projectId: string): void;
@@ -37,10 +40,12 @@ export const usePictureMarksStore = create<PictureMarksState>((set, get) => ({
   marking: null,
   tool: "draw",
   byProject: {},
+  past: {},
   start: (projectId, at) => {
     const held = get().byProject[projectId];
     const frame = held?.marks.length && held.version === at.version && held.mediaId === at.mediaId ? held : { ...at, marks: [] };
-    set(state => ({ marking: projectId, byProject: { ...state.byProject, [projectId]: frame } }));
+    set(state => ({ marking: projectId, byProject: { ...state.byProject, [projectId]: frame },
+      ...(frame !== held && { past: { ...state.past, [projectId]: undefined } }) }));
     return frame;
   },
   stop: () => {
@@ -53,24 +58,31 @@ export const usePictureMarksStore = create<PictureMarksState>((set, get) => ({
   setTool: tool => set({ tool }),
   add: (projectId, mark) => set(state => {
     const frame = state.byProject[projectId];
-    return frame ? { byProject: { ...state.byProject, [projectId]: { ...frame, marks: [...frame.marks, mark].slice(0, MAX_MARKS) } } } : {};
+    return frame ? { byProject: { ...state.byProject, [projectId]: { ...frame, marks: [...frame.marks, mark].slice(0, MAX_MARKS) } },
+      past: { ...state.past, [projectId]: [...state.past[projectId] ?? [], frame.marks] } } : {};
   }),
   replace: (projectId, index, mark) => set(state => {
     const frame = state.byProject[projectId];
     if (!frame || index < 0 || index >= frame.marks.length) return {};
     const marks = frame.marks.slice();
     marks[index] = mark;
-    return { byProject: { ...state.byProject, [projectId]: { ...frame, marks } } };
+    return { byProject: { ...state.byProject, [projectId]: { ...frame, marks } },
+      past: { ...state.past, [projectId]: [...state.past[projectId] ?? [], frame.marks] } };
   }),
   undo: projectId => set(state => {
     const frame = state.byProject[projectId];
-    return frame ? { byProject: { ...state.byProject, [projectId]: { ...frame, marks: frame.marks.slice(0, -1) } } } : {};
+    if (!frame) return {};
+    // The marks as they were before the last one drawn or moved; with nothing remembered, the last mark comes off.
+    const past = state.past[projectId] ?? [];
+    return { byProject: { ...state.byProject, [projectId]: { ...frame, marks: past.at(-1) ?? frame.marks.slice(0, -1) } },
+      past: { ...state.past, [projectId]: past.slice(0, -1) } };
   }),
   clear: projectId => set(state => ({
     marking: state.marking === projectId ? null : state.marking,
     byProject: { ...state.byProject, [projectId]: undefined },
+    past: { ...state.past, [projectId]: undefined },
   })),
 }));
 
 /** How many marks one frame takes, as the engine takes them. */
-export const MAX_MARKS = 20;
+const MAX_MARKS = 20;

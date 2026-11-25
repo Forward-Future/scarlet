@@ -3,7 +3,8 @@ import { emptyTimeline, makeMediaClip } from "./builders.js";
 import { applyOps, shiftClip, splitClip, trimHead, type TimelineOp } from "./ops.js";
 import { HistoryConflict, historyLineage, planRevert, replayHistoryEdit } from "./history.js";
 import { crossfadeJoins, rippleJoins } from "./joinCrossfade.js";
-import type { Change, Timeline } from "./schema.js";
+import type { Timeline } from "./timelineSchema.js";
+import type { Change } from "./changeSchema.js";
 import { clipEnd } from "./time.js";
 
 it("keeps a later ripple cut on the same source footage when undoing an earlier cut", () => {

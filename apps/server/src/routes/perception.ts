@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { fileInDirectoryAsync } from "@scarlet/render";
+import { fileInDirectoryAsync, heardAudio } from "@scarlet/render";
 import { Hono, type Context } from "hono";
 import type { MediaAsset } from "@scarlet/timeline";
 import { SOURCE_AUDIO_MOST } from "@scarlet/shared";
@@ -14,6 +14,7 @@ import { pictureCuts } from "../services/pictureCuts.js";
 import { screenMotion } from "../services/screenMotion.js";
 import { screenText } from "../services/screenText.js";
 import { listenFor } from "../services/listening.js";
+import { handOff } from "../services/taskModels.js";
 import { askAreas, editShowAreas, showArea, type ShowAreaEdit } from "../services/showArea.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
 import { optionalNumberParam, requireMedia } from "./util.js";
@@ -27,18 +28,22 @@ function requireSourceRange(from: number | undefined, to: number | undefined) {
 /** Read-only measurements the agent tools need beyond waveforms and transcripts. */
 export function perceptionRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
-  // Integrated loudness (EBU R128) of a source's first audio stream, optionally for a range.
+  // Integrated loudness (EBU R128) of a source's chosen audio track, or its first, optionally for a range.
   r.get("/projects/:projectId/media/:mediaId/loudness", async c => {
     const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
     if (media.kind !== "audio" && !media.hasAudio) throw badRequest("no_audio", "This media has no audio to measure.");
     const from = optionalNumberParam(c.req.query("from"), "from"), to = optionalNumberParam(c.req.query("to"), "to");
     requireSourceRange(from, to);
+    // Past the end there is no sound, and FFmpeg's summary of nothing reads as -70 LUFS peaking at full scale.
+    if (!(Math.min(to ?? Infinity, media.duration || Infinity) > (from ?? 0))) {
+      throw badRequest("bad_range", media.duration ? `Choose a range inside 0–${media.duration.toFixed(2)} s.` : "Choose a positive source range in seconds.");
+    }
     const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
     if (!file) throw notFound("source file");
     const info = await stat(file);
     // A measurement someone asked for, such as a running edit's, isn't stopped by a pause of the project's media work.
     const result = await measuredLoudness(ctx, file, [media.hash, info.size, info.ctimeMs, info.mtimeMs], { from, to, projectId: media.projectId,
-      stop: ctx.projectSignal(media.projectId) });
+      audio: heardAudio(media), stop: ctx.projectSignal(media.projectId) });
     return c.json({ mediaId: media.id, ...(from !== undefined && { from }), ...(to !== undefined && { to }), ...result });
   });
 
@@ -156,6 +161,21 @@ export function perceptionRoutes(ctx: Ctx) {
     requireActiveAttempt(ctx, requestAttempt(c.req.raw), c.req.param("projectId"), taskId);
     const wait = Math.max(0, Math.min(240, optionalNumberParam(c.req.query("wait"), "wait") ?? 60)) * 1000;
     return c.json(await listenFor(ctx, taskId, { mediaId, from, to, voice: voice === "me" || voice === "other voices" ? voice : undefined, question }, wait));
+  });
+
+  // Hand one kind of work to the model the editor chose for it in Task models, and wait up to `wait` seconds (default
+  // 120) for what it saved and said. Only a running request hands off, for itself.
+  r.post("/projects/:projectId/hand-off", async c => {
+    const body = await c.req.json().catch(() => null) as { taskId?: unknown; type?: unknown; brief?: unknown; handoffId?: unknown } | null;
+    const { taskId, type, brief, handoffId } = body ?? {};
+    if (typeof taskId !== "string" || (typeof handoffId !== "string" && (typeof type !== "string" || typeof brief !== "string"))) {
+      throw badRequest("bad_request", "Send taskId with type and brief, or with handoffId.");
+    }
+    if (typeof brief === "string" && brief.length > 8000) throw badRequest("bad_request", "Brief in up to 8,000 characters.");
+    requireActiveAttempt(ctx, requestAttempt(c.req.raw), c.req.param("projectId"), taskId);
+    const wait = Math.max(0, Math.min(240, optionalNumberParam(c.req.query("wait"), "wait") ?? 120)) * 1000;
+    return c.json(await handOff(ctx, taskId, { type: typeof type === "string" ? type : undefined, brief: typeof brief === "string" ? brief : undefined,
+      handoffId: typeof handoffId === "string" ? handoffId : undefined }, wait));
   });
 
   return r;

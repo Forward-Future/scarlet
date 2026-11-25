@@ -38,6 +38,13 @@ it("keeps background work lowered for as long as the editor waits for a playback
   expect(calls).toEqual([[7, true], [7, false]]);
 });
 
+it("lowers background work as soon as the editor starts waiting for a playback section, not at the next check", () => {
+  const { first, calls } = harness();
+  first.adopt(8, () => true);
+  first.hold();
+  expect(calls).toEqual([[8, true]]);
+});
+
 it("runs work at normal priority once someone waits for it, whatever the editor does", () => {
   const { first, calls, advance } = harness();
   let nobodyWaits = true;

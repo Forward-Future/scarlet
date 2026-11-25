@@ -4,7 +4,7 @@ import { useSkillsStore } from "../../stores/skills";
 import { markSkillMatches, normalizeSkillLines, revealSkillMatch, type SkillFindState } from "./SkillFind";
 
 /** A `/skill` the library has, where it is in the text. Words the library has no skill for stay plain. */
-export function keywordSpans(text: string, skills: readonly Pick<Skill, "name">[]) {
+function keywordSpans(text: string, skills: readonly Pick<Skill, "name">[]) {
   const names = new Set(skills.map(s => s.name));
   return Array.from(text.matchAll(/(^|[^\w/])\/([a-z0-9][a-z0-9-]*)/gi), m => {
     const name = m[2]!;
@@ -97,6 +97,8 @@ export function SkillInstructions({ value: body, onChange, readOnly, placeholder
     return null;
   }
 
+  const hoverDescription = hover && skills.find(s => s.name === hover.name)?.description;
+
   return <div className="skill-instructions">
     <div ref={backdrop} className={`${className} skill-instructions-text`} aria-hidden="true">{marked}{"​"}</div>
     <textarea ref={box} className={`${className} skill-instructions-field`} value={value} readOnly={readOnly} placeholder={placeholder}
@@ -111,7 +113,7 @@ export function SkillInstructions({ value: body, onChange, readOnly, placeholder
       onChange={e => onChange(e.target.value)} />
     {hover && <div className="skill-keyword-note" role="tooltip" style={{ left: hover.left - 6, top: hover.top - 6 }}>
       <span className="skill-keyword-words"><span>/{hover.name}</span>
-        <small>Skill{skills.find(s => s.name === hover.name)?.description ? ` · ${skills.find(s => s.name === hover.name)!.description}` : ""}</small></span>
+        <small>Skill{hoverDescription ? ` · ${hoverDescription}` : ""}</small></span>
     </div>}
   </div>;
 }

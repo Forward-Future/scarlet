@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
 import { usePlayerStore } from "../stores/player";
+import { markedRangeOf, useUiStore } from "../stores/ui";
 
 export function isEditableTarget(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;
@@ -43,6 +44,8 @@ export function ignorePageShortcut(e: KeyboardEvent, owner?: Element | null): bo
   if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target)) return true;
   // A small popover that is open closes on Esc before anything behind it does, wherever its own listener sits.
   if (e.key === "Escape" && document.querySelector("[data-escape-owner]")) return true;
+  // A stretch marked on the timeline goes on Esc before an edit's card or anything else the page closes.
+  if (e.key === "Escape" && markedRangeOf(useUiStore.getState().agentContext)) return true;
   // A focused handle of the marked range takes its own Esc, and leaves Space to the player: it has no click of its own.
   const handle = e.target instanceof Element && !!e.target.closest("[data-range-handle]");
   if (e.key === "Escape" && handle) return true;
@@ -62,7 +65,8 @@ export function arrowSeekTime(time: number, key: SeekArrow, shift: boolean, fps 
   const dir = key === "ArrowLeft" ? -1 : 1;
   if (shift) {
     const rate = fps > 0 && Number.isFinite(fps) ? fps : 30;
-    return (Math.round(time * rate) + dir) / rate;
+    const slack = Math.min(0.1, 1e-3 * rate);
+    return (Math.floor(time * rate + slack) + dir) / rate;
   }
   return (Math.round(time * 1000) + dir * 1000) / 1000;
 }
@@ -114,8 +118,15 @@ export function useComparisonShortcut(enabled: boolean, toggle: () => void, owne
   }, undefined, owner);
 }
 
+/** True for Option+X / Alt+X (standard Clear In/Out). Checks `code` too because macOS reports `≈` for Option+X. */
+export function isAltClearRangeKey(e: { key: string; code?: string; altKey: boolean; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }): boolean {
+  return e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.code === "KeyX" || e.key.toLowerCase() === "x");
+}
+
 /** Stands in the list for a shortcut's own key, which is ⌘ on a Mac and Ctrl on Windows. The list shows the one in use. */
 export const PLATFORM_KEY = "Mod";
+/** Stands in the list for Option on a Mac and Alt on Windows/Linux. */
+export const ALT_KEY = "Alt";
 
 export const SHORTCUTS: Array<{ keys: string[]; what: string; where: string }> = [
   { keys: [PLATFORM_KEY, ","], what: "Open Settings", where: "Everywhere" },
@@ -134,6 +145,7 @@ export const SHORTCUTS: Array<{ keys: string[]; what: string; where: string }> =
   { keys: ["←", "→"], what: "Back / forward 1 second (1 frame with Shift)", where: "Preview" },
   { keys: ["L"], what: "Faster playback, back to 0.5× after 2× (Shift for slower)", where: "Preview" },
   { keys: ["−", "+"], what: "Zoom the timeline out / in (0 to fit)", where: "Timeline" },
+  { keys: [ALT_KEY, "X"], what: "Clear the marked range (also Esc or Delete)", where: "Timeline" },
   { keys: ["N"], what: "Type a message at the playhead", where: "In a project" },
   { keys: ["Esc"], what: "Close what is on screen", where: "Edit, call or suggestion" },
   { keys: ["Esc"], what: "Close a popover or leave Settings", where: "Everywhere" },

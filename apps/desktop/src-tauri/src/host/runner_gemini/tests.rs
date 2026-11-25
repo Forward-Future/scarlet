@@ -1,5 +1,26 @@
 use super::*;
+use super::acp_parse::SCARLET_TOOLS;
 use crate::host::runner::testing::sample_mcp;
+
+/// A task folder inside the test's temporary folder, so the run's own Gemini folder beside it goes with it.
+fn task_dir(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let task = dir.path().join("task");
+    std::fs::create_dir_all(&task).unwrap();
+    task
+}
+
+/// Parse one JSON-RPC notification line from `agy acp` (or non-JSON output as a log line).
+fn parse_gemini_line(line: &str, st: &mut GeminiState) -> Vec<RunnerEvent> {
+    let Some(msg) = parse_json_object(line) else {
+        return vec![RunnerEvent::new("log", line)];
+    };
+    if msg.get("method").and_then(Value::as_str) == Some("session/update") {
+        if let Some(update) = msg.pointer("/params/update") {
+            return parse_gemini_acp_update(update, st);
+        }
+    }
+    Vec::new()
+}
 
 fn feed(lines: &[&str], st: &mut GeminiState) -> Vec<RunnerEvent> {
     lines.iter().flat_map(|l| parse_gemini_line(l, st)).collect()
@@ -175,9 +196,13 @@ fn knows_every_tool_scarlet_offers_and_no_other() {
 #[test]
 fn builds_acp_command_prompt_meta_and_mcp_server_entry() {
     let mcp = sample_mcp();
-    let cmd = build_gemini_command("agy");
+    let cmd = build_gemini_command("agy", None);
     assert_eq!(cmd.file, "agy");
     assert_eq!(cmd.args, ["acp", "--sandbox", "--disable-telemetry"]);
+    // The run's own Gemini folder keeps the user's personal GEMINI.md and plugin rules out.
+    let own = gemini_dir(std::path::Path::new("/w/tasks-v2/tsk_1"));
+    assert_eq!(own, std::path::Path::new("/w/tasks-v2/tsk_1.gemini"));
+    assert_eq!(build_gemini_command("agy", Some(&own)).args, ["acp", "--sandbox", "--disable-telemetry", "--gemini-dir", own.to_str().unwrap()]);
     assert_eq!(cmd.stdin, None);
     // No GEMINI.md: agy cuts a rule file off at 24,000 bytes.
     assert!(cmd.files.is_empty());
@@ -253,7 +278,7 @@ done
 async fn runs_acp_session_with_model_effort_permissions_and_usage() {
     let dir = tempfile::tempdir().unwrap();
     let (script, log_path) = fake_agy(dir.path(), false);
-    let (mut opts, events) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (mut opts, events) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
     opts.model = Some("gemini-3.1-pro".into());
     opts.effort = Some("high".into());
     opts.instruction = "Trim the clip".into();
@@ -311,7 +336,7 @@ while IFS= read -r line; do
 done
 "#)).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let (opts, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (opts, _) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
     let res = run_gemini(opts).await;
     assert!(res.ok && res.question.is_none() && !res.question_posted, "{res:?}");
     assert_eq!(res.summary, "Kept both takes.");
@@ -322,7 +347,7 @@ done
 async fn carries_on_after_a_refusal_in_the_engines_words() {
     let dir = tempfile::tempdir().unwrap();
     let (script, log_path) = fake_agy(dir.path(), false);
-    let (mut opts, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (mut opts, _) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
     opts.refused_tool = Some("Scarlet refused {tool} here. Carry on with Scarlet's tools only.".into());
     let res = run_gemini(opts).await;
     assert!(res.ok, "{:?}", res.error);
@@ -350,7 +375,7 @@ while IFS= read -r line; do
 done
 "#, log_path.display())).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let (opts, events) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (opts, events) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
     let res = run_gemini(opts).await;
     assert!(!res.ok);
     let error = res.error.unwrap_or_default();
@@ -418,7 +443,7 @@ done
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let (opts, events) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (opts, events) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
     let res = run_gemini(opts).await;
     assert!(res.ok, "unexpected error: {:?}", res.error);
     assert_eq!(res.summary, final_reply);
@@ -433,7 +458,7 @@ done
 async fn writes_no_words_of_its_own_for_the_model_after_a_refusal() {
     let dir = tempfile::tempdir().unwrap();
     let (script, log_path) = fake_agy(dir.path(), false);
-    let (mut opts, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (mut opts, _) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
     opts.refused_tool = None;
     let res = run_gemini(opts).await;
     assert!(!res.ok);
@@ -450,7 +475,7 @@ async fn writes_no_words_of_its_own_for_the_model_after_a_refusal() {
 async fn stops_a_run_whose_turns_keep_ending_on_refused_tools() {
     let dir = tempfile::tempdir().unwrap();
     let (script, log_path) = fake_agy(dir.path(), true);
-    let (opts, events) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (opts, events) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
 
     let res = run_gemini(opts).await;
     assert!(!res.ok);
@@ -469,7 +494,10 @@ async fn streams_live_token_usage_from_agy_transcript_and_skips_prior_steps_on_r
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
-    let transcript = home.join(".gemini/antigravity-cli/brain/s-live/.system_generated/logs/transcript.jsonl");
+    let cwd = dir.path().join("task");
+    std::fs::create_dir_all(&cwd).unwrap();
+    // agy writes its transcript in the run's own Gemini folder, not the user's ~/.gemini.
+    let transcript = gemini_dir(&cwd).join("antigravity-cli/brain/s-live/.system_generated/logs/transcript.jsonl");
     std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
     let script = dir.path().join("fake-agy-live");
     std::fs::write(
@@ -513,7 +541,7 @@ done
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let (mut opts, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (mut opts, _) = crate::host::runner::testing::options("gemini", &cwd, Some(script.to_string_lossy().into_owned()));
     opts.model = Some("gemini-4-neon".into());
     opts.env.insert("HOME".into(), home.to_string_lossy().into_owned());
     let reports: Arc<Mutex<Vec<AgentUsage>>> = Arc::default();
@@ -530,7 +558,7 @@ done
     assert_eq!(res.usage.as_ref().map(|u| (u.input_tokens, u.cache_read_tokens, u.output_tokens, u.reasoning_tokens)), Some((1200, 1000, 80, 60)));
 
     // Resuming the same session must skip the earlier claim's steps in transcript.jsonl.
-    let (mut resume_opts, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (mut resume_opts, _) = crate::host::runner::testing::options("gemini", &cwd, Some(script.to_string_lossy().into_owned()));
     resume_opts.model = Some("gemini-4-neon".into());
     resume_opts.instruction = "resumed turn".into();
     resume_opts.resume_session = Some("s-live".into());
@@ -559,6 +587,21 @@ fn lets_a_request_use_agys_own_tools_inside_its_folders_only() {
     assert!(!allow(json!({ "name": "read_file", "locations": [{ "path": "/w/../etc/passwd" }] })));
     assert!(!allow(json!({ "name": "read_file", "rawInput": { "path": "~/.ssh/id_rsa" } })));
     assert!(!allow(json!({ "name": "list_dir", "rawInput": { "paths": ["/w/artifacts", "/w2"] } })));
+}
+
+#[test]
+fn reads_a_relative_path_from_the_task_folder_so_one_that_climbs_out_is_refused() {
+    let roots = vec!["/w".to_string(), "/Applications/Google Chrome.app".to_string()];
+    let allow = |call: Value| workspace_permission(&json!({ "toolCall": call }), &roots);
+    // Three folders up from a task folder is Scarlet's own, where its token is kept.
+    assert!(!allow(json!({ "name": "read_file", "rawInput": { "path": "../../../agent.json" } })));
+    assert!(!allow(json!({ "name": "read_file", "rawInput": { "file_path": "artifacts/../../secret" } })));
+    assert!(!allow(json!({ "name": "read_file", "locations": [{ "path": "../secret" }] })));
+    // Inside the task folder, a relative path is fine, as are words that only look like one.
+    assert!(allow(json!({ "name": "write_file", "rawInput": { "file_path": "artifacts/page.html", "content": "<a href=\"../index.html\">back</a>" } })));
+    assert!(allow(json!({ "name": "read_file", "rawInput": { "path": "artifacts/../notes.md" } })));
+    assert!(allow(json!({ "name": "read_file", "locations": [{ "path": "artifacts/page.html" }] })));
+    assert!(allow(json!({ "name": "run_shell_command", "rawInput": { "command": "cd .. && ls" } })));
 }
 
 #[cfg(unix)]
@@ -597,7 +640,7 @@ done
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let (opts, _) = crate::host::runner::testing::options("gemini", dir.path(), Some(script.to_string_lossy().into_owned()));
+    let (opts, _) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
     assert!(opts.effort.is_none());
     let res = run_gemini(opts).await;
     assert!(res.ok, "unexpected error: {:?}", res.error);
@@ -605,4 +648,49 @@ done
     assert!(sent.contains(r#""method":"session/set_config_option""#));
     assert!(sent.contains(r#""configId":"thought_level""#));
     assert!(sent.contains(r#""value":"medium""#));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn continues_when_default_effort_is_rejected_but_fails_for_explicit_effort() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake-agy-reject-effort");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+  case "$line" in
+    *'"method":"initialize"'*)
+      echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"_meta":{"antigravity":{"systemPrompt":{"append":true}}}}}}'
+      ;;
+    *'"method":"session/new"'*)
+      echo '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-eff-err","configOptions":[{"id":"thought_level","category":"thought_level","currentValue":"high","options":[{"value":"low"},{"value":"medium"},{"value":"high"}]}]}}'
+      ;;
+    *'"method":"session/set_config_option"'*)
+      echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32602,\"message\":\"thought level unsupported for model\"}}"
+      ;;
+    *'"method":"session/prompt"'*)
+      echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
+      ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Unset effort: best-effort default falls back and completes the prompt.
+    let (opts, events) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
+    let res = run_gemini(opts).await;
+    assert!(res.ok, "unexpected error: {:?}", res.error);
+    assert!(events.lock().unwrap().iter().any(|e| e.kind == "log" && e.text.contains("could not apply default effort")));
+
+    // Explicit effort: rejecting it still fails the run clearly.
+    let (mut explicit, _) = crate::host::runner::testing::options("gemini", &task_dir(&dir), Some(script.to_string_lossy().into_owned()));
+    explicit.effort = Some("low".into());
+    let res = run_gemini(explicit).await;
+    assert!(!res.ok);
+    assert_eq!(res.error.as_deref(), Some("Gemini set_effort failed: thought level unsupported for model"));
 }

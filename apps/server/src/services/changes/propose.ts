@@ -3,6 +3,7 @@ import {
   applyOps,
   assignSpots,
   clipById,
+  clipRange,
   describeDiff,
   diffTimelines,
   frameAligned,
@@ -15,8 +16,10 @@ import {
   timelineDuration,
   WritableTimeline,
   type Change,
+  type Clip,
   type JoinFades,
   type Timeline,
+  type TimeRange,
 } from "@scarlet/timeline";
 import type { Ctx } from "../../context.js";
 import { now } from "../../db.js";
@@ -231,6 +234,23 @@ export function persistProposal(ctx: Ctx, user: User, projectId: string, body: P
   // A range says where to look. One that starts on the timeline and runs past its end means "to the end"; refusing it
   // cost a pass a turn spent guessing the timeline's length.
   const ends = diff.durationAfter;
+  // A save that only leaves to-dos for the editor is one edit a to-do, however the model named them: each is the
+  // editor's to add, park or reject. Named none, the save changed no stretch of the video, so the request listed nothing and its
+  // 27 B-roll ideas could be reached from nowhere in the chat; named once for all 33, they were one row (2026-11-23).
+  // A name the model gave one to-do alone stays; any other row is the start of its to-do, and its card says it in full.
+  const todos = body.ops?.length ? body.ops.flatMap(op =>
+    op.op === "addMarker" && op.marker.kind === "todo" && !op.marker.resolved && op.marker.text.trim() ? [op.marker] : []) : [];
+  if (todos.length && todos.length === body.ops?.length) {
+    const named = body.timelineEdits ?? [];
+    const holds = (edit: (typeof named)[number], time: number) => edit.range.start - 1e-6 <= time && time <= edit.range.end + 1e-6;
+    const own = todos.map(marker => {
+      const on = named.filter(edit => holds(edit, marker.time));
+      return on.length === 1 && todos.filter(other => holds(on[0]!, other.time)).length === 1 ? on[0] : undefined;
+    });
+    if (named.length !== todos.length || own.some(edit => !edit)) {
+      body = { ...body, timelineEdits: todos.map((marker, i) => own[i] ?? { label: rowWords(marker.text), range: { start: marker.time, end: marker.time } }) };
+    }
+  }
   if (body.timelineEdits?.some(({ range }) => range.end > ends + 1e-6 && range.start < ends)) {
     body = { ...body, timelineEdits: body.timelineEdits.map(e => e.range.end > ends && e.range.start < ends ? { ...e, range: { ...e.range, end: ends } } : e) };
   }
@@ -238,6 +258,13 @@ export function persistProposal(ctx: Ctx, user: User, projectId: string, body: P
   if (off) {
     throw badRequest("invalid_edit_range", `Edit ranges must lie on the resulting timeline, which is ${ends.toFixed(3)} s long. ` +
       `"${off.label}" is ${off.range.start}-${off.range.end} s.`);
+  }
+  if (body.timelineEdits?.length) {
+    const spanning = spanningTimelineEdits(body.timelineEdits, touchedRanges(base, stored, body.ops, diff.ranges), !!body.ops?.length);
+    if (spanning.length) {
+      throw badRequest("spanning_edit_range", `${spanning.slice(0, 4).join("; ")}${spanning.length > 4 ? `; and ${spanning.length - 4} more` : ""}. ` +
+        "List each edit at a separate time range as its own entry in timelineEdits with its exact playback range; only edits that act on the same time range share one.");
+    }
   }
   const threadId = sourceTask ? threadOf(sourceTask) : changeId;
   const replacements = new Set<string>();
@@ -347,4 +374,90 @@ export function notifyReady(ctx: Ctx, change: Change) {
     projectId: change.projectId,
     link: reviewItemPath(change.projectId, change.id),
   });
+}
+
+/** A to-do's words as its row's: whole when they fit on a row's two lines in the chat, else up to the last word that does. */
+function rowWords(text: string, max = 72): string {
+  const words = text.trim().replace(/\s+/g, " ");
+  if (words.length <= max) return words;
+  const cut = words.slice(0, max - 1);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), max >> 1)).replace(/[\s,;:.]+$/, "")}\u2026`;
+}
+
+/** Untouched gaps shorter than this merge into one changed stretch, matching `changedSpots`'s default gap. */
+const TOUCHED_GAP = 0.5;
+/** Two stretches sharing less than this only touch at an edit boundary. */
+const EDIT_TOUCH = 0.05;
+
+const formatRange = (r: TimeRange) => r.end - r.start < 1e-3 ? `${r.start.toFixed(2)} s` : `${r.start.toFixed(2)}\u2013${r.end.toFixed(2)} s`;
+
+/**
+ * Merged stretches on the resulting timeline that this proposal actually touched: the rendered diff ranges plus any
+ * clip added, modified (beyond a pure timelineIn slide) or moved by its ops, and any added or updated markers.
+ */
+function touchedRanges(base: Timeline, stored: Timeline, ops: ProposeChangeRequest["ops"], diffRanges: TimeRange[]): TimeRange[] {
+  const raw: TimeRange[] = [...diffRanges];
+  if (ops?.length) {
+    const storedClips = new Map<string, Clip>();
+    for (const track of stored.tracks) for (const clip of track.clips) if (!storedClips.has(clip.id)) storedClips.set(clip.id, clip);
+    const clipSpan = (id: unknown) => {
+      const clip = typeof id === "string" ? storedClips.get(id) : undefined;
+      if (!clip) return;
+      try { return clipRange(clip); } catch { return; }
+    };
+    for (const op of ops) {
+      if (op.op === "addClip" && op.clip && typeof op.clip === "object") {
+        const span = clipSpan((op.clip as { id?: unknown }).id);
+        if (span) raw.push(span);
+      } else if (op.op === "updateClip" && op.patch && typeof op.patch === "object") {
+        const keys = Object.keys(op.patch as Record<string, unknown>);
+        if (keys.some(k => k !== "timelineIn" && k !== "label")) {
+          const span = clipSpan(op.clipId);
+          if (span) raw.push(span);
+        }
+      } else if (op.op === "moveClip") {
+        const span = clipSpan(op.clipId);
+        if (span) raw.push(span);
+      } else if (op.op === "addMarker" && op.marker && typeof op.marker === "object") {
+        const saved = stored.markers.find(m => m.id === (op.marker as { id?: unknown }).id);
+        const time = saved?.time ?? (typeof (op.marker as { time?: unknown }).time === "number" ? (op.marker as { time: number }).time : undefined);
+        if (time !== undefined) raw.push({ start: time, end: time });
+      } else if (op.op === "updateMarker") {
+        const saved = stored.markers.find(m => m.id === op.markerId) ?? base.markers.find(m => m.id === op.markerId);
+        if (saved) raw.push({ start: saved.time, end: saved.time });
+      }
+    }
+  }
+  const sorted = raw.filter(r => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end >= r.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: TimeRange[] = [];
+  for (const r of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && r.start <= last.end + TOUCHED_GAP) last.end = Math.max(last.end, r.end);
+    else merged.push({ start: r.start, end: r.end });
+  }
+  return merged;
+}
+
+/**
+ * Named edits whose range bridges untouched gaps across multiple disjoint changed stretches. Bundling scattered edits
+ * (e.g. punch-ins or quote crops across a whole video) into one spanning range causes them to collapse into one row,
+ * hijack range-only flags, and mix unrelated ops in their card.
+ */
+function spanningTimelineEdits(edits: NonNullable<ProposeChangeRequest["timelineEdits"]>, touched: TimeRange[], hasOps: boolean): string[] {
+  const hitsFor = (range: TimeRange) => touched.filter(t => t.end - t.start <= 1e-6
+    ? t.start >= range.start - EDIT_TOUCH && t.start <= range.end + EDIT_TOUCH
+    : Math.min(t.end, range.end) - Math.max(t.start, range.start) > EDIT_TOUCH);
+  const problems: string[] = [];
+  for (const edit of edits) {
+    if (edit.replaces) continue;
+    if (edit.range.end - edit.range.start <= TOUCHED_GAP) continue;
+    const hits = hitsFor(edit.range);
+    // For full-timeline replacements without ops, ignore splice-edge-only hits from a reordered segment.
+    const counted = hasOps ? hits : hits.filter(h => h.end - h.start > TOUCHED_GAP);
+    if (counted.length < 2) continue;
+    const shown = counted.slice(0, 6).map(formatRange).join(", ") + (counted.length > 6 ? `, and ${counted.length - 6} more` : "");
+    problems.push(`"${edit.label}" (${formatRange(edit.range)}) spans ${counted.length} separate changed stretches (${shown})`);
+  }
+  return problems;
 }

@@ -162,15 +162,24 @@ it("lists tokens by project, provider and model in Settings", async () => {
 
   const view = render(<UsageSettings />);
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-  const text = view.host.textContent ?? "";
-  expect(text).toContain("1.3M tokens");
-  expect(text).toContain(". 3 runs since ");
-  expect(text).toContain("Interview");
-  expect(text).toContain("Deleted project");
-  expect(text).toContain("Claude Code");
-  expect(text).toContain("Default model");
-  expect(text).not.toMatch(/agent/i);
-  expect(text).not.toMatch(/\$|cost/i);
+  const text = () => view.host.textContent ?? "";
+  expect(text()).toContain("1.3M tokens");
+  expect(text()).toContain("3 runs since ");
+  expect(text()).toContain("Interview");
+  expect(text()).toContain("Deleted project");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
+
+  const tabButton = (label: string) => [...view.host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(b => b.textContent?.includes(label))!;
+  act(() => tabButton("Providers").click());
+  expect(text()).toContain("Claude Code");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
+
+  act(() => tabButton("Models").click());
+  expect(text()).toContain("Default model");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
 
   // The switch reflects the editor's choice and remembers it.
   const toggle = view.host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Show tokens in the chat"]')!;
@@ -235,10 +244,11 @@ it("says what Scarlet is doing this moment on one line under its opening sentenc
   const spoken = [...joins, said("The opening is saved, and I’ve found the retake of the letter.", 60)];
   view.rerender(<RunBundle task={running} events={spoken} changes={[]} banded />);
   expect(now(view.host)).toBe("The opening is saved, and I’ve found the retake of the letter.");
-  // A cut Scarlet asked about is named by its call's number, not by where it comes among the pass's cuts.
-  const asked = [{ id: "chg", cutAssessments: [{ index: 1, verdict: "ask", askOrder: 1 }, { index: 7, verdict: "ask", askOrder: 0 }] }] as never;
+  // A cut Scarlet asked about is named by its time, never by a number. One it hasn't asked about is a flagged cut.
+  const asked = [{ id: "chg", cutReasons: [{ start: 10, end: 11 }, { start: 167, end: 168 }, { start: 200, end: 201 }, { start: 300, end: 301 }],
+    cutAssessments: [{ index: 1, verdict: "ask", askOrder: 1 }, { index: 7, verdict: "ask", askOrder: 0 }] }] as never;
   view.rerender(<RunBundle task={running} events={[...spoken, tool("dialogue_review_inspect", 70, { changeId: "chg", index: 1, count: 1 })]} changes={asked} banded />);
-  expect(now(view.host)).toBe("Listening to Cut 2");
+  expect(now(view.host)).toBe("Listening to the cut at 2:47");
   view.rerender(<RunBundle task={running} events={[...spoken, tool("dialogue_review_inspect", 70, { changeId: "chg", index: 3, count: 1 })]} changes={asked} banded />);
   expect(now(view.host)).toBe("Listening to a flagged cut");
   // Under a heading that carries Stop, the line has none. With no heading, Stop ends the line.
@@ -262,6 +272,23 @@ it("says what Scarlet is doing this moment on one line under its opening sentenc
   bare.rerender(<RunBundle task={{ ...task, summary: "Cut the dialogue." }} events={spoken} changes={[]} banded />);
   expect(bare.host.querySelector(".req-lead, .req-now")).toBeNull();
   bare.unmount();
+});
+
+it("keeps saying a request is picking up where it left off until its first call, on a model that thinks first", () => {
+  openProject();
+  const again: Task = { ...task, id: "tsk_again", state: "running", summary: null, finishedAt: undefined, resumeRootId: task.id };
+  const started: TaskEvent[] = [{ type: "log", at: "2026-11-05T10:00:01.000Z", text: "Codex session started", data: { kind: "init" } },
+    { type: "log", at: "2026-11-05T10:00:02.000Z", text: "(thinking) Where was I.", data: { kind: "reasoning" } }];
+  const view = render(<RunBundle task={again} events={started} changes={[]} banded />);
+  const now = () => view.host.querySelector(".req-now [role=status]")?.textContent;
+  expect(now()).toBe("Picking up where it left off");
+  // Its first call takes the line, and thinking after that reads as it does on any request.
+  const called: TaskEvent[] = [...started, { type: "tool", at: "2026-11-05T10:00:05.000Z", text: "timeline_get", data: { tool: "scarlet.timeline_get", input: {} } }];
+  view.rerender(<RunBundle task={again} events={called} changes={[]} banded />);
+  expect(now()).toBe("Looking at the timeline");
+  view.rerender(<RunBundle task={again} events={[...called, { ...started[1]!, at: "2026-11-05T10:00:09.000Z" }]} changes={[]} banded />);
+  expect(now()).toBe("Thinking");
+  view.unmount();
 });
 
 it("says how far the transcripts it waits on are, and keeps file progress in Media", () => {
@@ -301,7 +328,7 @@ it("says how far the transcripts it waits on are, and keeps file progress in Med
   view.unmount();
 });
 
-it("says a run that ended without its transcripts is paused, and offers to finish it once they're ready", () => {
+it("says a run that ended without its transcripts needs them, not that it is paused, and offers to finish it once they're ready", () => {
   const paused: Task = { ...task, needsTranscripts: ["cam"], finishedAt: "2026-11-05T11:04:00.000Z" };
   const transcribing: Task = { ...task, id: "tsk_cam", kind: "transcribe", agent: "api", instruction: "Transcribe cam", context: { mediaId: "cam" },
     state: "running", summary: null, finishedAt: undefined, progress: { stage: "aligning", fraction: 0.18, remainingSeconds: 13_689 } };
@@ -313,7 +340,7 @@ it("says a run that ended without its transcripts is paused, and offers to finis
   const view = render(<RunBundle task={paused} events={[]} changes={[]} onResume={onResume} onWaitForTranscripts={onWait} />);
   const line = () => [view.host.querySelector(".run-summary")?.textContent, view.host.querySelector(".run-wait")?.textContent];
   // How far along it is, as a percent: no guess at how long is left.
-  expect(line()).toEqual(["Paused · needs transcript", "Transcript 18%Finish when ready"]);
+  expect(line()).toEqual(["Needs transcript", "Transcript 18%Finish when ready"]);
   act(() => view.host.querySelector<HTMLButtonElement>(".run-wait button")!.click());
   expect(onWait).toHaveBeenCalledWith(true);
   view.unmount();
@@ -407,6 +434,33 @@ it("keeps the figure of a paused run's transcripts going on when one of them is 
   view.unmount();
 });
 
+it("keeps the figure of a working run's transcripts going on when one of them is saved, rather than starting it again", () => {
+  const running: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
+  const transcribe = (mediaId: string, over: Partial<Task>): Task => ({ ...task, id: `tsk_${mediaId}`, kind: "transcribe", agent: "api",
+    instruction: `Transcribe ${mediaId}`, context: { mediaId }, startedAt: undefined, finishedAt: undefined, summary: null, ...over });
+  const words = (fraction: number, remainingSeconds: number) => ({ state: "running" as const,
+    progress: { stage: "transcribing" as const, fraction: fraction / 3, remainingSeconds: remainingSeconds * 3, words: { fraction, remainingSeconds } } });
+  const project = (tasks: Task[], saved: string[] = []) => act(() => useProjectStore.setState({ current: { id: "prj_1", tasks: [running, ...tasks], taskEvents: {},
+    media: [{ id: "cam", duration: 3000 }, { id: "mic", duration: 1000 }].map(m => saved.includes(m.id) ? { ...m, transcriptId: `trs_${m.id}` } : m) } as unknown as ProjectData }));
+  const wait = (mediaId: string, over: object = {}): TaskEvent => ({ type: "log", at: "2026-11-05T10:00:10.000Z", text: "Waiting for the transcript",
+    data: { kind: "media_wait", wait: "transcript", mediaId, ...over } });
+  // The run waits on both. The camera's transcript waits its turn behind the mic's, which has 90% of its words: 23% of the two.
+  project([transcribe("cam", { state: "running", progress: { stage: "queued", fraction: 0 } }), transcribe("mic", words(0.9, 20))]);
+  const view = render(<RunBundle task={running} events={[wait("cam"), wait("mic")]} changes={[]} banded />);
+  const line = () => view.host.querySelector(".req-now [role=status]")?.textContent;
+  expect(line()).toBe("Transcribing the recordings · 23%");
+  // The mic's is saved and the camera's begins, with 3% of its words in. The mic's share stays counted, so the figure
+  // goes on from 23%. Counted over the camera alone, it dropped back to 3%.
+  project([transcribe("cam", words(0.03, 480)), transcribe("mic", { state: "done" })], ["mic"]);
+  view.rerender(<RunBundle task={running} events={[wait("cam"), wait("mic"), wait("mic", { done: true })]} changes={[]} banded />);
+  expect(line()).toBe("Transcribing the recordings · 27%");
+  // A recording whose transcript couldn't be made is no longer waited for, and has no share in the figure.
+  view.rerender(<RunBundle task={running} events={[wait("cam"), wait("mic"), wait("mic", { done: true, failed: true })]} changes={[]} banded />);
+  project([transcribe("cam", words(0.03, 480)), transcribe("mic", { state: "failed" })]);
+  expect(line()).toBe("Transcribing the recordings · 3%");
+  view.unmount();
+});
+
 it("leaves a question under a heading to the heading, opens the steps before it from its line with none, and says what Scarlet does with the answer", () => {
   openProject();
   const running: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
@@ -431,6 +485,46 @@ it("leaves a question under a heading to the heading, opens the steps before it 
   openDetails(bare.host);
   expect(rows(bare.host)).toEqual(["One.", "Two.", "Three."]);
   bare.unmount();
+});
+
+it("says what a request in line again waits for when that is the editor, with the way to start it before their calls", () => {
+  openProject();
+  const queued: Task = { ...task, state: "queued", summary: null, finishedAt: undefined };
+  // The row's words, whether they are amber as a question's are, and the tray's play mark at the row's right.
+  const row = (host: HTMLElement) => {
+    const status = host.querySelector<HTMLElement>(".req-status [role=status]");
+    return [status?.textContent, status?.classList.contains("req-ask"), !!host.querySelector(".req-status .req-right > button.queue-start")];
+  };
+  const mark = (host: HTMLElement) => host.querySelector<HTMLButtonElement>(".req-status .req-right > button.queue-start")!;
+  // Nothing of the editor's holds it: Queued, the word its cut's card and the tray use, and nothing to press.
+  const view = render(<RunBundle task={queued} events={[]} changes={[]} banded />);
+  expect(row(view.host)).toEqual(["Queued", false, false]);
+  // The calls of a pass hold it: the tray's own words, in amber, and its play mark, which starts it without them.
+  const startNow = vi.fn();
+  const calls = { words: "Waits for your calls", startNow };
+  view.rerender(<RunBundle task={queued} events={[]} changes={[]} banded held={calls} />);
+  expect(row(view.host)).toEqual(["Waits for your calls", true, true]);
+  expect([mark(view.host).title, mark(view.host).getAttribute("aria-label"), mark(view.host).textContent]).toEqual(["Start now, before your calls", "Start now", ""]);
+  expect(startNow).not.toHaveBeenCalled();
+  act(() => mark(view.host).click());
+  expect(startNow).toHaveBeenCalledOnce();
+  // Scarlet's question holds it: the words, and no mark, since an answer isn't theirs to waive.
+  view.rerender(<RunBundle task={queued} events={[]} changes={[]} banded held={{ words: "Waits for your answer" }} />);
+  expect(row(view.host)).toEqual(["Waits for your answer", true, false]);
+  view.unmount();
+  // With editing paused nothing starts until Resume, whatever else holds the request: it says Paused, and has no mark.
+  const paused = render(<RunBundle task={queued} events={[]} changes={[]} paused held={calls} />);
+  expect(row(paused.host)).toEqual(["Paused", false, false]);
+  expect(paused.host.querySelector<HTMLElement>(".req-status [role=status]")?.title).toBe("Editing is paused. Resume picks this up where it left off.");
+  // Under a heading, which says Paused itself, the row goes with its mark.
+  paused.rerender(<RunBundle task={queued} events={[]} changes={[]} banded paused held={calls} />);
+  expect(paused.host.querySelector(".req-status, .queue-start")).toBeNull();
+  paused.unmount();
+  // The words are a queued request's alone: a question Scarlet asks keeps its own row.
+  const asking = render(<RunBundle task={{ ...queued, state: "waiting_for_user" }} events={[]} changes={[]} held={calls} />);
+  expect(row(asking.host)).toEqual(["Needs your answer", true, false]);
+  asking.unmount();
+  expect(startNow).toHaveBeenCalledOnce();
 });
 
 it("leaves a question's tokens to its heading, and has a row for them with no heading", () => {
@@ -544,10 +638,19 @@ it("leaves the word for how a run ended to its heading when the block has one, w
   expect(view.host.querySelector(".req-act")).toBeNull();
   // A run that finished has no word, and one that failed says so.
   expect([runEnded(task), runEnded({ ...task, state: "failed" })]).toEqual([undefined, "Couldn’t finish"]);
+  // One that waits on a transcript says so. "Paused" is for editing the editor paused, which Resume picks up.
+  expect([runEnded({ ...task, needsTranscripts: ["cam"] }), runEnded({ ...task, needsTranscripts: ["cam", "mic"] })]).toEqual(["Needs transcript", "Needs transcripts"]);
   view.unmount();
 });
 
-it("says Done for a finished request whose closing words were commands or its own request said back, never their first words", () => {
+it("says on a paused request's line that Resume picks it up, as its heading's hover does", () => {
+  const view = render(<RunBundle task={{ ...task, state: "queued", summary: null, finishedAt: undefined }} events={[]} changes={[]} paused />);
+  const line = view.host.querySelector("[role=status]");
+  // There is no Continue above the message box: Resume, at the request's right, is what picks it up.
+  expect([line?.textContent, line?.getAttribute("title")]).toEqual(["Paused", "Editing is paused. Resume picks this up where it left off."]);
+});
+
+it("says Nothing changed for a finished request whose closing words were commands or its own request said back, never their first words", () => {
   openProject();
   const row = (summary: string) => {
     const view = render(<RunBundle task={{ ...task, summary }} events={[]} changes={[]} banded />);
@@ -556,8 +659,8 @@ it("says Done for a finished request whose closing words were commands or its ow
     return text;
   };
   // Nothing of such a reply is shown as Scarlet's words, so the request's one row doesn't start with them either.
-  expect(row("Ran `pnpm test` && checked the JSON output.")).toBe("Done");
-  expect(row("Tighten the intro.")).toBe("Done");
+  expect(row("Ran `pnpm test` && checked the JSON output.")).toBe("Nothing changed");
+  expect(row("Tighten the intro.")).toBe("Nothing changed");
   // The words that are Scarlet's own still say what the request came to.
   expect(row("Ran `git status`. Both pauses are under a second, so I left them in.")).toBe("Both pauses are under a second…");
   expect(row("Tightened the intro.")).toBe("Tightened the intro");
@@ -579,6 +682,26 @@ it("says what a stopped run saved in words, and opens the timeline from them onl
   view.unmount();
 });
 
+it("lets go of the focus when the line that opens what a run made is clicked, so Space plays instead of pressing it again", () => {
+  openProject();
+  const made = { id: "chg_1", state: "approved", description: "Trimmed the pause before the answer.", cutReasons: [], ranges: [] } as unknown as Parameters<typeof RunBundle>[0]["finalChange"];
+  const onOpen = vi.fn();
+  const view = render(<RunBundle task={task} events={[]} changes={[]} finalChange={made} banded onOpen={onOpen} />);
+  const line = view.host.querySelector<HTMLButtonElement>("button.req-summary")!;
+  // A press with the mouse carries a click count, and in WebView2 it leaves the button focused. The line stays on
+  // screen, so Space would press it again.
+  line.focus();
+  act(() => { line.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 })); });
+  expect(onOpen).toHaveBeenCalledOnce();
+  expect(document.activeElement).not.toBe(line);
+  // Pressed with the keyboard it keeps the focus, so Tab goes on from there.
+  line.focus();
+  act(() => { line.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 })); });
+  expect(onOpen).toHaveBeenCalledTimes(2);
+  expect(document.activeElement).toBe(line);
+  view.unmount();
+});
+
 it("names a pass's final check for what it is, and says what it is doing now, not what it did on its first run", () => {
   openProject();
   const at = (seconds: number) => new Date(Date.parse(task.startedAt!) + seconds * 1000).toISOString();
@@ -593,7 +716,51 @@ it("names a pass's final check for what it is, and says what it is doing now, no
   ];
   const again: Task = { ...task, state: "running", summary: null, finishedAt: undefined, startedAt: at(4000), repeatAudit: { version: "v2", returns: 1 } };
   const view = render(<RunBundle task={again} events={events} changes={[]} banded />);
-  expect(view.host.querySelector(".req-lead")?.textContent).toBe("Final check of the finished cut");
+  expect(view.host.querySelector(".req-lead")?.textContent).toBe("Closing check for repeats");
   expect(view.host.textContent).not.toContain(FIRST);
-  expect(view.host.querySelector(".req-now [role=status]")?.textContent).toBe("Checking the finished dialogue for repeats");
+  expect(view.host.querySelector(".req-now [role=status]")?.textContent).toBe("Checking the video for repeats");
+});
+
+it("keeps a finished request's time and tokens out of its heading, and shows them when the pointer rests on it", () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  const done = { ...task, state: "done" as const, workedMs: 12_000, finishedAt: new Date().toISOString() };
+  useUiStore.getState().setShowRunTokens(true);
+  openProject({ [task.id]: totals() });
+  const view = render(<div className="unit-msg"><p>Trim the pause</p><RequestMetrics attempts={[done]} events={{}} quiet /></div>);
+  const heading = view.host.querySelector<HTMLElement>(".unit-msg")!;
+  const tokens = () => view.host.querySelector<HTMLButtonElement>("button.unit-tokens")!;
+  // The figures stay in the page for the note to hang from and for a screen reader; they just aren't drawn.
+  expect([tokens().classList.contains("is-quiet"), tokens().textContent]).toEqual([true, "12s · 48.2K tokens"]);
+  expect(document.querySelector(".tokens-tip")).toBeNull();
+  // The pointer has to rest: one that only crosses the heading opens nothing.
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })); vi.advanceTimersByTime(100); });
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" })); vi.advanceTimersByTime(1000); });
+  expect(document.querySelector(".tokens-tip")).toBeNull();
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })); vi.advanceTimersByTime(400); });
+  expect([...document.querySelectorAll(".tokens-tip > span")][0]?.textContent).toBe("Active time12s");
+  expect(document.querySelector(".tokens-tip .tokens-tip-total")?.textContent).toBe("Total48,200");
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" })); });
+  expect(document.querySelector(".tokens-tip")).toBeNull();
+  // With tokens off, the hover still says how long it took.
+  act(() => useUiStore.getState().setShowRunTokens(false));
+  expect([tokens().classList.contains("is-quiet"), tokens().textContent]).toEqual([true, "12s"]);
+  act(() => { heading.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" })); vi.advanceTimersByTime(400); });
+  expect([...document.querySelectorAll(".tokens-tip > span")].map(row => row.textContent)).toEqual(["Active time12s"]);
+  // The request Scarlet is on keeps them in view.
+  view.rerender(<div className="unit-msg"><RequestMetrics attempts={[{ ...task, state: "running" as const, finishedAt: undefined, workedMs: 0 }]} events={{}} /></div>);
+  expect(view.host.querySelector(".is-quiet")).toBeNull();
+  view.unmount();
+  vi.useRealTimers();
+});
+
+it("leaves Scarlet's opening sentence out of a request under a row: the row says what it is", () => {
+  const working: Task = { ...task, state: "running", summary: null, finishedAt: undefined };
+  const at = (seconds: number) => new Date(Date.parse(task.startedAt!) + seconds * 1000).toISOString();
+  const events = [{ type: "log" as const, at: at(0), text: "Starting the editing agent." }, { type: "log" as const, at: at(2), text: "I’ll trim the pause to a beat." }];
+  openProject();
+  const own = render(<RunBundle task={working} events={events} changes={[]} banded />);
+  const under = render(<RunBundle task={working} events={events} changes={[]} banded under />);
+  expect([!!own.host.querySelector(".req-lead"), !!own.host.querySelector(".req-now")]).toEqual([true, true]);
+  expect([!!under.host.querySelector(".req-lead"), !!under.host.querySelector(".req-now")]).toEqual([false, true]);
+  own.unmount(); under.unmount();
 });

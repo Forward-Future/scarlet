@@ -18,7 +18,7 @@
  * from those clips and from audio tracks, mixed. No transforms, fades, captions
  * or colour clips (gaps render black/silent).
  */
-import { LOCAL_MEDIA_INPUT, extractWaveformFull as decodeWaveform, hashFile, renderPlaybackSegment, type WaveformCache as BinaryWaveformCache } from "@scarlet/render";
+import { audioMapArgs, LOCAL_MEDIA_INPUT, extractWaveformFull as decodeWaveform, hashFile, renderPlaybackSegment, type WaveformCache as BinaryWaveformCache } from "@scarlet/render";
 import { join } from "node:path";
 import type { MediaAsset, MediaClip, MediaKind, Project, Timeline, TimeRange } from "@scarlet/timeline";
 import { clipEnd, timelineDuration, timelineToSource } from "@scarlet/timeline";
@@ -33,6 +33,7 @@ export interface ProbeResult {
   width?: number;
   height?: number;
   hasAudio: boolean;
+  audioStreams?: MediaAsset["audioStreams"];
   hasAlpha?: boolean;
   /** A moving picture's declared colour (`MediaAsset.color`). The fallback adapter doesn't read it. */
   color?: MediaAsset["color"];
@@ -76,20 +77,21 @@ export interface RenderEncoding { encoder: string; rendered: number }
 export interface RenderAdapter {
   probeMedia(path: string, signal?: AbortSignal): Promise<ProbeResult>;
   hashFile(path: string, onBytesRead?: (bytes: number) => void, signal?: AbortSignal): Promise<string>;
-  extractWaveformFull(path: string, duration: number, pointsPerSecond: number, onProgress?: (fraction: number) => void, signal?: AbortSignal): Promise<BinaryWaveformCache | WaveformData>;
+  extractWaveformFull(path: string, duration: number, pointsPerSecond: number, onProgress?: (fraction: number) => void, signal?: AbortSignal,
+    audio?: { audioTrack?: MediaAsset["audioTrack"]; audioStreamCount?: number }): Promise<BinaryWaveformCache | WaveformData>;
   waveformFromCache(cache: WaveformCache, from: number, to: number, points: number): WaveformData;
   extractFrame(path: string, t: number, opts: { width: number; signal?: AbortSignal; indexedMp4?: boolean; decoder?: "cuda"; fps?: number;
     /** The file's HDR transfer: the frame is tone-mapped to SDR. The fallback adapter leaves it as decoded. */
     hdr?: "hlg" | "pq";
     /** Only this area of the picture, as fractions of it, and labelled percent lines over it. */
     area?: [number, number, number, number]; grid?: { width: number; height: number } }): Promise<Buffer>;
-  makeProxy(input: string, output: string, opts: { height: number; checkpointDir?: string; range?: TimeRange; hwaccel?: RenderOptions["hwaccel"]; signal?: AbortSignal; onProgress?: (p: number) => void; onFallback?: (stage: "decode" | "encode") => void }): Promise<void>;
+  makeProxy(input: string, output: string, opts: { height?: number; audioTrack?: MediaAsset["audioTrack"]; checkpointDir?: string; range?: TimeRange; hwaccel?: RenderOptions["hwaccel"]; signal?: AbortSignal; onProgress?: (p: number) => void; onFallback?: (stage: "decode" | "encode") => void }): Promise<void>;
   /** True when footage proxies can be encoded on the GPU. The fallback adapter never can. */
   hardwareProxies?(hwaccel: RenderOptions["hwaccel"]): Promise<boolean>;
   renderRange(project: Project, timeline: Timeline, range: TimeRange, outputPath: string, opts: RenderOptions): Promise<void>;
   renderPlaybackSegment: typeof renderPlaybackSegment;
   renderFullCached(project: Project, timeline: Timeline, cacheDir: string, outputPath: string,
-    opts: RenderOptions & { onCachedRanges?(ranges: TimeRange[]): void }): Promise<RenderEncoding | void>;
+    opts: RenderOptions & { onCachedRanges?(ranges: TimeRange[]): void; onReused?(reused: { seconds: number; progress: number }): void }): Promise<RenderEncoding | void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +111,9 @@ interface ProbeStream {
   pix_fmt?: string;
   duration?: string;
   nb_frames?: string;
+  channels?: number;
+  sample_rate?: string;
+  tags?: Record<string, string | undefined>;
   disposition?: Record<string, number>;
 }
 
@@ -125,7 +130,23 @@ async function probeMedia(path: string, signal?: AbortSignal): Promise<ProbeResu
   const json = JSON.parse(out.toString("utf8")) as { format?: { duration?: string }; streams?: ProbeStream[] };
   const streams = json.streams ?? [];
   const video = streams.find((s) => s.codec_type === "video" && !(s.disposition?.attached_pic === 1));
-  const audio = streams.find((s) => s.codec_type === "audio");
+  const audioList = streams.filter((s) => s.codec_type === "audio");
+  const audio = audioList[0];
+  const audioStreams = audioList.length > 1
+    ? audioList.map((s, index) => {
+      const rate = s.sample_rate ? Number(s.sample_rate) : undefined;
+      const lang = s.tags?.language?.trim();
+      const title = s.tags?.title?.trim();
+      return {
+        index,
+        ...(s.codec_name ? { codec: s.codec_name } : {}),
+        ...(s.channels && s.channels > 0 ? { channels: s.channels } : {}),
+        ...(rate && Number.isFinite(rate) && rate > 0 ? { sampleRate: rate } : {}),
+        ...(lang && lang !== "und" ? { language: lang } : {}),
+        ...(title ? { title: title.slice(0, 80) } : {}),
+      };
+    })
+    : undefined;
   const formatDuration = Number(json.format?.duration);
   let duration = Number.isFinite(formatDuration) ? formatDuration : Number(video?.duration ?? audio?.duration ?? 0);
   if (!Number.isFinite(duration)) duration = 0;
@@ -144,14 +165,16 @@ async function probeMedia(path: string, signal?: AbortSignal): Promise<ProbeResu
     width: video?.width,
     height: video?.height,
     hasAudio: !!audio,
+    ...(audioStreams ? { audioStreams } : {}),
     hasAlpha: video?.pix_fmt ? ALPHA_HINTS.some((h) => video.pix_fmt!.includes(h)) : undefined,
     kind,
     originalPlaybackType: originalPlaybackType(path, kind, video?.codec_name, audio?.codec_name),
   };
 }
 
-function extractWaveformFull(path: string, duration: number, pointsPerSecond: number, onProgress?: (fraction: number) => void, signal?: AbortSignal) {
-  return decodeWaveform(path, duration, pointsPerSecond, { onProgress, signal });
+function extractWaveformFull(path: string, duration: number, pointsPerSecond: number, onProgress?: (fraction: number) => void, signal?: AbortSignal,
+  audio?: { audioTrack?: MediaAsset["audioTrack"]; audioStreamCount?: number }) {
+  return decodeWaveform(path, duration, pointsPerSecond, { onProgress, signal, audioTrack: audio?.audioTrack, audioStreamCount: audio?.audioStreamCount });
 }
 
 function waveformFromCache(cache: WaveformCache, from: number, to: number, points: number): WaveformData {
@@ -188,24 +211,26 @@ async function extractFrame(path: string, t: number, opts: { width: number; sign
 }
 
 async function makeProxy(input: string, output: string, opts: Parameters<RenderAdapter["makeProxy"]>[2]) {
-  const h = Math.max(2, Math.round(opts.height / 2) * 2);
-  let duration: number | undefined;
-  if (opts.onProgress) {
-    try {
-      duration = (await probeMedia(input)).duration;
-    } catch {
-      /* progress is best-effort */
-    }
-  }
+  const h = Math.max(2, Math.round((opts.height ?? 540) / 2) * 2);
+  // The preview plays the track the editor chose, or every track mixed, named by number: left to itself FFmpeg plays
+  // the stream with the most channels.
+  const probed = await probeMedia(input).catch(() => undefined);
+  const duration = probed?.duration;
+  const audioOnly = probed?.kind === "audio";
+  const streams = probed ? [...audioOnly ? [] : ["-map", "0:v:0"],
+    ...probed.hasAudio ? audioMapArgs({ audioTrack: opts.audioTrack, audioStreamCount: probed.audioStreams?.length }, { channelLayout: "stereo", label: "pa" }) : []] : [];
   await ffmpeg(
     [
       ...(opts.onProgress ? ["-progress", "pipe:1", "-nostats"] : []),
       ...(opts.range ? ["-ss", ffmpegPosition(opts.range.start)] : []),
       ...LOCAL_MEDIA_INPUT, "-i", input,
       ...(opts.range ? ["-t", String(opts.range.end - opts.range.start)] : []),
-      "-vf", `scale=-2:'min(${h},ih)'`,
-      "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
-      "-force_key_frames", "expr:gte(t,n_forced*0.5)",
+      ...streams,
+      ...(audioOnly ? ["-vn"] : [
+        "-vf", `scale=-2:'min(${h},ih)'`,
+        "-c:v", "libx264", "-preset", opts.range ? "ultrafast" : "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+        "-force_key_frames", "expr:gte(t,n_forced*0.5)",
+      ]),
       "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-y", output,
     ],
     { signal: opts.signal, onProgress: opts.onProgress, duration },

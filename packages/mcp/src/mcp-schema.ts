@@ -11,7 +11,7 @@ import type { ToolResult } from "./tool-result.js";
  * of its own, which a harness may show the model untyped. Eighteen parameters of seven tools read that way, the word
  * references in dialogue_check_join's `cuts` and timelineEdits' reason among them (2026-11-20).
  */
-export function unshared<T extends z.ZodTypeAny>(schema: T): T {
+function unshared<T extends z.ZodTypeAny>(schema: T): T {
   const copy = (value: unknown): unknown => value instanceof z.ZodType ? unshared(value)
     : Array.isArray(value) ? value.map(copy)
     : value instanceof Map ? new Map([...value].map(([key, item]) => [key, copy(item)]))
@@ -54,8 +54,8 @@ export function watchRefusedArguments(server: McpServer, failed: (name: string, 
 
 /** The includeAudio flag exists only for a model that can hear; the type always carries it so handlers stay simple. */
 export type AudioShape = { includeAudio: z.ZodDefault<z.ZodBoolean> };
-export const createAudioOption = (hearing: boolean) => (description: string) =>
-  (hearing ? { includeAudio: z.boolean().default(false).describe(description) } : {}) as AudioShape;
+export const createAudioOption = (hearing: boolean, defaultValue = false) => (description: string) =>
+  (hearing ? { includeAudio: z.boolean().default(defaultValue).describe(description) } : {}) as AudioShape;
 
 /**
  * An area of a picture as [left, top, right, bottom] in percent of it. An array of one item type, not a tuple: Codex
@@ -65,17 +65,17 @@ export const createAudioOption = (hearing: boolean) => (description: string) =>
 export const percentBox = z.array(z.number().min(0).max(100)).length(4);
 
 export const editReasonInput = EditReason.optional().describe(
-  "One short sentence for the card above the timeline explaining the footage cue, editorial tradeoff, or editor request that motivated this choice.",
+  "One short, simple sentence for the card above the timeline saying why you made this choice, in plain everyday words (no timestamps, durations, arrows, or production jargon).",
 );
 
 export const timelineEditsInput = z.array(z.object({
-  label: z.string().min(1).max(180).describe("Short editor-facing title, at most 50 characters"),
+  label: z.string().min(1).max(180).describe("Short, plain editor-facing title, at most 50 characters"),
   range: z.object({ start: z.number().nonnegative(), end: z.number().nonnegative() }).describe("Seconds in the resulting timeline. For a cut, give the point where it joins with start equal to end. For any other edit, give all the footage as it plays, from its first second to its last."),
   summary: z.string().trim().min(1).max(SUMMARY_MAX).optional().describe("A short sentence for the chat about what this edit changed, including notable side effects"),
-  reason: editReasonInput.describe("Why you made this specific edit, shown on its card. Supply one for every item."),
+  reason: editReasonInput.describe("One short, simple sentence for the card saying why you made this edit, in plain everyday words. Supply one for every item; for a To do marker, keep it brief and don't repeat the marker's text."),
   check: z.string().trim().min(1).max(120).optional().describe("A few words naming a doubt the editor must settle by listening or looking. Marks the edit as needing the editor until they keep it. The card plays the edit's range: for a doubt about a few seconds of a longer edit, flag those seconds with edit_flag once it is saved instead."),
   replaces: z.object({ changeId: z.string(), spot: z.number().int().nonnegative() }).optional(),
-})).optional().describe("List each distinct edit this save makes and its exact playback range in the resulting timeline. A passage it leaves as it was is not an edit, even one you checked. Keep overlapping edits separate. For a revision set replaces to the original change ID and zero-based edit index, and give the full updated range and reason.");
+})).optional().describe("List each individual edit this save makes and its exact playback range in the resulting timeline — never bundle separate edits across untouched stretches into one spanning range (only edits acting on the same time range share a range). Give each edit its own specific title. A passage it leaves as it was is not an edit, even one you checked. Keep overlapping edits separate. For a revision set replaces to the original change ID and zero-based edit index, and give the full updated range and reason.");
 
 export function makeIntentInput(hasTaskId: boolean) {
   const intent = z.enum(["requested", "suggestion", "alternative"]);

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { applyOps } from "./ops.js";
 import { emptyTimeline, makeMediaClip } from "./builders.js";
-import type { Clip, MediaAsset, MediaClip, Timeline } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { Clip, MediaClip, Timeline } from "./timelineSchema.js";
 import { pictureSyncOps } from "./pictureSync.js";
 
 const media: MediaAsset[] = [
@@ -131,5 +132,17 @@ describe("pictureSyncOps", () => {
     expect(() => pictureSyncOps(edit(), [...media, { id: "mic", kind: "audio", name: "Mic", path: "mic", duration: 9, hasAudio: true }], "mic", 0.2)).toThrow(/only a video/);
     expect(() => pictureSyncOps(edit(), [{ ...media[0]!, hasAudio: false }], "cam", 0.2)).toThrow(/no sound of its own/);
     expect(() => pictureSyncOps(emptyTimeline("p"), media, "cam", 0.2)).toThrow(/No clip of cam/);
+  });
+});
+
+describe("pictureSyncOps sound copy", () => {
+  it("keeps the clip's chosen audio stream and its level changes on the sound it hands to the dialogue track", () => {
+    const tl = edit();
+    const c1 = tl.tracks[0]!.clips[0] as MediaClip;
+    c1.audioTrack = 1;
+    c1.volumeKeyframes = [{ time: 2, db: 0, ease: "linear" }, { time: 3, db: -12, ease: "linear" }];
+    const { timeline } = sync(tl, 0.65);
+    expect(clip(timeline, "c1").volume).toBe(0);
+    expect(clip(timeline, "c1_audio")).toMatchObject({ audioTrack: 1, volumeKeyframes: c1.volumeKeyframes });
   });
 });

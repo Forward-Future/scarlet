@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { checkAttachments } from "../services/graphics.js";
 import { z } from "zod/v3";
-import { CompleteTaskRequest, CreateTaskRequest, EDITING_TOOL_GROUPS, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
+import { CompleteTaskRequest, CreateTaskRequest, QuestionChoices, questionChoicesOf, EDITING_TOOL_GROUPS, PictureMarks, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskAttachment, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict } from "../errors.js";
@@ -14,6 +14,7 @@ import { jsonBody, requireProjectHeader, requireScoped } from "./util.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
 import { continueWhenReady, interruptTask, retryTask } from "../services/taskRecovery.js";
 import { listenerFor } from "../services/listening.js";
+import { handOffTypes } from "../services/taskModels.js";
 import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
 
 // `tool_help` reads the rest of a tool's description to a harness given only each tool's first sentence (Gemini's).
@@ -56,6 +57,7 @@ export function taskRoutes(ctx: Ctx) {
     if (body.kind === "learning_check") throw badRequest("not_a_request", "Scarlet starts this check itself, with each request.");
     if (body.kind === "area_check") throw badRequest("not_a_request", "Scarlet starts this check itself, when a save needs it.");
     if (body.kind === "listen_check") throw badRequest("not_a_request", "Scarlet starts this itself, when a request asks to hear a passage.");
+    if (body.kind === "hand_off") throw badRequest("not_a_request", "Scarlet starts this itself, when a request hands work to the model chosen for it.");
     if (body.kind === "broll_make") throw badRequest("not_a_request", "This kind of run is retired.");
     const { mediaId, version } = body.context ?? {};
     if (mediaId && !ctx.db.prepare("SELECT 1 FROM media WHERE id = ? AND project_id = ?").get(mediaId, project.id)) {
@@ -116,8 +118,9 @@ export function taskRoutes(ctx: Ctx) {
   r.get("/projects/:id/tasks", (c) => {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const state = c.req.query("state");
-    // A skill edit and a learning check only borrow the project to run in. Neither is part of its conversation.
-    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check', 'area_check', 'listen_check', 'broll_make')" + (state ? " AND state = ?" : ""),
+    // A skill edit and a learning check only borrow the project to run in. Neither is part of its conversation, and a
+    // hand-off's edits are the request's that handed it the work.
+    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'learning_check', 'area_check', 'listen_check', 'hand_off', 'broll_make')" + (state ? " AND state = ?" : ""),
       state ? [project.id, TaskState.parse(state)] : [project.id], "created_at DESC");
     const conversation = c.req.query("events") === "conversation"
       ? ctx.repos.taskEvents.conversations(tasks.filter(t => t.kind !== "transcribe").map(t => t.id)) : undefined;
@@ -141,7 +144,9 @@ export function taskRoutes(ctx: Ctx) {
     const events = view === "none" ? [] : ctx.repos.taskEvents.list(task.id, view === "conversation" ? "conversation" : "all");
     // A request whose model can't hear is told which model listens for it, if one is signed in (its `listen` tool).
     const listener = listenerFor(ctx, task);
-    return c.json({ task, checksTaskAttempts: true, events, ...(listener && { listener }) });
+    // A request is told the kinds of work the editor gave other models, signed in now (its `hand_off` tool).
+    const taskModels = handOffTypes(ctx, task).map(({ id, name, description, by }) => ({ id, name, description, by }));
+    return c.json({ task, checksTaskAttempts: true, events, ...(listener && { listener }), ...(taskModels.length && { taskModels }) });
   });
 
   // Called by agent hosts before each run. workDir is the task artifact directory on the host; timeLimit is the run's limit in minutes.
@@ -188,10 +193,21 @@ export function taskRoutes(ctx: Ctx) {
   });
 
   r.post("/tasks/:taskId/answer", async (c) => {
-    const body = await jsonBody(c, RunChoice.extend({ text: z.string().min(1), skillIds: z.array(z.string().min(1)).optional() }));
+    const body = await jsonBody(c, RunChoice.extend({ text: z.string().min(1), skillIds: z.array(z.string().min(1)).optional(),
+      attachments: z.array(TaskAttachment).max(20).optional(), pictureMarks: PictureMarks.optional() }));
+    if (body.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to run this request.");
+    // Files sent with an answer are kept with the request as its own files are, so the run is told of them the same way.
+    const answering = body.attachments?.length ? requireTask(c.req.param("taskId")) : undefined;
+    const attached = answering && await checkAttachments(ctx, answering.projectId, body.attachments);
+    if (body.pictureMarks && !attached?.some(a => a.id === body.pictureMarks!.attachmentId)) {
+      throw badRequest("unknown_attachment", "The marked frame's picture isn't attached to this message. Mark the frame again.");
+    }
     // The answer, any model switch, the requeue and its activity entry land together, after the state check.
     const updated = ctx.db.transaction(() => {
       const task = requireTask(c.req.param("taskId"));
+      // Only the editor answers here, so these read as the chat does. Events from a host keep the engine's own wording.
+      if (FINISHED_TASK.has(task.state)) throw conflict("task_finished", task.state === "done" ? "This request has already finished." : "This request has already stopped.");
+      if (task.state !== "waiting_for_user") throw conflict("no_question", "Scarlet isn’t waiting for an answer any more.");
       const switched = body.agent !== undefined && (body.agent !== task.agent || body.model !== task.model);
       const tuned = body.agent !== undefined && (switched || body.effort !== task.effort || body.fast !== task.fast || body.serviceTier !== task.serviceTier);
       const prepared: Task = tuned ? {
@@ -201,9 +217,16 @@ export function taskRoutes(ctx: Ctx) {
         effort: body.effort,
         fast: body.fast,
         serviceTier: body.serviceTier,
-        ...(switched && { session: undefined }),
+        ...(switched && { session: undefined, sessionRevokedFor: task.startedAt }),
       } : { ...task };
       if (body.skillIds?.length) prepared.context = { ...prepared.context, skillIds: [...new Set([...(prepared.context.skillIds ?? []), ...body.skillIds])] };
+      if (attached) {
+        const kept = prepared.context.attachments ?? [];
+        const files = [...kept, ...attached.filter(a => !kept.some(k => k.id === a.id))];
+        if (files.length > 20) throw badRequest("too_many_attachments", "This request already has as many files as it can take. Take some off and answer again.");
+        // The request's own marked frame stays the one described. A frame marked for the answer is one of its files, with the marks drawn on it.
+        prepared.context = { ...prepared.context, attachments: files, ...(body.pictureMarks && !prepared.context.pictureMarks && { pictureMarks: body.pictureMarks }) };
+      }
       const { task: updated } = appendTaskEvent(ctx, prepared, { type: "answer", text: body.text });
       if (switched) ctx.log(`[task] ${task.id} switched ${task.agent}/${task.model ?? "default"} → ${updated.agent}/${updated.model ?? "default"} on answer`);
       logActivity(ctx, { projectId: task.projectId, actor: actorFor(c.var.user), type: "question.answered", summary: `${c.var.user.name} answered ${agentName(updated.agent)}: ${quote(body.text, 120)}`, data: { taskId: task.id, threadId: task.context.threadId, question: task.question } });
@@ -214,17 +237,19 @@ export function taskRoutes(ctx: Ctx) {
 
   // Called by agent hosts
   r.on("POST", ["/tasks/:taskId/question", "/projects/:projectId/tasks/:taskId/question"], async (c) => {
-    const { startedAt, text, sessionId } = await jsonBody(c, z.object({ startedAt: z.string().datetime().optional(), text: z.string().min(1),
-      sessionId: z.string().min(1).max(200).nullable().optional() }));
+    const { startedAt, text, sessionId, choices } = await jsonBody(c, z.object({ startedAt: z.string().datetime().optional(), text: z.string().min(1),
+      sessionId: z.string().min(1).max(200).nullable().optional(), choices: QuestionChoices.optional() }));
     const waiting = ctx.db.transaction(() => {
       let task = requireTask(c.req.param("taskId"), c.req.param("projectId"));
       // A lost response may be retried by the MCP process or its host, even after an answer and a new claim.
       if (task.startedAt !== startedAt) return false;
-      if (task.state === "claimed" || task.state === "running") task = appendTaskEvent(ctx, task, { type: "question", text }).task;
+      if (task.state === "claimed" || task.state === "running") task = appendTaskEvent(ctx, task, { type: "question", text, ...(choices && { data: { choices } }) }).task;
+      // The host may hand the question over before the MCP process does, without the answers it offers: they join it.
+      else if (choices && task.state === "waiting_for_user" && task.question === text && !task.questionChoices) task = saveTask(ctx, { ...task, questionChoices: questionChoicesOf({ choices }) });
       const waiting = task.state === "waiting_for_user";
       // Only the host knows the CLI session that asked; the MCP server's copy leaves it alone.
-      // An answer may already have re-queued this claim.
-      if (sessionId !== undefined && (waiting || task.state === "queued") && task.session?.id !== (sessionId ?? undefined)) {
+      // An answer may already have re-queued this claim, and may have switched models: that attempt's session is not kept.
+      if (sessionId !== undefined && (waiting || task.state === "queued") && (!startedAt || task.sessionRevokedFor !== startedAt) && task.session?.id !== (sessionId ?? undefined)) {
         saveTask(ctx, { ...task, session: sessionId ? { agent: task.agent, id: sessionId } : undefined });
       }
       return waiting;

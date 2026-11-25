@@ -8,7 +8,7 @@ import { createProject, type Project } from "@scarlet/timeline";
 import type { GraphicRenderResponse, Task, TaskAttachment, TaskPrompt } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
-import { createTask, saveTask } from "../services/tasks.js";
+import { appendTaskEvent, createTask, saveTask } from "../services/tasks.js";
 import { purgeTrash } from "../services/trash.js";
 
 let directory: string;
@@ -105,6 +105,44 @@ describe("attachments", () => {
       context: { pictureMarks: { attachmentId: frame.id, time: 7, marks } } });
     expect(unattached.status).toBe(400);
     expect(await unattached.text()).toContain("Mark the frame again");
+  });
+
+  it("keeps the files sent with an answer with the request, as its own files are, and tells the run of them the same way", async () => {
+    const guide = await attach("Brand Guide.md", "# Our style\nUse red.", "text/markdown");
+    const logo = await attach("logo-white.png", "png", "image/png");
+    const frame = await attach("Marked frame 0.07.png", "png", "image/png");
+    const created = await api("POST", `/projects/${project.id}/tasks`, { agent: "claude", instruction: "Make the logo smaller.", context: { attachments: [guide] } });
+    const { task } = await created.json() as { task: Task };
+    const answer = (body: object) => api("POST", `/tasks/${task.id}/answer`, { text: "By a third, and use this logo instead.", ...body });
+    // Nothing is asked yet: the answer is refused, and its file isn't kept.
+    expect((await answer({ attachments: [logo] })).status).toBe(409);
+    expect(workspace.ctx.repos.tasks.get(task.id)!.context.attachments).toEqual([guide]);
+    const ask = () => appendTaskEvent(workspace.ctx, { ...workspace.ctx.repos.tasks.get(task.id)!, state: "running" }, { type: "question", text: "Smaller by how much?" });
+    ask();
+    // A file from another project, or a marked frame whose picture isn't attached, is refused as on a request.
+    const other = workspace.ctx.repos.projects.insert(createProject("Other"));
+    const elsewhere = await (await api("POST", `/projects/${other.id}/attachments`, (() => { const form = new FormData(); form.append("file", new Blob(["x"]), "other.txt"); return form; })())).json() as { attachment: TaskAttachment };
+    const refused = await answer({ attachments: [elsewhere.attachment] });
+    expect([refused.status, (await refused.text()).includes("attached in this project")]).toEqual([400, true]);
+    const marks = [{ kind: "box", box: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 } }];
+    const unattached = await answer({ pictureMarks: { attachmentId: frame.id, time: 7, marks } });
+    expect([unattached.status, (await unattached.text()).includes("Mark the frame again")]).toEqual([400, true]);
+    expect(workspace.ctx.repos.tasks.get(task.id)!.state).toBe("waiting_for_user");
+    // The answer's file and marked frame join the request's own, stored as they are, and the request runs again.
+    const answered = await answer({ attachments: [{ ...logo, size: 1 }, frame], pictureMarks: { attachmentId: frame.id, time: 7, marks } });
+    expect(answered.status).toBe(200);
+    const kept = (await answered.json() as { task: Task }).task;
+    expect([kept.state, kept.context.attachments, kept.context.pictureMarks]).toEqual(["queued", [guide, logo, frame], { attachmentId: frame.id, time: 7, marks }]);
+    const told = await prompt(kept);
+    const stored = (file: TaskAttachment) => join(workspace.ctx.paths.attachments(project.id), file.id, file.name);
+    expect(told).toContain(`- File the editor attached: "Brand Guide.md" (text, 1 KB), attachment ${guide.id}, at ${stored(guide)}`);
+    expect(told).toContain(`- File the editor attached: "logo-white.png" (image, 1 KB), attachment ${logo.id}, at ${stored(logo)}`);
+    expect(told).toContain(`The frame with the marks drawn on it is attachment ${frame.id} ("Marked frame 0.07.png").`);
+    // A second answer adds its file once, and a frame marked for it is one more file: the first marks stay described.
+    ask();
+    const again = await attach("Marked frame 0.09.png", "png", "image/png");
+    const second = await (await answer({ attachments: [logo, again], pictureMarks: { attachmentId: again.id, time: 9, marks } })).json() as { task: Task };
+    expect([second.task.context.attachments, second.task.context.pictureMarks?.attachmentId]).toEqual([[guide, logo, frame, again], frame.id]);
   });
 
   it("reads a text attachment back, and goes when its project is removed for good", async () => {

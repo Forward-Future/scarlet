@@ -3,18 +3,18 @@
  * into one continuous AAC program so encoder priming never lands on interior edits.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { planSegments, sha256, snapToFrame, stableStringify, timelineDuration } from "@scarlet/timeline";
 import type { MediaAsset, Project, Timeline, TimeRange } from "@scarlet/timeline";
-import { effectKind } from "./effects.js";
+import { audioEffectDelay, effectKind } from "./effects.js";
 import { BEST_AUDIO_BITRATE, COMPRESSED_AUDIO_BITRATE, PROGRAM_AUDIO_BITRATE } from "./encoder.js";
 import { fnum, runFfmpeg, sampleCount } from "./exec.js";
-import { buildFilterGraph, clipPlacement } from "./graph.js";
+import { buildFilterGraph } from "./graph.js";
+import { clipPlacement } from "./graphTransform.js";
 import { isImagePath } from "./probe.js";
 import type { RenderOptions } from "./render.js";
 import { DELIVERY_AUDIO_REVISION } from "./segmentKey.js";
-import { concatFile, exportSegments, fileHasContent, publishSegment, renderBatch, segmentTimelines, withStagedFile } from "./segmentUtils.js";
+import { concatFile, exportSegments, fileHasContent, publishSegment, renderBatch, segmentTimelines, withStagedFile, withTempDir } from "./segmentUtils.js";
 
 export interface ProgramAudioOptions extends RenderOptions {
   exportRange?: TimeRange;
@@ -31,6 +31,7 @@ function audioMixPlan(project: Project, timeline: Timeline, range: TimeRange, ca
     const asset = media.get(clip.mediaId);
     return [{
       source: asset?.hash ?? asset?.path ?? clip.mediaId, kind: asset?.kind, hasAudio: asset?.hasAudio,
+      ...((clip.audioTrack ?? asset?.audioTrack) !== undefined ? { audioTrack: clip.audioTrack ?? asset?.audioTrack } : {}),
       graphicStill: asset?.kind === "graphic" ? isImagePath(asset.path) : undefined,
       videoStart: asset?.previewClock?.videoStart, volume: clip.volume, speed: clip.speed,
       seek: fnum(clip.sourceIn + p.local0 * clip.speed), visible: fnum(p.vis), delay: Math.round(p.pos * sampleRate),
@@ -38,6 +39,8 @@ function audioMixPlan(project: Project, timeline: Timeline, range: TimeRange, ca
       fades: clip.audioFadeIn || clip.audioFadeOut ? [clip.audioFadeIn, clip.audioFadeOut, p.local0, p.clipDur] : undefined,
       // The level a keyframe gives is timed from the clip's start, so the section's place in the clip goes with it.
       levels: clip.volumeKeyframes?.length ? [clip.volumeKeyframes, fnum(p.local0)] : undefined,
+      // A sound an effect plays late used to end that much early: mixes made then aren't reused.
+      lateTail: audioEffectDelay(clip.effects) > 0 || undefined,
     }];
   }));
   const samples = sampleCount(range.start, range.end, sampleRate);
@@ -93,18 +96,13 @@ export async function renderProgramAudio(project: Project, timeline: Timeline, c
   });
   // Another export may have finished the program while its sections were being mixed.
   if (await fileHasContent(file)) return file;
-  const temp = await fs.mkdtemp(path.join(opts.tempDir ?? os.tmpdir(), "scarlet-sound-"));
-  try {
-    return await withStagedFile(file, "part.m4a", async staged => {
-      const list = path.join(temp, "sound.txt");
-      await fs.writeFile(list, files.map(concatFile).join("\n") + "\n");
-      await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", list, "-map", "0:a:0", "-map_chapters", "-1",
-        "-af", "asetpts=N/SR/TB", "-c:a", "aac", "-b:a", bitrate, "-ar", String(sampleRate), "-ac", String(audioChannels), "-movie_timescale", String(sampleRate), staged],
-        { ffmpegPath: opts.ffmpegPath, signal: opts.signal });
-      await publishSegment(staged, file);
-      return file;
-    });
-  } finally {
-    await fs.rm(temp, { recursive: true, force: true });
-  }
+  return withTempDir(opts.tempDir, "scarlet-sound-", temp => withStagedFile(file, "part.m4a", async staged => {
+    const list = path.join(temp, "sound.txt");
+    await fs.writeFile(list, files.map(concatFile).join("\n") + "\n");
+    await runFfmpeg(["-y", "-f", "concat", "-safe", "0", "-i", list, "-map", "0:a:0", "-map_chapters", "-1",
+      "-af", "asetpts=N/SR/TB", "-c:a", "aac", "-b:a", bitrate, "-ar", String(sampleRate), "-ac", String(audioChannels), "-movie_timescale", String(sampleRate), staged],
+      { ffmpegPath: opts.ffmpegPath, signal: opts.signal });
+    await publishSegment(staged, file);
+    return file;
+  }));
 }

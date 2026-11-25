@@ -42,6 +42,19 @@ export interface HostStatus {
 
 export type DesktopPlatform = "macos" | "windows" | "linux";
 
+export interface ProviderSettingsView {
+  ollama: { url: string | null; disabled: boolean };
+  lmstudio: { url: string | null; disabled: boolean };
+  openrouter: { hasKey: boolean; keyFromEnv: boolean; disabled: boolean };
+}
+
+export interface ProviderSettingsChange {
+  provider: "ollama" | "lmstudio" | "openrouter";
+  url?: string | null;
+  apiKey?: string | null;
+  disabled?: boolean | null;
+}
+
 export type UpdateSource = "local" | "release";
 
 export interface AgentPick {
@@ -122,6 +135,14 @@ async function registerListener(event: string, register: () => Promise<Unlisten>
   }
 }
 
+/** Hear each of the desktop's `event`s. `name` is the listener as the log records it. */
+function listenFor<T>(name: string, event: string, cb: (payload: T) => void) {
+  return registerListener(name, async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<T>(event, e => cb(e.payload));
+  });
+}
+
 export interface StorageSize { bytes: number; files: number; estimated: boolean }
 export interface DeveloperStorage extends StorageSize { kind: "cargo" | "scratch"; path: string }
 
@@ -131,6 +152,14 @@ export interface DeveloperStorage extends StorageSize { kind: "cargo" | "scratch
  */
 export interface UpdateBuild { revision: string; done: number; step: number; stepStarted: number; stepSeconds: number }
 export interface UpdateStatus { ready: string | null; building: UpdateBuild | null; source?: UpdateSource | null }
+
+export interface FfmpegStatus {
+  installed: boolean;
+  canInstall: boolean;
+  installDir: string;
+  ffmpegPath: string | null;
+  ffprobePath: string | null;
+}
 
 export const desktop = {
   async onDropFiles(cb: (event: import("@tauri-apps/api/webview").DragDropEvent) => void): Promise<Unlisten> {
@@ -146,7 +175,15 @@ export const desktop = {
   hostStatus: () => invoke<HostStatus>("host_status"),
   hostRefreshAgents: () => invoke<HostStatus>("host_refresh_agents"),
   hostRefreshQuota: (force = false) => invoke<HostStatus>("host_refresh_quota", { force }),
+  /** How Ollama, LM Studio and OpenRouter are set up on this computer. The OpenRouter key itself never comes back. */
+  providerSettings: () => invoke<ProviderSettingsView>("provider_settings"),
+  /** Save one provider's address, key or switch (left out: unchanged; null or "": cleared), then look for models again. */
+  saveProviderSettings: (change: ProviderSettingsChange) => invoke<HostStatus>("save_provider_settings", { ...change }),
   agentInstall: (agent: "claude" | "codex" | "gemini") => invoke<"installed" | "needsNode">("agent_install", { agent }),
+  /** Update the installed CLI the way it was installed. Resolves to the version it is at afterwards. */
+  agentUpdate: (agent: "claude" | "codex" | "gemini") => invoke<string | null>("agent_update", { agent }),
+  ffmpegStatus: () => invoke<FfmpegStatus>("ffmpeg_status"),
+  ffmpegInstall: () => invoke<FfmpegStatus>("ffmpeg_install"),
   agentLoginStart: (agent: string) => invoke<AgentLoginStatus>("agent_login_start", { agent }),
   agentLoginCode: (agent: string, code: string) => invoke<void>("agent_login_code", { agent, code }),
   agentLoginCancel: (agent: string) => invoke<void>("agent_login_cancel", { agent }),
@@ -179,22 +216,13 @@ export const desktop = {
   log: (message: string | string[], level: "info" | "warn" | "error" | "debug" = "info") => invoke<void>("desktop_log", { level, message }).catch(() => undefined),
 
   async onEngineStatus(cb: (s: EngineStatus) => void): Promise<Unlisten> {
-    return registerListener("engine-status", async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      return listen<EngineStatus>("engine://status", e => cb(e.payload));
-    });
+    return listenFor("engine-status", "engine://status", cb);
   },
   async onAgentLogin(cb: (s: AgentLoginStatus) => void): Promise<Unlisten> {
-    return registerListener("agent-login", async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      return listen<AgentLoginStatus>("agent-login://status", e => cb(e.payload));
-    });
+    return listenFor("agent-login", "agent-login://status", cb);
   },
   async onHostStatus(cb: (s: HostStatus) => void): Promise<Unlisten> {
-    return registerListener("host-status", async () => {
-      const { listen } = await import("@tauri-apps/api/event");
-      return listen<HostStatus>("host://status", e => cb(e.payload));
-    });
+    return listenFor("host-status", "host://status", cb);
   },
 };
 

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { player } from "../../lib/player";
 import { usePictureMarksStore } from "../../stores/pictureMarks";
 import { usePlayerStore } from "../../stores/player";
-import { PictureMarkTools, PictureMarks, toggleMarking } from "./PictureMarks";
+import { PictureMarkTools, PictureMarks, marksTakeEscape, toggleMarking } from "./PictureMarks";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -70,6 +70,23 @@ it("draws a line, a box and a point on the frame, in fractions of the picture, a
   expect(Array.from(container.querySelectorAll(".picture-mark-number, .picture-mark-point"), n => n.textContent)).toEqual(["1", "2", "3"]);
 });
 
+it("starts marking from M pressed while the video plays, once the player hears it stopped, on the frame marked", async () => {
+  usePlayerStore.setState({ playing: true });
+  await show();
+  // The player says it stopped a moment after the press: the marking is on already.
+  await act(async () => start());
+  expect(player.pause).toHaveBeenCalled();
+  expect(usePictureMarksStore.getState().marking).toBe("prj");
+  // The video ran on past the frame meanwhile: it goes back to the frame marked.
+  expect(player.seek).toHaveBeenCalledWith(7, true);
+  await act(async () => usePlayerStore.setState({ playing: false }));
+  expect(usePictureMarksStore.getState().marking).toBe("prj");
+  expect(usePictureMarksStore.getState().byProject.prj?.time).toBe(7);
+  // Playing on from there still ends it.
+  await act(async () => usePlayerStore.setState({ playing: true }));
+  expect(usePictureMarksStore.getState().marking).toBeNull();
+});
+
 it("leaves marking on Esc or when the video plays on, and keeps the marks for the message", async () => {
   await show();
   await act(async () => toggleMarking("prj", { time: 7, version: "v1" }));
@@ -126,7 +143,7 @@ it("explains each top-left icon on hover (including disabled buttons) and hides 
     ["Draw", "Draw freehand"],
     ["Box", "Drag a box"],
     ["Point", "Drop a pin"],
-    ["Undo", "Remove the last mark"],
+    ["Undo", "Take back the last mark"],
     ["Clear marks", "Remove all marks"],
   ] as const) {
     await hoverItem(label, "pointerover");
@@ -195,6 +212,16 @@ it("lets the editor grab and move boxes, freehand marks, and points, clamping to
   await dragEl('rect.picture-mark-hit[data-mark-index="0"]', 80, 70, 160, 110);
   expect(marks()[0]).toEqual({ kind: "box", box: { x: 0.3, y: 0.4, w: 0.2, h: 0.3 } });
 
+  // ⌘Z puts the moved box back where it was, and every mark stays: a second one then takes the last mark drawn.
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
+  expect(marks()).toHaveLength(3);
+  expect(marks()[0]).toEqual({ kind: "box", box: { x: 0.1, y: 0.2, w: 0.2, h: 0.3 } });
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true })); });
+  expect(marks()).toHaveLength(2);
+  await press("pointerdown", 360, 160);
+  await press("pointerup", 360, 160);
+  await dragEl('rect.picture-mark-hit[data-mark-index="0"]', 80, 70, 160, 110);
+
   // Clicking a mark without dragging neither moves it nor creates a stray point.
   await dragEl('rect.picture-mark-hit[data-mark-index="0"]', 160, 110, 160, 110);
   expect(marks()).toHaveLength(3);
@@ -237,5 +264,29 @@ it("ends marking when seeking away while paused and drops any mid-draw stroke on
   await act(async () => usePlayerStore.setState({ time: 10 }));
   expect(usePictureMarksStore.getState().marking).toBeNull();
   expect(container.querySelector(".picture-marks")).toBeNull();
+});
+
+it("says Esc is the marking's while a frame is marked or a mark is dragged, so nothing behind the picture closes with it", async () => {
+  await show();
+  const esc = (target: EventTarget = window) => {
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+    Object.defineProperty(event, "target", { value: target });
+    return event;
+  };
+  expect(marksTakeEscape(esc())).toBe(false);
+  await act(async () => toggleMarking("prj", { time: 7, version: "v1" }));
+  expect(marksTakeEscape(esc())).toBe(true);
+  // Words being written keep their own Esc: the marking doesn't end on it, so it isn't the marking's.
+  const box = document.createElement("textarea");
+  container.append(box);
+  expect(marksTakeEscape(esc(box))).toBe(false);
+  // Once marking is over, a mark held mid-drag still takes Esc, which puts it back.
+  await press("pointerdown", 200, 100);
+  await press("pointerup", 200, 100);
+  await act(async () => usePictureMarksStore.getState().stop());
+  expect(marksTakeEscape(esc())).toBe(false);
+  const point = container.querySelector('.picture-mark-point[data-mark-index="0"]')!;
+  await act(async () => { point.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 200, clientY: 100, pointerId: 2, button: 0 })); });
+  expect(marksTakeEscape(esc())).toBe(true);
 });
 

@@ -36,6 +36,19 @@ async function api<T = unknown>(method: string, path: string, body?: unknown, he
   return { status: res.status, body: await res.json().catch(() => null) as T };
 }
 
+it("tells the editor in plain words when their answer has nothing to go to", async () => {
+  const task = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Tighten the intro", createdBy: editor });
+  const answer = async () => (await api<{ error: { code: string; message: string } }>("POST", `/tasks/${task.id}/answer`, { text: "The first." })).body.error;
+  // In line, and asking nothing.
+  expect(await answer()).toEqual({ code: "no_question", message: "Scarlet isn’t waiting for an answer any more." });
+  await api("POST", `/tasks/${task.id}/cancel`);
+  expect(await answer()).toEqual({ code: "task_finished", message: "This request has already stopped." });
+  saveTask(app.ctx, { ...app.ctx.repos.tasks.get(task.id)!, state: "done" });
+  expect(await answer()).toEqual({ code: "task_finished", message: "This request has already finished." });
+  // An event from a host for the same request keeps the engine's own wording: it isn't the editor's to read.
+  expect(() => appendTaskEvent(app.ctx, app.ctx.repos.tasks.get(task.id)!, { type: "log", text: "late" })).toThrow("task is already done");
+});
+
 /** The host's claim of one queued task, or null when it can't be claimed now. */
 const claim = async (id: string) => (await api<{ task: Task | null }>("POST", `/hosts/${hostId}/claim`, { taskId: id })).body.task ?? null;
 const prompt = async (id: string, fresh = false) => (await api<TaskPrompt>("GET", `/tasks/${id}/prompt${fresh ? "?fresh=1" : ""}`)).body;
@@ -250,6 +263,27 @@ it("ends the looks a request asked for with it: stopped, paused or finished, and
   expect([get(early.id).state, get(later.id).state]).toEqual(["claimed", "cancelled"]);
 });
 
+it("keeps the answers a question offers until it is answered, from whichever process hands it over first", async () => {
+  const task = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Tighten the intro", createdBy: editor });
+  const asking = (await claim(task.id))!;
+  const choices = ["Keep the cold open", "Cut it"];
+  // The MCP process hands it over with the answers to pick; the host's copy after it changes nothing.
+  await api("POST", `/tasks/${task.id}/question`, { startedAt: asking.startedAt, text: "Keep the cold open?", choices });
+  await api("POST", `/tasks/${task.id}/question`, { startedAt: asking.startedAt, text: "Keep the cold open?", sessionId: "s1" });
+  expect(get(task.id)).toMatchObject({ state: "waiting_for_user", question: "Keep the cold open?", questionChoices: choices });
+  // Answered, the question goes with its answers.
+  await api("POST", `/tasks/${task.id}/answer`, { text: "Cut it" });
+  expect([get(task.id).question, get(task.id).questionChoices]).toEqual([null, undefined]);
+  // The host hands the next one over first, without them: the MCP process's copy adds them.
+  const again = (await claim(task.id))!;
+  await api("POST", `/tasks/${task.id}/question`, { startedAt: again.startedAt, text: "Which take?", sessionId: "s1" });
+  expect(get(task.id).questionChoices).toBeUndefined();
+  await api("POST", `/tasks/${task.id}/question`, { startedAt: again.startedAt, text: "Which take?", choices: ["The first", "The second"] });
+  expect(get(task.id).questionChoices).toEqual(["The first", "The second"]);
+  // One answer alone, or more than four, isn't a choice: the question is refused as it came.
+  expect((await api("POST", `/tasks/${task.id}/question`, { startedAt: again.startedAt, text: "Which take?", choices: ["The first"] })).status).toBe(400);
+});
+
 it("tells a resumed attempt where its run stands when it starts, not when it was put back in line", async () => {
   const task = await request("Mark the chapters");
   const ts = new Date().toISOString();
@@ -316,13 +350,14 @@ it("carries a paused run on in its CLI session on the same model, and a run the 
   expect(opus.session).toBeUndefined();
   expect(get(quitAgain.id).sessionCarriesOn).toBeUndefined();
 
-  // A harness Scarlet doesn't resume carries no session on, paused or not.
+  // A Gemini run carries on in its agy session too.
   await api("POST", `/tasks/${opus.id}/cancel`);
   const gemini = await request("Add captions", "gemini");
   saveTask(app.ctx, { ...get(gemini.id), session: { agent: "gemini", id: "session-4" } });
-  await api("POST", `/projects/${project.id}/stop-editing`);
-  expect(get(gemini.id).sessionCarriesOn).toBeUndefined();
-  expect(get(get(gemini.id).retryTaskId!).session).toBeUndefined();
+  await quit(gemini);
+  expect(get(gemini.id).sessionCarriesOn).toBe(true);
+  expect(get(get(gemini.id).retryTaskId!).session).toEqual({ agent: "gemini", id: "session-4" });
+  expect((await prompt(get(gemini.id).retryTaskId!)).resumeSession).toBe("session-4");
 });
 
 it("tells a look at a frame nothing of the video's timeline or skills, and a request about one staged cut no whole diff", async () => {
@@ -432,6 +467,11 @@ it("hands off silently when switching models on an answer or on resume-editing, 
   appendTaskEvent(app.ctx, get(first.id), { type: "answer", text: "Yes, keep music bed." });
   saveTask(app.ctx, { ...get(first.id), state: "done", summary: "Removed 4 pauses.", reply: "Left breath pauses around the punchline intact.", finishedAt: ts });
   app.ctx.repos.changes.put({
+    id: "chg_f0", projectId: project.id, taskId: first.id, threadId: first.id,
+    fromVersion: "ver_0", toVersion: "ver_0b", description: "Early draft of opening cut",
+    author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "rejected", replacedBy: "chg_f1", renders: [], createdAt: "2026-11-22T00:00:00Z", updatedAt: ts,
+  } as unknown as Change);
+  app.ctx.repos.changes.put({
     id: "chg_f1", projectId: project.id, taskId: first.id, threadId: first.id,
     fromVersion: "ver_0", toVersion: "ver_1", description: "Cut opening dead air",
     author: { type: "agent", name: "Claude" }, noteIds: [], timelineEdits: [], ranges: [], state: "approved", renders: [], createdAt: "2026-11-22T00:00:01Z", updatedAt: ts,
@@ -448,7 +488,33 @@ it("hands off silently when switching models on an answer or on resume-editing, 
   expect(followUp.instruction).toContain("Asked editor: Keep music bed?");
   expect(followUp.instruction).toContain("Editor answered: Yes, keep music bed.");
   expect(followUp.instruction).toContain("You replied: Removed 4 pauses.");
-  expect(followUp.instruction).toContain("Editorial note: Left breath pauses around the punchline intact.");
+  expect(followUp.instruction).toContain("Your reply to the editor: Left breath pauses around the punchline intact.");
+  expect(followUp.instruction).toContain('Earlier change: "Early draft of opening cut" (replaced by chg_f1, which holds its cuts now; the editor made no decision on it).');
   expect(followUp.instruction).toContain('Earlier change: "Cut opening dead air" (approved).');
   expect(followUp.instruction).toContain('Latest change: "Cut mid-roll dead air" (ready).');
+  await api("POST", `/tasks/${followUp.id}/cancel`);
+
+  // 4. Late /question callback from the previous model's host cannot reattach its old session after an answer switches models.
+  const raced = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", model: "opus", instruction: "Trim pauses", createdBy: scarlet });
+  const racedStarted = "2026-11-22T01:00:00.000Z";
+  saveTask(app.ctx, { ...get(raced.id), state: "running", startedAt: racedStarted });
+  // MCP asks first without a sessionId.
+  await api("POST", `/tasks/${raced.id}/question`, { startedAt: racedStarted, text: "Keep intro?" });
+  expect(get(raced.id).state).toBe("waiting_for_user");
+  // Editor rejects api agent, then answers while switching to Codex before Claude's host sends its sessionId.
+  expect((await api("POST", `/tasks/${raced.id}/answer`, { text: "Yes", agent: "api" })).status).toBe(400);
+  expect((await api("POST", `/tasks/${raced.id}/answer`, { text: "Yes", agent: "codex", model: "gpt-5.4" })).status).toBe(200);
+  expect(get(raced.id)).toMatchObject({ state: "queued", agent: "codex", model: "gpt-5.4" });
+  expect(get(raced.id).session).toBeUndefined();
+  // Claude's host finishes and posts its sessionId with the old startedAt; it must not be attached to Codex.
+  await api("POST", `/tasks/${raced.id}/question`, { startedAt: racedStarted, text: "Keep intro?", sessionId: "claude-stale-sess" });
+  expect(get(raced.id).session).toBeUndefined();
+  expect((await prompt(raced.id)).resumeSession).toBeUndefined();
+  await api("POST", `/tasks/${raced.id}/cancel`);
+
+  // 5. Resuming a paused project rejects agent "api" without unpausing editing.
+  await api("POST", `/projects/${project.id}/stop-editing`);
+  expect((await api("POST", `/projects/${project.id}/resume-editing`, { agent: "api" })).status).toBe(400);
+  expect(app.ctx.repos.projects.header(project.id)!.editingPaused).toBe(true);
+  expect((await api("POST", `/projects/${project.id}/resume-editing`, {})).status).toBe(200);
 });

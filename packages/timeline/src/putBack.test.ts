@@ -2,8 +2,8 @@ import { expect, it } from "vitest";
 import { emptyTimeline, makeMediaClip, makeTrack } from "./builders.js";
 import { replayJoinFades } from "./joinCrossfade.js";
 import { applyOps } from "./ops.js";
-import { putBackCut, putBackLooks } from "./putBack.js";
-import type { Timeline } from "./schema.js";
+import { putBackCut, putBackLooks, putBackMarkers } from "./putBack.js";
+import type { Timeline } from "./timelineSchema.js";
 import { clipEnd, timelineDuration } from "./time.js";
 
 const FPS = 30;
@@ -81,4 +81,16 @@ it("takes one punch-in off again, wherever its footage is now, and leaves what w
   // A change that also set a clip outside the edits it named did more than those edits: Scarlet is asked.
   expect(putBackLooks(later, faded, punched, ops, { start: 10, end: 28 }, [{ start: 10, end: 28 }], FPS)).toBeUndefined();
   expect(a).toBe("picture");
+});
+
+it("takes off the marker a to-do left, wherever later edits moved it, and leaves the others", () => {
+  const { faded: before } = cutTwice();
+  const after = applyOps(before, [{ op: "addMarker", marker: { id: "boats", time: 5, kind: "todo", text: "Add B-roll of the boats" } },
+    { op: "addMarker", marker: { id: "harbour", time: 20, kind: "todo", text: "Add B-roll of the harbour" } }]);
+  // A later edit moved the marker and added one of its own.
+  const head = { ...after, markers: [...after.markers.map(m => m.id === "boats" ? { ...m, time: 7 } : m), { ...after.markers[0]!, id: "later", time: 5 }] };
+  expect(putBackMarkers(head, before, after, { start: 4, end: 6 }, FPS)!.markers.map(m => m.id)).toEqual(["harbour", "later"]);
+  // No marker of the change's in that stretch, or the marker is already gone.
+  expect(putBackMarkers(head, before, after, { start: 10, end: 12 }, FPS)).toBeUndefined();
+  expect(putBackMarkers({ ...head, markers: [] }, before, after, { start: 4, end: 6 }, FPS)).toBeUndefined();
 });

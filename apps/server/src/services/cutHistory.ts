@@ -1,5 +1,5 @@
 import type { User } from "@scarlet/shared";
-import { diffTimelines, HistoryConflict, makeTimeMap, newId, planRevert, putBackCut, putBackLooks, putBackSplit, timelineDuration, type Change, type TimeRange } from "@scarlet/timeline";
+import { diffTimelines, HistoryConflict, makeTimeMap, newId, planRevert, putBackCut, putBackLooks, putBackMarkers, putBackSplit, timelineDuration, type Change, type TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
@@ -96,13 +96,15 @@ export function recordHistoryEdit(ctx: Ctx, user: User, projectId: string, targe
  */
 export interface RejectedEdit {
   changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean;
+  /** All the edit did was leave a marker for the editor, such as a to-do: rejecting it takes that marker off. */
+  marker?: boolean;
   at?: number; before?: { version: string; removed: TimeRange };
 }
 
 /**
  * Reject applied edits with no model, wherever the engine knows exactly what they changed. A cut's footage goes back at
  * its join. An edit of a change that only set how clips look or sound goes back to how those clips were. A split edit's
- * sound cuts with its picture again. A change whose
+ * sound cuts with its picture again. A to-do's marker comes off. A change whose
  * every edit is rejected comes out whole, as History's Undo takes it out. Every other edit stays as it is.
  *
  * It is refused (`needs_scarlet`) where the engine can't tell what an edit changed, where a later edit changed it
@@ -144,8 +146,9 @@ export function rejectEdits(ctx: Ctx, user: User, projectId: string, threadId: s
       if (!before || !after || !change.ops?.length) throw unclear();
       for (const edit of edits) {
         const range = named?.[edit.spot]?.range;
-        const next = range && (putBackLooks(result, before, after, change.ops, range, named!.map(item => item.range), fps)
-          ?? putBackSplit(result, before, after, change.ops, range));
+        const next = range && (edit.marker ? putBackMarkers(result, before, after, range, fps)
+          : putBackLooks(result, before, after, change.ops, range, named!.map(item => item.range), fps)
+            ?? putBackSplit(result, before, after, change.ops, range));
         if (!next) throw unclear();
         result = next;
       }

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Task } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { api } from "./client";
-import { lastStep, recordUndo, undoLast, useUndoStore } from "./undo";
+import { forgetCalls, lastStep, recordUndo, undoLast, useUndoStore } from "./undo";
 
 beforeEach(() => {
   vi.spyOn(api, "cancelTask").mockImplementation(async id => ({ task: { id } as Task }));
@@ -60,6 +60,16 @@ it("puts away the new version a call's revision made, and the pass it replaced w
   expect(api.reopenChange).toHaveBeenCalledWith("pass");
 });
 
+it("keeps Scarlet's capital in the reason an undo failed, and starts any other reason small after the colon", async () => {
+  const said = async (error: Error) => {
+    recordUndo({ kind: "revision", word: "Reject", projectId: "prj", version: "ver_1" });
+    await undoLast("prj", { changes: [], tasks: [] }, async () => { throw error; });
+    return useUndoStore.getState().error?.text;
+  };
+  expect(await said(new TypeError("Failed to fetch"))).toBe("Couldn’t undo Reject: Scarlet can’t reach its engine right now.");
+  expect(await said(new Error("The video changed since."))).toBe("Couldn’t undo Reject: the video changed since.");
+});
+
 it("says why a revision can't be taken back once the pass it made went in, and moves on to the step before", async () => {
   recordUndo({ kind: "keep", word: "Keep", projectId: "prj", threadId: "thr", refs: [{ changeId: "chg", spot: 0 }], edit: { changeId: "chg", spot: 0 } });
   recordUndo({ kind: "revision", projectId: "prj", taskId: "task_call" });
@@ -71,4 +81,35 @@ it("says why a revision can't be taken back once the pass it made went in, and m
   // The next press takes back the Keep, and the reason goes.
   await undoLast("prj", { changes, tasks: [] }, noRevert);
   expect(useUndoStore.getState().error).toBeUndefined();
+});
+
+it("leaves a revision still at work running when its version has been applied since and it can't be taken back", async () => {
+  recordUndo({ kind: "revision", projectId: "prj", taskId: "task_call" });
+  const changes = [change("pass", "rejected", { replacedBy: "pass_v2" }), change("pass_v2", "approved", { taskId: "task_call" })];
+  expect(await undoLast("prj", { changes, tasks: [task("task_call", "running", { changeId: "pass", cutIndex: 3 })] }, noRevert)).toBeUndefined();
+  expect(useUndoStore.getState().error?.text).toBe("Couldn’t undo the revision: the version it made has been applied since.");
+  expect(api.cancelTask).not.toHaveBeenCalled();
+});
+
+it("takes a call's Keep back through the page that holds its pass, not the Keep before it, and says the page's reason when it can't", async () => {
+  recordUndo({ kind: "keep", word: "Keep", projectId: "prj", threadId: "thr", refs: [{ changeId: "chg", spot: 0 }], edit: { changeId: "chg", spot: 0 } });
+  recordUndo({ kind: "call", word: "Keep", projectId: "prj", changeId: "pass", index: 2 });
+  const uncall = vi.fn();
+  expect(await undoLast("prj", { changes: [], tasks: [] }, noRevert, uncall)).toMatchObject({ kind: "call", changeId: "pass", index: 2 });
+  expect(uncall.mock.calls).toEqual([[expect.objectContaining({ changeId: "pass", index: 2 })]]);
+  expect(api.unkeepEdits).not.toHaveBeenCalled();
+  // A Reject edit on a call whose pass has gone in since: the reason shows, and the Keep before it is left alone.
+  recordUndo({ kind: "call", word: "Reject", projectId: "prj", changeId: "pass", index: 1, was: "cut" });
+  uncall.mockImplementation(() => { throw new Error("Its pass has been applied since."); });
+  expect(await undoLast("prj", { changes: [], tasks: [] }, noRevert, uncall)).toBeUndefined();
+  expect(useUndoStore.getState().error).toEqual({ projectId: "prj", text: "Couldn’t undo Reject: its pass has been applied since." });
+  expect(api.unkeepEdits).not.toHaveBeenCalled();
+  expect(lastStep(useUndoStore.getState().steps, "prj")).toMatchObject({ kind: "keep" });
+  // Once no pass waits, the calls made on it go from the list together, in this project only.
+  recordUndo({ kind: "call", word: "Keep", projectId: "prj", changeId: "pass", index: 0 });
+  recordUndo({ kind: "call", word: "Keep", projectId: "other", changeId: "pass_other", index: 0 });
+  recordUndo({ kind: "call", word: "Keep", projectId: "prj", changeId: "pass", index: 1 });
+  forgetCalls("prj");
+  expect(lastStep(useUndoStore.getState().steps, "prj")).toMatchObject({ kind: "keep" });
+  expect(lastStep(useUndoStore.getState().steps, "other")).toMatchObject({ kind: "call", changeId: "pass_other" });
 });

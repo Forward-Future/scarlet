@@ -5,7 +5,8 @@ import { applyOps, ProposedOp, TimelineOp } from "./ops.js";
 import { toOtio } from "./otio.js";
 import { toFcpxml } from "./fcpxml.js";
 import type { HandoffSource } from "./handoff.js";
-import type { MediaAsset, MediaClip, Timeline } from "./schema.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { MediaClip, Timeline } from "./timelineSchema.js";
 import { expandSplitJoins, putBackSplit, splitEditWords, splitJoinOps } from "./splitJoin.js";
 import { clipEnd, timelineDuration } from "./time.js";
 
@@ -103,6 +104,12 @@ describe("splitJoinOps", () => {
   it("refuses a split longer than the sound it shortens", () => {
     const tl = conversation();
     expect(() => splitJoinOps(tl, media, FPS, [{ at: 4, shift: 3.99 }])).toThrow(/too soon to start/);
+  });
+  it("says the time of a join a few milliseconds before a whole minute as that minute, not 60 seconds", () => {
+    const tl = emptyTimeline("p");
+    tl.tracks[0]!.clips = [makeMediaClip("host", 0, 59.996, 0, { id: "a" }), makeMediaClip("guest", 0, 10, 59.996, { id: "b" })];
+    expect(() => splitJoinOps(tl, media, FPS, [{ at: 119.997, shift: -0.2 }]))
+      .toThrow(`No join on ${tl.tracks[0]!.id} at 2:00.00. The nearest is at 1:00.00 (59.996 s).`);
   });
 });
 
@@ -226,5 +233,26 @@ describe("handing a split edit to another editor", () => {
     // Its sound is connected below the host's shot, 3.76 s in (the host's clip starts at 2 s of its recording), from 9.76 s.
     expect(xml).toContain('offset="144/25s" name="Guest" start="244/25s" duration="106/25s" srcEnable="audio"');
     expect(xml).toContain('offset="2s" name="Host" start="2s" duration="94/25s" srcEnable="audio"');
+  });
+});
+
+describe("split edit sound keeps its levels and stream", () => {
+  it("keeps the audio stream and keeps level changes on the same footage when the sound leads its picture", () => {
+    const before = conversation();
+    const answer = before.tracks[0]!.clips[1] as MediaClip;
+    answer.audioTrack = 1;
+    // 1 s into the shot, timeline 5 s.
+    answer.volumeKeyframes = [{ time: 1, db: -10, ease: "linear" }];
+    const { ops } = splitJoinOps(before, media, FPS, [{ at: 4, shift: -0.24 }, { at: 8, shift: 0.4 }]);
+    const after = applyOps(before, ops);
+    const guest = sounds(after).find(c => c.mediaId === "guest")!;
+    close(guest.timelineIn, 3.76);
+    expect(guest.audioTrack).toBe(1);
+    close(guest.timelineIn + guest.volumeKeyframes![0]!.time, 5);
+    // Putting back the J cut alone leaves the copy with the L cut, its level change still at 5 s.
+    const back = putBackSplit(after, before, after, ops as never, { start: 3.76, end: 4 })!;
+    const kept = sounds(back).find(c => c.mediaId === "guest")!;
+    close(kept.timelineIn, 4);
+    close(kept.timelineIn + kept.volumeKeyframes![0]!.time, 5);
   });
 });

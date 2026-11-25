@@ -27,6 +27,7 @@ import type {
   TimeRange,
   TransitionPlan,
 } from "@scarlet/timeline";
+import { audioMixStreamsFilter, resolveAudioTrack, type ResolvedAudioTrack } from "./audioTrack.js";
 import { INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, even, ffmpegMajor, fnum, requireDrawtext } from "./exec.js";
 import { audioEffectDelay, effectFilters } from "./effects.js";
 import { canZscale, toneMapChain, type HdrTransfer } from "./hdr.js";
@@ -48,8 +49,10 @@ import {
   signed,
   transformChain,
   videoClockStart,
+  type AnimatedTransform,
   type Placement,
 } from "./graphTransform.js";
+import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
 import { hasIndexedAvc, isImagePath, isStillAsset, probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
 import { motionFilters, motionOffsets, motionsIn, planTransitions, type TransitionMotion } from "./transitions.js";
 
@@ -121,6 +124,20 @@ export interface FilterGraph {
   range: TimeRange;
   /** Remove the temp directory holding the script and caption files. */
   cleanup: () => Promise<void>;
+}
+
+/** How a media clip's picture enters the graph. */
+interface MediaPicture {
+  still: boolean;
+  /** Shrink the CUDA frames on the GPU before they come back to memory. */
+  cudaScale: boolean;
+  /** Where the clip's first frame is in an input it shares with the clips beside it. */
+  sharedStart?: number;
+  /** A still read once and repeated in the graph. */
+  held: boolean;
+  /** One picture on every project frame (`fillsFrames`). */
+  filled: boolean;
+  toneMap: string[];
 }
 
 export async function buildFilterGraph(
@@ -216,8 +233,13 @@ async function writeFilterGraph(
   const includeAudio = !opts.singleFrame && !opts.pictureOnly;
   let directPicture: FilterGraph["directPicture"];
 
-  const overlay = (layer: string, x: string, y: string, p: Placement, filled = false) => {
+  /** Lay `layer` over the stack where its transform, at `localT`, and its transition `moves` put it. */
+  const overlay = (layer: string, tf: AnimatedTransform, localT: string, moves: TransitionMotion[], p: Placement, filled = false) => {
     directPicture = undefined;
+    const pos = overlayPosition(tf, localT);
+    const moved = motionOffsets(moves, W, H);
+    const x = moved.x ? `${pos.x}+${moved.x}` : pos.x;
+    const y = moved.y ? `${pos.y}+${moved.y}` : pos.y;
     const out = label("s");
     // The layer's own end stops it. Its start needs the test: overlay shows a layer from the base frame
     // nearest its first picture, which can be the frame before. A filled layer holds its last picture for as
@@ -229,7 +251,7 @@ async function writeFilterGraph(
     stack = out;
   };
 
-  const videoForMedia = (clip: MediaClip, idx: number, still: boolean, p: Placement, cudaScale: boolean, sharedStart?: number, held = false, filled = false, toneMap: string[] = []) => {
+  const videoForMedia = (clip: MediaClip, idx: number, p: Placement, { still, cudaScale, sharedStart, held, filled, toneMap }: MediaPicture) => {
     const speed = clip.speed ?? 1;
     const moves = motionsOf(clip.id);
     const tf = resolveTransform(clip, warn);
@@ -267,9 +289,7 @@ async function writeFilterGraph(
     if (filled) chain.push(`fps=${fnum(fps)}`);
     const lbl = label("v");
     lines.push(`[${idx}:v]${chain.join(",")}${lbl}`);
-    const pos = overlayPosition(tf, shift ? `(t${signed(-shift)})` : "t");
-    const moved = motionOffsets(moves, W, H);
-    overlay(lbl, moved.x ? `${pos.x}+${moved.x}` : pos.x, moved.y ? `${pos.y}+${moved.y}` : pos.y, p, filled);
+    overlay(lbl, tf, shift ? `(t${signed(-shift)})` : "t", moves, p, filled);
   };
 
   const videoForColor = (clip: ColorClip, p: Placement) => {
@@ -286,12 +306,10 @@ async function writeFilterGraph(
     chain.push(...motionFilters(moves, W, c => ffColor(c)));
     const lbl = label("c");
     lines.push(`${chain.join(",")}${lbl}`);
-    const pos = overlayPosition(tf, "t");
-    const moved = motionOffsets(moves, W, H);
-    overlay(lbl, moved.x ? `${pos.x}+${moved.x}` : pos.x, moved.y ? `${pos.y}+${moved.y}` : pos.y, p);
+    overlay(lbl, tf, "t", moves, p);
   };
 
-  const audioForMedia = (clip: MediaClip, idx: number, p: Placement, skip: number) => {
+  const audioForMedia = (clip: MediaClip, idx: number, p: Placement, skip: number, track: ResolvedAudioTrack, explicitTrack: boolean) => {
     const speed = clip.speed ?? 1;
     // Keep a delayed microphone on the input seek clock. Fill its leading
     // silence before trimming, changing speed or mixing it with other clips.
@@ -313,7 +331,19 @@ async function writeFilterGraph(
     chain.push(`aformat=sample_rates=${SR}:channel_layouts=${layout}`);
     if (p.pos > 0) chain.push(`adelay=${Math.round(p.pos * SR)}S:all=1`);
     const lbl = label("a");
-    lines.push(`[${idx}:a]${chain.join(",")}${lbl}`);
+    if (track.mode === "mix") {
+      const mixed = `amix_${labelN++}`;
+      lines.push(audioMixStreamsFilter(idx, track.count, {
+        sampleRate: SR,
+        channelLayout: layout,
+        outLabel: mixed,
+        prefix: `as_${labelN++}_`,
+      }));
+      lines.push(`[${mixed}]${chain.join(",")}${lbl}`);
+    } else {
+      const pad = track.stream === 0 && !explicitTrack ? `[${idx}:a]` : `[${idx}:a:${track.stream}]`;
+      lines.push(`${pad}${chain.join(",")}${lbl}`);
+    }
     audioLabels.push(lbl);
   };
 
@@ -394,7 +424,7 @@ async function writeFilterGraph(
       let indexedOriginal = !!asset.previewClock && hasIndexedAvc(asset);
       const open = (input: string, start: number, hardware: boolean, duration = p.vis * speed) => addInput([
         ...(indexedPicture && (input !== file || shared || indexedOriginal) ? INDEXED_MP4_INPUT : []),
-        ...(hardware && cudaScale ? ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] :
+        ...(hardware && cudaScale ? CUDA_FRAMES_INPUT :
           hardware && accelerate && opts.decoder !== "cuda" ? ["-hwaccel", "videotoolbox"] : []),
         ...(start > 0 ? ["-ss", fnum(start)] : []), "-t", fnum(duration),
       ], input);
@@ -414,18 +444,24 @@ async function writeFilterGraph(
           indexedOriginal = hasIndexedClock(source, asset.fps) && source.rotation === 0 && source.pixFmt === "yuv420p" &&
             source.width === asset.width && source.height === asset.height;
         }
-        // Only the image demuxer repeats a picture at the input. A GIF, or a movie
-        // holding one picture, is read once and repeated in the graph.
-        const held = still && (!isImagePath(file) || /\.gif$/i.test(file));
+        // Only the image demuxer repeats a picture at the input. A GIF, a HEIC or AVIF photo (which FFmpeg opens as a
+        // movie, with no loop option), or a movie holding one picture, is read once and repeated in the graph.
+        const held = still && (!isImagePath(file) || /\.(gif|heic|avif)$/i.test(file));
         const idx = held ? addInput(["-t", fnum(p.vis)], file)
           : still ? addInput(["-loop", "1", "-framerate", fnum(fps), "-t", fnum(p.vis)], file)
           : shared ? open(file, shared.start / fps, true, (shared.end - shared.start) / fps)
           : open(proxy?.file ?? file, Math.max(0, pictureSeek - (proxy?.start ?? 0)), !proxy, visible.vis * speed);
         const firstLayer = stack === "[base]";
-        // A single frame already seeks to the picture shown at its time.
-        // A preview copy of an HDR file is SDR already.
-        videoForMedia(clip, idx, still, visible, cudaScale && !proxy, shared ? pictureSeek - shared.start / fps : undefined, held,
-          !opts.singleFrame && fillsFrames(clip, asset, fps), proxy ? [] : await toneMapFor(hdr));
+        videoForMedia(clip, idx, visible, {
+          still,
+          cudaScale: cudaScale && !proxy,
+          sharedStart: shared ? pictureSeek - shared.start / fps : undefined,
+          held,
+          // A single frame already seeks to the picture shown at its time.
+          filled: !opts.singleFrame && fillsFrames(clip, asset, fps),
+          // A preview copy of an HDR file is SDR already.
+          toneMap: proxy ? [] : await toneMapFor(hdr),
+        });
         if (opts.directPicture && opts.pictureOnly && !opts.pictureFilter && !opts.singleFrame && firstLayer && !shared && !proxy && !still && !motionsOf(clip.id).length &&
             directExportPicture(clip, visible, asset, await verifiedProbe(asset), W, H, fps, D)) {
           directPicture = { file, start: pictureSeek, frames: Math.round(D * fps) };
@@ -435,7 +471,19 @@ async function writeFilterGraph(
         // Seeking before a movie's first video keyframe can discard earlier
         // audio packets. Read that prefix from the beginning and trim by PTS.
         const skip = srcStart < firstPicture ? srcStart : 0;
-        audioForMedia(clip, open(file, srcStart - skip, true, p.vis * speed + skip), p, skip);
+        const selectedTrack = clip.audioTrack ?? asset.audioTrack;
+        const streamCount = asset.audioStreams?.length
+          ?? (selectedTrack !== undefined ? (await verifiedProbe(asset))?.audioStreams?.length : undefined);
+        // An effect that plays the sound late reads that much more of it (`audioForMedia`), so the input runs on too.
+        const late = audioEffectDelay(clip.effects);
+        audioForMedia(
+          clip,
+          open(file, srcStart - skip, true, (p.vis + late) * speed + skip),
+          p,
+          skip,
+          resolveAudioTrack(selectedTrack, streamCount),
+          selectedTrack !== undefined,
+        );
       }
     }
   }
@@ -455,18 +503,7 @@ async function writeFilterGraph(
   if (!opts.audioOnly) lines.push(`${stack}trim=duration=${fnum(D)},setpts=PTS-STARTPTS,format=yuv420p${opts.pictureFilter ? "," + opts.pictureFilter : ""}[vout]`);
 
   // Audio mix, padded/trimmed to the exact duration.
-  if (includeAudio) {
-    const tail = opts.audioSamples !== undefined ? `apad,atrim=end_sample=${opts.audioSamples},asetpts=PTS-STARTPTS[aout]` : `apad=whole_dur=${fnum(D)},atrim=duration=${fnum(D)},asetpts=PTS-STARTPTS[aout]`;
-    if (audioLabels.length === 0) {
-      lines.push(opts.audioSamples === undefined ? `anullsrc=r=${SR}:cl=${layout}:d=${fnum(D)}[aout]` : `anullsrc=r=${SR}:cl=${layout},${tail}`);
-    } else if (audioLabels.length === 1) {
-      lines.push(`${audioLabels[0]}${tail}`);
-    } else {
-      lines.push(
-        `${audioLabels.join("")}amix=inputs=${audioLabels.length}:normalize=0:duration=longest:dropout_transition=0,${tail}`,
-      );
-    }
-  }
+  if (includeAudio) lines.push(audioMixLine(audioLabels, SR, layout, D, opts.audioSamples));
 
   const graph = lines.join(";\n") + "\n";
   const scriptPath = path.join(tmp, "graph.txt");
@@ -492,6 +529,19 @@ async function writeFilterGraph(
     range: { start: R0, end: R1 },
     cleanup,
   };
+}
+
+/**
+ * The line that sums the clips' sound (`labels`) into `[aout]`, padded and trimmed to `duration`, or to exactly
+ * `samples` samples when given. Silence when no clip sounds.
+ */
+function audioMixLine(labels: string[], sampleRate: number, layout: string, duration: number, samples: number | undefined): string {
+  const tail = samples !== undefined ? `apad,atrim=end_sample=${samples},asetpts=PTS-STARTPTS[aout]` : `apad=whole_dur=${fnum(duration)},atrim=duration=${fnum(duration)},asetpts=PTS-STARTPTS[aout]`;
+  if (labels.length === 0) {
+    return samples === undefined ? `anullsrc=r=${sampleRate}:cl=${layout}:d=${fnum(duration)}[aout]` : `anullsrc=r=${sampleRate}:cl=${layout},${tail}`;
+  }
+  if (labels.length === 1) return `${labels[0]}${tail}`;
+  return `${labels.join("")}amix=inputs=${labels.length}:normalize=0:duration=longest:dropout_transition=0,${tail}`;
 }
 
 /**

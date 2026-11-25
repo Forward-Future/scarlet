@@ -7,19 +7,21 @@ import type {
   CreateTaskRequest,
   FullRenderKeys,
   Learning,
+  PictureMarks,
   ProjectSummary,
   Render,
   RenderRequest,
   RunChoice,
   SpeakerProgress,
   Task,
+  TaskAttachment,
   TaskEvent,
   TrashedProject,
   UsageTotals,
   VersionSummary,
   WsEvent,
 } from "@scarlet/shared";
-import type { Change, MediaAsset, Note, Project, Timeline } from "@scarlet/timeline";
+import type { AudioTrackSelection, Change, MediaAsset, Note, Project, Timeline } from "@scarlet/timeline";
 import { api, errorMessage } from "../lib/client";
 import { parseTimestamp } from "../lib/format";
 import { subscribeProject } from "../lib/realtime";
@@ -113,7 +115,7 @@ interface ProjectState {
   retryTask(taskId: string, runWith?: RunChoice): Promise<void>;
   /** Finish a run that ended without its transcripts once they are ready, or stop waiting to. */
   continueWhenReady(taskId: string, on: boolean): Promise<void>;
-  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice): Promise<void>;
+  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice, files?: { attachments: TaskAttachment[]; pictureMarks?: PictureMarks }): Promise<void>;
   /** Keep a queued request from starting while its words are changed, or let it go. */
   holdForRewording(taskId: string, on: boolean): Promise<void>;
   /** Change the words of a request still waiting its turn. */
@@ -126,6 +128,10 @@ interface ProjectState {
   upsertMedia(projectId: string, media: MediaAsset): void;
   /** Take a file Scarlet couldn't read out of the project. The engine refuses one the video or its history uses. */
   removeMedia(mediaId: string): Promise<void>;
+  /** Choose which audio track (or all tracks mixed) Scarlet reads from a multi-track recording. */
+  setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection): Promise<void>;
+  /** Save what the editor says a file is and how to use it. An empty note takes it off. */
+  setMediaNote(mediaId: string, note: string): Promise<void>;
   loadActivity(more?: boolean): Promise<void>;
 }
 
@@ -213,6 +219,11 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     patch(projectId, (d) => ({ notes: upsert(d.notes, res.note), tasks: res.task ? upsertAnswered(d.tasks, res.task) : d.tasks }));
     return res;
   };
+  /** Show the working cut an edit of the history made. The list of versions it changed is read again when next asked for. */
+  const showRewritten = (projectId: string, project: Project) => patch(projectId, d => {
+    const shown = takeProject(d, project);
+    return shown ? { project: shown, versions: undefined } : {};
+  });
   /** Send a change to one of the open project's learnings, and keep the learning as the engine answers. */
   const learningChanged = async (send: (projectId: string) => Promise<{ learning: Learning }>) => {
     const projectId = get().current?.id;
@@ -338,6 +349,11 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       }
       const pending = { id, events: [] as WsEvent[], imports: [] as MediaAsset[] };
       opening = pending;
+      // What arrived while the project was being read is applied on top of the read.
+      const replayPending = () => {
+        for (const event of pending.events) get().applyEvent(event);
+        for (const asset of pending.imports) get().upsertMedia(id, asset);
+      };
       try {
         // Another try at a failed read follows nothing: the project is followed already, and one the editor has
         // left meanwhile stays left.
@@ -363,8 +379,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
           },
         });
         opening = undefined;
-        for (const event of pending.events) get().applyEvent(event);
-        for (const asset of pending.imports) get().upsertMedia(id, asset);
+        replayPending();
 
         // Token counts are secondary: a failed read leaves them out without blocking the edit history.
         void api.projectUsage(id, "task").then(usage => {
@@ -432,8 +447,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
         const message = errorMessage(err);
         set({ status: "error", error: message, trashedProject, current: trashedProject ? null : get().current });
         if (!trashedProject && get().current?.id === id) {
-          for (const event of pending.events) get().applyEvent(event);
-          for (const asset of pending.imports) get().upsertMedia(id, asset);
+          replayPending();
           patch(id, d => ({ reviewStatus: d.reviewStatus ? "error" : undefined, reviewError: message }));
           readAgainLater(id, request, tries);
         }
@@ -589,8 +603,11 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
           savedProject = h.saved;
           return { project: shown ?? showHeld(h) };
         });
-        // The answer can be older than a head the socket brought meanwhile: when the two disagree, the engine says which is current.
-        if (!stale && heldHead !== undefined && heldHead !== project.head) void get().refreshHead(projectId).catch(() => undefined);
+        // The answer can be older than a head the socket brought meanwhile: when the two disagree, the engine says which is
+        // current. A read that fails is tried again, as after an undo.
+        if (!stale && heldHead !== undefined && heldHead !== project.head) {
+          void get().refreshHead(projectId).catch(headUnread(projectId, get().current?.project.head));
+        }
         // The library lists the latest edit first. A project whose video changed moves there now, not when the list is
         // next read. One that was renamed, archived or paused wasn't edited: its time and its place stay.
         const list = get().list, was = list.find(p => p.id === projectId);
@@ -637,28 +654,23 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       if (!cur?.project.head) return;
       const { project, change } = await api.historyEdit(cur.id, version, action, cur.project.head, cur.project.branch ?? "main");
       replaceChange(change);
-      patch(cur.id, d => {
-        const shown = takeProject(d, project);
-        return shown ? { project: shown, versions: undefined } : {};
-      });
-      await get().refreshHead(cur.id);
+      showRewritten(cur.id, project);
+      // The undo went through. A timeline that can't be read at once is read again, as after an approval.
+      await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
     },
     async rejectEdits(threadId, head, edits) {
       const cur = get().current;
       if (!cur) throw new Error("No project is open.");
       const { project, change } = await api.rejectEdits(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edits });
       replaceChange(change);
-      patch(cur.id, d => {
-        const shown = takeProject(d, project);
-        return shown ? { project: shown, versions: undefined } : {};
-      });
-      void get().refreshHead(cur.id).catch(() => {});
+      showRewritten(cur.id, project);
+      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return change.appliedVersion ?? change.toVersion;
     },
     async revise(changeId, body) {
       const res = await api.reviseChange(changeId, body);
       replaceChange(res.change);
-      patch(res.change.projectId, (d) => ({ notes: upsert(d.notes, res.note), tasks: res.task ? upsertAnswered(d.tasks, res.task) : d.tasks }));
+      noteCreated(res.change.projectId, res);
       return res.task;
     },
 
@@ -763,7 +775,9 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { task, resumed } = await api.continueWhenReady(taskId, on);
       patch(task.projectId, (d) => ({ tasks: resumed ? upsertAnswered(upsert(d.tasks, task), resumed) : upsert(d.tasks, task) }));
     },
-    async answerTask(taskId, text, skillIds, runWith) {
+    async answerTask(taskId, text, skillIds, runWith, files) {
+      // Files attached to the answer go with it. Without any, the call is as it always was.
+      if (files) return taskAnswered(api.answerTask(taskId, text, skillIds, runWith, files));
       return taskAnswered(runWith ? api.answerTask(taskId, text, skillIds, runWith) : api.answerTask(taskId, text, skillIds));
     },
     async holdForRewording(taskId, on) {
@@ -831,6 +845,18 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       await api.removeMedia(projectId, mediaId);
       // The socket says so as well. The row goes without waiting for it.
       patch(projectId, d => ({ media: d.media.filter(m => m.id !== mediaId) }));
+    },
+    async setMediaNote(mediaId, note) {
+      const projectId = get().current?.id;
+      if (!projectId) return;
+      const { media } = await api.setMediaNote(mediaId, note);
+      patch(projectId, d => ({ media: upsert(d.media, media) }));
+    },
+    async setMediaAudioTrack(mediaId, audioTrack) {
+      const projectId = get().current?.id;
+      if (!projectId) return;
+      const { media } = await api.setMediaAudioTrack(mediaId, audioTrack);
+      patch(projectId, d => ({ media: upsert(d.media, media) }));
     },
     async loadActivity(more) {
       const cur = get().current;

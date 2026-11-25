@@ -3,7 +3,7 @@ import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createProject, type Change, type Project } from "@scarlet/timeline";
-import { ATTEMPT_HEADER, TASK_HEADER, queueOrder, queueWait, taskPlan, type Task, type TaskEvent, type TaskPrompt, type WsEvent } from "@scarlet/shared";
+import { ATTEMPT_HEADER, TASK_HEADER, queueOrder, queueWait, REJECT_MESSAGE, taskPlan, type Task, type TaskEvent, type TaskPrompt, type WsEvent } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { PLAN_STEPS } from "@scarlet/mcp/prompt";
@@ -211,6 +211,23 @@ it("shows a learning check the editor's recent corrections across videos, each w
     { said: "cut tail frames", about: `a cut ${skill.name} made`, elsewhere: true },
     { said: "take more off the beginning", about: `a cut ${skill.name} made` },
   ]);
+});
+
+it("shows a learning check the editor's revision of an applied edit, and not a rejection Scarlet was asked to make", () => {
+  const editor = { type: "human" as const, name: "Editor" };
+  const ts = new Date().toISOString();
+  app.ctx.repos.changes.put({ id: "chg_applied", projectId: project.id, fromVersion: "v1", toVersion: "v2", description: "Captions", author: { type: "agent", name: "Claude" },
+    noteIds: [], timelineEdits: [{ label: "Captions", range: { start: 4, end: 9 } }], ranges: [], state: "approved", renders: [], createdAt: ts, updatedAt: ts } as never);
+  // Revise (R) on an applied edit, and the × that asks Scarlet to put one back, are both requests in the edit's thread.
+  const revised = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Make them smaller",
+    context: { changeId: "chg_applied", editIndex: 0, time: 4, message: "Make them smaller" }, createdBy: editor });
+  const rejected = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "The editor rejected “Captions”.",
+    context: { changeId: "chg_applied", editIndex: 0, time: 4, message: REJECT_MESSAGE }, createdBy: editor });
+  const check = createTask(app.ctx, { projectId: project.id, kind: "learning_check", agent: "claude", instruction: "Make them smaller",
+    context: { checksTaskId: revised.id }, createdBy: editor });
+  const decided = learningCheckContext(app.ctx, check).decided ?? [];
+  expect(decided).toContainEqual(expect.objectContaining({ id: `revised:${revised.id}`, decision: "revised", label: "Captions", note: "Make them smaller" }));
+  expect(decided.map(d => d.id)).not.toContain(`revised:${rejected.id}`);
 });
 
 it("pairs questions with the answers that followed", () => {
@@ -753,4 +770,62 @@ it("knows an applied edit by where it was made, from whichever thread or version
   expect(await claim()).toBeNull();
   await api("POST", `/tasks/${flagged.id}/complete`, { state: "done" });
   expect(await claim()).toBe(revised.id);
+});
+
+it("tells a new request the chat before it: what the editor asked and what Scarlet told them, mid-work too", async () => {
+  const send = async (instruction: string, context?: Record<string, unknown>) =>
+    (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, { kind: "edit", agent: "claude", instruction, ...(context && { context }) })).body.task;
+  const prompt = async (task: Task) => (await api<TaskPrompt>("GET", `/tasks/${task.id}/prompt`)).body;
+  // Created a moment apart, as an editor's messages are.
+  const at = (task: Task, seconds: number) => app.ctx.repos.tasks.put({ ...app.ctx.repos.tasks.get(task.id)!, createdAt: new Date(Date.parse("2026-11-23T10:00:00Z") + seconds * 1000).toISOString() });
+
+  // The first request of a project is told of no chat, so a pass on a new project reads exactly what it did.
+  const find = await send("find both of those clips");
+  at(find, 0);
+  expect((await prompt(find)).systemPrompt).not.toContain("# Earlier in this chat");
+
+  // Scarlet shows the links while it works and closes by pointing back at them.
+  const links = "Kontorovich: https://example.com/watch?v=a&t=508s\nEllenberg: https://example.com/watch?v=a&t=86s";
+  appendTaskEvent(app.ctx, find, { type: "log", text: "Looking through the doc", data: { kind: "tool_call" } });
+  appendTaskEvent(app.ctx, find, { type: "log", text: links, data: { kind: "editor_progress" } });
+  saveTask(app.ctx, { ...app.ctx.repos.tasks.get(find.id)!, state: "done", summary: "Found both clips. I shared the timestamped links above." });
+
+  // The next message is a request of its own, with no thread: it is told the one before it.
+  const next = await send("tell me the tiemstamps");
+  at(next, 60);
+  const told = await prompt(next);
+  expect(told.instruction).toBe("tell me the tiemstamps");
+  const chat = told.systemPrompt.slice(told.systemPrompt.indexOf("# Earlier in this chat"));
+  expect(chat).toContain('1. The editor asked: "find both of those clips"');
+  expect(chat).toContain("   You told them: Kontorovich: https://example.com/watch?v=a&t=508s\n   Ellenberg: https://example.com/watch?v=a&t=86s");
+  expect(chat).toContain("   You closed with: Found both clips. I shared the timestamped links above.");
+  // What Scarlet's tools did isn't what it told the editor, and the request itself isn't earlier than itself.
+  expect(chat).not.toContain("Looking through the doc");
+  expect(chat).not.toContain("tiemstamps");
+
+  // A request that hasn't finished says so, and a long chat keeps to its latest requests, oldest first.
+  const later = [];
+  for (let i = 0; i < 7; i++) {
+    const task = await send(`request ${i}`);
+    at(task, 120 + i);
+    later.push(task);
+  }
+  const last = await send("and the last one");
+  at(last, 200);
+  const long = (await prompt(last)).systemPrompt;
+  expect(long).not.toContain("find both of those clips");
+  expect(long).not.toContain('"request 0"');
+  expect(long).toContain('1. The editor asked: "request 1"\n   It hasn’t finished yet.');
+  expect(long).toContain('6. The editor asked: "request 6"');
+
+  // A follow-up in a thread has that thread in its own words, with what Scarlet showed there, and not twice.
+  const followUp = await send("which one is longer?", { threadId: find.id });
+  at(followUp, 300);
+  expect(followUp.instruction).toContain(`- Asked: find both of those clips\n  You told the editor: Kontorovich: https://example.com/watch?v=a&t=508s\n  Ellenberg: https://example.com/watch?v=a&t=86s\n  You replied: Found both clips.`);
+  const inThread = (await prompt(followUp)).systemPrompt;
+  expect(inThread.slice(inThread.indexOf("# Earlier in this chat"))).not.toContain("find both of those clips");
+
+  // A check that reads a request for a rule edits no video and is told none of the chat.
+  const check = app.ctx.repos.tasks.select("kind = 'learning_check' AND json_extract(json, '$.context.checksTaskId') = ?", [last.id])[0]!;
+  expect((await prompt(check)).systemPrompt).not.toContain("# Earlier in this chat");
 });

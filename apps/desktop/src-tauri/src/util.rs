@@ -93,12 +93,6 @@ pub fn env_remove_ci(env: &mut HashMap<String, String>, keys: &[&str]) {
     env.retain(|k, _| !keys.iter().any(|name| k.eq_ignore_ascii_case(name)));
 }
 
-/// Replace any case-insensitive variant of `key` with `key = value`.
-pub fn env_set_ci(env: &mut HashMap<String, String>, key: &str, value: String) {
-    env_remove_ci(env, &[key]);
-    env.insert(key.into(), value);
-}
-
 /// Keep only environment entries whose names match `allowed`, ignoring ASCII case.
 pub fn env_filter_allowlist(env: HashMap<String, String>, allowed: &[&str]) -> HashMap<String, String> {
     env.into_iter().filter(|(k, _)| allowed.iter().any(|name| k.eq_ignore_ascii_case(name))).collect()
@@ -121,6 +115,19 @@ pub fn assistant_prefix(home: &Path) -> PathBuf {
     home.join(".scarlet").join("assistants")
 }
 
+/// Folders under %LOCALAPPDATA% where Windows installs put the assistant CLIs and Node.js.
+pub(crate) fn windows_local_app_dirs(local: &Path) -> Vec<PathBuf> {
+    vec![
+        // Where the official Antigravity CLI (Gemini) installer puts agy.exe, and the folder older builds used.
+        local.join("agy").join("bin"),
+        local.join("antigravity-cli").join("bin"),
+        local.join("Microsoft/WinGet/Links"),
+        local.join("pnpm"),
+        local.join("Programs").join("nodejs"),
+        local.join("Volta").join("bin"),
+    ]
+}
+
 /// The PATH a GUI app inherits on macOS/Linux is minimal; add the places the
 /// agent CLIs and node are usually installed so detection and spawning work
 /// when Scarlet is launched from the Dock/Finder.
@@ -130,17 +137,13 @@ pub fn augmented_path(env: &HashMap<String, String>, home: &Path) -> String {
     let mut parts: Vec<String> = current.split(sep).filter(|p| !p.is_empty()).map(String::from).collect();
     let prefix = assistant_prefix(home);
     let assistant_bin = if cfg!(windows) { prefix } else { prefix.join("bin") };
-    let mut extra: Vec<PathBuf> = vec![assistant_bin, home.join(".local/bin"), home.join(".claude").join("local")];
+    let mut extra: Vec<PathBuf> = vec![assistant_bin, home.join(".local/bin"), home.join(".claude").join("local"), home.join(".codex").join("bin")];
     if cfg!(windows) {
         if let Some(appdata) = env_get(env, "APPDATA") {
             extra.push(PathBuf::from(appdata).join("npm"));
         }
         if let Some(local) = env_get(env, "LOCALAPPDATA") {
-            extra.push(PathBuf::from(local).join("antigravity-cli").join("bin"));
-            extra.push(PathBuf::from(local).join("Microsoft/WinGet/Links"));
-            extra.push(PathBuf::from(local).join("pnpm"));
-            extra.push(PathBuf::from(local).join("Programs").join("nodejs"));
-            extra.push(PathBuf::from(local).join("Volta").join("bin"));
+            extra.extend(windows_local_app_dirs(Path::new(local)));
         }
         extra.push(home.join(".bun").join("bin"));
         extra.push(PathBuf::from("C:\\Program Files\\nodejs"));

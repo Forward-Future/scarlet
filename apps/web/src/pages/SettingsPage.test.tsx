@@ -14,6 +14,7 @@ import { SettingsPage } from "./SettingsPage";
 
 const defaults = buildDb().settings;
 const freshLocalSettings: ServerSettings = { ...defaults, transcription: { provider: "whispercpp", openaiModel: "whisper-1" } };
+const crisperLocalSettings: ServerSettings = { ...defaults, transcription: { provider: "whispercpp", localModel: "crisperwhisper", openaiModel: "whisper-1" } };
 const settings = { ...defaults, transcription: { ...defaults.transcription, provider: "openai" as const } };
 
 let el: HTMLDivElement;
@@ -44,8 +45,13 @@ const esc = () => act(async () => {
 const heading = () => el.querySelector("h1")?.textContent;
 const saveButton = () => el.querySelector<HTMLButtonElement>('button[type="submit"]')!;
 const transcribeWith = () => el.querySelector<HTMLButtonElement>("#tr-provider")!;
-// Advanced is the tab with a Save: its dropdowns wait for it, as its typed fields do.
+const languageSelect = () => el.querySelector<HTMLButtonElement>("#tr-lang")!;
 const previewHeight = () => el.querySelector<HTMLButtonElement>("#rd-height")!;
+const hardwareAccel = () => el.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Hardware acceleration"]')!;
+const customLocalSettings: ServerSettings = {
+  ...defaults,
+  transcription: { ...defaults.transcription, provider: "whispercpp", localModel: "custom", whisperModelPath: "/models/old.bin", whisperCppPath: "/adapters/old" },
+};
 
 it("saves the telemetry switch from About and links the filler-word model credit", async () => {
   const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
@@ -71,35 +77,111 @@ it("shows reporting locked off by the environment even with a saved opt-in", asy
   expect(el.textContent).toContain("turned off by the engine environment");
 });
 
+it("saves how Scarlet talks to the editor when they leave the field, in their own words", async () => {
+  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
+  await open("/settings");
+  const field = el.querySelector<HTMLTextAreaElement>(".talking-to-you-field")!;
+  expect(el.querySelector("#talking-to-you-heading")?.textContent).toBe("Talking to you");
+  expect(field.value).toBe("");
+  const type = (text: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, text);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await type("  Say times as 1:05, not 65 seconds.\n");
+  expect(save).not.toHaveBeenCalled();
+  await act(async () => { field.focus(); field.blur(); });
+  expect(save).toHaveBeenCalledExactlyOnceWith({ talkingToYou: "Say times as 1:05, not 65 seconds." });
+  expect(field.value).toBe("Say times as 1:05, not 65 seconds.");
+  // Leaving the field again with nothing changed saves nothing.
+  await act(async () => { field.focus(); field.blur(); });
+  expect(save).toHaveBeenCalledOnce();
+});
+
+it("keeps what the editor wrote about how Scarlet talks when the save fails, to be saved again", async () => {
+  const save = vi.spyOn(api, "updateSettings").mockRejectedValueOnce(new Error("The engine is offline."))
+    .mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
+  await open("/settings");
+  const field = el.querySelector<HTMLTextAreaElement>(".talking-to-you-field")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "Keep notes short.");
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => { field.focus(); field.blur(); });
+  expect(el.querySelector(".talking-to-you")?.textContent).toContain("The engine is offline.");
+  expect(field.value).toBe("Keep notes short.");
+  await act(async () => { field.focus(); field.blur(); });
+  expect(save).toHaveBeenCalledTimes(2);
+  expect(field.value).toBe("Keep notes short.");
+  expect(el.querySelector(".talking-to-you")?.textContent).not.toContain("The engine is offline.");
+});
+
+it("shows only language, preview quality and hardware acceleration on Advanced and saves each right away", async () => {
+  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } as typeof settings }));
+  await open("/settings#advanced");
+  // No Save button, and internal knobs (note cleanup, handle seconds, concurrency, OpenAI model, encoder list) stay out of view.
+  expect(el.querySelector('button[type="submit"]')).toBeNull();
+  expect(el.textContent).not.toMatch(/Note cleanup|Handle seconds|Concurrency|OpenAI model|videotoolbox|nvenc/);
+  expect(languageSelect().textContent).toBe("English");
+  expect(previewHeight().textContent).toBe("540p (default)");
+  expect(hardwareAccel().getAttribute("aria-checked")).toBe("true");
+
+  // Choosing Auto-detect sends null so the engine clears the saved language.
+  await selectOption(languageSelect(), "Auto-detect");
+  const sent = JSON.parse(JSON.stringify(save.mock.calls[0]![0]));
+  expect(sent).toMatchObject({ transcription: { provider: "openai", language: null } });
+
+  await selectOption(previewHeight(), "720p");
+  expect(save).toHaveBeenLastCalledWith({ render: expect.objectContaining({ previewHeight: 720 }) });
+
+  await act(async () => hardwareAccel().click());
+  expect(save).toHaveBeenLastCalledWith({ render: expect.objectContaining({ hwaccel: "none" }) });
+  expect(hardwareAccel().getAttribute("aria-checked")).toBe("false");
+
+  await act(async () => hardwareAccel().click());
+  expect(save).toHaveBeenLastCalledWith({ render: expect.objectContaining({ hwaccel: "auto" }) });
+  expect(hardwareAccel().getAttribute("aria-checked")).toBe("true");
+});
+
+it("keeps an uncommon saved transcription language selectable in the dropdown", async () => {
+  vi.mocked(api.settings).mockResolvedValue({
+    settings: { ...settings, transcription: { ...settings.transcription, language: "uk" } },
+    transcriptionAvailable: true,
+  });
+  await open("/settings#advanced");
+  expect(languageSelect().textContent).toBe("uk");
+});
+
 it("leaves Settings on Esc when nothing is unsaved", async () => {
   await open("/settings#advanced");
-  expect(saveButton().disabled).toBe(true);
   await esc();
   expect(el.textContent).toBe("Project library");
 });
 
-it("keeps Settings open on Esc while a change is unsaved and moves focus to Save", async () => {
-  await open("/settings#advanced");
-  await selectOption(previewHeight(), "720p");
-  expect(document.activeElement).toBe(previewHeight());
-  await esc();
-  expect(heading()).toBe("Settings");
-  expect(document.activeElement).toBe(saveButton());
-  await esc();
-  expect(heading()).toBe("Settings");
-  expect(document.activeElement).toBe(saveButton());
-});
-
-it("leaves on Esc again once the change is saved", async () => {
+it("keeps Settings open on Esc while custom local model paths are unsaved and moves focus to Save", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: customLocalSettings, transcriptionAvailable: true });
   let finish!: () => void;
   const save = vi.spyOn(api, "updateSettings").mockImplementation(patch => new Promise(resolve => {
-    finish = () => resolve({ settings: { ...settings, ...patch } as typeof settings });
+    finish = () => resolve({ settings: { ...customLocalSettings, ...patch } as typeof customLocalSettings });
   }));
   await open("/settings#advanced");
-  await selectOption(previewHeight(), "720p");
+  const model = el.querySelector<HTMLInputElement>("#tr-modelpath")!;
+  await act(async () => {
+    model.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(model, "/models/new.bin");
+    model.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(saveButton().disabled).toBe(false);
+  // First Esc blurs the text field, second moves focus to Save.
   await esc();
+  expect(document.activeElement).toBe(document.body);
+  await esc();
+  expect(heading()).toBe("Settings");
+  expect(document.activeElement).toBe(saveButton());
+  await esc();
+  expect(heading()).toBe("Settings");
+  expect(document.activeElement).toBe(saveButton());
   await act(async () => saveButton().click());
-  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ render: expect.objectContaining({ previewHeight: 720 }) }));
+  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ transcription: expect.objectContaining({ whisperModelPath: "/models/new.bin" }) }));
   // The change isn't saved until the engine answers.
   await esc();
   expect(heading()).toBe("Settings");
@@ -109,29 +191,13 @@ it("leaves on Esc again once the change is saved", async () => {
   expect(el.textContent).toBe("Project library");
 });
 
-it("only blurs a changed text field on the first Esc and moves focus to Save on the next", async () => {
-  await open("/settings#advanced");
-  const language = el.querySelector<HTMLInputElement>("#tr-lang")!;
-  await act(async () => {
-    language.focus();
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(language, "fr");
-    language.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  expect(saveButton().disabled).toBe(false);
-  await esc();
-  expect(document.activeElement).toBe(document.body);
-  await esc();
-  expect(heading()).toBe("Settings");
-  expect(document.activeElement).toBe(saveButton());
-});
-
 it("leaves Esc to an open list, which closes without leaving Settings", async () => {
   await open();
   await act(async () => transcribeWith().click());
   expect(document.querySelector('[role="listbox"]')).not.toBeNull();
   // Transcription can't be turned off: the list offers only the ways to run it.
   expect([...document.querySelectorAll('[role="option"]')].map(o => o.textContent))
-    .toEqual(["CrisperWhisper 2.0 (default)", "Whisper large-v3-turbo (bundled)", "Custom local model", "OpenAI Whisper (cloud)"]);
+    .toEqual(["Whisper large-v3-turbo (default)", "CrisperWhisper 2.0", "Custom local model", "OpenAI Whisper (cloud)"]);
   await esc();
   expect(document.querySelector('[role="listbox"]')).toBeNull();
   expect(heading()).toBe("Settings");
@@ -150,8 +216,8 @@ it("says who is signed in once on General, in the card, and has no default to pi
   expect(el.querySelector("form h2")?.textContent).toBe("Speech transcription");
   expect([...el.querySelectorAll<HTMLLabelElement>("form label")].map(label => [label.htmlFor, label.textContent])).toEqual([["tr-provider", "Preferred model"]]);
   // The one choice left is saved as it is made, and nothing else goes with it.
-  await selectOption(transcribeWith(), "CrisperWhisper 2.0 (default)");
-  expect(save).toHaveBeenCalledExactlyOnceWith({ transcription: expect.objectContaining({ provider: "whispercpp", localModel: "crisperwhisper" }) });
+  await selectOption(transcribeWith(), "Whisper large-v3-turbo (default)");
+  expect(save).toHaveBeenCalledExactlyOnceWith({ transcription: expect.objectContaining({ provider: "whispercpp", localModel: "whispercpp" }) });
 });
 
 it("picks how much Scarlet checks with the editor on General, saved as it is chosen", async () => {
@@ -187,96 +253,78 @@ it("shows the settings once Retry gets through after a failed load", async () =>
   expect(el.querySelector("#tr-lang")).not.toBeNull();
 });
 
-it("tells the engine to clear Language and the note cleanup Model when their fields are emptied", async () => {
-  expect(settings).toMatchObject({ transcription: { language: "en" }, noteCleanup: { enabled: true, model: "claude-haiku-4-5" } });
-  const save = vi.spyOn(api, "updateSettings").mockImplementation(async () => ({
-    settings: { ...settings, transcription: { provider: "openai", openaiModel: "whisper-1" }, noteCleanup: { enabled: true, provider: "anthropic" } },
-  }));
-  await open("/settings#advanced");
-  const language = el.querySelector<HTMLInputElement>("#tr-lang")!;
-  const model = el.querySelector<HTMLInputElement>("#nc-model")!;
-  expect([language.value, model.value]).toEqual(["en", "claude-haiku-4-5"]);
-  await typeInto(language, "");
-  await typeInto(model, "");
-  await act(async () => saveButton().click());
-  // What goes over the wire: JSON drops an undefined field, and the engine then keeps the value it had.
-  const sent = JSON.parse(JSON.stringify(save.mock.calls[0]![0]));
-  expect(sent).toMatchObject({ transcription: { provider: "openai", language: null }, noteCleanup: { enabled: true, model: null } });
-  expect([language.value, model.value]).toEqual(["", ""]);
-  expect(saveButton().disabled).toBe(true);
-});
-
-it("holds what is typed in a number field until Save, instead of refilling one that was emptied", async () => {
-  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
-  await open("/settings#advanced");
-  const concurrency = el.querySelector<HTMLInputElement>("#rd-conc")!;
-  const handle = el.querySelector<HTMLInputElement>("#rd-handle")!;
-  expect([concurrency.value, handle.value]).toEqual(["2", "1.5"]);
-  // Emptied, the field stays empty for the next digit: it used to put 1 back at once, so typing 4 made 14.
-  await typeInto(concurrency, "");
-  expect(concurrency.value).toBe("");
-  expect(saveButton().disabled).toBe(false);
-  await typeInto(concurrency, "4");
-  expect(concurrency.value).toBe("4");
-  // A field left empty keeps the value it had.
-  await typeInto(handle, "");
-  expect(handle.value).toBe("");
-  await act(async () => saveButton().click());
-  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ render: expect.objectContaining({ concurrency: 4, handleSeconds: 1.5 }) }));
-  expect([concurrency.value, handle.value]).toEqual(["4", "1.5"]);
-});
-
 const press = (text: string) => act(async () => {
   [...document.querySelectorAll<HTMLElement>("a, button")].find(c => c.textContent?.trim() === text)!.click();
 });
 const asking = () => document.querySelector("dialog[open]")?.textContent ?? "";
 
-it("asks before a tab or the back link drops an unsaved change", async () => {
-  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } as typeof settings }));
+it("asks before a tab or the back link drops unsaved custom local model paths", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: customLocalSettings, transcriptionAvailable: true });
+  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...customLocalSettings, ...patch } as typeof customLocalSettings }));
   await open("/settings#advanced");
-  expect(previewHeight().textContent).toContain("540p");
-  await selectOption(previewHeight(), "720p");
+  const model = () => el.querySelector<HTMLInputElement>("#tr-modelpath")!;
+  expect(model().value).toBe("/models/old.bin");
+  await typeInto(model(), "/models/new.bin");
   await press("About");
   expect(asking()).toContain("These settings have unsaved changes.");
   expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("Advanced");
   // Stay keeps the change where it was.
   await press("Stay");
   expect(asking()).toBe("");
-  expect(previewHeight().textContent).toContain("720p");
+  expect(model().value).toBe("/models/new.bin");
   // Discard leaves without saving, and the old value is what comes back.
   await press("About");
   await press("Discard changes");
   expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("About");
   expect(save).not.toHaveBeenCalled();
   await press("Advanced");
-  expect(previewHeight().textContent).toContain("540p");
+  expect(model().value).toBe("/models/old.bin");
   // Save and leave saves first.
-  await selectOption(previewHeight(), "720p");
+  await typeInto(model(), "/models/new.bin");
   await press("← Projects");
   expect(asking()).toContain("These settings have unsaved changes.");
   await press("Save and leave");
-  expect(save).toHaveBeenCalledWith(expect.objectContaining({ render: expect.objectContaining({ previewHeight: 720 }) }));
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ transcription: expect.objectContaining({ whisperModelPath: "/models/new.bin" }) }));
   expect(el.textContent).toBe("Project library");
 });
 
-it("holds Restart to update while a change is unsaved, as the skill editor does", async () => {
-  vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } as typeof settings }));
+it("holds Restart to update while custom model paths are unsaved, as the skill editor does", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: customLocalSettings, transcriptionAvailable: true });
+  vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...customLocalSettings, ...patch } as typeof customLocalSettings }));
   // Restart to update asks the page first, and restarts only if nothing cancels.
   const restartAllowed = () => window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
   await open("/settings#advanced");
   expect(restartAllowed()).toBe(true);
-  await typeInto(el.querySelector<HTMLInputElement>("#rd-conc")!, "4");
+  await typeInto(el.querySelector<HTMLInputElement>("#tr-modelpath")!, "/models/new.bin");
   expect(restartAllowed()).toBe(false);
   await act(async () => saveButton().click());
   expect(saveButton().disabled).toBe(true);
   expect(restartAllowed()).toBe(true);
 });
 
+it("waits for an immediate Advanced save before switching tabs and puts the choice back if it fails", async () => {
+  let fail!: () => void;
+  vi.spyOn(api, "updateSettings").mockImplementation(() => new Promise((_resolve, reject) => {
+    fail = () => reject(new Error("Engine unreachable"));
+  }));
+  await open("/settings#advanced");
+  await selectOption(previewHeight(), "720p");
+  await press("About");
+  expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("Advanced");
+  expect(el.textContent).toContain("Saving…");
+  await act(async () => fail());
+  expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("Advanced");
+  expect(el.querySelector('form [role="alert"]')?.textContent).toBe("Engine unreachable");
+  expect(previewHeight().textContent).toBe("540p (default)");
+  await press("About");
+  expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("About");
+});
+
 it("saves a General dropdown as it is chosen, with no Save to press", async () => {
   const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } as typeof settings }));
   await open();
   expect(el.querySelector('button[type="submit"]')).toBeNull();
-  await selectOption(transcribeWith(), "CrisperWhisper 2.0 (default)");
+  await selectOption(transcribeWith(), "CrisperWhisper 2.0");
   expect(save).toHaveBeenCalledExactlyOnceWith({ transcription: expect.objectContaining({ provider: "whispercpp", localModel: "crisperwhisper" }) });
   expect(transcribeWith().textContent).toContain("CrisperWhisper");
   // Put back, it is saved again, and nothing is left to ask about on the way to another tab.
@@ -297,7 +345,7 @@ it.each(["Advanced", "← Projects"])("waits for General to save before going to
     };
   }));
   await open();
-  await selectOption(transcribeWith(), "CrisperWhisper 2.0 (default)");
+  await selectOption(transcribeWith(), "Whisper large-v3-turbo (default)");
   expect(save).toHaveBeenCalledOnce();
   await press(destination);
   expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("General");
@@ -313,7 +361,7 @@ it("shows a General save error if the editor tried to change tabs during the sav
     fail = () => reject(new Error("Engine unreachable"));
   }));
   await open();
-  await selectOption(transcribeWith(), "CrisperWhisper 2.0 (default)");
+  await selectOption(transcribeWith(), "Whisper large-v3-turbo (default)");
   await press("Advanced");
   await act(async () => fail());
   expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("General");
@@ -323,12 +371,21 @@ it("shows a General save error if the editor tried to change tabs during the sav
   expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("Advanced");
 });
 
-it("shows the bundled fallback for first-install CrisperWhisper and opens its pinned model files through the desktop", async () => {
+it("defaults fresh local settings to bundled Whisper without CrisperWhisper setup", async () => {
   vi.mocked(api.settings).mockResolvedValue({ settings: freshLocalSettings, transcriptionAvailable: true });
+  vi.mocked(api.localModelStatus).mockResolvedValue({ state: "ready", selected: "whispercpp", active: "whispercpp", fallback: false });
+  await open();
+  expect(transcribeWith().textContent).toBe("Whisper large-v3-turbo (default)");
+  expect(el.querySelector("form details")).toBeNull();
+  expect(el.querySelector("form")?.textContent).not.toContain("Set up CrisperWhisper");
+});
+
+it("shows the bundled fallback for first-install CrisperWhisper and opens its pinned model files through the desktop", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: crisperLocalSettings, transcriptionAvailable: true });
   vi.mocked(api.localModelStatus).mockResolvedValue({ state: "ready", selected: "crisperwhisper", active: "whispercpp", fallback: true });
   const browse = vi.spyOn(desktop, "openUrl").mockResolvedValue();
   await open();
-  expect(transcribeWith().textContent).toBe("CrisperWhisper 2.0 (default)");
+  expect(transcribeWith().textContent).toBe("CrisperWhisper 2.0");
   expect(el.querySelector('form [role="status"]')?.textContent).toContain("Using bundled Whisper");
   const guide = el.querySelector<HTMLDetailsElement>("form details")!;
   const summary = guide.querySelector("summary")!;
@@ -346,7 +403,7 @@ it("shows the bundled fallback for first-install CrisperWhisper and opens its pi
 });
 
 it("names the bundled Whisper fallback while its download is still in progress", async () => {
-  vi.mocked(api.settings).mockResolvedValue({ settings: freshLocalSettings, transcriptionAvailable: true });
+  vi.mocked(api.settings).mockResolvedValue({ settings: crisperLocalSettings, transcriptionAvailable: true });
   vi.mocked(api.localModelStatus).mockResolvedValue({
     state: "downloading", selected: "crisperwhisper", active: "whispercpp", fallback: true, received: 35, total: 100,
   });
@@ -367,7 +424,7 @@ it("shows where audio goes when switching between cloud, bundled and custom tran
   const local = "Audio stays on this computer.";
   expect(form.textContent).toContain(cloud);
   expect(form.textContent).not.toContain(local);
-  await selectOption(transcribeWith(), "Whisper large-v3-turbo (bundled)");
+  await selectOption(transcribeWith(), "Whisper large-v3-turbo (default)");
   expect(form.textContent).toContain(local);
   expect(form.textContent).not.toContain(cloud);
   await selectOption(transcribeWith(), "Custom local model");
@@ -379,7 +436,7 @@ const setupButton = (label: string) => [...el.querySelectorAll<HTMLButtonElement
   .find(button => button.textContent?.trim() === label)!;
 
 it("cancels the native folder picker without starting or saving an installation", async () => {
-  vi.mocked(api.settings).mockResolvedValue({ settings: freshLocalSettings, transcriptionAvailable: true });
+  vi.mocked(api.settings).mockResolvedValue({ settings: crisperLocalSettings, transcriptionAvailable: true });
   const pick = vi.spyOn(desktop, "pickFolder").mockResolvedValue(null);
   const install = vi.spyOn(desktop, "installCrisperModel");
   const save = vi.spyOn(api, "updateSettings");
@@ -393,7 +450,7 @@ it("cancels the native folder picker without starting or saving an installation"
 });
 
 it("can retry an installation error and keeps showing a pending install when General reopens", async () => {
-  vi.mocked(api.settings).mockResolvedValue({ settings: freshLocalSettings, transcriptionAvailable: true });
+  vi.mocked(api.settings).mockResolvedValue({ settings: crisperLocalSettings, transcriptionAvailable: true });
   vi.mocked(api.localModelStatus).mockResolvedValue({ state: "ready", selected: "crisperwhisper", active: "whispercpp", fallback: true });
   const pick = vi.spyOn(desktop, "pickFolder").mockResolvedValueOnce("/models/partial").mockResolvedValueOnce("/models/complete checkpoint");
   const issue = "The model folder is missing tokenizer.json.";
@@ -421,7 +478,7 @@ it("can retry an installation error and keeps showing a pending install when Gen
 });
 
 it("hides CrisperWhisper setup while checking and when CrisperWhisper is already installed", async () => {
-  vi.mocked(api.settings).mockResolvedValue({ settings: freshLocalSettings, transcriptionAvailable: true });
+  vi.mocked(api.settings).mockResolvedValue({ settings: crisperLocalSettings, transcriptionAvailable: true });
   let resolveStatus!: (status: Awaited<ReturnType<typeof api.localModelStatus>>) => void;
   vi.mocked(api.localModelStatus).mockImplementation(() => new Promise(resolve => { resolveStatus = resolve; }));
   await open();
@@ -439,8 +496,8 @@ it("can turn on the local default from a previously disabled transcription provi
   const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...disabled, ...patch } }));
   await open();
   expect(transcribeWith().textContent).toBe("Transcription unavailable");
-  await selectOption(transcribeWith(), "CrisperWhisper 2.0 (default)");
-  expect(save).toHaveBeenCalledExactlyOnceWith({ transcription: expect.objectContaining({ provider: "whispercpp", localModel: "crisperwhisper" }) });
+  await selectOption(transcribeWith(), "Whisper large-v3-turbo (default)");
+  expect(save).toHaveBeenCalledExactlyOnceWith({ transcription: expect.objectContaining({ provider: "whispercpp", localModel: "whispercpp" }) });
 });
 
 it("uses the engine's recognized preset for older paths and explains when there is no local runtime", async () => {
@@ -449,7 +506,7 @@ it("uses the engine's recognized preset for older paths and explains when there 
   const reason = "CrisperWhisper is not installed and the bundled Whisper runtime is unavailable.";
   vi.mocked(api.localModelStatus).mockResolvedValue({ state: "missing", selected: "crisperwhisper", fallback: false, reason });
   await open();
-  expect(transcribeWith().textContent).toBe("CrisperWhisper 2.0 (default)");
+  expect(transcribeWith().textContent).toBe("CrisperWhisper 2.0");
   expect(el.querySelector('form [role="status"]')?.textContent).toBe(reason);
 });
 
@@ -479,7 +536,7 @@ it("discovers existing custom paths, browses for replacements and saves them acr
   const replacement = { whisperModelPath: "/models/my model.bin", whisperCppPath: "/adapters/my adapter" };
   expect(save).toHaveBeenCalledWith(expect.objectContaining({ transcription: expect.objectContaining({ ...replacement, localModel: "custom" }) }));
   await press("General");
-  await selectOption(transcribeWith(), "Whisper large-v3-turbo (bundled)");
+  await selectOption(transcribeWith(), "Whisper large-v3-turbo (default)");
   expect(save).toHaveBeenLastCalledWith({ transcription: expect.objectContaining({ ...replacement, provider: "whispercpp", localModel: "whispercpp" }) });
   await selectOption(transcribeWith(), "OpenAI Whisper (cloud)");
   expect(save).toHaveBeenLastCalledWith({ transcription: expect.objectContaining({ ...replacement, provider: "openai" }) });
@@ -492,7 +549,7 @@ it("discovers existing custom paths, browses for replacements and saves them acr
 it("puts a General dropdown back and says why when its choice can't be saved", async () => {
   vi.spyOn(api, "updateSettings").mockRejectedValue(new Error("Engine unreachable"));
   await open();
-  await selectOption(transcribeWith(), "CrisperWhisper 2.0 (default)");
+  await selectOption(transcribeWith(), "Whisper large-v3-turbo (default)");
   expect(transcribeWith().textContent).toContain("OpenAI Whisper");
   expect(el.querySelector('form [role="alert"]')?.textContent).toBe("Engine unreachable");
   // Esc still leaves: nothing here is waiting to be saved.
@@ -500,24 +557,13 @@ it("puts a General dropdown back and says why when its choice can't be saved", a
   expect(el.textContent).toBe("Project library");
 });
 
-it("counts a change that was put back as no change: Save goes dim and leaving doesn't ask", async () => {
+it("counts a custom path put back as no change: Save goes dim and leaving doesn't ask", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: customLocalSettings, transcriptionAvailable: true });
   await open("/settings#advanced");
-  const language = el.querySelector<HTMLInputElement>("#tr-lang")!;
-  const concurrency = el.querySelector<HTMLInputElement>("#rd-conc")!;
-  await typeInto(language, "fr");
+  const model = el.querySelector<HTMLInputElement>("#tr-modelpath")!;
+  await typeInto(model, "/models/other.bin");
   expect(saveButton().disabled).toBe(false);
-  await typeInto(language, "en");
-  expect(saveButton().disabled).toBe(true);
-  // A dropdown, a switch and a number field the same.
-  await selectOption(previewHeight(), "720p");
-  await selectOption(previewHeight(), "540p");
-  const cleanup = el.querySelector<HTMLButtonElement>('[aria-label="Enable note cleanup"]')!;
-  await act(async () => cleanup.click());
-  expect(saveButton().disabled).toBe(false);
-  await act(async () => cleanup.click());
-  await typeInto(concurrency, "4");
-  expect(saveButton().disabled).toBe(false);
-  await typeInto(concurrency, "2");
+  await typeInto(model, "/models/old.bin");
   expect(saveButton().disabled).toBe(true);
   await press("About");
   expect(asking()).toBe("");

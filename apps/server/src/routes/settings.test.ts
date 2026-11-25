@@ -47,10 +47,13 @@ it("clears a field sent as null, and keeps one the patch leaves out", async () =
 });
 
 it("says whether the speech model the editor pointed to is there, and otherwise where Scarlet's own stands", async () => {
-  expect(await status()).toEqual({ selected: "crisperwhisper", state: "missing", fallback: false, reason: expect.stringContaining("unavailable") });
+  expect(await status()).toEqual({ selected: "whispercpp", state: "missing", fallback: false, reason: expect.stringContaining("unavailable") });
   app.ctx.whisperCli = process.execPath;
+  expect(await status()).toEqual({ ...await app.ctx.whisperModel.status(), selected: "whispercpp", active: "whispercpp", fallback: false });
+  await save({ transcription: { localModel: "crisperwhisper" } });
   expect(await status()).toEqual({ ...await app.ctx.whisperModel.status(), selected: "crisperwhisper", active: "whispercpp",
     fallback: true, reason: expect.stringContaining("bundled Whisper") });
+  await save({ transcription: { localModel: null } });
 
   const model = join(dataDir, "ggml-custom.bin");
   await save({ transcription: { whisperModelPath: model } });
@@ -128,9 +131,11 @@ it("revokes queued local work after the model changes, including changes made by
 it("says why nothing can transcribe, so Media can offer the fix", async () => {
   const settings = async () => (await app.app.request("/api/settings", { headers: { Authorization: `Bearer ${accessToken(app.ctx)}` } })).json();
   // A library first opened where no local runtime was found starts off, and says what is missing.
-  const missing = "CrisperWhisper is not installed. The bundled Whisper runtime is unavailable.";
+  const missing = "The bundled Whisper runtime is unavailable.";
   expect(await settings()).toMatchObject({ transcriptionAvailable: false, transcriptionIssue: missing });
   await save({ transcription: { provider: "whispercpp" } });
+  expect(await settings()).toMatchObject({ transcriptionAvailable: false, transcriptionIssue: missing });
+  await save({ transcription: { provider: "whispercpp", localModel: "crisperwhisper" } });
   expect(await settings()).toMatchObject({ transcriptionAvailable: false, transcriptionIssue: "CrisperWhisper is not installed. The bundled Whisper runtime is unavailable." });
   await save({ transcription: { provider: "openai" } });
   expect(await settings()).toMatchObject({ transcriptionAvailable: false, transcriptionIssue: "OpenAI transcription needs an API key." });
@@ -139,4 +144,25 @@ it("says why nothing can transcribe, so Media can offer the fix", async () => {
   const ready = await settings();
   expect(ready).toMatchObject({ transcriptionAvailable: true });
   expect(ready).not.toHaveProperty("transcriptionIssue");
+});
+
+it("falls back to a working whisper-cli on PATH when a dev checkout only has a zero-byte placeholder", async () => {
+  const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  const binDir = join(dataDir, "placeholder-bin"), pathDir = join(dataDir, "path-bin");
+  await mkdir(binDir, { recursive: true });
+  await mkdir(pathDir, { recursive: true });
+  await writeFile(join(binDir, name), "");
+  const fallback = join(pathDir, name);
+  await writeFile(fallback, "program", { mode: 0o755 });
+  const devApp = createApp({ dataDir: join(dataDir, "dev"), skillsSeedDir: join(dataDir, "none"), env: { SCARLET_BIN_DIR: binDir, PATH: pathDir }, log: () => {} });
+  try {
+    expect(devApp.ctx.whisperCli).toBe(fallback);
+    expect(devApp.ctx.whisperCliBundled).toBe(false);
+    expect(devApp.ctx.settings().transcription.provider).toBe("whispercpp");
+    expect((await importTranscriptionPolicy(devApp.ctx)).provider).toBe("whispercpp");
+    const res = await devApp.app.request("/api/settings", { headers: { Authorization: `Bearer ${accessToken(devApp.ctx)}` } });
+    expect(await res.json()).toMatchObject({ transcriptionAvailable: true });
+  } finally {
+    await devApp.ctx.close();
+  }
 });

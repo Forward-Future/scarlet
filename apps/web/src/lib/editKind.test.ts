@@ -19,12 +19,16 @@ describe("drawing an applied edit on the timeline", () => {
     expect(editFocus(edit({ kind: "other" }), 3000, "2 edits")).toMatchObject({ bandLabel: "2 edits" });
   });
 
+  it("says Put back for footage put back, on its row and its card as in the sentence, never Added", () => {
+    expect([editKindWord(edit({ kind: "restore" })), editRowWord(edit({ kind: "restore" }))]).toEqual(["Put back", "Put back"]);
+  });
+
   it("marks footage put back as added, with how much", () => {
     expect(editFocus(edit({ kind: "restore", range: { start: 555.4, end: 556.6 } }), 3000))
-      .toMatchObject({ bandLabel: "Added · 1.2 s", tone: "added" });
+      .toMatchObject({ bandLabel: "Put back · 1.2 s", tone: "added" });
     // A hair under ten seconds reads as ten, not "10.0".
-    expect(editFocus(edit({ kind: "restore", range: { start: 100, end: 109.97 } }), 3000)).toMatchObject({ bandLabel: "Added · 10 s" });
-    expect(editFocus(edit({ kind: "restore", range: { start: 100, end: 112.4 } }), 3000)).toMatchObject({ bandLabel: "Added · 12 s" });
+    expect(editFocus(edit({ kind: "restore", range: { start: 100, end: 109.97 } }), 3000)).toMatchObject({ bandLabel: "Put back · 10 s" });
+    expect(editFocus(edit({ kind: "restore", range: { start: 100, end: 112.4 } }), 3000)).toMatchObject({ bandLabel: "Put back · 12 s" });
   });
 
   it("marks a removal with a line at its join", () => {
@@ -72,9 +76,22 @@ describe("the note on an applied edit's card", () => {
       .toBe("Add the other boat renders. Marked “throw it on the screen now” where the boat comparison belongs.");
     expect(editNote(edit({ label: "Boat comparison footage", check: "Add the other boat renders", reason: "You asked for it on screen here.", marker: true })))
       .toBe("Add the other boat renders. You asked for it on screen here.");
-    // Said already, it isn't said twice.
+    // Said already, it isn't said twice — in either order.
     const asked = "Marked where the boat comparison belongs: add the other boat renders.";
     expect(editNote(edit({ label: "Boat comparison footage", check: "Add the other boat renders", summary: asked, marker: true }))).toBe(asked);
+    expect(editNote(edit({ label: "Boat comparison footage", todo: "Show the other boat renders where you mention them.", reason: "Where you mention them", marker: true })))
+      .toBe("Show the other boat renders where you mention them.");
+    // Closing question marks stay intact when a reason follows.
+    expect(editNote(edit({ label: "Aviation timeline", todo: "Show an aviation timeline here?", reason: "Keeps the story moving.", marker: true })))
+      .toBe("Show an aviation timeline here? Keeps the story moving.");
+  });
+
+  it("leads a marker's note with what Scarlet raised about it since, such as the clip it found for the spot", () => {
+    const todo = "Insert the Kontorovich clip here.";
+    const found = "Found it, from 8:28: https://www.youtube.com/watch?v=zqzk43bSdDI&t=508s";
+    expect(editNote(edit({ label: "Kontorovich clip", todo, check: found, recheck: "2026-11-24T01:43:07.000Z", marker: true }))).toBe(`${found}. ${todo}`);
+    // The marker's own words, raised again as they are, are said once.
+    expect(editNote(edit({ label: "Kontorovich clip", todo, check: "Insert the Kontorovich clip here", recheck: "2026-11-24T01:43:07.000Z", marker: true }))).toBe(todo);
   });
 
   it("keeps leading a revised marker's note with what it asks, not with the word for the revision", () => {

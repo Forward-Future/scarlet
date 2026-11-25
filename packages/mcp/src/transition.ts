@@ -10,12 +10,14 @@ export interface TransitionJoinInput {
 }
 
 const clock = (seconds: number) => {
-  const m = Math.floor(seconds / 60), s = seconds - m * 60;
+  // Rounded to the hundredth first, so 59.996 s reads 1:00.00 and not 0:60.00.
+  const hundredths = Math.round(seconds * 100);
+  const m = Math.floor(hundredths / 6000), s = (hundredths - m * 6000) / 100;
   return `${m}:${s.toFixed(2).padStart(5, "0")}`;
 };
 
 /** The clip each join leads into, from its id or the time of its join. */
-export function findJoin(timeline: Timeline, join: TransitionJoinInput, fps: number): { clip: MediaClip; trackId: string } {
+function findJoin(timeline: Timeline, join: TransitionJoinInput, fps: number): { clip: MediaClip; trackId: string } {
   if (join.clipId) {
     for (const track of timeline.tracks) {
       const clip = track.clips.find(c => c.id === join.clipId);

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startAppLog, stopAppLog } from "./appLog";
-import { editKey, keepEdits, reviewKey, unkeepEdits, useKeptEdits } from "./keptEdits";
-import { useReviewed } from "../components/review/ThreadEdits";
+import { editKey, keepEdits, notYetKept, reviewKey, unkeepEdits, useKeptEdits } from "./keptEdits";
+import { useReviewed } from "../components/review/threadEditState";
 import { api } from "./client";
 import type { Thread } from "@scarlet/shared";
 import { act } from "react";
@@ -32,6 +32,15 @@ it("remembers kept edits per thread and notices storage changing underneath", ()
   expect(readKept("prj", "other").size).toBe(0);
   localStorage.clear();
   expect(readKept("prj", "thr").size).toBe(0);
+});
+
+it("says which edits of a row a Keep would newly keep, so taking it back leaves the ones kept before it", () => {
+  const row = [{ changeId: "chg", spot: 0 }, { changeId: "chg", spot: 1 }, { changeId: "chg", spot: 2 }];
+  keepEdits("prj", "row", [row[1]!]);
+  expect(notYetKept("prj", "row", row)).toEqual([row[0], row[2]]);
+  expect(notYetKept("prj", "elsewhere", row)).toEqual(row);
+  keepEdits("prj", "row", row);
+  expect(notYetKept("prj", "row", row)).toEqual([]);
 });
 
 it("tells the engine what the editor kept, under the identity the Keep is recorded by, so the request's runs hear of it", () => {

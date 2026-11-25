@@ -20,6 +20,7 @@ mod launch;
 
 pub use launch::{dev_repo_root, parse_ready_line, resolve_engine_launch, EngineLaunch, ReadyInfo, READY_PREFIX};
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
@@ -30,13 +31,13 @@ use anyhow::{anyhow, Result};
 use futures_util::future::{BoxFuture, FutureExt, Shared};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::process::{Child, ChildStdin};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Paths;
 use crate::util::{engine_env, hide_console, lossy_lines};
-use launch::{bundled_chrome, engine_line_level, newest_mtime, set_chrome_env};
+use launch::{bundled_chrome, dev_whisper_cli, engine_line_level, newest_mtime, set_chrome_env, set_dev_whisper_env};
 
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -377,7 +378,8 @@ impl EngineManager {
         }
     }
 
-    async fn run_once(&self, launch: &EngineLaunch, generation: u64) -> Result<()> {
+    /// The engine's environment: the user's, with the media tools, browser, data folder and dev seeds it runs with.
+    fn launch_env(&self, launch: &EngineLaunch) -> HashMap<String, String> {
         let mut env = engine_env(&self.paths.home);
         // Node's 4 default threads serve every file read, stat and streamed range, so a playing video
         // and a cache scan queue behind each other. Respect a value the user set.
@@ -398,6 +400,8 @@ impl EngineManager {
                     env.entry("SCARLET_BIN_DIR".into()).or_insert_with(|| dir.to_string_lossy().into_owned());
                 }
             }
+            // Fresh dev worktrees carry a zero-byte whisper-cli placeholder; reuse the main checkout's or installed app's.
+            set_dev_whisper_env(&mut env, || dev_whisper_cli(&dev_repo_root(), env!("SCARLET_BUILD_TARGET"), &self.paths.home));
         }
         if launch.kind == "dev" {
             let skills = dev_repo_root().join("skills");
@@ -407,6 +411,17 @@ impl EngineManager {
         }
         set_chrome_env(&mut env, bundled_chrome(self.paths.resource_dir.as_deref(), tauri::is_dev()).as_deref());
         env.insert("SCARLET_DATA".into(), self.paths.data_dir.to_string_lossy().to_string());
+        // Only the public packages are built for a release feed. The engine reports usage under the `release` channel
+        // only with it, so source, local-main and review builds count as `dev` (docs/telemetry.md).
+        match option_env!("SCARLET_RELEASE_CHANNEL").filter(|channel| !channel.is_empty()) {
+            Some(channel) => { env.insert("SCARLET_RELEASE_CHANNEL".into(), channel.into()); }
+            None => { env.remove("SCARLET_RELEASE_CHANNEL"); }
+        }
+        env
+    }
+
+    async fn run_once(&self, launch: &EngineLaunch, generation: u64) -> Result<()> {
+        let env = self.launch_env(launch);
 
         let mut cmd = tokio::process::Command::new(&launch.program);
         cmd.args(&launch.prefix_args);
@@ -429,19 +444,7 @@ impl EngineManager {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().ok_or_else(|| anyhow!("engine stdout not captured"))?;
         if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(async move {
-                let mut lines = lossy_lines(stderr);
-                loop {
-                    match lines.next_line().await {
-                        Ok(Some(l)) => log::log!(engine_line_level(&l, true), "[engine] {l}"),
-                        Ok(None) => break,
-                        Err(error) => {
-                            log::warn!("[desktop] engine-output-failed pid={pid} stage=stderr code={}", error.raw_os_error().unwrap_or(0));
-                            break;
-                        }
-                    }
-                }
-            });
+            log_stderr(stderr, pid);
         }
         let tracked = Running::track(child, stdin, pid);
         let exit = tracked.exit.clone();
@@ -451,32 +454,7 @@ impl EngineManager {
 
         // Wait for the ready line (other log lines may precede it).
         let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<ReadyInfo>();
-        let reader = tokio::spawn(async move {
-            let mut tx = Some(ready_tx);
-            let mut lines = lossy_lines(stdout);
-            loop {
-                let l = match lines.next_line().await {
-                    Ok(Some(line)) => line,
-                    Ok(None) => break,
-                    Err(error) => {
-                        log::warn!("[desktop] engine-output-failed pid={pid} stage=stdout code={}", error.raw_os_error().unwrap_or(0));
-                        break;
-                    }
-                };
-                if l.trim_start().starts_with(READY_PREFIX) {
-                    if let Some(info) = parse_ready_line(&l) {
-                        if let Some(tx) = tx.take() {
-                            let _ = tx.send(info);
-                        }
-                    } else {
-                        // A partial or malformed handshake can still carry the session credential.
-                        log::warn!("[desktop] engine-handshake-invalid pid={pid} stage=startup");
-                    }
-                    continue;
-                }
-                log::log!(engine_line_level(&l, false), "[engine] {l}");
-            }
-        });
+        let reader = read_stdout(stdout, pid, ready_tx);
 
         let ready = tokio::time::timeout(Duration::from_secs(60), ready_before_exit(ready_rx, exit.clone())).await;
         match ready {
@@ -571,6 +549,53 @@ impl EngineManager {
             }
         });
     }
+}
+
+/// Log each line the engine writes to stderr.
+fn log_stderr(stderr: ChildStderr, pid: u32) {
+    tokio::spawn(async move {
+        let mut lines = lossy_lines(stderr);
+        loop {
+            match lines.next_line().await {
+                Ok(Some(l)) => log::log!(engine_line_level(&l, true), "[engine] {l}"),
+                Ok(None) => break,
+                Err(error) => {
+                    log::warn!("[desktop] engine-output-failed pid={pid} stage=stderr code={}", error.raw_os_error().unwrap_or(0));
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// Read the engine's stdout to its end: log each line, and send the ready line's details once.
+fn read_stdout(stdout: ChildStdout, pid: u32, ready_tx: tokio::sync::oneshot::Sender<ReadyInfo>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tx = Some(ready_tx);
+        let mut lines = lossy_lines(stdout);
+        loop {
+            let l = match lines.next_line().await {
+                Ok(Some(line)) => line,
+                Ok(None) => break,
+                Err(error) => {
+                    log::warn!("[desktop] engine-output-failed pid={pid} stage=stdout code={}", error.raw_os_error().unwrap_or(0));
+                    break;
+                }
+            };
+            if l.trim_start().starts_with(READY_PREFIX) {
+                if let Some(info) = parse_ready_line(&l) {
+                    if let Some(tx) = tx.take() {
+                        let _ = tx.send(info);
+                    }
+                } else {
+                    // A partial or malformed handshake can still carry the session credential.
+                    log::warn!("[desktop] engine-handshake-invalid pid={pid} stage=startup");
+                }
+                continue;
+            }
+            log::log!(engine_line_level(&l, false), "[engine] {l}");
+        }
+    })
 }
 
 #[cfg(test)]

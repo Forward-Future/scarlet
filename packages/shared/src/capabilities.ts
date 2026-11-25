@@ -51,6 +51,12 @@ export interface AgentCapabilities {
    * calls it, and the model reads a tool's whole description and parameters from `tool_help`.
    */
   briefTools?: boolean;
+  /**
+   * The most characters one tool's description may have before the harness cuts the rest off. Claude Code turns tool
+   * search off for an endpoint that isn't Anthropic's and cuts an MCP tool's description at 4,096 characters, so
+   * `tool_call`'s index is kept under this ceiling.
+   */
+  toolDescriptionChars?: number;
 }
 
 /** Wait for a client whose tool deadline is unknown: a margin below the common 60-second one. */
@@ -94,7 +100,27 @@ const KNOWN: Record<string, AgentCapabilities> = {
   // audio, embedded or linked block, but agy's own file viewer gives it a WAV from its folder: it wrote out a restart
   // word for word, hesitations and all ("they are lobbying against, mm, they are lobbying to control GPUs").
   gemini: { images: true, audio: false, audioFiles: true, files: false, plan: false, briefTools: true, resultChars: 9_000, toolWaitSeconds: 120 },
+  // Ollama, LM Studio and OpenRouter run through Claude Code pointed at their Anthropic-compatible endpoint, so the
+  // harness is Claude Code's, but the model is not Claude. Claude Code turns its tool search off for an endpoint that
+  // isn't Anthropic's, and would then send all of Scarlet's definitions (about 117 KB) every turn, more than a local
+  // model's context holds; listed briefly they are about 43 KB. Images reach only a model that reads them
+  // (`IMAGE_MODELS`): sent to one that doesn't, the request fails. Local models get shorter pages for their smaller
+  // contexts.
+  ollama: { images: false, audio: false, files: false, plan: false, briefTools: true, toolDescriptionChars: 4_000, resultChars: 16_000, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 },
+  lmstudio: { images: false, audio: false, files: false, plan: false, briefTools: true, toolDescriptionChars: 4_000, resultChars: 16_000, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 },
+  openrouter: { images: false, audio: false, files: false, plan: false, briefTools: true, toolDescriptionChars: 4_000, toolPrefix: "mcp__scarlet__", toolWaitSeconds: 240 },
 };
+
+/**
+ * Models that read images where their provider's others may not. OpenRouter's Claude, Gemini and GPT models all take
+ * pictures; a model that takes none fails the whole request when a frame reaches it, so the rest stay text-only.
+ */
+const IMAGE_MODELS: Record<string, RegExp> = { openrouter: /^(anthropic\/|google\/gemini|openai\/(gpt-(4o|4\.1|5)|o\d))/i };
+
+/** Whether this model reads images, though its provider's other models may not. */
+export function modelSeesImages(agent: string | undefined, model: string | undefined): boolean {
+  return !!(agent && model && Object.hasOwn(IMAGE_MODELS, agent) && IMAGE_MODELS[agent]!.test(model));
+}
 
 // An agent Scarlet didn't launch is someone's own MCP client, such as Claude Code or Claude Desktop pointed at Scarlet,
 // and each of those shows the model the images a tool returns. Turning images off here would take the frame tools away
@@ -122,9 +148,24 @@ function validResultChars(value: unknown): value is number {
  */
 const HEARING_MODELS: Record<string, RegExp> = { codex: /-audio\b/i };
 
+/**
+ * Models that hear a WAV file opened through their harness's file viewer, where the harness also exposes third-party
+ * models that don't. `agy` (`agent: "gemini"`) offers Claude and GPT models alongside Gemini; only Gemini models hear
+ * WAV files opened there (2026-11-23: `agy` + `claude-opus-5-5` received `source_audio` WAVs it couldn't hear).
+ */
+const AUDIO_FILE_MODELS: Record<string, RegExp> = { gemini: /(?:^|\/)gemini\b/i };
+
 /** Whether this model hears audio in a tool's result, though its harness's others don't. */
 export function modelHearsAudio(agent: string | undefined, model: string | undefined): boolean {
   return !!(agent && model && Object.hasOwn(HEARING_MODELS, agent) && HEARING_MODELS[agent]!.test(model));
+}
+
+/** Whether this model hears a WAV file opened with its harness's file viewer. Unset model means the harness's default. */
+export function modelHearsAudioFiles(agent: string | undefined, model: string | undefined): boolean {
+  const known = agent && Object.hasOwn(KNOWN, agent) ? KNOWN[agent] : undefined;
+  if (!known?.audioFiles) return false;
+  if (!model) return true;
+  return !Object.hasOwn(AUDIO_FILE_MODELS, agent!) || AUDIO_FILE_MODELS[agent!]!.test(model);
 }
 
 /** Whether a run with these capabilities can hear a recording: in a tool's result, or as a file it opens itself. */
@@ -164,14 +205,18 @@ export function hearingModels(agents: ReadonlyArray<SignedInAgent>): Listener[] 
   const seen = new Set<string>();
   const out: Listener[] = [];
   for (const a of [...usable.filter(a => a.id === "gemini"), ...usable.filter(a => a.id !== "gemini")]) {
-    const models = a.id === "gemini" ? [a.model, ...(a.models ?? [])] : [a.model, ...(a.models ?? [])].filter(m => modelHearsAudio(a.id, m));
+    const listed = [a.model, ...(a.models ?? [])].filter((m): m is string => !!m);
+    const models = listed.filter(m => a.id === "gemini" ? modelHearsAudioFiles(a.id, m) : modelHearsAudio(a.id, m));
     for (const model of models) {
-      if (!model || seen.has(`${a.id}:${model}`)) continue;
+      if (seen.has(`${a.id}:${model}`)) continue;
       seen.add(`${a.id}:${model}`);
       out.push({ agent: a.id, model });
     }
     // Gemini whose CLI lists no models still hears, on its own default.
-    if (a.id === "gemini" && !models.some(Boolean)) out.push({ agent: "gemini" });
+    if (a.id === "gemini" && !listed.length && !seen.has("gemini:")) {
+      seen.add("gemini:");
+      out.push({ agent: "gemini" });
+    }
   }
   return out;
 }
@@ -193,8 +238,15 @@ export function chooseListener(agents: ReadonlyArray<SignedInAgent>, setting: st
  */
 export function listenerAmong(agents: ReadonlyArray<SignedInAgent>): Listener | undefined {
   const usable = agents.filter(a => a.installed && a.loggedIn !== false);
-  const gemini = usable.find(a => a.id === "gemini");
-  if (gemini) return { agent: "gemini", ...(gemini.model && { model: gemini.model }) };
+  for (const gemini of usable.filter(a => a.id === "gemini")) {
+    if (gemini.model) {
+      if (modelHearsAudioFiles("gemini", gemini.model)) return { agent: "gemini", model: gemini.model };
+      const heard = (gemini.models ?? []).find(m => modelHearsAudioFiles("gemini", m));
+      if (heard) return { agent: "gemini", model: heard };
+    } else if (!gemini.models?.length || gemini.models.some(m => modelHearsAudioFiles("gemini", m))) {
+      return { agent: "gemini" };
+    }
+  }
   for (const a of usable) {
     const model = [a.model, ...(a.models ?? [])].find(m => modelHearsAudio(a.id, m));
     if (model) return { agent: a.id, model };
@@ -204,7 +256,9 @@ export function listenerAmong(agents: ReadonlyArray<SignedInAgent>): Listener | 
 
 export function agentCapabilities(agent: string | undefined, override?: Partial<AgentCapabilities> | string, model?: string): AgentCapabilities {
   const known = (agent && Object.hasOwn(KNOWN, agent) && KNOWN[agent]) || UNKNOWN;
-  const base = modelHearsAudio(agent, model) ? { ...known, audio: true } : known;
+  let base = modelHearsAudio(agent, model) ? { ...known, audio: true } : known;
+  if (!base.images && modelSeesImages(agent, model)) base = { ...base, images: true };
+  if (base.audioFiles && !modelHearsAudioFiles(agent, model)) base = { ...base, audioFiles: false };
   let extra: Partial<AgentCapabilities> = {};
   if (typeof override === "string" && override.trim()) {
     try {
@@ -212,6 +266,7 @@ export function agentCapabilities(agent: string | undefined, override?: Partial<
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
       for (const key of ["images", "audio", "audioFiles", "files", "shell", "web", "plan", "briefTools"] as const) if (typeof parsed[key] === "boolean") extra[key] = parsed[key] as boolean;
       if (typeof parsed.resultChars === "number") extra.resultChars = parsed.resultChars;
+      if (typeof parsed.toolDescriptionChars === "number" && Number.isSafeInteger(parsed.toolDescriptionChars) && parsed.toolDescriptionChars >= 1_000) extra.toolDescriptionChars = parsed.toolDescriptionChars;
       if (typeof parsed.toolWaitSeconds === "number" && Number.isFinite(parsed.toolWaitSeconds) && parsed.toolWaitSeconds > 0) extra.toolWaitSeconds = parsed.toolWaitSeconds;
     } catch {
       extra = {};

@@ -1,12 +1,33 @@
 import { useEffect, useRef } from "react";
 import { MAX_RECORD_SECONDS, useRecorder, type RecorderResult } from "../../lib/recorder";
+import { isComposing } from "../../lib/hotkeys";
 import { useUiStore } from "../../stores/ui";
 import { Icon } from "../ui/primitives";
+
+/** What the red button is named while it records: a press sends what was said, and Esc throws it away. */
+export const SEND_RECORDING = "Send (Esc to discard)";
+
+/**
+ * The recordings Esc throws away. That press is the recording's alone: it closes no card, clears no tag and leaves a
+ * queued request's words in the box. So it is heard here first, by a listener in place before any the page adds later,
+ * and goes no further.
+ */
+const discards = new Set<() => void>();
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", e => {
+    if (e.key !== "Escape" || !discards.size || e.metaKey || e.ctrlKey || e.altKey || isComposing(e)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    for (const discard of [...discards]) discard();
+  }, true);
+}
 
 /**
  * Mic toggle. Click toggles recording; holding V (uiStore.voiceHold) records
  * push-to-talk style when `followHold` is set. Shows a red dot and elapsed
- * time while recording and auto-stops at the 2 minute cap.
+ * time while recording and auto-stops at the 2 minute cap. A press on the red
+ * button, letting go of V and the cap all send what was said. Esc throws the
+ * recording away instead, and that press does nothing else.
  */
 export function MicButton({ onResult, onStart, onRecording, onError, disabled, disabledReason, followHold = false, label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; onError?(message: string): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; label?: string }) {
   const rec = useRecorder(onResult);
@@ -67,16 +88,27 @@ export function MicButton({ onResult, onStart, onRecording, onError, disabled, d
     };
   }, [stop]);
 
+  // Esc while it records throws the recording away: nothing is sent and nothing lands in the box.
+  useEffect(() => {
+    if (!recording) return;
+    const discard = () => {
+      heldRef.current = false;
+      stop(true);
+    };
+    discards.add(discard);
+    return () => { discards.delete(discard); };
+  }, [recording, stop]);
+
   const unsupported = rec.state === "unsupported";
   const isDisabled = disabled || unsupported;
-  const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? "Stop recording" : followHold ? `${label} (hold V)` : label;
+  const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? SEND_RECORDING : followHold ? `${label} (hold V)` : label;
 
   return (
     <div className="flex items-center gap-2">
       <button
         ref={button}
         type="button"
-        aria-label={rec.recording ? "Stop recording" : label}
+        aria-label={rec.recording ? SEND_RECORDING : label}
         aria-pressed={rec.recording}
         title={title}
         disabled={isDisabled}

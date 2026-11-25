@@ -22,13 +22,13 @@ const LEAD = /^[^\p{L}\p{N}]*/u;
 const TRAIL = /[^\p{L}\p{N}]*$/u;
 const POSSESSIVE = /['’]s$/iu;
 
-/** A word's text in three parts: what comes before its letters, its letters, and what comes after (with a possessive 's). */
-function parts(text: string) {
+/** A word's text in three parts: what comes before its letters, its letters, and what comes after (with a possessive 's, unless told to keep it in). */
+function parts(text: string, splitPossessive = true) {
   const lead = LEAD.exec(text)![0];
   let rest = text.slice(lead.length);
   let trail = TRAIL.exec(rest)![0];
   rest = rest.slice(0, rest.length - trail.length);
-  const possessive = POSSESSIVE.exec(rest);
+  const possessive = splitPossessive && POSSESSIVE.exec(rest);
   if (possessive && rest.length > possessive[0].length) {
     trail = possessive[0] + trail;
     rest = rest.slice(0, -possessive[0].length);
@@ -67,23 +67,39 @@ export function applyWordFix(transcript: Transcript, fix: TranscriptWordFix): Wo
     }
   });
   entries.sort((a, b) => a.w.start - b.w.start);
-  const normalized = entries.map(e => e.word < 0 ? "" : normalizeTranscriptToken(parts(e.w.text).core));
+  // Words read as transcript search reads them; the last word of find also matches a word with a possessive 's after it.
+  const normalized = entries.map(e => e.word < 0 ? "" : normalizeTranscriptToken(e.w.text));
+  const stems = entries.map(e => e.word < 0 ? "" : normalizeTranscriptToken(parts(e.w.text).core));
+  const full = tokens(fix.replace);
+  /** Whether the words from `at` read `want`, the last of them with or without a possessive 's. */
+  const reads = (at: number, want: readonly string[]) => at >= 0 && at + want.length <= entries.length &&
+    want.every((t, j) => normalized[at + j] === t || (j === want.length - 1 && stems[at + j] === t));
   const places: WordFixPlace[] = [];
   let wordsAdded = 0;
   /** New words by segment and word position, and the words taken out. */
   const replaced = new Map<string, TranscriptWord[]>();
   const removed = new Set<string>();
   const key = (e: Entry) => `${e.segment}/${e.word}`;
+  /** The first word no earlier place took in. */
+  let done = 0;
   for (let i = 0; i + find.length <= entries.length; i++) {
-    if (!find.every((t, j) => normalized[i + j] === t)) continue;
-    const span = entries.slice(i, i + find.length) as Array<Extract<Entry, { word: number }> & { w: TranscriptWord }>;
+    if (!reads(i, find)) continue;
+    // A place that already says the whole fix around the words found ("Claude Code" for Claude → Claude Code) is
+    // that fix's place: read as it, it keeps its words, where reading the find alone would say a word twice.
+    let begin = i, want = find;
+    for (let o = 0; full.length > find.length && o + find.length <= full.length; o++) {
+      if (find.every((t, j) => full[o + j] === t) && i - o >= done && reads(i - o, full)) { begin = i - o; want = full; break; }
+    }
+    const lastWord = want.length - 1;
+    const possessive = normalized[begin + lastWord] !== want[lastWord];
+    const span = entries.slice(begin, begin + want.length) as Array<Extract<Entry, { word: number }> & { w: TranscriptWord }>;
     const first = span[0]!.w, last = span.at(-1)!.w;
     if ((fix.from !== undefined && last.end <= fix.from) || (fix.to !== undefined && first.start >= fix.to)) continue;
-    const head = parts(first.text), tail = parts(last.text);
+    const head = parts(first.text), tail = parts(last.text, possessive);
     let words: TranscriptWord[];
     if (replace.length === span.length) {
       words = span.map(({ w }, k) => {
-        const p = parts(w.text);
+        const p = parts(w.text, k === lastWord && possessive);
         return { ...w, text: p.lead + cased(p.core, replace[k]!) + p.trail };
       });
     } else {
@@ -98,12 +114,17 @@ export function applyWordFix(transcript: Transcript, fix: TranscriptWordFix): Wo
       });
     }
     const before = span.map(e => e.w.text.trim()).join(" "), after = words.map(w => w.text.trim()).join(" ");
-    if (before === after) { i += find.length - 1; continue; }
-    places.push({ index: i, start: first.start, end: last.end, before, after });
+    i = begin + want.length - 1;
+    done = i + 1;
+    if (before === after) continue;
+    places.push({ index: begin, start: first.start, end: last.end, before, after });
     wordsAdded += words.length - span.length;
-    replaced.set(key(span[0]!), words);
-    for (const e of span.slice(1)) removed.add(key(e));
-    i += find.length - 1;
+    // A word for each word stays in the line it was in, where a phrase runs from one line into the next.
+    if (words.length === span.length) span.forEach((e, k) => replaced.set(key(e), [words[k]!]));
+    else {
+      replaced.set(key(span[0]!), words);
+      for (const e of span.slice(1)) removed.add(key(e));
+    }
   }
   if (!places.length) return { transcript, places, wordsAdded: 0 };
   const segments = transcript.segments.map((segment, s): TranscriptSegment => {

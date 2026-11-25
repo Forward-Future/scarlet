@@ -20,8 +20,7 @@ export const LANDING_SETTLES = 3000;
 export const LANDING_SHOWS = 4000;
 /** How many versions' timelines the window keeps beyond the ones a waiting pass needs. */
 export const KEPT_TIMELINES = 6;
-/** What a request paused with the project's editing waits for. */
-export const PAUSED_HINT = "Editing is paused. Resume picks this up where it left off.";
+export { PAUSED_HINT } from "../../lib/taskRun";
 
 /** ↑ ↓ step between the cuts or edits that are open one at a time. ← → are always the player's: they skip. */
 export const stepOf = (key: string): 1 | -1 | undefined => key === "ArrowUp" ? -1 : key === "ArrowDown" ? 1 : undefined;
@@ -40,11 +39,11 @@ export interface JoinedListen { version: string; timeline: Timeline; clock: Join
 export type Panel = "media" | "export" | "learnings" | null;
 
 /** Where a call stands: approved, skipped, still open, or being revised. */
-export type CallState = "approved" | "skipped" | "open" | "revising";
-export interface PassCall {
+type CallState = "approved" | "skipped" | "open" | "revising";
+interface PassCall {
   index: number;
   askOrder?: number;
-  /** Its number, as on its card and the timeline: the order it reached the editor in. */
+  /** The order it reached the editor in, which names its row for good. The editor never sees it: a call goes by its time. */
   n: number;
   /** Where its row goes in the list. */
   start: number;
@@ -67,9 +66,10 @@ export interface OpenPass {
   threadId: string;
   /** How many cuts the pass proposes. */
   cuts: number;
-  /** Every call in the pass, numbered, with where it stands: the progress the summary card shows. */
+  /** Every call in the pass, with where it stands: the progress the summary card shows. */
   calls: PassCall[];
-  /** The numbers of the request's edits that ask for a look, by `editKey`: they count on from the calls. */
+  /** The request's edits that ask for a look, by `editKey`: the order they reached the editor in, after the calls, and
+   *  the name they go by, at their time ("Cut at 0:11"). */
   editNumbers: ReadonlyMap<string, { n: number; name: string }>;
   openCall(index: number): void;
   running: boolean;
@@ -86,7 +86,8 @@ export interface OpenPass {
 }
 
 export type HoveredReviewRow = { threadId: string; editKey?: string; call?: number };
-export type ReviewMarker = { edit: ThreadEdit; number: number; total: number };
+/** `state`: amber while it asks for a look, filled once kept, as its row in the chat says. */
+type ReviewMarker = { edit: ThreadEdit; state?: "check" | "kept" };
 export type LocatedReview = { head: string | null; markers: ReviewMarker[] };
 export type ReportReviewMarkers = (threadId: string, review?: LocatedReview) => void;
 
@@ -95,13 +96,22 @@ export interface ChatActions {
   atOnce?: number;
   /** The queued request Scarlet will take up next, matching the tray's Next line. */
   nextQueuedId?: string;
+  /**
+   * What a request in line waits for when that is the editor, as the tray says it ("Waits for your calls"), with the
+   * way to start it before the calls when they are what holds it.
+   */
+  waitsOn?(task: Task): { words: string; startNow?(): void } | undefined;
   showing?: ThreadEdit;
   /** The request whose own row opened the edit that's showing. Opened from a list or the timeline, there is none. */
   showingFrom?: string;
-  /** The request whose edits the timeline marks. Its band is a shade lighter. */
+  /** The request whose edits the timeline marks. Its band is deep violet. */
   marked?: string;
-  /** Put a request's edits on the timeline, from a press on its band. */
+  /** Pick a request, from a press on its band: its edits are the ones on the timeline. Pressed again, it lets go. */
   mark?(threadId: string): void;
+  /** The requests folded to their headings, by their run. */
+  collapsed?: ReadonlySet<string>;
+  /** Fold a request to its heading, or open it again, from the arrow at its heading's left. */
+  collapse?(run: string): void;
   /** Show the whole timeline, from a press on any request's band. */
   fitTimeline?(): void;
   pass?: OpenPass;
@@ -130,32 +140,43 @@ export interface ChatActions {
   /** Light the timeline's marker at this time, or none: the pointer is over that edit's row in the chat. */
   lightMark(time?: number, target?: HoveredReviewRow): void;
   reply(thread: Thread): void;
+  /** The question the message box is answering now, by its task: its Answer link in the chat would only say so again. */
+  answering?: string;
   revise(thread: Thread, change: Change): void;
   /**
    * What a request about one cut is called while that cut is a call of the pass waiting now, or an edit of its request
-   * that asks for a look: "Cut 2", its number, the same on its line in the list, on its card and on the timeline. Any
-   * other cut goes by its time.
+   * that asks for a look: by its time ("Cut at 2:47"), the same on its row in the list, on its card and in the box's tag.
    */
   cutName?(about: { changeId?: string; cutIndex?: number; editIndex?: number }): string | undefined;
-  /** The number a call of the waiting pass goes by, for a line that names it ("Listening to Cut 2"). */
-  callNumber?(changeId: string, cutIndex: number): number | undefined;
+  /** Where a call of the waiting pass is in the video, for a line that names it ("Listening to the cut at 2:47"). */
+  callTime?(changeId: string, cutIndex: number): number | undefined;
   /** Open Learnings with this rule in view, from the line under the request it came from. */
   reviewLearning?(learningId: string): void;
 }
 
 /**
- * Which of a request's lists is open: every edit, or just the ones that need the editor. A pass's calls are listed
- * without a click for as long as they wait.
+ * Which of a request's lists is open. A request with nothing for the editor to review has one list, every edit
+ * ("all"). One with review rows has three tabs: For you ("need", or none: it is the one shown until another is
+ * pressed), Working and Done. There "all" is For you with low risk edits included, the edits Scarlet didn't flag listed
+ * among the ones that wait, each in its place in the video: the timeline shows them as it does for a list of every edit.
  */
-export type OpenList = "all" | "need" | undefined;
+export type OpenList = "all" | "need" | "working" | "done" | undefined;
 export type PassList = [open: OpenList, setOpen: Dispatch<SetStateAction<OpenList>>];
 
-/** A request about one cut or edit that is still in the chat, drawn directly under the row it is about. `key` is that row's. */
-export interface Nest { key: string; node: ReactNode }
+/**
+ * A request about one cut or edit that is still in the chat, drawn directly under the row it is about. `key` is that
+ * row's. `needs`: the request itself waits on the editor (it asks a question, or stopped early and offers Resume or
+ * Retry), so its row stays in For you with it.
+ */
+export interface Nest { key: string; node: ReactNode; needs?: boolean }
 export const noNests: readonly Nest[] = [];
 /** What the requests about each row's cut or edit took, by the row's key, for the hover of the word the row ends on. */
 export type Spent = ReadonlyMap<string, string>;
 export const noSpent: Spent = new Map();
+
+/** Whether For you has listed this edit, or a version of it it replaced, so it keeps its row there once decided. */
+export const listedBefore = (listed: ReadonlySet<string>, e: Omit<ThreadEdit, "at">) =>
+  listed.has(editKey(e)) || e.previous.some(p => listed.has(editKey(p)));
 
 /** Let the new video finish attaching (including StrictMode's effect replay) before giving it a listen.
  * A selection replaced in the same commit never starts playback on the next selection's video. */
@@ -167,31 +188,6 @@ export function afterPlayerMount(start: () => () => void) {
     closed = true;
     stop?.();
   };
-}
-
-/** Each project keeps its own: rewording a request in one project leaves the words kept for another as they are. */
-const LEGACY_REWORDING_KEY = "scarlet.rewording.v1";
-const rewordingKey = (projectId: string) => `${LEGACY_REWORDING_KEY}:${projectId}`;
-function readRewording(key: string, projectId: string): { id: string; text: string } | undefined {
-  const saved = JSON.parse(localStorage.getItem(key) ?? "null") as { projectId?: unknown; id?: unknown; text?: unknown } | null;
-  return saved && saved.projectId === projectId && typeof saved.id === "string" && typeof saved.text === "string" ? { id: saved.id, text: saved.text } : undefined;
-}
-/** The queued request whose words were in the message box when the project was last on screen, with those words. */
-export function savedRewording(projectId: string): { id: string; text: string } | undefined {
-  try {
-    // Words kept before each project had its own slot are in the one slot all projects shared.
-    return readRewording(rewordingKey(projectId), projectId) ?? readRewording(LEGACY_REWORDING_KEY, projectId);
-  } catch {
-    return undefined;
-  }
-}
-export function saveRewording(projectId: string, rewording: { id: string; text: string } | undefined) {
-  try {
-    if (rewording) localStorage.setItem(rewordingKey(projectId), JSON.stringify({ projectId, ...rewording }));
-    else localStorage.removeItem(rewordingKey(projectId));
-    // The shared slot is this project's no longer: its words are in the project's own now, or done with.
-    if (readRewording(LEGACY_REWORDING_KEY, projectId)) localStorage.removeItem(LEGACY_REWORDING_KEY);
-  } catch { /* Without storage the words last for this session only. */ }
 }
 
 /**

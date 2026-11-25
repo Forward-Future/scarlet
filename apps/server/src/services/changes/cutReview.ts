@@ -82,7 +82,7 @@ function releaseWhenReady(ctx: Ctx, change: Change, render: Render, owner: strin
 }
 
 /** Queue the actual edited media the first call will open, including the footage on both sides of the join. */
-export function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index: number): Change["firstDecisionPreview"] {
+function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index: number): Change["firstDecisionPreview"] {
   const owner = newId("prep");
   const render = queueDecisionPlayback(ctx, change, review, index, owner);
   if (!render) return;
@@ -94,7 +94,7 @@ export function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview
  * The waiting call the editor reaches after deciding `decided`, as Keep moves on For you: the next by number, else
  * the first by number. A call they have decided, or sent back to Scarlet, isn't waiting.
  */
-export function nextWaitingCall(change: Change, decided?: number, sentBack: ReadonlySet<number> = new Set()): number | undefined {
+function nextWaitingCall(change: Change, decided?: number, sentBack: ReadonlySet<number> = new Set()): number | undefined {
   const called = new Set(change.cutChoices?.map(c => c.index));
   const waiting = (change.cutAssessments ?? []).filter(a => isPublishedCall(a) && a.index !== decided && !called.has(a.index) && !sentBack.has(a.index))
     .sort((a, b) => (a.askOrder ?? Infinity) - (b.askOrder ?? Infinity) || a.index - b.index);
@@ -178,7 +178,7 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
   if (!project) throw notFound("project");
   if (ontoVersion && !restoredCuts) throw badRequest("invalid_cut_selection", "Choose the cuts to preview.");
   if (ontoVersion && project.head !== ontoVersion)
-    throw conflict("cut_review_stale", "The working edit changed during review.", { currentVersion: project.head });
+    throw conflict("cut_review_stale", "The video changed while this cut was open. Open it again.", { currentVersion: project.head });
   const base = resolveTimeline(ctx, project, change.fromVersion);
   const proposed = resolveTimeline(ctx, project, change.toVersion);
   // Only an opening assembly needs source durations. Its populated tracks each use a single source.
@@ -233,7 +233,7 @@ export function prepareCutReview(ctx: Ctx, change: Change, restoredCuts?: number
 }
 
 /** The editor's call on each staged cut, or what Approve does without one: Scarlet's verdict once it has assessed the pass, else cut. */
-export function cutDecision(change: Change, index: number): CutChoice["choice"] {
+function cutDecision(change: Change, index: number): CutChoice["choice"] {
   const chosen = change.cutChoices?.find(c => c.index === index)?.choice;
   if (chosen) return chosen;
   if (!change.cutAssessments?.length) return "cut";
@@ -305,7 +305,7 @@ function forwardChoicesToLivePass(ctx: Ctx, user: User, change: Change, body: Sa
     return saveCutChoices(ctx, user, live, { fromVersion: live.fromVersion, toVersion: live.toVersion,
       choices: [...choices].map(([index, choice]) => ({ index, choice })), applyWhenDone: schedule });
   }
-  throw conflict("cut_review_moved", "This review has already moved on.");
+  throw conflict("cut_review_moved", "This pass has changed since. Open the call again from For you.");
 }
 
 /**
@@ -314,12 +314,12 @@ function forwardChoicesToLivePass(ctx: Ctx, user: User, change: Change, body: Sa
  */
 export function saveCutChoices(ctx: Ctx, user: User, change: Change, body: SaveCutChoicesBody): Change {
   if (change.intent !== "suggestion" || !change.cutReasons?.length || change.fromVersion !== body.fromVersion || change.toVersion !== body.toVersion)
-    throw conflict("cut_review_stale", "This proposal is no longer waiting for review.");
+    throw conflict("cut_review_stale", "This pass isn’t waiting on your calls any more.");
   const replaced = change.rejectReason === CARRIED || change.rejectReason === REVISED ||
     change.state === "revising" && !!revisedPass(ctx, change);
   if (replaced) return forwardChoicesToLivePass(ctx, user, change, body);
   if (change.state !== "ready" && change.state !== "revising")
-    throw conflict("cut_review_stale", "This proposal is no longer waiting for review.");
+    throw conflict("cut_review_stale", "This pass isn’t waiting on your calls any more.");
   const review = prepareCutReview(ctx, change).review;
   if (!review) throw badRequest("cuts_unsupported", "This edit has no individual cuts.");
   const byIndex = new Map<number, CutChoice>();
@@ -435,7 +435,7 @@ export function saveCutAssessments(ctx: Ctx, change: Change, task: Task | undefi
       + "Give each its own: the words this cut takes out or keeps, and what to listen for at its join.");
   }
   // Each new ask is numbered after every ask before it: in the order Scarlet makes them, and within one save in
-  // timeline order. The editor's number for a call goes by it. A pass whose asks aren't numbered yet, as one saved
+  // timeline order. The calls keep that order. A pass whose asks aren't numbered yet, as one saved
   // before the engine numbered them, numbers the asks it already has first, in timeline order, so none of the calls
   // the editor has seen moves. Once a pass numbers its asks, one left without a number is a cut no one checked that
   // the editor sent back, and it stays with those.

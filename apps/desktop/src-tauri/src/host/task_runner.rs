@@ -14,6 +14,7 @@ use super::api::{self, Api};
 use super::detect;
 use super::runner::{self, run_agent, RunOptions};
 use super::runner_codex;
+use super::runner_gemini;
 use super::types::{self, CompleteTaskRequest, McpSpec, RunResult, RunnerEvent, Task, TaskEvent};
 use super::usage;
 use super::workspace::{self, real_path, remove_claude_sessions, remove_control_files, remove_token_file, TASKS_DIR};
@@ -133,7 +134,7 @@ impl HostRuntime {
             return;
         }
         // Resolve before the folder can go: Claude Code names its project folder after the real path.
-        let real = if task.agent == "claude" { real_path(&dir) } else { None };
+        let real = if task.agent == "claude" || super::providers::is_extra_provider(&task.agent) { real_path(&dir) } else { None };
         if let Err(e) = remove_control_files(&dir) {
             log::warn!("task {task_id}: could not clean its folder: {e}");
         }
@@ -152,6 +153,13 @@ impl HostRuntime {
         if !session_stays && std::fs::symlink_metadata(&codex_home).is_ok_and(|m| m.is_dir()) {
             if let Err(e) = std::fs::remove_dir_all(&codex_home) {
                 log::warn!("task {task_id}: could not remove its Codex home: {e}");
+            }
+        }
+        // So does a Gemini run, in its own Gemini folder.
+        let gemini_dir = runner_gemini::gemini_dir(&dir);
+        if !session_stays && std::fs::symlink_metadata(&gemini_dir).is_ok_and(|m| m.is_dir()) {
+            if let Err(e) = std::fs::remove_dir_all(&gemini_dir) {
+                log::warn!("task {task_id}: could not remove its Gemini folder: {e}");
             }
         }
         // Handed over once its folder is clean: the attempt that resumes the run works in the same folder.
@@ -230,6 +238,7 @@ impl HostRuntime {
         self.paths.work_dir.join(TASKS_DIR).join(format!("{:x}", Sha256::digest(scope)))
     }
 
+    #[cfg(test)]
     pub async fn run_task(&self, task: Task, cancel: CancellationToken) {
         self.run_task_attempt(task, cancel, None, None).await
     }
@@ -257,7 +266,7 @@ impl HostRuntime {
         // Events: forwarded in order by a consumer task so completion waits for them.
         let (sink, consumer) = self.forward_events(&task.id, task.started_at.clone());
 
-        let env = detect::runner_env(&task.agent, &self.agents.read().await, &child_env(&self.paths.home));
+        let env = detect::runner_env(&task.agent, &self.agents.read().await, &self.agent_env());
         let model = task.model.clone().or_else(|| self.models.get(&task.agent).cloned());
         // Persist the start before the CLI can have side effects. A dead desktop's unstarted claim can be resumed.
         let start = TaskEvent { task_id: Some(task.id.clone()), at: Some(now_iso()), kind: "log".into(), text: "Starting the editing agent.".into(), data: None };
@@ -351,7 +360,7 @@ impl HostRuntime {
         // A request's agent gets its harness's own tools, and launchers for the programs this machine has. An engine from
         // before them leaves `workspace` out, and the run has Scarlet's tools only, as it did.
         let workspace = if prompt.workspace {
-            Some(workspace::workspace_tools(&cwd, self.paths.resource_dir.as_deref(), &crate::util::env_map())?)
+            Some(workspace::workspace_tools(&cwd, self.paths.resource_dir.as_deref(), &child_env(&self.paths.home))?)
         } else {
             None
         };
