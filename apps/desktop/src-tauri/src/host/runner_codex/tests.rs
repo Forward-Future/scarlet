@@ -497,3 +497,24 @@ fn gives_a_request_its_shell_a_look_at_pictures_the_live_web_and_reads_of_its_pr
     assert!(side.args.contains(&"permissions.scarlet.network.enabled=false".to_string()));
 }
 
+#[test]
+fn links_codex_auth_files_into_an_isolated_home_and_replaces_stale_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let user_home = dir.path().join("user");
+    let run_home = dir.path().join("run");
+    std::fs::create_dir_all(&user_home).unwrap();
+    std::fs::create_dir_all(&run_home).unwrap();
+    let auth = user_home.join("auth.json");
+    std::fs::write(&auth, r#"{"token":"first"}"#).unwrap();
+
+    link_codex_auth_file(&auth, &run_home.join("auth.json"), false, false).unwrap();
+    link_codex_auth_file(&user_home.join("auth.lock"), &run_home.join("auth.lock"), true, false).unwrap();
+    assert_eq!(std::fs::read_to_string(run_home.join("auth.json")).unwrap(), r#"{"token":"first"}"#);
+
+    // Updating the user's auth file is immediately visible in the run's isolated home, and re-linking replaces cleanly.
+    std::fs::write(&auth, r#"{"token":"refreshed"}"#).unwrap();
+    assert_eq!(std::fs::read_to_string(run_home.join("auth.json")).unwrap(), r#"{"token":"refreshed"}"#);
+    link_codex_auth_file(&auth, &run_home.join("auth.json"), false, true).unwrap();
+    assert_eq!(std::fs::read_to_string(run_home.join("auth.json")).unwrap(), r#"{"token":"refreshed"}"#);
+}
+

@@ -57,6 +57,7 @@ fn main() {
             let _ = std::fs::write(&sidecar, b"");
         }
     }
+    println!("cargo:rerun-if-env-changed=SCARLET_RELEASE_CHANNEL");
     println!("cargo:rerun-if-changed=binaries");
     println!("cargo:rerun-if-changed=tauri.conf.json");
     tauri_build::build()

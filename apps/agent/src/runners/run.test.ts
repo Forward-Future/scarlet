@@ -1057,4 +1057,41 @@ describe("runAgent", () => {
     expect(() => runnerFor("api")).toThrow('no runner for agent "api"');
     await expect(runAgent({ ...base, agent: "api" })).rejects.toThrow('no runner for agent "api"');
   });
+
+  it.runIf(process.platform !== "win32")("retries Claude without unsupported optional flags and caches them per binary", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scarlet-claude-compat-"));
+    try {
+      const counts = join(dir, "counts");
+      const bin = join(dir, "old-claude");
+      const init = JSON.stringify({ type: "system", subtype: "init", session_id: "s1", model: "opus", mcp_servers: [{ name: "scarlet", status: "connected" }] });
+      const done = JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Trimmed it." });
+      await writeFile(bin, `#!/bin/sh
+echo x >> "${counts}"
+for arg in "$@"; do
+  if [ "$arg" = "--restricted" ]; then
+    echo "error: unknown option '--restricted'" >&2
+    exit 1
+  fi
+  if [ "$arg" = "--effort" ]; then
+    echo "error: unknown option '--effort'" >&2
+    exit 1
+  fi
+done
+printf '%s\\n' '${init}'
+printf '%s\\n' '${done}'
+`);
+      await chmod(bin, 0o755);
+      const first = await runClaude({ ...base, cwd: dir, bin, effort: "high" });
+      expect(first.ok).toBe(true);
+      expect(first.summary).toBe("Trimmed it.");
+      expect((await readFile(counts, "utf8")).trim().split("\n")).toHaveLength(3);
+
+      // Second run on the same binary skips the rejected flags on attempt 1.
+      const second = await runClaude({ ...base, cwd: dir, bin, effort: "high" });
+      expect(second.ok).toBe(true);
+      expect((await readFile(counts, "utf8")).trim().split("\n")).toHaveLength(4);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
