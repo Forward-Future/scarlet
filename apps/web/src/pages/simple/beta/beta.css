@@ -139,7 +139,7 @@
 [data-new-layout] .queue-reword[aria-pressed="true"] { background: var(--color-line); color: var(--color-fg); }
 
 /* Three-column edits rail between the chat and the video. */
-[data-new-layout] .review-rail { display: flex; flex-direction: column; flex: none; width: clamp(260px, 22vw, 320px); min-height: 0; border-right: 1px solid var(--color-line); background: var(--color-bg); }
+[data-new-layout] .review-rail { position: relative; display: flex; flex-direction: column; flex: none; width: clamp(260px, 22vw, 320px); min-height: 0; border-right: 1px solid var(--color-line); background: var(--color-bg); }
 [data-new-layout] .review-rail[hidden] { display: none; }
 [data-new-layout] .review-rail-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 54px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--color-line); }
 [data-new-layout] .review-rail-head h2 { display: flex; align-items: baseline; gap: 7px; margin: 0; font-size: 13px; font-weight: 600; color: var(--color-fg); }
@@ -165,7 +165,7 @@
 [data-new-layout] .review-low-body .simple-edit { color: var(--color-muted); }
 [data-new-layout] .review-low-body :is(.simple-pass-value, .simple-edit-value, .simple-pass-time, .simple-pass-check, .simple-edit-check, .edit-version, .edit-row-time) { color: var(--color-dim); }
 [data-new-layout] .edit-row-time { flex: none; justify-self: start; min-width: 30px; font-size: 11.5px; line-height: 17px; font-family: var(--font-mono, monospace); font-variant-numeric: tabular-nums; color: var(--color-dim); }
-[data-new-layout] .review-rail .simple-edits > li > button { grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; }
+[data-new-layout] .review-rail .simple-edits > li > button { grid-template-columns: minmax(38px, max-content) minmax(0, 1fr) auto; column-gap: 8px; }
 [data-new-layout] .review-rail :is(.simple-edits, .simple-pass-list) > li:has(> button.is-asking) > .subunit { display: none; }
 [data-new-layout] .review-rail :is(.simple-edits, .simple-pass-list) > li > button.is-asking-current:not(.is-on) { background: rgba(255, 255, 255, .07); border-radius: 8px; }
 [data-new-layout] .review-low-body .edit-badge { border-color: var(--color-dim); color: var(--color-muted); }
@@ -173,9 +173,27 @@
 [data-new-layout] .review-rail .simple-review-empty { padding: 8px 6px; }
 [data-new-layout] .review-rail .simple-review-rest { padding-left: 6px; }
 [data-new-layout] .review-rail :is(.simple-pass-list, .simple-edits) { max-height: none; overflow: visible; margin: 0; border-top: 0; }
-[data-new-layout] .review-rail .simple-edit { width: 100%; margin: 0; align-items: start; }
-[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) { white-space: normal; }
-[data-new-layout] .review-rail :is(.simple-edit-words, .simple-pass-words) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; }
+[data-new-layout] .review-rail .simple-edit { width: 100%; margin: 0; align-items: center; }
+[data-new-layout] .review-rail .simple-pass-list > li > button { align-items: center; }
+[data-new-layout] .review-rail :is(.simple-pass-time, .edit-row-time) { white-space: nowrap; }
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) { display: flex; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) > :is(.simple-pass-tick, .edit-version, .simple-pass-more) { flex: none; }
+[data-new-layout] .review-rail :is(.simple-edit, .simple-edit.is-on, .simple-pass-list > li > button, .simple-pass-list > li > button.is-on) :is(.simple-edit-words, .simple-pass-words) {
+  display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+[data-new-layout] .review-rail-tip {
+  position: fixed; z-index: 40; display: flex; flex-direction: column; gap: 3px;
+  width: max-content; max-width: min(400px, calc(100vw - 24px));
+  padding: 6px 10px; border: 1px solid var(--color-line); border-radius: 7px;
+  background: var(--color-raised); box-shadow: 0 4px 16px rgb(0 0 0 / 45%);
+  font-size: 12px; line-height: 1.4; font-weight: 400; color: var(--color-fg);
+  text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none;
+}
+[data-new-layout] .review-rail-tip-detail { color: var(--color-muted); }
+@media (prefers-reduced-motion: no-preference) {
+  [data-new-layout] .review-rail-tip { animation: review-rail-tip-in 90ms ease-out; }
+  @keyframes review-rail-tip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+}
 [data-new-layout] .review-rail .subunit { margin-left: 8px; }
 
 /* One-row in-line revision style everywhere inside the beta layout. */
