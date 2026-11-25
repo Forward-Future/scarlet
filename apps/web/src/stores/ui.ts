@@ -96,6 +96,7 @@ export function pointOf(context: AgentContext | "whole" | null | undefined) {
 const AGENT_KEY = "scarlet.agent";
 const RUN_TOKENS_KEY = "scarlet.runTokens";
 const NEW_LAYOUT_KEY = "scarlet.newLayout";
+const STYLE_GUIDES_KEY = "scarlet.styleGuides";
 const FIRST_EDIT_HINT_KEY = "scarlet.firstEditHint";
 const SIGN_IN_LATER_KEY = "scarlet.signInLater";
 
@@ -188,6 +189,10 @@ interface UiState {
   /** Try the new three-column workspace layout (Beta). Off by default unless turned on in Settings → General. */
   newLayout: boolean;
   setNewLayout(v: boolean): void;
+
+  /** Try Style guides (Beta): reusable visual styles with previews and @name mentions. Off by default. */
+  styleGuidesBeta: boolean;
+  setStyleGuidesBeta(v: boolean): void;
 
   /** Context pinned to the next agent instruction (from transcript span, note popover, etc). */
   draftOwner: string | null;
@@ -318,6 +323,15 @@ export const useUiStore = create<UiState>((set, get) => ({
       else localStorage.removeItem(NEW_LAYOUT_KEY);
     } catch { /* Keep the choice for this session. */ }
     set({ newLayout: v });
+  },
+
+  styleGuidesBeta: (() => { try { return localStorage.getItem(STYLE_GUIDES_KEY) === "1"; } catch { return false; } })(),
+  setStyleGuidesBeta: (v) => {
+    try {
+      if (v) localStorage.setItem(STYLE_GUIDES_KEY, "1");
+      else localStorage.removeItem(STYLE_GUIDES_KEY);
+    } catch { /* Keep the choice for this session. */ }
+    set({ styleGuidesBeta: v });
   },
 
   draftOwner: null,

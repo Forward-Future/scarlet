@@ -115,7 +115,10 @@ export function AppShell() {
     if (status !== "ready") return;
     let active = true;
     void api.settings().then(({ settings }) => {
-      if (active) useUiStore.getState().setDefaultAgent(settings.defaultAgent);
+      if (active) {
+        useUiStore.getState().setDefaultAgent(settings.defaultAgent);
+        useUiStore.getState().setStyleGuidesBeta(settings.styleGuidesBeta);
+      }
     }).catch(() => undefined);
     void useHostsStore.getState().load();
     void useProjectStore.getState().loadList();

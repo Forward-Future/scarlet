@@ -1,5 +1,5 @@
 import { z } from "zod/v3";
-import { ActivityEntry, AgentHost, Learning, QuickAction, Render, Skill, SkillVersion, Task, TaskEvent, type QueueTask } from "@scarlet/shared";
+import { ActivityEntry, AgentHost, Learning, QuickAction, Render, Skill, SkillVersion, StyleGuideRecord, Task, TaskEvent, type QueueTask } from "@scarlet/shared";
 import type { PriceLookup } from "./modelPrices.js";
 import { Author, Change, Note, Transcript } from "@scarlet/timeline";
 import { now, type Db } from "../db.js";
@@ -204,6 +204,12 @@ export function createRepos(db: Db, defaultProvider: DefaultProvider = "none", p
       updated_at: s.updatedAt ?? now(),
     })),
     skillVersions: new SkillVersionsRepo(db),
+    styleGuides: new JsonStore<StyleGuideRecord>(db, "style_guides", StyleGuideRecord, (s) => ({
+      name: s.name,
+      is_default: s.isDefault ? 1 : 0,
+      created_at: s.createdAt ?? now(),
+      updated_at: s.updatedAt ?? now(),
+    })),
     activity: new JsonStore<ActivityEntry>(db, "activity", ActivityEntry, (a) => ({
       project_id: a.projectId,
       type: a.type,

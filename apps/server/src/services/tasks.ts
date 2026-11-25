@@ -5,6 +5,7 @@ import {
   isLearningCheck,
   isProjectEditTask,
   isSkillEdit,
+  isStyleGuideEdit,
   planText,
   PROJECT_EDIT_TASK_KINDS,
   questionChoicesOf,
@@ -418,7 +419,7 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   const asked = saved.context.message ?? saved.instruction.split("\n").pop() ?? saved.instruction;
   // A learning check is Scarlet's own reading of a request. What it offers is in Learnings; the run itself is no one's news.
   if (!isLearningCheck(saved)) logActivity(ctx, {
-    projectId: isSkillEdit(saved) ? null : saved.projectId,
+    projectId: isSkillEdit(saved) || isStyleGuideEdit(saved) ? null : saved.projectId,
     actor: { type: "agent", id: saved.agent, name: saved.agent, model: saved.model },
     type: `request.${body.state}`,
     summary:
@@ -536,7 +537,7 @@ export function startBeforeCalls(ctx: Ctx, user: User, task: Task): Task {
  * it so: the instruction is built again the way it was when the request was sent, the note a revision or a new edit at
  * a point was sent as says it too, and the skills are the ones the new words name, as they'd be if sent so.
  */
-export function rewordTask(ctx: Ctx, user: User, task: Task, text: string, skillIds?: string[]): Task {
+export function rewordTask(ctx: Ctx, user: User, task: Task, text: string, skillIds?: string[], styleGuideIds?: string[]): Task {
   stillWaiting(task);
   const said = task.context.message ?? task.instruction;
   if (text === said) return holdForRewording(ctx, task, false);
@@ -547,7 +548,8 @@ export function rewordTask(ctx: Ctx, user: User, task: Task, text: string, skill
   const message = task.context.message !== undefined ? { message: text } : {};
   // Reworded, the request is the editor's own words: what the app had worded for them, such as an undo, no longer stands.
   const skills = skillIds?.length ? [...new Set(skillIds)] : undefined;
-  const saved = saveTask(ctx, { ...task, instruction, context: { ...task.context, ...message, skillIds: skills, asked: undefined,
+  const styleGuides = styleGuideIds?.length ? [...new Set(styleGuideIds)] : undefined;
+  const saved = saveTask(ctx, { ...task, instruction, context: { ...task.context, ...message, skillIds: skills, styleGuideIds: styleGuides, asked: undefined,
     ...(editsDialogue(task.kind) && { dialogueOperation: requestedDialogue(ctx, text) ?? "none", dialogueRange: undefined }) }, rewordingUntil: undefined });
   // The prompt quotes a request's notes beside its instruction, so a note left with the old words would ask them still.
   for (const id of task.kind === "revise" || task.kind === "note" ? task.context.noteIds ?? [] : []) {

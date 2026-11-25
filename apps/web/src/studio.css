@@ -707,6 +707,207 @@
   .skill-editor-body { display: block; overflow-y: auto; }
   .skill-chat { width: 100%; max-height: 50vh; border: 0; border-bottom: 1px solid var(--color-line); }
 }
+
+/* Style guides gallery and visual preview canvas */
+.style-guides-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 900px) { .style-guides-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 580px) { .style-guides-grid { grid-template-columns: 1fr; } }
+
+.style-guide-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  background: var(--color-panel);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+.style-guide-card:hover {
+  border-color: var(--color-muted);
+  background: var(--color-raised);
+}
+.style-guide-thumb {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  background: #101010;
+  border-bottom: 1px solid var(--color-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.style-guide-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.style-guide-thumb-empty {
+  font-size: 12px;
+  color: var(--color-dim);
+}
+.style-guide-card-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.style-guide-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.style-guide-slug {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.style-guide-default-badge {
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-raised);
+  border: 1px solid var(--color-line);
+  color: var(--color-fg);
+}
+.style-guide-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.style-guide-name-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+.style-guide-name-wrap .skill-name {
+  padding-left: 2px;
+}
+.style-guide-chat-empty {
+  padding: 20px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+.style-guide-msg-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.style-guide-msg-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  background: var(--color-bg);
+  font-size: 11.5px;
+  color: var(--color-muted);
+}
+.style-guide-preview-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: #101010;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  overflow: auto;
+}
+.style-guide-preview-stage {
+  width: 100%;
+  max-width: 960px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.style-guide-preview-frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  border: 1px solid var(--color-line);
+  background: #141414;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.style-guide-preview-frame.is-clickable {
+  cursor: zoom-in;
+  transition: border-color 140ms ease;
+}
+.style-guide-preview-frame.is-clickable:hover {
+  border-color: var(--color-muted);
+}
+.style-guide-preview-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.style-guide-preview-frame.is-empty {
+  border-style: dashed;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+}
+.style-guide-preview-placeholder-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-muted);
+}
+.style-guide-preview-placeholder-body {
+  font-size: 12.5px;
+  color: var(--color-dim);
+  max-width: 340px;
+}
+.style-guide-preview-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.style-guide-preview-caption {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--color-dim);
+  text-align: center;
+}
+.style-guide-lightbox {
+  background: #101010;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.style-guide-lightbox img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
 @media (max-width: 540px) {
   .media-row { gap: 7px 10px; }
   .media-jobs { flex-basis: 100%; }
