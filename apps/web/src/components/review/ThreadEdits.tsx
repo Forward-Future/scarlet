@@ -280,7 +280,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const checkTitle = revised || edit.reason ? undefined : edit.check;
       const isLeaving = !!leaving?.(edit);
       const showUnkeep = decided && !edit.marker && !isLeaving && unkeepRefs.length > 0;
-      const unkeepTip = edit.check ? "Move back to For you" : only ? "Move back to low risk" : "Unkeep";
+      const unkeepTip = edit.check ? "Move back to For you" : only ? "Move back to safe edits" : "Unkeep";
       return <Fragment key={editKey(edit)}><li className={[isLeaving && "is-leaving", showUnkeep && "has-unkeep"].filter(Boolean).join(" ") || undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
