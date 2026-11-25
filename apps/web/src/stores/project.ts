@@ -95,6 +95,12 @@ interface ProjectState {
   historyEdit(version: string, action: "revert" | "restore"): Promise<void>;
   /** Put back what applied edits the editor rejected changed, on the engine. Answers with the version it made. */
   rejectEdits(threadId: string, head: string, edits: Parameters<typeof api.rejectEdits>[1]["edits"]): Promise<string>;
+  /** Adjust an applied cut's edges directly on the engine. Answers with the version it made and whether the cut was removed whole. */
+  adjustCut(threadId: string, head: string, cut: Parameters<typeof api.adjustCut>[1]["cut"], removed: Parameters<typeof api.adjustCut>[1]["removed"]): Promise<{ version: string; rejected: boolean }>;
+  /** Adjust a non-cut applied edit's start/end edges directly on the engine (captions, overlays, zooms, dips, split edits). */
+  adjustEdit(threadId: string, head: string, edit: Parameters<typeof api.adjustEdit>[1]["edit"], nextRange: Parameters<typeof api.adjustEdit>[1]["nextRange"]): Promise<{ version: string; rejected: boolean }>;
+  /** Move one staged cut of a waiting dialogue pass directly, carrying over all other cuts and editor choices. */
+  reviseStagedCut(changeId: string, index: number, body: Parameters<typeof api.reviseStagedCut>[2]): Promise<{ change: Change; index: number }>;
   revise(changeId: string, body: Parameters<typeof api.reviseChange>[1]): Promise<Task | undefined>;
 
   requestRender(body: Partial<RenderRequest>): Promise<Render>;
@@ -690,6 +696,36 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       showRewritten(cur.id, project);
       void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return change.appliedVersion ?? change.toVersion;
+    },
+    async adjustCut(threadId, head, cut, removed) {
+      const cur = get().current;
+      if (!cur) throw new Error("No project is open.");
+      const { project, change } = await api.adjustCut(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, cut, removed });
+      replaceChange(change);
+      showRewritten(cur.id, project);
+      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      return { version: change.appliedVersion ?? change.toVersion, rejected: !!change.rejects };
+    },
+    async adjustEdit(threadId, head, edit, nextRange) {
+      const cur = get().current;
+      if (!cur) throw new Error("No project is open.");
+      const { project, change } = await api.adjustEdit(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edit, nextRange });
+      replaceChange(change);
+      showRewritten(cur.id, project);
+      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      return { version: change.appliedVersion ?? change.toVersion, rejected: !!change.rejects };
+    },
+    async reviseStagedCut(changeId, index, body) {
+      const res = await api.reviseStagedCut(changeId, index, body);
+      const cur = get().current;
+      if (cur && cur.id === res.change.projectId) {
+        patch(cur.id, d => ({
+          changes: upsert(d.changes.map(c => c.id === changeId && c.state === "ready" ? { ...c, state: "rejected" as const, replacedBy: res.change.id } : c), res.change),
+        }));
+      } else {
+        replaceChange(res.change);
+      }
+      return { change: res.change, index: res.index ?? index };
     },
     async revise(changeId, body) {
       const res = await logged("revision-created", api.reviseChange(changeId, body),

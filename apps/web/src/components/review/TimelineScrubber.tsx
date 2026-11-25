@@ -10,14 +10,16 @@ import { ScrubPreview, type HoverVideo } from "../player/ScrubPreview";
 import { TimelineRuler } from "./TimelineRuler";
 import { useTimelineZoom } from "./useTimelineZoom";
 import { FloatingScrubLoupe, type ScrubLens } from "./FloatingScrubLoupe";
+import { lengthLabel } from "../../lib/format";
 import { LOUPE_PX_PER_FRAME, lastFrameBefore, rangeEdges, useRangeSelect } from "./TimelineRange";
+import { useCutTrim, type CutAdjustOptions } from "./TimelineCutTrim";
 import type { ProgressFocus } from "../player/SimpleProgress";
 import { HeldStillsContext, MediaLanes, stripUrl, type FrameAt, type HeldStills, type PreviewStrip } from "./TimelineFilmstrip";
 import { bandLabel, dotState, gapAt, gapLabel, isPill, LANDING_PLAYS, layoutMarks, MARK_GAP, nearestMark, ZOOM_STEPS, type MarkLayout, type TimelineDot, type TimelineGap } from "./timelineMarkerLayout";
 import { TimelineClock, TimelineSlider } from "./TimelineSlider";
 
 export { gapAt };
-export type { TimelineDot, TimelineGap };
+export type { CutAdjustOptions, TimelineDot, TimelineGap };
 
 /** Hovering a chat row lights its marker without re-rendering the workspace. */
 export const EditHoverContext = createContext(createStore<number | undefined>(() => undefined));
@@ -56,6 +58,8 @@ interface TimelineScrubberProps {
   onGap?(gap: TimelineGap, time: number): void;
   /** A click inside the highlight's band, at the time it points to. It doesn't seek: the caller decides where to play it. */
   onBand?(time: number): void;
+  /** Hover-only edge drag handles on an open cut's band (applied cut or waiting call). Invisible at rest. */
+  cutAdjust?: CutAdjustOptions;
   /** Changes each time the caller asks for the whole timeline, which it then zooms out to. */
   fit?: number;
   /** The stretch the editor marked for the message they're writing, in this timeline's clock. */
@@ -110,7 +114,7 @@ export function TimelineScrubber(props: TimelineScrubberProps) {
 }
 
 function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, subject, kept, foot,
-  pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, typedTimes, gaps, skippedRanges, onGap, onBand, fit, range, onRange, onAddTime, fps = 30 }:
+  pictureAspect = 16 / 9, frameAt, previewStrip, hoverVideo, onSeek, onSelectTime, onScrubStart, highlight, marks, typedTimes, gaps, skippedRanges, onGap, onBand, cutAdjust, fit, range, onRange, onAddTime, fps = 30 }:
   TimelineScrubberProps & { subject: string; kept: RefObject<KeptView | undefined> }) {
   const litMark = useStore(useContext(EditHoverContext));
   // The message box's icon is open: the passage the message is about lights up.
@@ -152,7 +156,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   }, []);
   // Zoom to a highlighted change when it appears, and back out when it goes. The zoom stays free in between.
   const highlightView = highlight && highlight.view.end > highlight.view.start ? highlight.view : undefined;
-  const highlightKey = highlightView ? `${highlightView.start}/${highlightView.end}` : "";
+  const highlightKey = highlightView ? (highlight?.key ?? `${highlightView.start}/${highlightView.end}`) : "";
   // The timeline this one takes the place of, when all that changed is the working cut under it.
   const [carried] = useState(() => kept.current?.subject === subject && kept.current.highlight === highlightKey ? kept.current : undefined);
   const { view: { from, span }, samples, target, blend, minSpan, zoomBy, fitRange, stopZoom } = useTimelineZoom(track, start, total, playhead, drag, carried?.view);
@@ -386,6 +390,14 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   const sheet = useMemo(() => previewStrip ? { fps: previewStrip.fps, url: (frames: number[]) => stripUrl(previewStrip, frames) } : undefined, [previewStrip]);
   const marking = useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect, range, onRange: onRange ?? noRange, onSeek,
     onScrubStart, onPress: selectPosition, onShiftPress: onAddTime, beforeGesture: stopZoom });
+  const cutTrim = useCutTrim({ slider, drag, from, span, start, end, fps, band: highlight?.band, leaving: highlight?.leaving, cutAdjust, edges,
+    frameAt, sheet, pictureAspect, onSeek, onScrubStart, beforeGesture: stopZoom });
+  const activeBand = cutTrim.liveBand ?? highlight?.band;
+  const liveBandLabel = cutTrim.liveBand && cutAdjust?.bandPrefix
+    ? cutTrim.liveBand.end - cutTrim.liveBand.start <= 0.5 / fps ? (cutAdjust.removeLabel ?? "Put back") : `${cutAdjust.bandPrefix} · ${lengthLabel(cutTrim.liveBand.end - cutTrim.liveBand.start)}`
+    : highlight?.bandLabel;
+  const shownBandText = activeBand && liveBandLabel
+    ? bandLabel(liveBandLabel, (Math.min(100, percent(activeBand.end)) - Math.max(0, percent(activeBand.start))) * width / 100) : undefined;
   // The slider runs from the whole video, at its left, to the closest zoom, on a log scale so each step looks the same.
   const zoomRange = total > 0 && minSpan < total ? Math.log(total / minSpan) : 0;
   const zoomValue = zoomRange && shownSpan > 0 ? Math.round(Math.max(0, Math.min(1, Math.log(total / shownSpan) / zoomRange)) * ZOOM_STEPS) : 0;
@@ -411,7 +423,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   </div>;
 
   return <div className="timeline-panel" onKeyDown={e => handleZoomKey(e.nativeEvent)}>
-    <div ref={track} className={marking.marking ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview suspended={!!lens} start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || addNote || undefined} pin={waiting?.time}>
+    <div ref={track} className={marking.marking || cutTrim.active ? "timeline-track is-marking" : "timeline-track"}><ScrubPreview suspended={!!lens} start={from} duration={span} pictureAspect={pictureAspect} frameAt={frameAt} hoverVideo={hoverVideo} note={markNote || addNote || undefined} pin={waiting?.time}>
     <TimelineSlider ref={slider} className={hotGap ? "timeline-slider is-gap-aimed" : "timeline-slider"} playhead={playhead} start={start} end={end} from={from} span={span}
       width={width} zoomSpace={zoomSpace} drag={drag} skippedRanges={skippedRanges} loupe={!!lens} fps={fps} selectPosition={selectPosition} tabIndex={total ? 0 : -1} aria-disabled={!total}
       aria-label="Position in the video" aria-description="Drag up from the picture or waveform to scrub one frame at a time."
@@ -496,28 +508,29 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
           </div>;
         })}
       </div>
-      {highlight?.band && (highlight.band.end > highlight.band.start
+      {activeBand && (activeBand.end > activeBand.start
         // Panned or zoomed out of view, the band draws nothing: clamped to the edge it would leave a sliver that reads as a mark there.
-        ? highlight.band.end > from && highlight.band.start < to &&
+        ? activeBand.end > from && activeBand.start < to &&
           // Pointer only: the keyboard reaches Before with \.
-          <span aria-hidden="true" className={`simple-timeline-band${highlight.tone ? ` is-${highlight.tone}` : ""}${highlight.undecided ? " is-proposed" : ""}${onBand && !highlight.leaving ? " is-live" : ""}${aimLit ? " is-lit" : ""}${highlight.leaving ? " is-leaving" : ""}`} style={{ left: `${Math.min(100, Math.max(0, percent(highlight.band.start)))}%`,
-            width: `${Math.max(0, Math.min(100, percent(highlight.band.end)) - Math.max(0, percent(highlight.band.start)))}%` }}
+          <span aria-hidden="true" className={`simple-timeline-band${highlight?.tone ? ` is-${highlight.tone}` : ""}${highlight?.undecided ? " is-proposed" : ""}${onBand && !highlight?.leaving ? " is-live" : ""}${aimLit ? " is-lit" : ""}${highlight?.leaving ? " is-leaving" : ""}${cutTrim.active ? " is-trimming" : ""}`} style={{ left: `${Math.min(100, Math.max(0, percent(activeBand.start)))}%`,
+            width: `${Math.max(0, Math.min(100, percent(activeBand.end)) - Math.max(0, percent(activeBand.start)))}%` }}
             onPointerDown={onBand ? e => {
               if (e.button !== 0 || !e.isPrimary || drag.current) return;
               // The playing side steps over this footage, so a click goes to the caller instead of starting a scrub.
               e.stopPropagation();
-              onBand(pressedTimeIn(e.clientX, highlight.band!));
+              onBand(pressedTimeIn(e.clientX, activeBand));
             } : undefined}>
-            {bandText && <span>{bandText}</span>}</span>
-        : highlight.band.start >= from && highlight.band.start <= to &&
-          <span aria-hidden="true" className={`simple-timeline-cut${highlight.tone ? ` is-${highlight.tone}` : ""}${highlight.undecided ? " is-proposed" : ""}${highlight.leaving ? " is-leaving" : ""}`} style={{ left: `${percent(highlight.band.start)}%` }}>
-            {highlight.bandLabel && <span>{highlight.bandLabel}</span>}</span>)}
+            {(shownBandText ?? bandText) && <span>{shownBandText ?? bandText}</span>}</span>
+        : activeBand.start >= from && activeBand.start <= to &&
+          <span aria-hidden="true" className={`simple-timeline-cut${highlight?.tone ? ` is-${highlight.tone}` : ""}${highlight?.undecided ? " is-proposed" : ""}${highlight?.leaving ? " is-leaving" : ""}`} style={{ left: `${percent(activeBand.start)}%` }}>
+            {liveBandLabel && <span>{liveBandLabel}</span>}</span>)}
       {gapNodes}
       {markLayout.length > 0 && <div aria-hidden="true" className={aimed ? "simple-timeline-hover is-aimed" : "simple-timeline-hover"}
         onPointerMove={hoverMark} onPointerLeave={() => { setHotMark(undefined); setAimed(false); }} onPointerDown={pressMark} />}
       {markNodes}
       {typedTimes?.filter(time => time >= from && time <= to).map(time =>
         <span key={time} className="timeline-message-time" aria-hidden="true" data-time={time} style={{ left: `${percent(time)}%` }} />)}
+      {cutTrim.layer}
       {marking.layer}
       {lens && <FloatingScrubLoupe lens={lens} first={firstFrame} last={lastFrame} fps={fps}
         frameAt={frameAt} sheet={sheet} pictureAspect={pictureAspect} />}

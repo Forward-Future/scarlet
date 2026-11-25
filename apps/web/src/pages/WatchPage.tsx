@@ -31,7 +31,7 @@ import { AmbientLight } from "../components/player/AmbientLight";
 import { cutFrameUrl, interactiveFrameUrl, scrubFrameUrl } from "../components/review/thumbs";
 import { EditBeforePreview, useEditBefore, type BeforePlayback } from "../components/review/EditBeforePreview";
 import { useApprovalComparison } from "../components/review/SideBySideComparison";
-import { PlayerTimeline, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
+import { PlayerTimeline, type CutAdjustOptions, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
 import { BeforeToggle } from "../components/review/BeforeToggle";
 import type { CutPlaybackWindow, PreparedCut } from "../components/review/usePrepareNextCut";
 import { FramingPreview } from "../components/review/FramingPreview";
@@ -115,6 +115,8 @@ interface PreviewProps {
     passageSkips?: TimeRange[];
     /** A click inside the shaded passage, when the playing side steps over it. */
     onBand?(time: number): void;
+    /** Hover-only edge drag on an open cut's band. */
+    cutAdjust?: CutAdjustOptions;
     /** Timeline navigation offers the point to the composer. N attaches it explicitly. */
     onPick?(point: AgentContext, how: "seek" | "n" | "pause" | "add"): void;
     /** Shift + click inserts a time and Shift + drag marks a stretch anywhere on the timeline (beta layout). */
@@ -733,7 +735,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? laneTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             onAddTime={simple.shiftTimes && simple.onPick ? time => { seekFull(time); selectTime(time, "add"); } : undefined}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}
-            typedTimes={simple.typedTimes} marks={simple.marks} fit={simple.fit} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
+            typedTimes={simple.typedTimes} marks={simple.marks} fit={simple.fit} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand} cutAdjust={simple.cutAdjust}
             highlight={simple.focus ?? (selectedEdit ? editFocus(selectedEdit, duration) : undefined)} />
         </div>
       </div>}
