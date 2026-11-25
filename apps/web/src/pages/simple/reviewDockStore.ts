@@ -1,6 +1,6 @@
 import { createContext, useContext, useSyncExternalStore } from "react";
 import type { ThreadEdit } from "@scarlet/shared";
-import { inListOrder, rowsOfTab, tabShown, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
+import { inListOrder, rowBeside, rowsOfTab, tabShown, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
 import type { HoveredReviewRow, Nest, OpenList } from "./types";
 
 /** One row inside the fixed bottom review dock: a cut/edit, a pass call, a rejected edit, or a decided call. */
@@ -48,6 +48,8 @@ export interface DockRow {
   dataLogLabel: string;
   callIndex?: number;
   edit?: Omit<ThreadEdit, "at">;
+  /** True when `edit` belongs to this thread's own changes (not an elsewhere flag or unrelated fallback). */
+  owns?: boolean;
   /** All edits represented by this row (a grouped multi-place edit or moment), for Keep confident. */
   edits?: readonly Omit<ThreadEdit, "at">[];
   /** 1-based position in its thread's edits list, for action logging when stepping with ↑ / ↓. */
@@ -89,6 +91,8 @@ export interface DockThreadReport {
   /** True when a single-edit unflagged thread is currently showing its edit card. */
   singleOpen: boolean;
   onCloseSingle?: () => void;
+  /** True once this thread's live edit list has settled (so initial saved → located arrival won't linger rows). */
+  listLoaded?: boolean;
   passApplying?: boolean;
   passError?: string;
   onRetryPass?: () => void;
@@ -120,10 +124,41 @@ function sameReport(a: DockThreadReport | undefined, b: DockThreadReport): boole
   if (!a) return false;
   if (a.isPass !== b.isPass || a.hasCalls !== b.hasCalls || a.hasForYou !== b.hasForYou || a.need !== b.need
     || a.allOpen !== b.allOpen || a.allLabel !== b.allLabel || a.soFar !== b.soFar || a.onlyRejected !== b.onlyRejected
-    || a.singleOpen !== b.singleOpen || a.passApplying !== b.passApplying || a.passError !== b.passError
+    || a.singleOpen !== b.singleOpen || a.listLoaded !== b.listLoaded || a.passApplying !== b.passApplying || a.passError !== b.passError
     || a.entries.length !== b.entries.length) return false;
   for (let i = 0; i < a.entries.length; i++) if (!sameEntry(a.entries[i]!, b.entries[i]!)) return false;
   return true;
+}
+
+const PLACE_RANK: Record<RowPlace, number> = { you: 4, working: 3, done: 2, optional: 1 };
+
+function entryEditId(entry: DockEntry): string | undefined {
+  if (entry.row.callIndex !== undefined || entry.members?.length) return undefined;
+  const e = entry.row.edit;
+  return e ? `${e.changeId}:${e.spot}` : undefined;
+}
+
+/**
+ * When a later request flags an edit made by an earlier request (`elsewhere: true`), both threads report that
+ * `(changeId, spot)`. Keep a single entry across the merged dock, preferring active review states over `optional`.
+ */
+export function dedupeDockEntries(entries: readonly DockEntry[]): DockEntry[] {
+  const best = new Map<string, DockEntry>();
+  for (const entry of entries) {
+    const id = entryEditId(entry);
+    if (!id) continue;
+    const prev = best.get(id);
+    if (!prev || PLACE_RANK[entry.place] > PLACE_RANK[prev.place]
+      || (PLACE_RANK[entry.place] === PLACE_RANK[prev.place]
+        && ((entry.row.needs && !prev.row.needs)
+          || (entry.row.needs === prev.row.needs && entry.row.owns && !prev.row.owns)))) {
+      best.set(id, entry);
+    }
+  }
+  return entries.filter(entry => {
+    const id = entryEditId(entry);
+    return !id || best.get(id) === entry;
+  });
 }
 
 /**
@@ -218,12 +253,6 @@ export class ReviewDockStore {
     return this.orderedReports(threadIds).find(r => !r.hasForYou && r.allOpen);
   }
 
-  /** A thread without review tabs explicitly showing in the dock ("See all" or an open single edit via "See edit"). */
-  explicitReport(threadIds: readonly string[]): DockThreadReport | undefined {
-    const ordered = this.orderedReports(threadIds);
-    return ordered.find(r => !r.hasForYou && r.allOpen) ?? ordered.find(r => !r.hasForYou && r.singleOpen);
-  }
-
   // Live handler dispatchers: `sameReport` skips re-rendering ReviewDock when only handler closures refresh,
   // so ReviewDock invokes handlers through the store to always reach the latest render's closures.
   openRow(threadId: string, entryKey: string) {
@@ -262,34 +291,109 @@ export class ReviewDockStore {
     this.reports.get(threadId)?.onRowHover(mark, hover);
   }
 
-  /** All entries across threads that have review tabs (For you / Working / Done), ordered by timeline time. */
+  /** All entries across all threads, deduplicated by edit identity and ordered by timeline time. */
   allEntries(threadIds: readonly string[]): DockEntry[] {
-    const raw = this.orderedReports(threadIds).filter(r => r.hasForYou).flatMap(r => r.entries);
+    const raw = dedupeDockEntries(this.orderedReports(threadIds).flatMap(r => r.entries));
     return inListOrder(raw, { numbers: false });
+  }
+
+  /**
+   * Priority-ordered For you entries: flagged/waiting rows first (timeline order), followed by
+   * confident/unflagged rows when `showAll` is true (newest request first, timeline order within each request).
+   */
+  priorityForYou(threadIds: readonly string[], showAll: boolean): DockEntry[] {
+    const ordered = this.orderedReports(threadIds);
+    const deduped = dedupeDockEntries(ordered.flatMap(r => r.entries));
+    const allowed = new Set(deduped.map(e => e.key));
+    const waiting = inListOrder(
+      deduped.filter(e => e.place === "you"),
+      { numbers: false },
+    );
+    if (!showAll) return waiting;
+    const confident = [...ordered].reverse().flatMap(r =>
+      inListOrder(r.entries.filter(e => e.place === "optional" && allowed.has(e.key)), { numbers: false }),
+    );
+    return [...waiting, ...confident];
+  }
+
+  /** All confident (unflagged, undecided) edits grouped by thread, for Keep confident + Undo. */
+  confidentEdits(threadIds: readonly string[]): Array<{ threadId: string; refs: Omit<ThreadEdit, "at">[] }> {
+    const ordered = this.orderedReports(threadIds);
+    const allowed = new Set(dedupeDockEntries(ordered.flatMap(r => r.entries)).map(e => e.key));
+    const out: Array<{ threadId: string; refs: Omit<ThreadEdit, "at">[] }> = [];
+    for (const rep of [...ordered].reverse()) {
+      const refs: Omit<ThreadEdit, "at">[] = [];
+      for (const entry of rep.entries) {
+        if (entry.place !== "optional" || !allowed.has(entry.key)) continue;
+        if (entry.row.edits?.length) refs.push(...entry.row.edits);
+        else if (entry.members?.length) {
+          for (const m of entry.members) if (m.edit) refs.push(m.edit);
+        } else if (entry.row.edit) refs.push(entry.row.edit);
+      }
+      if (refs.length) out.push({ threadId: rep.threadId, refs });
+    }
+    return out;
   }
 
   /** Navigable entries currently shown in the active tab of the docked tabbed view, top to bottom. */
   tabNavigable(threadIds: readonly string[], dockList: OpenList): DockEntry[] {
-    const all = this.allEntries(threadIds);
     const tab: ReviewTab = tabShown(dockList);
-    const optionalOpen = dockList === "all";
-    return rowsOfTab(all, tab, optionalOpen, { numbers: false })
+    if (tab === "you") {
+      const waiting = this.priorityForYou(threadIds, false);
+      const showAll = dockList !== "need" || waiting.length === 0;
+      return this.priorityForYou(threadIds, showAll)
+        .filter(e => !e.row.rejected && !!(e.row.stepOpen ?? e.row.open));
+    }
+    const all = this.allEntries(threadIds);
+    return rowsOfTab(all, tab, false, { numbers: false })
       .filter(e => !e.row.rejected && !!(e.row.stepOpen ?? e.row.open));
   }
 
-  /** Waiting ("For you") entries that still need a decision, ordered by timeline time. */
+  /** Waiting ("For you") entries that still need a decision or an answer, ordered by timeline time. */
   waitingEntries(threadIds: readonly string[]): DockEntry[] {
-    return rowsOfTab(this.allEntries(threadIds), "you", false, { numbers: false })
+    return this.priorityForYou(threadIds, false)
       .filter(e => (e.row.needs || e.row.asks) && !e.row.rejected && !!e.row.open);
   }
 
-  /** Entries stepped through by Keep when low-risk edits are included (waiting + optional), ordered by timeline time. */
-  keepEntries(threadIds: readonly string[], includeLowRisk: boolean): DockEntry[] {
+  /** Entries stepped through by Keep in the Priority list: waiting rows first, then confident rows when included. */
+  keepEntries(threadIds: readonly string[], includeConfident: boolean): DockEntry[] {
     const waiting = this.waitingEntries(threadIds);
-    if (!includeLowRisk) return waiting;
-    return rowsOfTab(this.allEntries(threadIds), "you", true, { numbers: false })
+    if (!includeConfident) return waiting;
+    return this.priorityForYou(threadIds, true)
       .filter(e => !e.row.rejected && !!e.row.open && (e.place === "optional" || e.row.needs || e.row.asks));
   }
+}
+
+/**
+ * Step ↑ (-1) or ↓ (+1) through `nav` (Priority-ordered on For you: flagged rows in timeline order,
+ * followed by confident rows newest-request-first). When `current` is in `nav`, steps strictly by index;
+ * when `current` left `nav` (e.g. just rejected or from another tab), stays aligned with its tier.
+ */
+export function stepInDock(
+  nav: readonly DockEntry[],
+  current: DockEntry | undefined,
+  where: { at: number; threadId?: string; tier?: "you" | "optional" },
+  delta: number,
+): DockEntry | undefined {
+  const here = current ? nav.indexOf(current) : -1;
+  if (here >= 0) return nav[here + delta];
+  if (!nav.length) return undefined;
+  if (where.tier && nav.every(e => e.place === "you" || e.place === "optional")) {
+    if (where.tier === "you") {
+      const you = nav.filter(e => e.place === "you");
+      return delta > 0
+        ? you.find(e => e.at >= where.at) ?? nav.find(e => e.place === "optional")
+        : you.findLast(e => e.at < where.at);
+    }
+    const opt = nav.filter(e => e.place === "optional");
+    if (!opt.length) return delta < 0 ? nav.at(-1) : undefined;
+    const sameThread = where.threadId ? opt.filter(e => e.threadId === where.threadId) : opt;
+    const pool = sameThread.length ? sameThread : opt;
+    const pick = delta > 0 ? pool.find(e => e.at >= where.at) : pool.findLast(e => e.at < where.at);
+    if (pick) return pick;
+    return delta > 0 ? nav[nav.indexOf(pool.at(-1)!) + 1] : nav[nav.indexOf(pool[0]!) - 1];
+  }
+  return rowBeside(nav, undefined, { at: where.at }, delta, { numbers: false });
 }
 
 export const ReviewDockContext = createContext<ReviewDockStore | undefined>(undefined);

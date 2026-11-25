@@ -123,6 +123,10 @@ export interface UnifiedRailRow extends RailRow {
   key: string;
   section: RailSection;
   sourceOrder: number;
+  /** Newest request index among all rows combined into this row (drives newest-request-first ordering in Confident edits). */
+  latestThreadOrder: number;
+  /** All thread IDs contributing to this row (for Show → jumping and flashing). */
+  threadIds: readonly string[];
   /** Underlying single-thread rows in chronological order (oldest first, newest last). */
   rows: readonly RailRow[];
 }
@@ -234,6 +238,8 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
       ...only,
       key: `${only.threadId}:${only.key}`,
       section: placeToSection(only.place),
+      latestThreadOrder: only.threadOrder,
+      threadIds: [only.threadId],
       rows: [only],
     };
   }
@@ -273,6 +279,8 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
     place,
     section,
     sourceOrder: lead.sourceOrder,
+    latestThreadOrder: Math.max(...group.map(r => r.threadOrder)),
+    threadIds: [...new Set(group.map(r => r.threadId))],
     rows: group,
     value,
     word,
@@ -302,6 +310,14 @@ const byVideoTime = (a: UnifiedRailRow, b: UnifiedRailRow) =>
   a.at - b.at
   || a.displayAt - b.displayAt
   || (a.threadId === b.threadId ? a.sourceOrder - b.sourceOrder : b.threadOrder - a.threadOrder)
+  || a.key.localeCompare(b.key);
+
+/** Confident edits surface newest requests first so newly generated batches appear immediately at the top, ordered by video time within each request. */
+const byNewestRequestThenTime = (a: UnifiedRailRow, b: UnifiedRailRow) =>
+  b.latestThreadOrder - a.latestThreadOrder
+  || a.at - b.at
+  || a.displayAt - b.displayAt
+  || a.sourceOrder - b.sourceOrder
   || a.key.localeCompare(b.key);
 
 /**
@@ -370,7 +386,7 @@ export function buildUnifiedRail(infos: ReadonlyMap<string, RailInfo>): RailView
   }
 
   sections.you.sort(byVideoTime);
-  sections.low.sort(byVideoTime);
+  sections.low.sort(byNewestRequestThenTime);
   sections.working.sort(byVideoTime);
   sections.done.sort(byVideoTime);
 

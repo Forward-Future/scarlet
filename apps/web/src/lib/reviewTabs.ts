@@ -113,6 +113,8 @@ export class ReviewLinger {
    * it is kept here for the way back: For you pressed leaves the switch as it was.
    */
   lowRisk = false;
+  /** Whether For you's "Needs you" filter pill was active when For you was last shown, kept across Working/Done switches. */
+  needsOnly = false;
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.version;

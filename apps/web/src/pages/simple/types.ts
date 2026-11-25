@@ -160,6 +160,8 @@ export interface ChatActions {
   callTime?(changeId: string, cutIndex: number): number | undefined;
   /** Open Learnings with this rule in view, from the line under the request it came from. */
   reviewLearning?(learningId: string): void;
+  /** Reveal and jump to this request's edits in the review list (Priority list rail or bottom dock). */
+  showThread?(threadId: string): void;
 }
 
 /**

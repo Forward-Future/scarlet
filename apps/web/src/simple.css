@@ -462,8 +462,26 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-tab[aria-pressed="true"] { border-bottom-color: var(--color-fg); color: var(--color-fg); }
 .simple-review-tab[aria-pressed="true"]:has(.simple-review-tab-count) { border-bottom-color: var(--color-warn); }
 .simple-review-tab-count { color: var(--color-warn); font-variant-numeric: tabular-nums; }
+.simple-review-tab-total { color: var(--color-dim); font-weight: 500; font-variant-numeric: tabular-nums; }
+.simple-review-tab-sep { color: var(--color-dim); font-weight: 400; }
 /* Working's and Done's counts are quiet: only what waits on the editor is amber. */
 .simple-review-tab-tally { color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.simple-review-tabs > .review-head-keep { margin-left: auto; align-self: center; height: 22px; padding: 0 2px; border: 0; border-radius: 5px; background: none;
+  color: var(--color-muted); font: inherit; font-size: 11.5px; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; white-space: nowrap; cursor: pointer; }
+.simple-review-tabs > .review-head-keep:is(:hover, :focus-visible) { color: var(--color-fg); text-decoration-color: var(--color-muted); }
+/* Priority list filter strip and subtle tier divider in the bottom dock. */
+.simple-review-dock .review-filter-bar { display: flex; flex: none; align-items: center; gap: 6px; padding: 0 0 8px; flex-wrap: wrap; }
+.simple-review-dock .review-filter-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border: 1px solid var(--color-line); border-radius: 999px;
+  background: none; color: var(--color-muted); font: inherit; font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap; }
+.simple-review-dock .review-filter-chip:is(:hover, :focus-visible) { border-color: var(--color-dim); color: var(--color-fg); }
+.simple-review-dock .review-filter-chip[aria-pressed="true"] { border-color: var(--color-muted); background: var(--color-raised); color: var(--color-fg); }
+.simple-review-dock .review-filter-chip.is-warn[aria-pressed="true"] { border-color: rgba(237, 194, 133, .55); background: rgba(237, 194, 133, .14); color: var(--color-warn); }
+.simple-review-dock .review-filter-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--color-warn); flex: none; }
+.simple-review-dock .review-tier-sep { display: flex; align-items: center; margin: 7px 8px 4px; padding-top: 7px; border-top: 1px solid var(--color-line);
+  font-size: 11.5px; font-weight: 500; color: var(--color-dim); font-variant-numeric: tabular-nums; list-style: none; }
+.simple-review-dock .simple-pass-list > li[data-low-risk] > button:not(.is-on) { color: var(--color-muted); }
+.simple-review-dock .simple-pass-list > li[data-low-risk] > button:not(.is-on) :is(.simple-pass-time, .simple-pass-value) { color: var(--color-dim); }
+.simple-review-dock .simple-pass-list > li[data-flash] > button { background: rgba(255, 255, 255, .07); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2); }
 /* Over For you's rows, one quiet line for the edits Scarlet didn't flag: a small switch and their count, which
    includes them in For you's list. */
 .simple-low-risk { display: flex; flex: none; align-items: center; gap: 8px; min-height: 28px; margin: 0 0 4px; color: var(--color-muted); font-size: 12.5px; }
