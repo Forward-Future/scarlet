@@ -613,6 +613,68 @@
 .settings-page form[data-unsaved] button[type="submit"]:focus,
 .skill-editor-toolbar[data-unsaved] > .btn-primary[data-esc-focus]:focus,
 .skill-chat .composer-send[data-esc-focus]:focus { outline: 2px solid var(--color-muted); outline-offset: 2px; }
+.diag-card { container-type: inline-size; }
+.diag-rows { display: grid; }
+.diag-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 6px 16px;
+  align-items: start;
+  padding: 11px 0;
+  border-top: 1px solid color-mix(in srgb, var(--color-line) 60%, transparent);
+}
+.diag-row-center { align-items: center; }
+.diag-row > dt { font-size: 12.5px; line-height: 20px; color: var(--color-muted); }
+.diag-row > dd { min-width: 0; }
+.diag-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; min-height: 20px; }
+.diag-status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--color-fg); }
+.diag-host-name { color: var(--color-muted); font-size: 12.5px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diag-host-name::before { content: "·"; margin-right: 8px; color: var(--color-dim); opacity: .7; }
+.diag-meta { display: inline-flex; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.diag-meta code { font-size: 11.5px; color: var(--color-muted); }
+.diag-meta > * + *::before { content: "·"; margin: 0 7px; color: var(--color-dim); opacity: .7; }
+.diag-activity { font-size: 12px; color: var(--color-dim); overflow-wrap: anywhere; }
+.diag-activity code { font-size: 11.5px; color: var(--color-muted); }
+.diag-providers { display: grid; gap: 6px; }
+.diag-providers li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; min-height: 20px; }
+.diag-provider-name { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; color: var(--color-fg); }
+.diag-version { font-family: var(--font-mono); font-size: 11px; color: var(--color-dim); font-variant-numeric: tabular-nums; }
+.diag-provider-auth { font-size: 12px; color: var(--color-muted); }
+.diag-path { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11.5px; color: var(--color-muted); user-select: text; }
+.diag-card .btn-ghost { min-height: 26px; padding: 3px 10px; border-radius: 7px; font-size: 12px; color: var(--color-muted); }
+.diag-card .btn-ghost:hover { color: var(--color-fg); }
+.diag-disclosure { border-top: 1px solid color-mix(in srgb, var(--color-line) 60%, transparent); }
+.diag-disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  margin: 4px -8px -6px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-dim);
+  list-style: none;
+  cursor: pointer;
+}
+.diag-disclosure > summary::-webkit-details-marker { display: none; }
+.diag-disclosure > summary:hover { color: var(--color-fg); background: var(--color-raised); }
+.diag-disclosure > summary svg { flex: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .diag-disclosure > summary svg { transition: transform 120ms ease; }
+}
+.diag-disclosure[open] > summary { margin-bottom: 0; color: var(--color-muted); }
+.diag-disclosure[open] > summary svg { transform: rotate(90deg); }
+.diag-details { display: grid; gap: 8px; margin-top: 8px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, var(--color-line) 45%, transparent); }
+.diag-detail-row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 2px 16px; align-items: baseline; font-size: 12px; }
+.diag-detail-row dt { color: var(--color-dim); }
+.diag-detail-row dd { min-width: 0; }
+.diag-detail-row code { font-family: var(--font-mono); font-size: 11px; color: var(--color-muted); overflow-wrap: anywhere; user-select: text; }
+@container (max-width: 520px) {
+  .diag-row, .diag-detail-row { grid-template-columns: minmax(0, 1fr); }
+}
 .tool-settings { margin-top: 28px; }
 .tool-setting-row { padding: 12px 14px; }
 .tool-inventory { font-size: 12px; }
