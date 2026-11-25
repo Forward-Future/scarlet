@@ -27,6 +27,7 @@ export type ScarletApi = Pick<
   | "deleteProject"
   | "media"
   | "uploadMedia"
+  | "expandMediaPaths"
   | "importMedia"
   | "removeMedia"
   | "setMediaAudioTrack"

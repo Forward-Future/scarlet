@@ -12,7 +12,7 @@ import type { ThreadEdit } from "./threadEdits.js";
 import type { StorageCleanup, StorageProject } from "./storage.js";
 import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, DialogueDetections, SourceAudioRequest, SoundPictureRequest, SoundPictureLayout, SheetRequest, TimelinePicturesRequest, InspectionReviewRequest, InspectionResult, PictureActivityRequest, PictureActivityWindow, RepeatAuditRequest, RepeatAuditResult } from "./inspection.js";
 import type { AudioTrackSelection, Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
-import type { ActivityEntry, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
+import type { ActivityEntry, ExpandMediaPathsResponse, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
 import type { AgentHost, RunChoice } from "./agents.js";
 import type { CompleteTaskRequest, CreateTaskRequest, PictureMarks, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
 import type { KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
@@ -194,6 +194,9 @@ export class ScarletClient extends ClientTransport {
     fd.append("file", file, name);
     appendFields(fd, { kind, provenance: provenance ? JSON.stringify(provenance) : undefined });
     return this.post<{ media: MediaAsset }>(`/projects/${projectId}/media`, fd);
+  }
+  expandMediaPaths(paths: string[], signal?: AbortSignal) {
+    return this.request<ExpandMediaPathsResponse>("POST", "/media/expand-paths", { paths }, { signal });
   }
   importMedia(projectId: string, body: { path?: string; url?: string; kind?: string; importId?: string; deferFormat?: boolean }, signal?: AbortSignal) {
     return this.request<{ media: MediaAsset }>("POST", `/projects/${projectId}/media/import`, body, { signal });

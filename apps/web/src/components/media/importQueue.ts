@@ -1,8 +1,9 @@
 import { create } from "zustand";
-import { importLinkFilename, type ProjectSummary } from "@scarlet/shared";
+import { importLinkFilename, ScarletApiError, type ProjectSummary } from "@scarlet/shared";
 import type { MediaAsset } from "@scarlet/timeline";
 import { appLog } from "../../lib/appLog";
 import { api, engineUnavailable, errorMessage } from "../../lib/client";
+import { expandDroppedPaths } from "../../lib/expandMediaPaths";
 import { canResumeFirstClip, matchAddedClip, resumeFirstClip, type FormatMatch } from "../../lib/firstClipFormat";
 import { fileBaseName } from "../../lib/format";
 import { addPendingImports, isLink, markImportStarted, pendingImports, projectsWithPendingImports, removePendingImport, retryInterruptedImport, type PendingImport } from "../../lib/pendingImports";
@@ -78,6 +79,13 @@ function dismiss(projectId: string, id: number) {
   update(projectId, state => ({ items: state.items.filter(item => item.id !== id) }));
 }
 
+function reportErrors(projectId: string, entries: Array<{ name: string; error: string }>) {
+  if (!entries.length) return;
+  update(projectId, state => ({
+    items: [...state.items, ...entries.map(({ name, error }) => ({ id: seq++, name, progress: 0, state: "error" as const, error }))],
+  }));
+}
+
 /**
  * Each project's queue outlives its screen. Read one original at a time in selection order. `matchFormat` comes
  * with a new project's first files, which are remembered as such so a quit doesn't lose the match. The format
@@ -101,8 +109,10 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
   appLog("import", "queued", { project: projectId, count: sources.length, uploads: sources.length - paths.length,
     links: paths.filter(isLink).length, first: !!matchFormat });
   update(projectId, state => ({ pending: state.pending + sources.length }));
+  const remaining = [...sources];
   const job = (queues.get(projectId) ?? Promise.resolve()).then(async () => {
-    for (const source of sources) {
+    while (remaining.length) {
+      const source = remaining.shift()!;
       const id = seq++;
       const name = filename(source);
       const patch = (changes: Partial<UploadItem>) => update(projectId, state => ({
@@ -110,6 +120,8 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
       }));
       const download = typeof source === "string" && isLink(source) ? new AbortController() : undefined;
       let keepPending = typeof source === "string" && disconnected.has(projectId);
+      let expandedCount = 0;
+      let wasDirectory = false;
       try {
         if (keepPending) continue;
         let media: MediaAsset;
@@ -141,6 +153,35 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
         }
       } catch (error) {
         if (download?.signal.aborted) continue;
+        // If a folder path reached the import route directly (e.g. resumed from an older session), expand it in place.
+        if (typeof source === "string" && error instanceof ScarletApiError && error.code === "path_is_directory") {
+          wasDirectory = true;
+          try {
+            const expanded = await expandDroppedPaths([source]);
+            const fresh = expanded.files.filter(file => {
+              if (file === source) return false;
+              const key = queueKey(projectId, file);
+              if (queued.has(key)) return false;
+              queued.add(key);
+              return true;
+            });
+            if (fresh.length) {
+              addPendingImports(projectId, fresh, !!matchFormat);
+              remaining.unshift(...fresh);
+              expandedCount = fresh.length;
+            } else if (expanded.emptyFolders.length) {
+              update(projectId, state => ({ items: [...state.items.filter(item => item.id !== id),
+                { id, name, progress: 0, state: "error", error: `No video files found in “${name}”.` }] }));
+            } else if (expanded.folders === 0) {
+              update(projectId, state => ({ items: [...state.items.filter(item => item.id !== id),
+                { id, name, progress: 0, state: "error", error: errorMessage(error) }] }));
+            }
+          } catch (expandError) {
+            update(projectId, state => ({ items: [...state.items.filter(item => item.id !== id),
+              { id, name, progress: 0, state: "error", error: errorMessage(expandError) }] }));
+          }
+          continue;
+        }
         if (typeof source === "string" && engineUnavailable(error)) {
           disconnected.set(projectId, id);
           keepPending = retryInterruptedImport(projectId, source);
@@ -156,7 +197,14 @@ export function enqueueImports(projectId: string, sources: ImportSource[], match
           else if (!arrived.includes(source)) removePendingImport(projectId, source);
           queued.delete(queueKey(projectId, source));
         }
-        update(projectId, state => ({ pending: state.pending - 1, ended: state.pending > 1 ? state.ended + 1 : 0, localImport: null }));
+        update(projectId, state => {
+          const nextPending = state.pending - 1 + expandedCount;
+          return {
+            pending: nextPending,
+            ended: nextPending > 0 ? state.ended + (wasDirectory ? 0 : 1) : 0,
+            localImport: null,
+          };
+        });
       }
     }
     if (!matchFormat || retrying.length) return;
@@ -267,7 +315,17 @@ export function useUploader(projectId: string, summary?: ProjectSummary) {
   return {
     items, localImport,
     start: (files: FileList | File[]) => { void enqueueImports(projectId, Array.from(files), matchFormat()); },
-    startPaths: (paths: string[]) => enqueueImports(projectId, paths, matchFormat()),
+    startPaths: async (paths: string[], opts?: { expand?: boolean }) => {
+      if (!paths.length) return;
+      if (opts?.expand === false) return enqueueImports(projectId, paths, matchFormat());
+      try {
+        const { files, emptyFolders } = await expandDroppedPaths(paths);
+        reportErrors(projectId, emptyFolders.map(folder => ({ name: folder.name, error: `No video files found in “${folder.name}”.` })));
+        if (files.length) await enqueueImports(projectId, files, matchFormat());
+      } catch (error) {
+        reportErrors(projectId, [{ name: filename(paths[0]!), error: errorMessage(error) }]);
+      }
+    },
     dismiss: (id: number) => dismiss(projectId, id),
   };
 }

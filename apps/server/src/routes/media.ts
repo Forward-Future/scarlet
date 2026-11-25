@@ -25,6 +25,7 @@ import { afterAudioTrackChange } from "../services/audioTrackChange.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
 import { framePriority, pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
+import { expandMediaPaths } from "../services/folderMedia.js";
 import { ingestMedia, removeUnreadableMedia, writeHashedFile } from "../services/ingest.js";
 import { settleAlignment, startTranscription, transcriptionHeld } from "../services/transcription.js";
 import { getWaveform, readWaveformCache } from "../services/waveforms.js";
@@ -240,6 +241,12 @@ export function mediaRoutes(ctx: Ctx) {
       // A capture whose file didn't go into the project isn't kept.
       if (capture) await rm(join(ctx.paths.project(project.id), capture), { force: true });
     }
+  });
+
+  // Expand dropped folders into the video files inside them; individual files and URLs pass through unchanged.
+  r.post("/media/expand-paths", async (c) => {
+    const { paths } = await jsonBody(c, z.object({ paths: z.array(z.string().min(1).max(4096)).max(1000) }));
+    return c.json(await expandMediaPaths(paths, { signal: c.req.raw.signal }));
   });
 
   // Show the first frame while a large original is still being copied into the project.
