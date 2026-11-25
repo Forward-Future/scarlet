@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fullRenderContext, type RenderRequest } from "@scarlet/shared";
 import { captionExportHasCues, captionTracks, handoffLosses, NO_CAPTION_TRACK, NO_CAPTIONS_IN_RANGE, snapToFrame, timelineDuration, usedMedia } from "@scarlet/timeline";
 import { errorMessage, IS_MOCK } from "../../lib/client";
@@ -45,6 +45,17 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
   const previous = busy?.file ?? (job?.phase === "failed" && job.context === context ? job.file : undefined);
   const exported = job?.phase === "done" ? job : undefined;
   const exportedCurrentEdit = exported?.context === context;
+  // Close the sheet as soon as an export finishes while it is open. Re-opening Export later, or cancelling a new save
+  // dialog that restores the previous done result, keeps the sheet open so its last exported file remains reachable.
+  const seenDone = useRef(exported);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (exported && exported !== seenDone.current) {
+      seenDone.current = exported;
+      closeRef.current();
+    }
+  }, [exported]);
   // For Resolve, Final Cut or Premiere: the folder for finishing the edit in another app. Otherwise the video or its captions.
   const [advanced, setAdvanced] = useState(previous?.format === "folder");
   const [plainFormat, setPlainFormat] = useState<"mp4" | "srt" | "vtt">(previous?.format === "srt" || previous?.format === "vtt" ? previous.format : "mp4");

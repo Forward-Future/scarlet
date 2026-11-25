@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Finishing an export now closes the Export window automatically and shows a quiet confirmation strip at the bottom with Show in folder.
 - On Windows, installing Gemini, Codex, or Claude Code from Scarlet now keeps the Windows system info their installers need and finds Codex where its installer puts it, instead of failing with a connection error.
 - Switching between For you, Working and Done now keeps the request's heading and tabs steady instead of jumping up and down, and smoothly folds back to the active tab's height once you click elsewhere, finish the request, or start a new one.
 - In the beta three-column layout, the Working banner now stays visible above the Done banner at the bottom of the edits column even when no edits are working.

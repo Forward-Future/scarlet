@@ -157,6 +157,8 @@ async function run(projectId: string, file: ExportFile, context: string, version
       }
     }
     if (ticket === null) throw new Error("Export destination expired");
+    // A new export is under way, so clear any earlier completion strip until this one finishes.
+    useUiStore.getState().dismissExportNotice();
     if (file.format === "folder") {
       update({ phase: "saving" });
       // The timeline files link the copies where the folder will be, so the engine is told where that is.
@@ -256,7 +258,10 @@ async function run(projectId: string, file: ExportFile, context: string, version
   } finally {
     if (result?.phase === "done") said("done");
     finish(result);
-    if (result?.phase === "done" && file.format === "mp4") useUiStore.getState().offerExportStar();
+    if (result?.phase === "done") {
+      useUiStore.getState().showExportNotice({ path: result.path, format: file.format });
+      if (file.format === "mp4") useUiStore.getState().offerExportStar();
+    }
     // Tell the engine the export is settled. If it can't hear, leave the destination for the next launch to finish.
     if (!keepPending) {
       const released = !ownedId || cancelled || await api.releaseRender(ownedId, owner).then(() => true, () => false);
