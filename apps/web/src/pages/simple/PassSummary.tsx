@@ -431,9 +431,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       place: members.some(m => asks.has(m.key)) ? "you" : rowPlace(members, { waits: m => m.needs || m.asks, sent: m => m.pending, kept: m => m.decided }),
       at: Math.min(...members.map(m => m.at)) });
   }
-  // A row that has just left For you for Working or Done stays a moment where it was, with its new word.
-  if (hasForYou) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was })), optionalOpen && tab === "you");
-  const heldFrom = (from: "you" | "optional") => entries.filter(e => (e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
+  // A row that has just left For you for Working or Done, or Done for Working, stays a moment where it was, with its new word.
+  if (hasForYou) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })), optionalOpen && tab === "you", tab === "done");
+  const heldFrom = (from: "you" | "optional" | "done") => entries.filter(e => (from === "done" ? e.place === "working" : e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
   const inPlace = (place: RowPlace) => entries.filter(e => e.place === place);
   // Every list goes by time, as its rows lead with their times (the editor's call, 2026-11-24): low risk rows open in
   // their place among the ones that wait, and nothing else in the list moves or changes.
@@ -446,10 +446,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const youBaseRows = inPlace("you").length + heldFrom("you").length;
   const workingCount = inPlace("working").length;
   const doneCount = inPlace("done").length;
+  const doneRows = doneCount + heldFrom("done").length;
   useReviewTabHeight(host, {
     enabled: hasForYou && !empty,
     tab,
-    counts: { you: youBaseRows + lowRows.length, working: workingCount, done: doneCount },
+    counts: { you: youBaseRows + lowRows.length, working: workingCount, done: doneRows },
     youBase: youBaseRows,
     hasLowRisk: optional.length > 0,
     lowOpen: low.shown,
@@ -464,7 +465,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       // With low risk edits included they are in the one list, in their place in the video among the rows that wait.
       { id: "you", label: pass && calls.length ? "Calls that need you" : "Edits that need you",
         rows: inListOrder(entries.filter(e => e.place === "you" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "you") || lowKeys.has(e.key)), order) },
-    ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided", rows: inListOrder(inPlace(tab), order) }];
+    ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided",
+      rows: inListOrder(tab === "done" ? [...inPlace("done"), ...heldFrom("done")] : inPlace(tab), order) }];
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
   // For you opens the first waiting row on the timeline, or leaves it open if the editor is already on one.
   const showNeeded = () => {
@@ -534,8 +536,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         const { row, members, more, moment, unfolded: open } = entry;
         // Under the tabs a decided row says how it was decided; the list of every edit keeps its amount, ticked.
         const value = id === "all" ? row.value : row.decision ?? row.value;
-        // Only For you's rows fade and leave: a row looked at under Working or Done meanwhile is where it belongs.
-        const leaving = id === "you" && !!linger.of(entry.key)?.leaving;
+        // Only rows leaving the list currently shown fade out: a row looked at in Working or Done meanwhile is where it belongs.
+        const heldRow = linger.of(entry.key);
+        const leaving = !!heldRow?.leaving && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
         const canUnkeepRow = !!row.unkeep && !leaving;
         return <li key={row.key} className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined} data-low-risk={id === "you" && lowKeys.has(entry.key) ? "" : undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
           data-log-control="open-pass-item" data-log-label={moment ? "Moment" : "Pass item"} disabled={!row.open} title={row.title || row.label} onClick={letGo(() => row.open?.())}
@@ -666,7 +669,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   // editor (a question, or one that stopped early) keeps its row in For you.
   const asks = new Set(nests.flatMap(nest => nest.needs ? [nest.key] : []));
   const rowOf = new Map<string, string>(), placeOf = new Map<string, RowPlace>();
-  const tracked: { key: string; place: RowPlace; was: string[] }[] = [];
+  const tracked: { key: string; place: RowPlace; was: string[]; busy?: boolean }[] = [];
   if (hasForYou) {
     for (const { members } of groups) {
       const row = members.map(m => m.edit), key = editKey(row[0]!);
@@ -674,7 +677,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
         : rowPlace(row, { waits: e => !!e.check && (asksEditor(revising(e)) || (!reviewed(e) && !revising(e))), sent: e => !!revising(e), kept: e => reviewed(e) });
       for (const e of row) rowOf.set(editKey(e), key);
       placeOf.set(key, place);
-      tracked.push({ key, place, was: row.flatMap(e => e.previous.map(editKey)) });
+      const busy = row.some(e => { const r = revising(e); return !!r && isWorking(r.state); });
+      tracked.push({ key, place, was: row.flatMap(e => e.previous.map(editKey)), busy });
     }
     for (const e of gone) {
       const key = editKey(e);
@@ -682,14 +686,19 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       placeOf.set(key, "done");
       tracked.push({ key, place: "done", was: e.previous.map(editKey) });
     }
-    // A row that has just left For you for Working or Done stays a moment where it was, with its new word.
-    linger.track(tracked, optionalOpen && tab === "you");
+    // A row that has just left For you for Working or Done, or Done for Working, stays a moment where it was, with its new word.
+    linger.track(tracked, optionalOpen && tab === "you", tab === "done");
   }
   const place = (e: Omit<ThreadEdit, "at">) => placeOf.get(rowOf.get(editKey(e)) ?? "");
-  const held = (e: Omit<ThreadEdit, "at">) => (place(e) === "working" || place(e) === "done") ? linger.of(rowOf.get(editKey(e)) ?? "") : undefined;
+  const held = (e: Omit<ThreadEdit, "at">) => {
+    const at = place(e);
+    const h = at === "working" || at === "done" ? linger.of(rowOf.get(editKey(e)) ?? "") : undefined;
+    return h && (h.from !== "done" || at === "working") ? h : undefined;
+  };
   const inYou = (e: Omit<ThreadEdit, "at">) => place(e) === "you" || held(e)?.from === "you";
   const inOptional = (e: Omit<ThreadEdit, "at">) => place(e) === "optional" || held(e)?.from === "optional";
-  const onScreen = (e: Omit<ThreadEdit, "at">) => tab === "you" ? inYou(e) || (optionalOpen && inOptional(e)) : place(e) === tab;
+  const inDone = (e: Omit<ThreadEdit, "at">) => place(e) === "done" || held(e)?.from === "done";
+  const onScreen = (e: Omit<ThreadEdit, "at">) => tab === "you" ? inYou(e) || (optionalOpen && inOptional(e)) : tab === "done" ? inDone(e) : place(e) === tab;
   const countOf = (at: RowPlace) => tracked.filter(row => row.place === at).length;
   const some = (only: (e: Omit<ThreadEdit, "at">) => boolean) => edits.some(only) || gone.some(only);
   // For you's one list: what waits, and with low risk edits included those too, each in its place in the video.
@@ -699,10 +708,11 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   const forYouList = (e: Omit<ThreadEdit, "at">) => inYou(e) || lowRow(e);
   const youBaseCount = countOf("you") + tracked.filter(row => (row.place === "working" || row.place === "done") && linger.of(row.key)?.from === "you").length;
   const lowShownCount = low.shown ? optionalCount + tracked.filter(row => (row.place === "working" || row.place === "done") && linger.of(row.key)?.from === "optional").length : 0;
+  const doneShownCount = countOf("done") + tracked.filter(row => row.place === "working" && linger.of(row.key)?.from === "done").length;
   useReviewTabHeight(host, {
     enabled: hasForYou,
     tab,
-    counts: { you: youBaseCount + lowShownCount, working: countOf("working"), done: countOf("done") },
+    counts: { you: youBaseCount + lowShownCount, working: countOf("working"), done: doneShownCount },
     youBase: youBaseCount,
     hasLowRisk: optionalCount > 0,
     lowOpen: low.shown,
@@ -752,7 +762,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   const showsList = hasForYou || open === "all" || onlyRejected || (!!single && !!shownEdit);
   // The edits the sentence would name are said by their rows while the lists on screen have one for each of them.
   // Low risk rows don't count: including them changes the list and nothing over it.
-  const rowsName = hasForYou ? edits.every(e => e.beforeCut || e.marker || e.elsewhere || (tab === "you" ? inYou(e) : place(e) === tab)) : open === "all";
+  const rowsName = hasForYou ? edits.every(e => e.beforeCut || e.marker || e.elsewhere || (tab === "you" ? inYou(e) : tab === "done" ? inDone(e) : place(e) === tab)) : open === "all";
   const made = useMemo(() => {
     if (working) return undefined;
     const said = madeSentence(edits, lengthLabel, false, rowsName);
@@ -770,10 +780,14 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     setOpen(was => was === "all" || linger.lowRisk ? "all" : undefined);
     if (flagged.length && !flagged.some(edit => !!actions.showing && matchesEdit(actions.showing, edit))) actions.openEdit(thread, flagged[0]!);
   };
-  const rows = (label: string | undefined, only?: (e: Omit<ThreadEdit, "at">) => boolean) =>
-    <ThreadEdits projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
-      // Only For you's rows fade and leave: a row looked at under Working or Done meanwhile is where it belongs.
-      leaving={only && tab === "you" ? edit => !!held(edit)?.leaving : undefined} low={only && tab === "you" ? lowRow : undefined}
+  const isLeaving = (edit: Omit<ThreadEdit, "at">) => {
+    const h = held(edit);
+    return !!h?.leaving && (tab === "you" ? h.from === "you" || h.from === "optional" : tab === h.from);
+  };
+  const rows = (label: string | undefined, only?: (e: Omit<ThreadEdit, "at">) => boolean, listKey?: string) =>
+    <ThreadEdits key={listKey} projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
+      // Only rows leaving the list currently shown fade out: a row looked at under Working or Done meanwhile is where it belongs.
+      leaving={only && tab !== "working" ? isLeaving : undefined} low={only && tab === "you" ? lowRow : undefined}
       nextQueuedId={actions.nextQueuedId}
       onPlay={ref => actions.openEdit(thread, ref)}
       onHover={ref => actions.lightMark(undefined, ref && { threadId: thread.id, editKey: editKey(ref) })}
@@ -792,10 +806,12 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     {hasForYou && tab === "you" && <>
       {/* Over For you's rows, the edits Scarlet didn't flag are one line: a switch that includes them. */}
       {lowLine && <LowRisk count={lowLine.count} on={optionalOpen} onToggle={low.toggle} leaving={lowLine.leaving} />}
-      {some(forYouList) ? rows("Edits that need you", forYouList) : <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
+      {some(forYouList) ? rows("Edits that need you", forYouList, "you") : <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
     </>}
-    {hasForYou && tab !== "you" && (countOf(tab) > 0 ? rows(tab === "working" ? "With Scarlet" : "Decided", e => place(e) === tab)
-      : <p className="simple-review-empty">{EMPTY_TAB[tab]}</p>)}
+    {hasForYou && tab === "working" && (countOf("working") > 0 ? rows("With Scarlet", e => place(e) === "working", "working")
+      : <p className="simple-review-empty">{EMPTY_TAB.working}</p>)}
+    {hasForYou && tab === "done" && (some(inDone) ? rows("Decided", inDone, "done")
+      : <p className="simple-review-empty">{EMPTY_TAB.done}</p>)}
     {nests.filter(nest => !listed.has(nest.key)).map(nest => nest.node)}
   </div>;
 }

@@ -453,7 +453,7 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-empty { box-sizing: border-box; margin: 0; padding: 8px 0; color: var(--color-muted); font-size: 12.5px; }
 /* Match the tallest tab's height below For you / Working / Done so switching tabs keeps the heading and tabs still. */
 .simple-pass[data-review-pad] > :is(.simple-pass-list, .simple-edits, .simple-review-empty) { min-height: var(--review-body-height); }
-/* A row the editor has just decided or sent back fades before it leaves For you. */
+/* A row the editor has just decided or sent back fades before it leaves For you or Done. */
 .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { opacity: 0; transition: opacity .3s ease; }
 @media (prefers-reduced-motion: reduce) {
   .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { transition: none; }

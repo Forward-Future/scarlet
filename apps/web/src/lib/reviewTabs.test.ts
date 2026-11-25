@@ -118,3 +118,54 @@ it("carries a held row over to the row that took its place, and drops it when it
   expect(linger.of("o")?.from).toBe("optional");
   linger.dispose();
 });
+
+it("holds a row moving from Done (or a just-kept row lingering in For you) to Working, then fades and releases it", () => {
+  const linger = new ReviewLinger();
+  const changed = vi.fn();
+  linger.subscribe(changed);
+  // While Done is shown, a row moving from Done to Working stays in Done, shows working, then fades out.
+  linger.track([{ key: "a", place: "done" }, { key: "b", place: "done" }], false, true);
+  linger.track([{ key: "a", place: "working", busy: true }, { key: "b", place: "done" }], false, true);
+  expect(linger.of("a")).toEqual(expect.objectContaining({ from: "done", leaving: false }));
+  vi.advanceTimersByTime(LINGER_MS);
+  expect([linger.of("a")?.leaving, changed.mock.calls.length]).toEqual([true, 1]);
+  vi.advanceTimersByTime(LINGER_FADE_MS);
+  expect([linger.of("a"), changed.mock.calls.length]).toEqual([undefined, 2]);
+  // If Done is not shown and the row is not lingering in For you, moving Done -> Working does not linger.
+  linger.track([{ key: "b", place: "working", busy: true }], false, false);
+  expect(linger.of("b")).toBeUndefined();
+  // A row just kept in For you that moves to Working before leaving stays in For you with a fresh timer (cancelling any fade).
+  linger.track([{ key: "c", place: "you" }], false, false);
+  linger.track([{ key: "c", place: "done" }], false, false);
+  vi.advanceTimersByTime(LINGER_MS);
+  expect(linger.of("c")).toEqual(expect.objectContaining({ from: "you", leaving: true }));
+  linger.track([{ key: "c", place: "working", busy: true }], false, false);
+  expect(linger.of("c")).toEqual(expect.objectContaining({ from: "you", leaving: false }));
+  vi.advanceTimersByTime(LINGER_MS - 1);
+  expect(linger.of("c")).toEqual(expect.objectContaining({ from: "you", leaving: false }));
+  vi.advanceTimersByTime(1);
+  expect(linger.of("c")?.leaving).toBe(true);
+  vi.advanceTimersByTime(LINGER_FADE_MS);
+  expect(linger.of("c")).toBeUndefined();
+  // A row kept in For you and then revised from Done replaces the stale For you hold with a Done hold.
+  linger.track([{ key: "d", place: "you" }], false, false);
+  linger.track([{ key: "d", place: "done" }], false, false);
+  expect(linger.of("d")?.from).toBe("you");
+  linger.track([{ key: "d", place: "working", busy: true }], false, true);
+  expect(linger.of("d")).toEqual(expect.objectContaining({ from: "done", leaving: false }));
+  // Returning to Done drops a Done hold immediately so it does not fade out.
+  linger.track([{ key: "d", place: "done" }], false, true);
+  expect(linger.of("d")).toBeUndefined();
+  // Moving from queued (busy: false) to actively working (busy: true) while held refreshes the linger window once.
+  linger.track([{ key: "e", place: "done" }], false, true);
+  linger.track([{ key: "e", place: "working", busy: false }], false, true);
+  vi.advanceTimersByTime(1500);
+  linger.track([{ key: "e", place: "working", busy: true }], false, true);
+  vi.advanceTimersByTime(1500);
+  expect(linger.of("e")).toEqual(expect.objectContaining({ from: "done", leaving: false }));
+  vi.advanceTimersByTime(LINGER_MS - 1500);
+  expect(linger.of("e")?.leaving).toBe(true);
+  vi.advanceTimersByTime(LINGER_FADE_MS);
+  expect(linger.of("e")).toBeUndefined();
+  linger.dispose();
+});
