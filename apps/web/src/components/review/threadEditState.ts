@@ -60,7 +60,7 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   const live = useMemo(() => edits.filter(e => !e.rejected), [edits]);
   const rejected = useMemo(() => edits.filter(e => e.rejected), [edits]);
   const located = useMemo(() => applied && current ? loaded.edits?.filter(e => !e.rejected) : undefined, [applied, current, loaded]);
-  return { listed: applied ? live : noEdits, rejected: applied ? rejected : noEdits, located, head };
+  return { listed: applied ? live : noEdits, rejected: applied ? rejected : noEdits, located, settled: !applied || !head || current, head };
 }
 
 export const noEdits: ListedEdit[] = [];
@@ -185,17 +185,17 @@ type WaitsOn<T> = { reviewed(edit: T): boolean; revising(edit: T): { state: Task
  * back with has stopped to ask the editor something. An edit made in several places is one row.
  */
 export function waitingRows<T extends ListedEdit>(edits: readonly T[], { reviewed, revising }: WaitsOn<T>): number {
-  return editGroups(edits).filter(group => group.members.some(({ edit }) => !!edit.check && (asksEditor(revising(edit)) || (!reviewed(edit) && !revising(edit))))).length;
+  return editGroups(edits).filter(group => group.members.some(({ edit }) => asksEditor(revising(edit)) || (!!edit.check && !reviewed(edit) && !revising(edit)))).length;
 }
 
 /**
  * The same for a dialogue pass, whose For you list has a row for each call and each edit: the calls still open, the
- * flagged edits that wait, and any call or For you edit (`forYou`) whose request has stopped to ask the editor something.
+ * flagged edits that wait, and any call or edit whose request has stopped to ask the editor something.
  */
 export function waitingPassRows<T extends ListedEdit>(calls: readonly { state: string; run?: { state: Task["state"] } }[] | undefined, edits: readonly T[],
-  forYou: (edit: T) => boolean, { reviewed, revising }: WaitsOn<T>): number {
+  _forYou: (edit: T) => boolean, { reviewed, revising }: WaitsOn<T>): number {
   return (calls?.filter(call => call.state === "open" || (call.state === "revising" && asksEditor(call.run))).length ?? 0)
-    + edits.filter(edit => (!!edit.check && !reviewed(edit) && !revising(edit)) || (forYou(edit) && asksEditor(revising(edit)))).length;
+    + edits.filter(edit => (!!edit.check && !reviewed(edit) && !revising(edit)) || asksEditor(revising(edit))).length;
 }
 
 /**

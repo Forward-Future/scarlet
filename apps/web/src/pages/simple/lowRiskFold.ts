@@ -105,6 +105,31 @@ function fold(host: HTMLElement | null, way: "in" | "out", held: Held | undefine
  * existing list immediately without replaying the open animation, and leaving For you stops any close animation at
  * once. With motion reduced they are there or gone at once.
  */
+/**
+ * A row on its way out of For you or Done closes as it fades, so the rows under it don't jump up when it goes. One that
+ * stays after all (⌘Z took its Keep back or a revision restarted it while it faded) is its own height again.
+ */
+export function useLeavingRows(host: RefObject<HTMLElement | null>) {
+  const leaving = useRef(new Map<HTMLElement, Animation>());
+  useLayoutEffect(() => {
+    for (const [row, room] of leaving.current) {
+      if (row.isConnected && row.classList.contains("is-leaving")) continue;
+      room.cancel();
+      delete row.dataset.closing;
+      row.style.overflowY = "";
+      leaving.current.delete(row);
+    }
+    if (!canMove()) return;
+    for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-leaving:not([data-closing])") ?? []) {
+      row.dataset.closing = "";
+      row.style.overflowY = "clip";
+      const room = row.animate([{ height: `${row.getBoundingClientRect().height}px` }, { height: "0px" }], { duration: LINGER_FADE_MS - 40, easing: EASE, fill: "forwards" });
+      room.finished?.catch(() => {});
+      leaving.current.set(row, room);
+    }
+  });
+}
+
 export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean, setOn: (on: boolean) => void, visible = true) {
   const [closing, setClosing] = useState(false);
   const held = useRef<Held>(undefined);
@@ -127,26 +152,7 @@ export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean,
   }, [closing, visible]); // eslint-disable-line react-hooks/exhaustive-deps
   // Included again from somewhere else while they close (an edit opened from the timeline), or switched away: stop closing.
   if ((on || !visible) && closing) setClosing(false);
-  // A row on its way out of For you or Done closes as it fades, so the rows under it don't jump up when it goes. One that
-  // stays after all (⌘Z took its Keep back or a revision restarted it while it faded) is its own height again.
-  const leaving = useRef(new Map<HTMLElement, Animation>());
-  useLayoutEffect(() => {
-    for (const [row, room] of leaving.current) {
-      if (row.isConnected && row.classList.contains("is-leaving")) continue;
-      room.cancel();
-      delete row.dataset.closing;
-      row.style.overflowY = "";
-      leaving.current.delete(row);
-    }
-    if (!canMove()) return;
-    for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-leaving:not([data-closing])") ?? []) {
-      row.dataset.closing = "";
-      row.style.overflowY = "clip";
-      const room = row.animate([{ height: `${row.getBoundingClientRect().height}px` }, { height: "0px" }], { duration: LINGER_FADE_MS - 40, easing: EASE, fill: "forwards" });
-      room.finished?.catch(() => {});
-      leaving.current.set(row, room);
-    }
-  });
+  useLeavingRows(host);
   const toggle = () => {
     held.current = hold(host.current);
     if (on && visible && canMove()) setClosing(true);

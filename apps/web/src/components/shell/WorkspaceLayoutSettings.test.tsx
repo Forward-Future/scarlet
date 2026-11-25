@@ -119,13 +119,14 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-rail")).toBeNull();
     expect(container.querySelector(".composer-ask")).toBeNull();
 
-    // Flip beta toggle on: switches live to three-column layout with bubbles, question panel, and Low risk.
+    // Flip beta toggle on: switches live to three-column layout with bubbles, question panel, and unified Priority list.
     await act(async () => useUiStore.getState().setNewLayout(true));
     await act(async () => {});
     expect(container.querySelector("[data-new-layout]")).not.toBeNull();
     expect(container.querySelector(".review-rail")).not.toBeNull();
-    expect(container.querySelector(".review-low-head")?.textContent).toContain("Low risk");
-    expect(container.querySelector(".review-low-done")?.textContent).toBe("Keep all");
+    expect(container.querySelector(".review-tier-sep")?.textContent).toContain("Confident edits");
+    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 1 confident");
+    expect([...container.querySelectorAll(".review-filter-chip")].map(b => b.textContent)).toEqual(["All 3", "Needs you 2"]);
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
     // Working and Done banners stay visible at the foot even when empty (Working above Done), separated by a divider line, chat doesn't repeat "For you N", and every row leads with its time, never a number.
@@ -276,21 +277,24 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => stopBtn.click());
     expect(cancelSpy).toHaveBeenCalledWith("task_beta_revise");
 
-    // #14 & #3: Fold Low risk, open the low-risk edit via Keep/click flow, confirm Low risk auto-unfolds and Keep moves straight to Done (not duplicated).
-    const lowHead = container.querySelector<HTMLButtonElement>(".review-low-head")!;
-    await act(async () => lowHead.click());
-    expect(lowHead.getAttribute("aria-expanded")).toBe("false");
+    // #14 & #3: Filter to Needs you (hiding confident edits), then open the confident edit via Keep/click flow, confirm filter returns to All and Keep moves straight to Done.
+    const needsChip = [...container.querySelectorAll<HTMLButtonElement>(".review-filter-chip")]
+      .find(b => b.textContent?.includes("Needs you"))!;
+    await act(async () => needsChip.click());
+    expect(needsChip.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(true);
     const musicRow = [...container.querySelectorAll<HTMLButtonElement>(".review-low-body button.simple-edit")]
       .find(b => b.textContent?.includes("music bed"))!;
     await act(async () => musicRow.click());
     await act(async () => {});
-    expect(lowHead.getAttribute("aria-expanded")).toBe("true");
-    // Keep music bed -> moves straight to Done without lingering in Low risk.
+    expect(needsChip.getAttribute("aria-pressed")).toBe("false");
+    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(false);
+    // Keep music bed -> moves straight to Done without lingering in confident edits.
     const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")]
       .find(b => b.textContent?.trim() === "Keep")!;
     await act(async () => keepBtn.click());
     await act(async () => {});
-    expect(container.querySelector(".review-low")?.hasAttribute("hidden")).toBe(true);
+    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(true);
     const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")]
       .find(b => b.textContent?.includes("Done"))!;
     expect(doneHead.textContent).toContain("1");
@@ -749,8 +753,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
     await act(async () => {});
 
-    // One unified <ol> inside Low risk, sorted by video time (0:18, 1:02, 1:59), with add + move combined into one row.
-    const lowBody = container.querySelector<HTMLElement>('.review-low-body[aria-label="Low risk"]')!;
+    // One unified <ol> inside Confident edits, ordered newest request first (0:18, 1:02, 1:59), with add + move combined into one row.
+    const lowBody = container.querySelector<HTMLElement>('.review-low-body[aria-label="Confident edits"]')!;
     expect(lowBody.querySelectorAll("ol")).toHaveLength(1);
     const lowRows = [...lowBody.querySelectorAll<HTMLButtonElement>("ol > li > button")];
     expect(lowRows.map(r => [
@@ -762,7 +766,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       ["1:02", "Fable 5.2 title", "Graphic"],
       ["1:59", "Haiku 5.5 title", "Graphic"],
     ]);
-    expect(container.querySelector(".review-low-head b")?.textContent).toBe("3");
+    expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("3");
+    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 confident");
 
     // Keeping the combined row keeps BOTH underlying thread edits together and moves one combined row into Done.
     await act(async () => lowRows[0]!.click());
@@ -771,16 +776,16 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => keepBtn.click());
     await act(async () => {});
     expect(keepSpy).toHaveBeenCalledTimes(2);
-    expect(container.querySelector(".review-low-head b")?.textContent).toBe("2");
+    expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("2");
     const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")].find(b => b.textContent?.includes("Done"))!;
     expect(doneHead.textContent).toContain("1");
 
-    // ⌘Z undoes BOTH threads' Keep together so the combined row returns cleanly to Low risk.
+    // ⌘Z undoes BOTH threads' Keep together so the combined row returns cleanly to Confident edits.
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true }));
     });
     await act(async () => {});
     expect(unkeepSpy).toHaveBeenCalledTimes(2);
-    expect(container.querySelector(".review-low-head b")?.textContent).toBe("3");
+    expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("3");
   });
 });
