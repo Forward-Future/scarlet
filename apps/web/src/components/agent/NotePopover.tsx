@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { agentTarget } from "@scarlet/shared";
 import { clipsAt } from "@scarlet/timeline";
+import { appLog, errorName } from "../../lib/appLog";
 import { errorMessage } from "../../lib/client";
 import { clock } from "../../lib/format";
 import { isComposing } from "../../lib/hotkeys";
@@ -10,6 +11,14 @@ import { useUiStore } from "../../stores/ui";
 import { DialogSurface, Icon, InlineError, Spinner, Toggle } from "../ui/primitives";
 import { AgentChip, useAgentAvailability } from "./AgentChip";
 import { MicButton } from "./MicButton";
+
+// Said once a session each: the draft is written as it is typed.
+const warned = new Set<string>();
+function warnOnce(event: "draft-not-saved" | "draft-unreadable", err: unknown) {
+  if (warned.has(event)) return;
+  warned.add(event);
+  appLog("error", event, { kind: "note", name: errorName(err) }, { level: "warn" });
+}
 
 /** Small popover for a note on a span picked in the transcript: text or voice, optional assignment. */
 export function NotePopover() {
@@ -22,7 +31,7 @@ export function NotePopover() {
     try {
       if (value) localStorage.setItem(draftKey, value);
       else localStorage.removeItem(draftKey);
-    } catch { /* Storage is optional. */ }
+    } catch (err) { warnOnce("draft-not-saved", err); /* Storage is optional. */ }
   };
   const close = () => { keepDraft(""); closePopover(); };
   const createNote = useProjectStore((s) => s.createNote);
@@ -41,7 +50,7 @@ export function NotePopover() {
   useEffect(() => {
     if (popover?.open) {
       let saved = "";
-      try { saved = localStorage.getItem(draftKey) ?? ""; } catch { /* Storage is optional. */ }
+      try { saved = localStorage.getItem(draftKey) ?? ""; } catch (err) { warnOnce("draft-unreadable", err); /* Storage is optional. */ }
       setText(saved);
       setErr(null);
       setTimeout(() => input.current?.focus(), 0);

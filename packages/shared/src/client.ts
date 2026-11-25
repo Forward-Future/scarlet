@@ -20,6 +20,17 @@ import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLe
 import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
 import type { GraphicRenderResponse, SaveStyleGuideRequest } from "./graphics.js";
 import type { Skill, SkillVersion, EditSkillRequest, UpsertSkillRequest } from "./skills.js";
+import type {
+  CreateStyleGuideRequest,
+  EditStyleGuideRequest,
+  StyleGuideAsset,
+  StyleGuideFromGraphicRequest,
+  StyleGuidePreviewRenderRequest,
+  StyleGuidePreviewRenderResponse,
+  StyleGuideRecord,
+  TaskStyleGuideDraft,
+  UpdateStyleGuideRequest,
+} from "./styleGuides.js";
 
 /**
  * File extension for a recorded clip. Chromium (Windows) records webm/opus;
@@ -531,8 +542,8 @@ export class ScarletClient extends ClientTransport {
     return this.post<{ task: Task }>(`/tasks/${taskId}/start-now`, {});
   }
   /** Change the words of a request that is still waiting its turn. It keeps its place in the queue. */
-  rewordTask(taskId: string, text: string, skillIds?: string[]) {
-    return this.post<{ task: Task }>(`/tasks/${taskId}/reword`, { text, skillIds } satisfies RewordTaskRequest);
+  rewordTask(taskId: string, text: string, skillIds?: string[], styleGuideIds?: string[]) {
+    return this.post<{ task: Task }>(`/tasks/${taskId}/reword`, { text, skillIds, styleGuideIds } satisfies RewordTaskRequest);
   }
 
   // Agent hosts
@@ -545,9 +556,9 @@ export class ScarletClient extends ClientTransport {
   postTaskEvent(taskId: string, event: TaskEvent, startedAt?: string) {
     return this.withResource("tasks", taskId, path => this.post<Record<string, never>>(path + "/events", { ...event, startedAt }));
   }
-  /** Hosts add the CLI session that asked (null: none), so the answer can continue it. */
-  async postTaskQuestion(taskId: string, startedAt: string | undefined, text: string, signal?: AbortSignal, host?: { sessionId: string | null }) {
-    const ack = await this.withResource("tasks", taskId, path => this.request<{ waiting?: unknown } | null>("POST", path + "/question", { startedAt, text, ...host }, { signal }));
+  /** Hosts add the CLI session that asked (null: none), so the answer can continue it. `choices` are the short answers the question offers. */
+  async postTaskQuestion(taskId: string, startedAt: string | undefined, text: string, signal?: AbortSignal, host?: { sessionId: string | null }, choices?: readonly string[]) {
+    const ack = await this.withResource("tasks", taskId, path => this.request<{ waiting?: unknown } | null>("POST", path + "/question", { startedAt, text, ...host, ...(choices?.length && { choices }) }, { signal }));
     if (typeof ack?.waiting !== "boolean") throw new Error("The engine did not acknowledge the question.");
     return { waiting: ack.waiting };
   }
@@ -636,6 +647,58 @@ export class ScarletClient extends ClientTransport {
   }
   saveSkillEdit(projectId: string, taskId: string, body: TaskSkillDraft & { skillId: string; hostId: string }) {
     return this.post<{ skill: Skill }>(`/projects/${projectId}/tasks/${taskId}/skill-edit`, body);
+  }
+
+  // Style guides
+  styleGuides() {
+    return this.get<{ styleGuides: StyleGuideRecord[] }>("/style-guides");
+  }
+  styleGuide(styleGuideId: string) {
+    return this.get<{ styleGuide: StyleGuideRecord; edits?: Task[] }>(`/style-guides/${apiPathId(styleGuideId)}`);
+  }
+  createStyleGuide(body: CreateStyleGuideRequest) {
+    return this.post<{ styleGuide: StyleGuideRecord }>("/style-guides", body);
+  }
+  createStyleGuideFromGraphic(body: StyleGuideFromGraphicRequest) {
+    return this.post<{ styleGuide: StyleGuideRecord }>("/style-guides/from-graphic", body);
+  }
+  updateStyleGuide(styleGuideId: string, body: UpdateStyleGuideRequest) {
+    return this.put<{ styleGuide: StyleGuideRecord }>(`/style-guides/${apiPathId(styleGuideId)}`, body);
+  }
+  deleteStyleGuide(styleGuideId: string) {
+    return this.delete<Record<string, never>>(`/style-guides/${apiPathId(styleGuideId)}`);
+  }
+  editStyleGuide(styleGuideId: string, body: EditStyleGuideRequest) {
+    return this.post<{ task: Task }>(`/style-guides/${apiPathId(styleGuideId)}/edit`, body);
+  }
+  saveTaskStyleGuideEdit(projectId: string, taskId: string, body: TaskStyleGuideDraft & { styleGuideId: string; hostId: string }) {
+    return this.post<{ styleGuide: StyleGuideRecord }>(`/projects/${apiPathId(projectId)}/tasks/${apiPathId(taskId)}/style-guide-edit`, body);
+  }
+  uploadStyleGuideAsset(styleGuideId: string, file: Blob | { path: string }, name?: string) {
+    const path = `/style-guides/${apiPathId(styleGuideId)}/assets`;
+    if (!(file instanceof Blob)) return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord }>(path, { path: file.path });
+    const fd = new FormData();
+    fd.append("file", file, name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "asset"));
+    return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord }>(path, fd);
+  }
+  styleGuideAssetUrl(styleGuideId: string, assetId: string) {
+    return this.fileUrl(`/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}`);
+  }
+  readStyleGuideAsset(styleGuideId: string, assetId: string, pages?: number[]) {
+    return this.post<{ name: string; path: string; size: number; mime?: string; text?: string; pageCount?: number;
+      pages?: Array<{ page: number; jpeg: string }>; image?: { mime: string; data: string } }>(
+      `/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}/read`,
+      pages ? { pages } : {},
+    );
+  }
+  renderStyleGuidePreview(styleGuideId: string, body: StyleGuidePreviewRenderRequest) {
+    return this.post<StyleGuidePreviewRenderResponse>(`/style-guides/${apiPathId(styleGuideId)}/preview`, body);
+  }
+  styleGuidePreviewSource(styleGuideId: string) {
+    return this.get<{ html: string; width: number; height: number; updatedAt: string; jpeg?: string }>(`/style-guides/${apiPathId(styleGuideId)}/preview/source`);
+  }
+  styleGuidePreviewUrl(styleGuideId: string, updatedAt?: string) {
+    return this.fileUrl(`/style-guides/${apiPathId(styleGuideId)}/preview`, updatedAt ? { v: updatedAt } : undefined);
   }
 
   // Learnings: rules picked up from requests, waiting for the editor

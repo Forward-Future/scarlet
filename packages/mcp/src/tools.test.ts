@@ -964,7 +964,7 @@ describe("tool annotations", () => {
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
   const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
     "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "hand_off", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
-    "graphic_render", "style_guide_save", "transcript_fix"];
+    "graphic_render", "style_guide_save", "style_guide_update", "style_guide_preview_render", "transcript_fix"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);
 
   it("gives every tool an input schema a harness can convert: no array that lists an item per position", async () => {
@@ -1054,9 +1054,10 @@ describe("tool annotations", () => {
   it("registers each tool with its annotation", async () => {
     const task = Task.parse({ id: "skill-task", state: "running", projectId: "prj_test", kind: "skill_edit", agent: "codex", instruction: "Shorter pauses",
       context: { skillId: "skl_1" }, hostId: "host_a", createdBy: { type: "human", name: "Editor" } });
+    const styleGuideTask = Task.parse({ ...task, id: "style-guide-task", kind: "style_guide_edit", instruction: "Warm editorial look", context: { styleGuideId: "sg_1" } });
     const check = Task.parse({ ...task, id: "check-task", kind: "learning_check", context: { checksTaskId: "asked-task" } });
     const edit = Task.parse({ ...task, id: "edit-task", kind: "edit", instruction: "Add B-roll", context: {} });
-    const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: check.id, task: check }),
+    const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: styleGuideTask.id, task: styleGuideTask }), await connect({ agent: "codex", taskId: check.id, task: check }),
       await connect({ agent: "codex", taskId: edit.id, task: edit }), await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" },
         taskModels: [{ id: "motion-graphics", name: "Motion graphics", by: { agent: "gemini" } }] })];
     try {

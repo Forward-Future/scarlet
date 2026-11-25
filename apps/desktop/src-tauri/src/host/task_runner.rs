@@ -134,7 +134,7 @@ impl HostRuntime {
             return;
         }
         // Resolve before the folder can go: Claude Code names its project folder after the real path.
-        let real = if task.agent == "claude" { real_path(&dir) } else { None };
+        let real = if task.agent == "claude" || super::providers::is_extra_provider(&task.agent) { real_path(&dir) } else { None };
         if let Err(e) = remove_control_files(&dir) {
             log::warn!("task {task_id}: could not clean its folder: {e}");
         }
@@ -266,7 +266,7 @@ impl HostRuntime {
         // Events: forwarded in order by a consumer task so completion waits for them.
         let (sink, consumer) = self.forward_events(&task.id, task.started_at.clone());
 
-        let env = detect::runner_env(&task.agent, &self.agents.read().await, &child_env(&self.paths.home));
+        let env = detect::runner_env(&task.agent, &self.agents.read().await, &self.agent_env());
         let model = task.model.clone().or_else(|| self.models.get(&task.agent).cloned());
         // Persist the start before the CLI can have side effects. A dead desktop's unstarted claim can be resumed.
         let start = TaskEvent { task_id: Some(task.id.clone()), at: Some(now_iso()), kind: "log".into(), text: "Starting the editing agent.".into(), data: None };

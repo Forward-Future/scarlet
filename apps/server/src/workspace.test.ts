@@ -4822,8 +4822,8 @@ it("hands off one call while the pass can still trim and assess its other cuts",
   const direct = (start: number, end: number) => proposeChange(ctx, localUser(ctx), project.id,
     { intent: "requested", taskId: task.id, description: "Trim", ops: [{ op: "rippleDelete", start, end }] });
   // The engine's index names the cut for the tools, and the editor's number for Scarlet's words to them.
-  expect(() => direct(8.5, 9)).toThrow(/cut 1 \(the editor’s “Cut 1”\).*with the editor.*don’t ask them about it.*amend:true/);
-  expect(() => direct(3, 8)).toThrow(/would join cut 0 and cut 1 \(the editor’s “Cut 1”\)/);
+  expect(() => direct(8.5, 9)).toThrow(/cut 1 \(one of the editor’s calls, which they know by its time\).*with the editor.*don’t ask them about it.*amend:true/);
+  expect(() => direct(3, 8)).toThrow(/would join cut 0 and cut 1 \(one of the editor’s calls, which they know by its time\)/);
   const ownTrim = (index: number, start: number, end: number) => api("POST", `/changes/${review.id}/staged-cuts/${index}`,
     { taskId: task.id, start, end, reason: "Start after the breath." });
   expect((await ownTrim(1, 8.5, 10)).status).toBe(409);
@@ -7185,7 +7185,7 @@ it("keeps a pass's own later save from changing footage under a cut that waits f
   // timeline over its four staged cuts left the editor's calls with nothing under them (2026-11-11).
   const rewrite = () => proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, fromVersion: staged.fromVersion,
     description: "Complete the pass", ops: [{ op: "rippleDelete", start: 11, end: 14 }] });
-  expect(rewrite).toThrow(/takes away the footage of a staged cut that waits for the editor’s call.*cut 0 (\(the editor’s “Cut 1”\) )?at 12\.00–13\.00 s.*dialogue_apply_cuts/s);
+  expect(rewrite).toThrow(/takes away the footage of a staged cut that waits for the editor’s call.*cut 0 (\(one of the editor’s calls, which they know by its time\) )?at 12\.00–13\.00 s.*dialogue_apply_cuts/s);
   expect(ctx.repos.projects.get(project.id)!.head).toBe(staged.fromVersion);
   expect(ctx.repos.changes.get(staged.id)!.state).toBe("ready");
   // Leaving a sliver of the cut is taking it away all the same.

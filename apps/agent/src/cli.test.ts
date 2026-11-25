@@ -114,10 +114,13 @@ describe("scarlet-agent", { timeout: 30_000 }, () => {
   it.skipIf(process.platform === "win32")("status lists every agent and where the host is connected", async () => {
     const dir = await home();
     await pathWith(FAKE_CLAUDE);
+    // No provider server or OpenRouter key here, whatever runs on this machine.
+    vi.stubGlobal("fetch", async () => { throw new TypeError("fetch failed"); });
+    onTestFinished(() => void vi.unstubAllGlobals());
     const { out } = output();
     await main(["status"]);
     expect(out()).toEqual([
-      expect.stringMatching(/^claude  2\.1\.0  logged in \(subscription: max\).*\ncodex   not installed\ngemini  not installed$/),
+      expect.stringMatching(/^claude  2\.1\.0  logged in \(subscription: max\).*\ncodex   not installed\ngemini  not installed\nollama  not available\nlmstudio not available\nopenrouter not available$/),
       "\nnot connected (scarlet-agent connect --server URL)",
     ]);
     await saveConfig({ server: "http://localhost:4000", token: "agent-token", hostId: "host_9", models: { claude: "opus" } }, { SCARLET_HOME: dir });

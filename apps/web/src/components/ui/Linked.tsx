@@ -1,8 +1,11 @@
 import type { MouseEvent, ReactNode } from "react";
 import { desktop } from "../../lib/desktop";
 
-/** A web address in Scarlet's words, written out or as a Markdown link, which is how a model often writes one. */
-const link = /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|https?:\/\/[^\s<>"”’]+/g;
+/**
+ * A web address in Scarlet's words, written out or as a Markdown link, which is how a model often writes one. A
+ * Markdown link's address keeps a pair of brackets of its own, as in a Wikipedia title.
+ */
+const link = /\[([^\]\n]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)|https?:\/\/[^\s<>"”’]+/g;
 
 /** The address as it reads in a sentence: no scheme, and short enough to leave the sentence its room. */
 function addressLabel(url: string) {
@@ -44,7 +47,8 @@ export function Linked({ text }: { text: string }): ReactNode {
   if (parts.every(part => typeof part === "string")) return text;
   return parts.map((part, i) => {
     if (typeof part === "string") return part;
-    if (!/^https:\/\//i.test(part.url)) return part.label;
+    // An address Scarlet doesn't open still says itself whole on hover, since its label may be cut short.
+    if (!/^https:\/\//i.test(part.url)) return <span key={i} title={part.url}>{part.label}</span>;
     const open = (event: MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();

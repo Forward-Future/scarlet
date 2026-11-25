@@ -117,7 +117,7 @@ pub const SCARLET_TOOLS: &[&str] = &[
     "faces", "lip_sync",
     "change_get", "change_list", "edit_flag", "notes_list", "note_reply", "note_resolve", "render_request", "render_status",
     "task_log", "task_question", "hand_off", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit",
-    "web_capture", "web_video", "graphic_render", "graphic_get", "style_guide_save", "attachment_read",
+    "web_capture", "web_video", "graphic_render", "graphic_get", "style_guide_save", "style_guide_update", "style_guide_preview_render", "style_guide_preview_get", "attachment_read",
     "media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area",
     "change_review_cut", "source_audio", "listen",
     "captions_generate",

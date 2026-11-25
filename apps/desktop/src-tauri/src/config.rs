@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::host::providers::ProviderSettings;
+
 /// Task control files may contain the workspace bearer token.
 pub fn private_directory(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path)?;
@@ -171,6 +173,9 @@ enum EditorAgent {
     Codex,
     Gemini,
     Api,
+    Ollama,
+    Lmstudio,
+    Openrouter,
 }
 
 impl Paths {
@@ -201,6 +206,39 @@ impl Paths {
         std::fs::create_dir_all(dir)?;
         let bytes = serde_json::to_vec(selection)?;
         crate::util::write_file_atomic(&path, &bytes, false)?;
+        Ok(())
+    }
+
+    fn provider_settings_file(&self) -> PathBuf {
+        self.config_file.with_file_name("providers.json")
+    }
+
+    /// Ollama, LM Studio and OpenRouter as the editor set them in Settings › Models. It holds the OpenRouter key, so
+    /// only its owner can read it, and nothing about it is logged but that it couldn't be read.
+    pub fn provider_settings(&self) -> ProviderSettings {
+        let path = self.provider_settings_file();
+        let saved = match std::fs::read(&path) {
+            Ok(saved) => saved,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ProviderSettings::default(),
+            Err(e) => {
+                log::warn!("could not read the provider settings: {e}");
+                return ProviderSettings::default();
+            }
+        };
+        let text = String::from_utf8_lossy(&saved);
+        serde_json::from_str(text.trim_start_matches('\u{feff}')).unwrap_or_else(|e| {
+            log::warn!("invalid provider settings (line {}, column {}); using none", e.line(), e.column());
+            ProviderSettings::default()
+        })
+    }
+
+    pub fn save_provider_settings(&self, settings: &ProviderSettings) -> Result<()> {
+        let path = self.provider_settings_file();
+        let dir = path.parent().context("missing desktop config directory")?;
+        std::fs::create_dir_all(dir)?;
+        let bytes = serde_json::to_vec_pretty(settings)?;
+        // A new file each time, readable by its owner alone (0600 where files have modes).
+        crate::util::write_file_atomic(&path, &bytes, true)?;
         Ok(())
     }
 
@@ -346,6 +384,45 @@ mod tests {
         let replacement = serde_json::json!({"agent": "claude", "model": "opus"});
         next.save_editor_model(&serde_json::from_value(replacement.clone()).unwrap()).unwrap();
         assert_eq!(serde_json::to_value(first.editor_model()).unwrap(), replacement);
+        for (agent, model) in [("ollama", "qwen3:30b"), ("lmstudio", "qwen/qwen3-8b"), ("openrouter", "anthropic/claude-sonnet-4.5")] {
+            let pick = serde_json::json!({"agent": agent, "model": model});
+            next.save_editor_model(&serde_json::from_value(pick.clone()).unwrap()).unwrap();
+            assert_eq!(serde_json::to_value(first.editor_model()).unwrap(), pick);
+        }
+    }
+
+    #[test]
+    fn keeps_provider_settings_for_their_owner_alone() {
+        use crate::host::providers::{KeySettings, LocalSettings};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path());
+        // None saved yet.
+        assert_eq!(paths.provider_settings(), ProviderSettings::default());
+        let saved = ProviderSettings {
+            ollama: LocalSettings { url: Some("http://gpu:11434".into()), disabled: false },
+            lmstudio: LocalSettings { url: None, disabled: true },
+            openrouter: KeySettings { api_key: Some("sk-or-v1-abc".into()), disabled: false },
+        };
+        paths.save_provider_settings(&saved).unwrap();
+        assert_eq!(super::tests::paths(dir.path()).provider_settings(), saved);
+        let file = dir.path().join("config").join("providers.json");
+        let on_disk: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        // camelCase, and what is unset is left out.
+        assert_eq!(on_disk, serde_json::json!({ "ollama": { "url": "http://gpu:11434" }, "lmstudio": { "disabled": true }, "openrouter": { "apiKey": "sk-or-v1-abc" } }));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Also over a file an older copy left open to everyone.
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+            paths.save_provider_settings(&saved).unwrap();
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        // A file that can't be read is no settings, and its key isn't logged.
+        crate::util::test_log::capture();
+        std::fs::write(&file, "{\"openrouter\":{\"apiKey\":\"sk-or-v1-leak\"},}").unwrap();
+        assert_eq!(paths.provider_settings(), ProviderSettings::default());
+        assert!(crate::util::test_log::find(&["invalid provider settings"]).is_some());
+        assert!(crate::util::test_log::find(&["sk-or-v1-leak"]).is_none());
     }
 
     #[test]

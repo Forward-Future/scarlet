@@ -157,17 +157,22 @@ async fn run_setup(mut cmd: Command, limit: Duration, setups: &'static Setups) -
 
 #[tauri::command]
 pub async fn install_crisper_model(state: State<'_, AppState>, directory: PathBuf) -> Result<(), String> {
-    let cmd = setup_command(&state.paths, &directory)?;
-    let output = run_setup(cmd, SETUP_LIMIT, &SETUPS).await?;
+    let cmd = setup_command(&state.paths, &directory).inspect_err(|e| log::warn!("CrisperWhisper setup not started: {e}"))?;
+    log::info!("CrisperWhisper setup started");
+    let started = std::time::Instant::now();
+    let output = run_setup(cmd, SETUP_LIMIT, &SETUPS).await.inspect_err(|e| log::warn!("CrisperWhisper setup failed: {e}"))?;
     if output.status.success() {
+        log::info!("CrisperWhisper setup done in {}", util::human_duration(started.elapsed()));
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let reason = util::stderr_tail_line(&stderr).unwrap_or_else(|| output.status.to_string());
     if cfg!(windows) && (matches!(output.status.code(), Some(101 | 103 | 106 | 107))
         || stderr.contains("No suitable Python runtime") || stderr.contains("No runtime installed")) {
+        log::warn!("CrisperWhisper setup failed: no suitable Python 3.12 ({}): {reason}", output.status);
         return Err(format!("{reason}. {NEED_PYTHON}"));
     }
+    log::warn!("CrisperWhisper setup failed ({}): {reason}", output.status);
     Err(reason)
 }
 

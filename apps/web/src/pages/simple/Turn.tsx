@@ -5,7 +5,7 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
-import { editGroups, listPlaces, useReviewed, useRevising, useThreadEdits, waitingPassRows, waitingRows } from "../../components/review/threadEditState";
+import { useReviewed, useRevising, useThreadEdits, waitingPassRows, waitingRows } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
 import { TipButton } from "../../components/ui/TipButton";
 import { errorMessage } from "../../lib/client";
@@ -159,10 +159,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const waits = (edit: ThreadEdit) => !!edit.check && !reviewed(edit) && !revising(edit);
     const reported = reportEvery ? located : located.filter(waits);
     if (!reported.length) return;
-    // Each dot has the number its row has in the chat, which an edit keeps when another is rejected.
-    const order = listPlaces(thread, located, rejected);
-    const numbers = new Map(editGroups(located).flatMap(({ members }) => members.map(({ edit }) => [edit, order.number(members[0]!.edit)!] as const)));
-    const markers = reported.map(edit => ({ edit, number: numbers.get(edit)!, total: order.total,
+    const markers = reported.map(edit => ({ edit,
       state: reviewed(edit) ? "kept" as const : waits(edit) ? "check" as const : undefined }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
@@ -184,6 +181,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   // Whether one of the request's edits was open when its line last drew, and which.
   const wasShowing = useRef(false);
   const lastOpen = useRef<string>(undefined);
+  // Whether the request's rows are under For you, Working and Done, as its block works it out.
+  const [tabbed, setTabbed] = useState(false);
   // The rows the editor has just decided or sent back, which stay in For you a moment before they leave.
   const [linger] = useState(() => new ReviewLinger());
   useEffect(() => () => linger.dispose(), [linger]);
@@ -388,7 +387,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const closed = entries.some(e => e.kind === "agent" && !e.onNote && ids.has((e.taskId ?? e.replyTo)!));
     // While every edit is listed, the list takes the place of Scarlet's reply; putting it away brings the reply back. The
     // short list of what needs the editor, shown without a click, leaves the reply where it is.
-    const listing = run === owner && hasRows && passList[0] === "all";
+    // Under For you, Working and Done the reply stays: there "all" only includes the low risk edits in For you's list.
+    const listing = run === owner && hasRows && passList[0] === "all" && !tabbed;
     // Scarlet's recheck of a cut the editor approved, under that cut's row: its reason is its heading, not a line under its work.
     const autoHeading = inside && isRecheck(task);
     mine.forEach((e, i) => {
@@ -438,8 +438,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const below = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, run: runs.find(r => r.root === root)! })) : [];
     const nests: Nest[] = below.map(({ key, run: about }) => ({ key, node: unit(about, true), needs: about.task.state === "waiting_for_user" || !runIsActive(about.task) }));
     const rows = run === owner && hasRows ? (aside: ReactNode) => summed
-      ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} />
-      : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} /> : undefined;
+      ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} onTabs={setTabbed} />
+      : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} onTabs={setTabbed} /> : undefined;
     // A request about one cut or edit says what it did there, and its row opens that cut or edit on the timeline.
     const target = targets.get(run.root);
     const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
@@ -513,7 +513,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // A recheck Scarlet began itself is headed too, by its reason after the Auto tag: where it stands and its controls
     // are at that heading's right, as a request's are, and not said again on a row under it.
     const headed = !!request || autoHeading;
-    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} under={inside} callNumber={actions.callNumber}
+    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} under={inside} callTime={actions.callTime}
         say={said.length ? <div className="req-said">{said}</div> : undefined} told={told} result={rows} recovery={recovery}
         // Under its call's row, that row is the cut it saved, with Scarlet's note: the note isn't said again under it.
         // A pass's calls are listed for as long as it waits, so a request keyed to one is always under its row.
@@ -603,8 +603,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   for (const run of runs) if (!placed.has(run.root) && !settled(run) && !nested.has(run.root)) nodes.push(unit(run));
   // Edits with no request behind them, such as an older change, still list in a card of their own.
   if (!owner && hasRows) nodes.push(<div key="edits" className="req">{summed
-    ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} />
-    : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} />}</div>);
+    ? <PassSummary projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} onTabs={setTabbed} />
+    : <ThreadResult projectId={projectId} thread={thread} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} onTabs={setTabbed} />}</div>);
   return <section ref={section} className="simple-turn" data-log-label="Edit thread" aria-label={thread.title} data-thread={thread.id}>
     {nodes}
   </section>;

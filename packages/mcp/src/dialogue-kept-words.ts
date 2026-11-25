@@ -5,7 +5,7 @@
 import { applyReviewRemovals, clipDuration, crossfadeJoins, sourceToTimeline, timelineToSource, type MediaAsset, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { JOIN_WORD_SECONDS, normalizeTranscriptToken } from "@scarlet/shared";
 import { audibleClipsByTrack, isTag, round3 } from "./analysis.js";
-import { SPEECH_DBFS, atQuietOrDip, dialogueAudioStream, extremeLevel, pageAt, plain, wordMargin, type JoinPage, type Word } from "./dialogue-acoustics.js";
+import { atQuietOrDip, dialogueAudioStream, extremeLevel, levelBars, pageAt, plain, wordMargin, type JoinPage, type Word } from "./dialogue-acoustics.js";
 import { partialRepeatAtJoin, type FragmentSide } from "./dialogue-fragment-repeat.js";
 import { REPEAT_WITHIN } from "./dialogue-leftovers.js";
 import { MAX_CROSSFADE, timelineJoins, type JoinSide } from "./timeline-perception.js";
@@ -237,7 +237,7 @@ export function readResumeQuote(tl: Timeline, project: Project, end: number, pag
       // measured dip or quiet point. When the edge sits at that dip and the word still sounds at
       // speaking level after it, that word is what resumes there (2026-11-22).
       return resumingAtDip && w.end > t + wordMargin &&
-        (extremeLevel(page, t, w.end, "highest")?.db ?? -Infinity) > SPEECH_DBFS;
+        (extremeLevel(page, t, w.end, "highest")?.db ?? -Infinity) > levelBars(page.levels).speech;
     });
     if (!words.length) return { result: "unverified" };
     const heard = words.slice(0, expected.length).flatMap(w => tokens(w.text));

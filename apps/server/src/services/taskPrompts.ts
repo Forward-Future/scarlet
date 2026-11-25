@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { buildSystemPrompt, type EarlierRequest } from "@scarlet/mcp/prompt";
-import { agentCapabilities, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, PROJECT_EDIT_TASK_KINDS, requestText, taskRunKind, workspaceCapabilities, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
+import { agentCapabilities, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, isStyleGuideEdit, PROJECT_EDIT_TASK_KINDS, requestText, taskRunKind, workspaceCapabilities, type Skill, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { notFound } from "../errors.js";
@@ -9,6 +9,7 @@ import { changeDiff, cutRevisionReference, passToRevise } from "./changes.js";
 import { mimeFor, styleGuidePath } from "./graphics.js";
 import { learningCheckContext } from "./learnings.js";
 import { assistantSkills } from "./skills.js";
+import { resolvePromptStyleGuides, styleGuideAssetPaths, styleGuideEdits } from "./styleGuides.js";
 import { runAttempts, runRoot } from "./runAttempts.js";
 import { handOffTypes, requestOf } from "./taskModels.js";
 import { answerHandoffInstruction, recoveryInstruction, savedChanges } from "./taskRecap.js";
@@ -19,9 +20,10 @@ import { resolveTimeline } from "./timeline.js";
  * its thread in a private Codex home beside its task folder, out of the user's own Codex thread list. Started afresh, a
  * pass resumed after a quit spent 120 more turns and 13.7M tokens finding its place again (2026-11-18). agy keeps a
  * Gemini session across its process (`session/resume`): two revisions restarted afresh after a quit measured their
- * edges all over again, four more minutes each (2026-11-23).
+ * edges all over again, four more minutes each (2026-11-23). Ollama, LM Studio and OpenRouter run in Claude Code
+ * sessions, which resume the same way.
  */
-export const RESUMABLE = new Set<string>(["claude", "codex", "gemini"]);
+export const RESUMABLE = new Set<string>(["claude", "codex", "gemini", "ollama", "lmstudio", "openrouter"]);
 
 /** What a run hears when it carries on in its own CLI session after Scarlet closed on it. */
 const INTERRUPTED = "Scarlet closed while you were working on this request, and it is open again. Carry on from where you stopped. " +
@@ -66,6 +68,20 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   const c = task.context;
   const editSkill = isSkillEdit(task) ? ctx.repos.skills.get(c.skillId ?? "") : undefined;
   if (isSkillEdit(task) && !editSkill) throw notFound("the skill this request revises");
+  const editGuideRecord = isStyleGuideEdit(task) ? ctx.repos.styleGuides.get(c.styleGuideId ?? "") : undefined;
+  if (isStyleGuideEdit(task) && !editGuideRecord) throw notFound("the style guide this request updates");
+  const editStyleGuide = editGuideRecord
+    ? {
+        guide: editGuideRecord,
+        assets: styleGuideAssetPaths(ctx, editGuideRecord),
+        attachedIds: c.attachments?.map(a => a.id),
+        hasPreview: Boolean(editGuideRecord.preview),
+        earlier: styleGuideEdits(ctx, editGuideRecord.id)
+          .filter(t => t.id !== task.id && (!task.createdAt || !t.createdAt || t.createdAt < task.createdAt))
+          .slice(-6)
+          .map(t => ({ asked: clipped(t.instruction, CHAT.asked), ...(t.summary?.trim() && { replied: clipped(t.summary, CHAT.message) }) })),
+      }
+    : undefined;
   // A run that edits no video is told nothing of the video's timeline, the edit it's about or the editor's skills: a
   // look at one frame, a read for a rule, a skill's revision. An edit's area checks each asked for a prompt, up to 20.
   // A hand-off edits the video for the request that handed it the work, so it is told what a request is.
@@ -111,6 +127,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     && agentCapabilities(task.agent, (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS).plan;
   const listens = isListenCheck(task);
   const told = { ...task, instruction };
+  const activeSkills = aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true);
   const systemPrompt = buildSystemPrompt({
     project: { project, timeline: !aside && project.head ? resolveTimeline(ctx, project, "head") : null },
     task: now ? { ...told, context: { ...c, changeId: now.change.id, cutIndex: now.index } } : told,
@@ -120,8 +137,9 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     // A resumed session already holds the earlier questions and answers.
     qa: resumeSession ? undefined : pairQuestionsAndAnswers(events),
     earlier: earlierRequests(ctx, task),
-    skills: aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true),
+    skills: activeSkills,
     editSkill: editSkill ?? undefined,
+    editStyleGuide,
     learningCheck: isLearningCheck(task) ? learningCheckContext(ctx, task) : undefined,
     areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
     listenCheck: isListenCheck(task) ? task.context.listenCheck : undefined,
@@ -132,7 +150,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     timeLimitMinutes: opts.timeLimitMinutes,
     // A request has its harness's own shell, file and web tools; a run that edits no video has Scarlet's alone.
     capabilities: { ...(aside && !listens ? agentCapabilities(task.agent) : workspaceCapabilities(agentCapabilities(task.agent, undefined, task.model))), plan: plans },
-    ...graphicsContext(ctx, project, task),
+    ...graphicsContext(ctx, project, task, activeSkills),
     // The kinds of work the editor gave other models, for a request to hand off; what a hand-off is doing, for one.
     ...(handOff && c.handOff ? { handOff: { name: c.handOff.name, description: c.handOff.description,
       request: requestText(requestOf(ctx, task)) } }
@@ -153,14 +171,16 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
 /**
  * What the editor gave a request for its graphics: the files attached to it and the project's style guide. A request that edits no video is given none.
  */
-function graphicsContext(ctx: Ctx, project: Project, task: Task) {
+function graphicsContext(ctx: Ctx, project: Project, task: Task, activeSkills: readonly Skill[]) {
   if (task.kind === "skill_from_change" || (isAsideTask(task) && !isHandOff(task))) return {};
   const attachments = (task.context.attachments ?? []).map(a => ({ ...a, mime: a.mime ?? mimeFor(a.name), path: join(ctx.paths.attachments(project.id), a.id, a.name) }));
   const guide = project.styleGuide;
   const guidePath = styleGuidePath(ctx, project.id, guide);
+  const libraryStyleGuides = resolvePromptStyleGuides(ctx, task, activeSkills);
   return {
     ...(attachments.length && { attachments }),
     ...(guide && { styleGuide: { name: guide.name, text: guide.text, ...(guidePath && { path: guidePath, mime: mimeFor(guidePath) }) } }),
+    ...(libraryStyleGuides.length && { libraryStyleGuides }),
   };
 }
 

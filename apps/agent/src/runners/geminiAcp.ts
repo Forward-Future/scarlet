@@ -96,7 +96,7 @@ export function flushStreams(st: GeminiParseState, events: RunnerEvent[]) {
 }
 
 /** Every tool Scarlet's MCP server can offer, the session-specific ones included. */
-const SCARLET_TOOLS = new Set<string>([...SCARLET_TOOL_NAMES, "tool_help", "tool_call", "skill_save_edit", "skill_save_from_change"]);
+const SCARLET_TOOLS = new Set<string>([...SCARLET_TOOL_NAMES, "tool_help", "tool_call", "skill_save_edit", "skill_save_from_change", "style_guide_update", "style_guide_preview_render", "style_guide_preview_get"]);
 /** How a harness names a Scarlet tool: agy offers them to the model as `mcp_scarlet_<tool>` (its `mcp_%s_%s`). */
 const SCARLET_PREFIX = /^(?:mcp__scarlet__|mcp_scarlet_|scarlet__|scarlet\.|scarlet\/|scarlet:)([a-z0-9_]+)(.?)/;
 

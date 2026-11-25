@@ -1,8 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { TimeRange } from "@scarlet/timeline";
 import { lengthLabel, playbackClock, preciseRange } from "../../lib/format";
+import { appLog } from "../../lib/appLog";
+import { isAltClearRangeKey } from "../../lib/hotkeys";
 import type { ScrubRelease } from "../../lib/player";
-import { DimMs } from "../ui/primitives";
+import { DimMs, Icon } from "../ui/primitives";
 import { QueuedImg } from "./QueuedImg";
 import { useUiStore } from "../../stores/ui";
 
@@ -108,6 +111,8 @@ interface RangeSelect {
   onScrubStart?(gesture: AbortSignal): ((release?: ScrubRelease) => void) | undefined;
   /** A press on the ruler that never became a range. It moves the playhead and keeps the range there was. */
   onPress(time: number): void;
+  /** The same press with Shift held: its time goes into the message being written. */
+  onShiftPress?(time: number): void;
   beforeGesture(): void;
 }
 
@@ -139,12 +144,14 @@ export function LoupePicture({ frame, last, fps, frameAt, sheet, foreground }: {
  * still on the ruler opens the same close-up, to draw a range by frames from there, and so does a drag that stops and
  * holds still: the end it was moving carries on by frames. A click on the ruler moves the playhead and keeps the range.
  */
-export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect = 16 / 9, range, onRange, onSeek, onScrubStart, onPress, beforeGesture }: RangeSelect) {
+export function useRangeSelect({ slider, drag, from, span, start, end, fps, edges, frameAt, sheet, pictureAspect = 16 / 9, range, onRange, onSeek, onScrubStart, onPress, onShiftPress, beforeGesture }: RangeSelect) {
   const [live, setLive] = useState<{ range: TimeRange; moving: "start" | "end"; at: number; snapped: boolean; precise?: number }>();
+  const [menu, setMenu] = useState<{ x: number; y: number }>();
   const gesture = useRef<Gesture>(undefined);
-  const now = useRef({ edges, fps, start, end, onRange, onSeek, onPress });
-  useLayoutEffect(() => { now.current = { edges, fps, start, end, onRange, onSeek, onPress }; });
+  const now = useRef({ edges, fps, start, end, onRange, onSeek, onPress, onShiftPress });
+  useLayoutEffect(() => { now.current = { edges, fps, start, end, onRange, onSeek, onPress, onShiftPress }; });
   useEffect(() => () => gesture.current?.stop(), []);
+  useEffect(() => { if (!range || live) setMenu(undefined); }, [range, live]);
 
   const place = (g: Gesture) => {
     if (g.paint !== undefined) cancelAnimationFrame(g.paint);
@@ -182,7 +189,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     const pressed = from + (e.clientX - rect.left) * perPixel;
     const anchor = edge && range ? (edge === "start" ? range.end : range.start)
       : snapTime(pressed, edges, RANGE_SNAP_PX * perPixel) ?? toFrame(clampTime(pressed, start, end), fps);
-    const id = e.pointerId;
+    const id = e.pointerId, shift = e.shiftKey;
     const g: Gesture = { id, anchor, edge, from, span, left: rect.left, width: rect.width, x0: e.clientX, x: e.clientX, moved: false, stillX: e.clientX, stop: () => {} };
     // A drag that stops and holds still goes into the close-up at the end it was moving, without letting go.
     const holdStill = () => {
@@ -215,9 +222,13 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       g.marked = drawn;
       g.stop();
       setLive(undefined);
-      if (drawn && g.last) now.current.onRange(g.last);
-      else if (!cancelled && !edge) {
-        now.current.onPress(clampTime(pressed, now.current.start, now.current.end));
+      if (drawn && g.last) {
+        // Once, as it is let go: the moves on the way are the seeks the player logs.
+        appLog("timeline", "range-set", { start: g.last.start, end: g.last.end, via: edge ? "handle" : "drag" });
+        now.current.onRange(g.last);
+      } else if (!cancelled && !edge) {
+        const at = clampTime(pressed, now.current.start, now.current.end);
+        if (shift && now.current.onShiftPress) now.current.onShiftPress(toFrame(at, now.current.fps)); else now.current.onPress(at);
       }
     };
     g.stop = () => {
@@ -253,8 +264,21 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
   const shown = live?.range ?? range;
   const lit = useUiStore(s => s.aimLit);
   const nudge = (edge: "start" | "end", e: KeyboardEvent<HTMLButtonElement>) => {
-    if (!range || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onRange(undefined); return; }
+    if (!range) return;
+    if (isAltClearRangeKey(e)) {
+      e.preventDefault(); e.stopPropagation();
+      appLog("timeline", "range-cleared", { via: "key", key: "alt+x" });
+      onRange(undefined);
+      return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "Escape" || (!e.shiftKey && (e.key === "Delete" || e.key === "Backspace"))) {
+      e.preventDefault();
+      e.stopPropagation();
+      appLog("timeline", "range-cleared", { via: "key", key: e.key });
+      onRange(undefined);
+      return;
+    }
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
     e.stopPropagation();
@@ -264,6 +288,24 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     const next = edge === "start" ? { start: Math.min(moved, range.end - 1 / fps), end: range.end } : { start: range.start, end: Math.max(moved, range.start + 1 / fps) };
     onRange(next, true);
     onSeek(edge === "start" ? next.start : next.end);
+  };
+  const onContextMenu = (e: MouseEvent<HTMLElement>) => {
+    if (!range || live) return;
+    const target = e.target instanceof Element ? e.target : null;
+    let onTarget = !!target?.closest(".timeline-range-pill, .timeline-range-handle, .timeline-range-zone");
+    if (!onTarget) {
+      const rect = slider.current?.getBoundingClientRect();
+      if (rect && rect.width > 0 && span > 0) {
+        const perPixel = span / rect.width;
+        const time = from + (e.clientX - rect.left) * perPixel;
+        const slack = RANGE_SNAP_PX * perPixel;
+        onTarget = time >= range.start - slack && time <= range.end + slack;
+      }
+    }
+    if (!onTarget) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY });
   };
 
   const percent = (t: number) => span ? (t - from) / span * 100 : 0;
@@ -277,7 +319,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       return <button key={edge} type="button" className={`timeline-range-handle is-${edge}${held ? " is-held" : ""}${held && live.snapped ? " is-snapped" : ""}`}
         style={{ left: `${percent(time)}%` }}
         aria-label={`${edge === "start" ? "Start" : "End"} of the marked range, ${playbackClock(time)}`}
-        title="Drag to adjust · hold for frame steps · ← → one frame"
+        title="Drag to adjust · hold for frame steps · ← → one frame · Esc to clear"
         onPointerDown={e => { if (begin(e, edge)) { e.stopPropagation(); e.currentTarget.focus({ preventScroll: true }); } }}
         data-range-handle="" onKeyDown={e => nudge(edge, e)} />;
     };
@@ -287,12 +329,107 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       <span aria-hidden="true" className={`timeline-range${live ? " is-live" : ""}${lit ? " is-lit" : ""}`} style={{ left: `${left}%`, width: `${Math.max(0, right - left)}%` }} />
       {live && live.precise === undefined && <span aria-hidden="true" className="timeline-range-time" style={{ left: `${(left + right) / 2}%` }}>
         <DimMs text={preciseRange(live.range.start, live.range.end)} /> · {lengthLabel(live.range.end - live.range.start)}</span>}
+      {!live && <RangePill mid={(left + right) / 2} range={shown} lit={lit} onClear={() => onRange(undefined)} onContextMenu={onContextMenu} />}
       {handle("start")}{handle("end")}
       {live?.precise !== undefined && edgeTime !== undefined && <RangeLoupe time={edgeTime} at={live.precise} fps={fps} last={lastFrameBefore(end, fps)}
         inside={live.moving === "end" ? "before" : "after"} snapped={live.snapped} edges={edges} frameAt={frameAt} sheet={sheet} pictureAspect={pictureAspect} />}
+      {menu && !live && range && <RangeMenu at={menu} onClear={() => { setMenu(undefined); onRange(undefined); }} onClose={() => setMenu(undefined)} />}
     </>;
   }
-  return { begin, layer, marking: !!live };
+  return { begin, layer, marking: !!live, onContextMenu };
+}
+
+/** Floating range readout and clear button anchored directly above the marked stretch on the timeline. */
+function RangePill({ mid, range, lit, onClear, onContextMenu }: {
+  mid: number; range: TimeRange; lit: boolean; onClear(): void; onContextMenu(e: MouseEvent<HTMLElement>): void;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const label = preciseRange(range.start, range.end);
+  const [half, setHalf] = useState(52);
+  useLayoutEffect(() => {
+    const width = ref.current?.offsetWidth;
+    if (width) setHalf(Math.ceil(width / 2));
+  }, [label]);
+  return <span
+    ref={ref}
+    className={`timeline-range-pill${lit ? " is-lit" : ""}`}
+    data-no-scrub-preview=""
+    style={{ left: `clamp(${half}px, ${mid}%, calc(100% - ${half}px))` }}
+    onPointerDown={e => e.stopPropagation()}
+    onContextMenu={onContextMenu}
+  >
+    <span className="timeline-range-pill-time"><DimMs text={label} /></span>
+    <button
+      type="button"
+      className="timeline-range-clear"
+      aria-label="Clear marked range"
+      title="Clear range (Esc)"
+      onPointerDown={e => e.stopPropagation()}
+      onClick={e => { e.stopPropagation(); onClear(); }}
+    >
+      <Icon name="x" size={10} />
+    </button>
+  </span>;
+}
+
+/** Right-click menu for the marked timeline range, portaled so nothing clips it and Esc closes it first. */
+function RangeMenu({ at, onClear, onClose }: { at: { x: number; y: number }; onClear(): void; onClose(): void }) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const itemRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState(at);
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el) return;
+    const inset = 8;
+    const w = el.offsetWidth || 148, h = el.offsetHeight || 36;
+    const x = Math.max(inset, Math.min(at.x, window.innerWidth - w - inset));
+    const y = Math.max(inset, Math.min(at.y, window.innerHeight - h - inset));
+    setPos({ x, y });
+    itemRef.current?.focus({ preventScroll: true });
+  }, [at.x, at.y]);
+  useEffect(() => {
+    const down = (e: globalThis.PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) onClose();
+    };
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    };
+    const dismiss = () => onClose();
+    document.addEventListener("pointerdown", down, true);
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("blur", dismiss);
+    window.addEventListener("resize", dismiss);
+    document.addEventListener("scroll", dismiss, true);
+    return () => {
+      document.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("blur", dismiss);
+      window.removeEventListener("resize", dismiss);
+      document.removeEventListener("scroll", dismiss, true);
+    };
+  }, [onClose]);
+  return createPortal(
+    <div
+      ref={menuRef}
+      role="menu"
+      aria-label="Marked range"
+      data-escape-owner=""
+      data-no-scrub-preview=""
+      className="timeline-range-menu card shadow-2xl p-1"
+      style={{ left: pos.x, top: pos.y }}
+      onPointerDown={e => e.stopPropagation()}
+      onContextMenu={e => e.preventDefault()}
+    >
+      <button ref={itemRef} type="button" role="menuitem" className="timeline-range-menu-item" onClick={onClear}>
+        <span>Clear range</span>
+        <kbd className="timeline-range-menu-key">Esc</kbd>
+      </button>
+    </div>,
+    document.body,
+  );
 }
 
 /**

@@ -48,6 +48,7 @@ const deleting = new Map<string, Promise<void>>();
  */
 function finishPurges(ctx: Ctx): Promise<void> {
   const pending = ctx.db.prepare("SELECT project_id FROM storage_purges").all() as {project_id: string}[];
+  let purged = 0;
   return ctx.track(Promise.all(pending.map(({ project_id: id }) => {
     let folder: string;
     try {
@@ -67,6 +68,7 @@ function finishPurges(ctx: Ctx): Promise<void> {
       try {
         await rm(folder, { recursive: true, force: true });
         ctx.db.prepare("DELETE FROM storage_purges WHERE project_id=?").run(id);
+        purged++;
       } catch (error) {
         ctx.log(`[trash] couldn't remove the folder of ${id} yet and will try again: ${(error as Error).message}`);
       } finally {
@@ -75,7 +77,9 @@ function finishPurges(ctx: Ctx): Promise<void> {
     })();
     deleting.set(folder, job);
     return job;
-  })).then(() => {}));
+  })).then(() => {
+    if (purged) ctx.log(`[trash] purged count=${purged}`);
+  }));
 }
 
 /** How many projects were removed for good. Their folders are deleted in the background (`ctx.pending`). */

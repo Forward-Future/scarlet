@@ -555,6 +555,29 @@ describe("timeline_first_cut indexed keeps", () => {
     } finally { await editor.close(); }
   });
 
+  it("starts a heard camera's keep where the screen recording begins when the camera started first", async () => {
+    // The camera started 1.5 s before the screen recording; it is heard, and word indices are its own.
+    const words = [{ text: "Hello", start: 2.0, end: 2.4 }, { text: "there.", start: 2.6, end: 3.0 }];
+    const cam: Transcript = { id: "tc", mediaId: "cam", segments: [{ id: "sc", start: 2, end: 3, text: "Hello there.", words }] };
+    mock.state.transcripts = { cam };
+    mock.state.project.media.push({ id: "cam", kind: "video", name: "camera.mp4", path: "camera.mp4", duration: 4, fps: 30, width: 1920, height: 1080, hasAudio: true, transcriptId: "tc" });
+    mock.state.waveform = (id, from, to, points) => spokenWaveform(id, from, to, points, words);
+    const editor = await connectEditor();
+    try {
+      const result = await editor.callTool({ name: "timeline_first_cut", arguments: {
+        intent: "requested", mediaId: "m1", description: "Sync the camera with the screen.", reason: "Both recordings play together.",
+        keep: [{ fromWord: 0, toWord: 1 }], layer: { mediaId: "cam", offset: -1.5, sound: true, framing: { scale: .25, x: .35, y: .35 } },
+      } }) as CallToolResult;
+      expect(result.isError, textOf(result)).toBeFalsy();
+      const posts = mock.requests.filter(r => r.method === "POST" && r.path === "/projects/prj_test/changes");
+      expect(posts, textOf(result)).toHaveLength(1);
+      const [v1, v2] = ProposeChangeRequest.parse(posts[0]!.body).timeline!.tracks;
+      expect(v1!.clips).toMatchObject([{ mediaId: "m1", sourceIn: 0, timelineIn: 0 }]);
+      expect(v2!.clips).toMatchObject([{ mediaId: "cam", sourceIn: 1.5, timelineIn: 0, volume: 1 }]);
+      expect(textOf(result)).toContain("Kept to m1's footage: keep[0] starts where m1 begins, leaving out 1.5 s of cam before it.");
+    } finally { await editor.close(); }
+  });
+
   it("leaves a cut unapplied when an indexed join cannot land in measured silence", async () => {
     const editor = await connectEditor();
     try {
@@ -1841,6 +1864,11 @@ describe("task events", () => {
       ["log", textOf(long)],
       ["question", "Keep the intro?"],
     ]);
+    // A question with a few clear answers hands them over too, for the editor to pick with one press.
+    await client.callTool({ name: "task_question", arguments: { text: "Keep the cold open?", choices: ["Keep it", "Cut it"] } });
+    expect(mock.state.events.at(-1)).toMatchObject({ type: "question", text: "Keep the cold open?", data: { choices: ["Keep it", "Cut it"] } });
+    const one = await client.callTool({ name: "task_question", arguments: { text: "Keep it?", choices: ["Yes"] } }) as CallToolResult;
+    expect(one.isError).toBe(true);
   });
   it("reads a save that asks for revision as a refusal, and a save as none", async () => {
     expect(toolRefusal({ content: [{ type: "text", text: JSON.stringify({ needsRevision: true, disputedEdges: [{ start: 1, end: 2 }], next: "Nothing was saved. Check the edge." }) }] }))
@@ -4351,7 +4379,7 @@ it("lets a request sent from an applied edit cut outside where that edit plays, 
   const session = (id: string, context: object) => connect(id, undefined, Task.parse({ id, projectId: tl.projectId, kind: "edit", agent: "claude", state: "running",
     instruction: "Take out the sentence before this too.", context: { version: tl.version, ...context }, createdBy: { type: "human", name: "Editor" } }));
   // The message box was aimed at an applied cut, so the request says where that cut plays: its join at 10 s and a moment either side.
-  const aimed = await session("aimed-at-edit", { changeId: "prior", editIndex: 0, editNumber: 1, time: 8.5, end: 11.5 });
+  const aimed = await session("aimed-at-edit", { changeId: "prior", editIndex: 0, time: 8.5, end: 11.5 });
   // The same times as a range the editor selected on the timeline.
   const selecting = await session("selected-range", { time: 8.5, end: 11.5 });
   const sentence = { start: 3, end: 8 };

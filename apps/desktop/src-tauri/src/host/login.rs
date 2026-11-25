@@ -172,8 +172,8 @@ impl LoginManager {
                         }
                         if let Some(url) = extract_url(&line).filter(|u| is_sign_in_url(u)) {
                             if url_seen.set(url.clone()).is_ok() {
-                                if agent == "gemini" && url.starts_with("https://") {
-                                    let _ = me.app.opener().open_url(&url, None::<&str>);
+                                if agent == "gemini" && url.starts_with("https://") && me.app.opener().open_url(&url, None::<&str>).is_err() {
+                                    log::warn!("{agent} sign-in: could not open the sign-in page in the browser");
                                 }
                                 me.report(&attempt, LoginStatus { agent: agent.clone(), state: "waiting".into(), url: Some(url), accepts_code, message: None });
                             }

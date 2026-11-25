@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { callNumbers, taskNeedsTranscripts, type SpeakerProgress, type Task, type TaskEvent } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { useProjectStore } from "../../stores/project";
+import { stagedCuts } from "../../lib/threads";
 import { useUiStore } from "../../stores/ui";
 import { blurOnPointerClick } from "../../lib/hotkeys";
 import { runProgress } from "../../lib/runProgress";
@@ -47,7 +48,8 @@ export function Said({ text, lead, className, fixed, children }: { text: string;
  *   plan, no list of what it did, and no percent but one: while the recordings are transcribed it says how far along
  *   they are. Its words shimmer. With no heading above it, Stop ends the line.
  * - When Scarlet asks something, or a request waits its turn: one row saying so, with its one action. A block whose
- *   heading already says where it stands (`banded`) leaves a question to the heading: its dot, the question and Answer.
+ *   heading already says where it stands (`banded`) leaves a question to the heading's dot: the question itself sits on
+ *   top of the message box.
  *   With no heading, the row opens the steps Scarlet took before it asked.
  * - When a run stops early: the row that says what it saved, with its one action.
  * - `say`: Scarlet's words, when it has any for the editor.
@@ -60,8 +62,8 @@ interface RunBundleProps {
   /** The history of the attempt Scarlet opened the request in, once the request was picked up again under this one. */
   opening?: readonly TaskEvent[];
   changes: readonly Change[];
-  /** The number a call of the waiting pass goes by in the window, when the window has numbered it. */
-  callNumber?(changeId: string, cutIndex: number): number | undefined;
+  /** Where a call of the waiting pass is in the video, as the window says it. */
+  callTime?(changeId: string, cutIndex: number): number | undefined;
   finalChange?: Change;
   /** Scarlet's words for the editor: a reply, a question, or why it stopped. */
   say?: ReactNode;
@@ -118,7 +120,7 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events: all, opening, changes, callNumber, say, result, onStop, actions, under }: RunBundleProps) {
+function WorkingRun({ task, events: all, opening, changes, callTime, say, result, onStop, actions, under }: RunBundleProps) {
   // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
   // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
   const events = useMemo(() => sinceRerun(task, all), [task, all]);
@@ -129,12 +131,13 @@ function WorkingRun({ task, events: all, opening, changes, callNumber, say, resu
   const progress = useMemo(() => runProgress(events), [events]);
   const voices = useProjectStore(s => s.current?.speakerProgress);
   const voice = progress.read && !progress.read.seconds ? progress.recordings?.map(id => voices?.[id]).find(Boolean) : undefined;
-  // A call goes by the number the window shows for it, which it keeps; one the window hasn't numbered, by its place among the asks.
-  const numberOf = useRef(callNumber);
-  numberOf.current = callNumber;
+  // A call goes by its time, as the window shows it; one the window hasn't placed, by where the pass staged it.
+  const timeOf = useRef(callTime);
+  timeOf.current = callTime;
   const doing = useMemo(() => runNow(events, aim?.note, (changeId, index) => {
     const pass = changes.find(c => c.id === changeId);
-    return numberOf.current?.(String(changeId), Number(index)) ?? (pass && callNumbers(pass, 0, false).get(index));
+    return timeOf.current?.(String(changeId), Number(index))
+      ?? (pass && callNumbers(pass, 0, false).has(index) ? stagedCuts(pass)[index]?.start : undefined);
   }), [events, aim, changes]);
   // While the run waits on its recordings' transcripts, the line says how far along they are: the one figure there.
   const tasks = useProjectStore(s => s.current?.tasks);
@@ -189,8 +192,8 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, held, 
   // One the editor holds back says so, as the tray does of the request that's next: it won't start by itself.
   const waitsOnEditor = waiting && !paused ? held : undefined;
   const label = waiting ? paused ? "Paused" : waitsOnEditor?.words ?? "Queued" : "Needs your answer";
-  // A question's steps open from its line. A question under a heading has no such line: the heading's dot, the question
-  // and Answer say it. Nor has a paused request: its heading says Paused.
+  // A question's steps open from its line. A question under a heading has no such line: the heading's dot says it, and
+  // the question is on top of the message box. Nor has a paused request: its heading says Paused.
   const line = !(banded && (asking || (waiting && paused)));
   const opens = asking && shown.length > 0;
   return <div className="req" data-state={asking ? "asking" : "working"} aria-label="Scarlet’s work" aria-busy={!asking}>

@@ -43,7 +43,7 @@ type CallState = "approved" | "skipped" | "open" | "revising";
 interface PassCall {
   index: number;
   askOrder?: number;
-  /** Its number, as on its card and the timeline: the order it reached the editor in. */
+  /** The order it reached the editor in, which names its row for good. The editor never sees it: a call goes by its time. */
   n: number;
   /** Where its row goes in the list. */
   start: number;
@@ -66,9 +66,10 @@ export interface OpenPass {
   threadId: string;
   /** How many cuts the pass proposes. */
   cuts: number;
-  /** Every call in the pass, numbered, with where it stands: the progress the summary card shows. */
+  /** Every call in the pass, with where it stands: the progress the summary card shows. */
   calls: PassCall[];
-  /** The numbers of the request's edits that ask for a look, by `editKey`: they count on from the calls. */
+  /** The request's edits that ask for a look, by `editKey`: the order they reached the editor in, after the calls, and
+   *  the name they go by, at their time ("Cut at 0:11"). */
   editNumbers: ReadonlyMap<string, { n: number; name: string }>;
   openCall(index: number): void;
   running: boolean;
@@ -86,7 +87,7 @@ export interface OpenPass {
 
 export type HoveredReviewRow = { threadId: string; editKey?: string; call?: number };
 /** `state`: amber while it asks for a look, filled once kept, as its row in the chat says. */
-type ReviewMarker = { edit: ThreadEdit; number: number; total: number; state?: "check" | "kept" };
+type ReviewMarker = { edit: ThreadEdit; state?: "check" | "kept" };
 export type LocatedReview = { head: string | null; markers: ReviewMarker[] };
 export type ReportReviewMarkers = (threadId: string, review?: LocatedReview) => void;
 
@@ -144,12 +145,11 @@ export interface ChatActions {
   revise(thread: Thread, change: Change): void;
   /**
    * What a request about one cut is called while that cut is a call of the pass waiting now, or an edit of its request
-   * that asks for a look: "Cut 2", its number, the same on its line in the list, on its card and on the timeline. Any
-   * other cut goes by its time.
+   * that asks for a look: by its time ("Cut at 2:47"), the same on its row in the list, on its card and in the box's tag.
    */
   cutName?(about: { changeId?: string; cutIndex?: number; editIndex?: number }): string | undefined;
-  /** The number a call of the waiting pass goes by, for a line that names it ("Listening to Cut 2"). */
-  callNumber?(changeId: string, cutIndex: number): number | undefined;
+  /** Where a call of the waiting pass is in the video, for a line that names it ("Listening to the cut at 2:47"). */
+  callTime?(changeId: string, cutIndex: number): number | undefined;
   /** Open Learnings with this rule in view, from the line under the request it came from. */
   reviewLearning?(learningId: string): void;
 }

@@ -161,6 +161,11 @@ pub fn workspace_env(env: &HashMap<String, String>, workspace: Option<&super::ty
 
 /// Dispatch on `opts.agent`.
 pub async fn run_agent(mut opts: RunOptions) -> RunResult {
+    let provider = super::providers::is_extra_provider(&opts.agent);
+    // An OpenRouter key saved in Settings is for OpenRouter's runs alone.
+    if !provider {
+        opts.env = super::providers::cli_env(&opts.env);
+    }
     // Scarlet's own variables stay out of every CLI, so its shell never holds the token.
     opts.env = workspace_env(&opts.env, opts.workspace.as_ref());
     let invalid_model = opts.model.as_deref().is_some_and(|m|
@@ -174,6 +179,15 @@ pub async fn run_agent(mut opts: RunOptions) -> RunResult {
         "claude" => super::runner_claude::run_claude(opts).await,
         "codex" => super::runner_codex::run_codex(opts).await,
         "gemini" => super::runner_gemini::run_gemini(opts).await,
+        // Claude Code, pointed at the provider. It takes no effort or speed of Claude's.
+        _ if provider => match super::providers::run_env(&opts.agent, opts.model.as_deref(), &opts.env) {
+            Ok(env) => {
+                opts.env = env;
+                (opts.effort, opts.service_tier) = (None, None);
+                super::runner_claude::run_claude(opts).await
+            }
+            Err(e) => RunResult::failed(e),
+        },
         other => RunResult::failed(format!("no runner for agent \"{other}\"")),
     }
 }
@@ -286,6 +300,58 @@ mod tests {
         }
         let unknown = run("cursor", None, None, None).await;
         assert_eq!((unknown.ok, unknown.error.as_deref()), (false, Some("no runner for agent \"cursor\"")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_provider_run_is_claude_code_pointed_at_the_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("seen");
+        // A Claude Code that notes its arguments and environment, then says nothing.
+        let then = format!("printf '%s\\n' \"$@\" > '{0}.args'; env > '{0}.env'", out.display());
+        let bin = testing::fake_cli(dir.path(), &[], &then);
+        let run = |agent: &str, model: Option<&str>, env: &[(&str, &str)]| {
+            let (mut opts, _) = testing::options(agent, dir.path(), Some(bin.clone()));
+            opts.model = model.map(String::from);
+            (opts.effort, opts.service_tier) = (Some("high".into()), Some("fast".into()));
+            opts.env = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            run_agent(opts)
+        };
+        let read = |ext: &str| std::fs::read_to_string(format!("{}.{ext}", out.display())).unwrap_or_default();
+        let base = [("PATH", "/usr/bin:/bin"), ("OLLAMA_HOST", "127.0.0.1:11500"), ("CLAUDE_CODE_OAUTH_TOKEN", "oauth"), ("OPENROUTER_API_KEY", "sk-or-v1-secret"), ("SCARLET_OPENROUTER_KEY_SAVED", "1")];
+
+        run("ollama", Some("qwen3:30b"), &base).await;
+        let (args, env) = (read("args"), read("env"));
+        for line in ["ANTHROPIC_BASE_URL=http://127.0.0.1:11500", "ANTHROPIC_AUTH_TOKEN=ollama", "ANTHROPIC_API_KEY=", "ANTHROPIC_MODEL=qwen3:30b", "CLAUDE_CODE_SUBAGENT_MODEL=qwen3:30b", "CLAUDE_CODE_ATTRIBUTION_HEADER=0"] {
+            assert!(env.lines().any(|l| l == line), "{line} missing from\n{env}");
+        }
+        assert!(!env.contains("CLAUDE_CODE_OAUTH_TOKEN") && !env.contains("sk-or-v1-secret"), "{env}");
+        // The model, and no effort or speed of Claude's. `--settings` keeps the run on Ollama over the editor's own
+        // Claude Code settings.
+        assert!(args.contains("--model\nqwen3:30b\n") && !args.contains("--effort") && !args.contains("--bare"), "{args}");
+        let settings: Value = serde_json::from_str(args.lines().skip_while(|l| *l != "--settings").nth(1).unwrap()).unwrap();
+        assert_eq!(settings["env"]["ANTHROPIC_BASE_URL"], "http://127.0.0.1:11500");
+        assert_eq!(settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "qwen3:30b");
+        assert!(settings.get("fastMode").is_none() && settings["env"].get("ANTHROPIC_AUTH_TOKEN").is_none());
+
+        // OpenRouter's key goes in the environment as the token, never on the command line.
+        run("openrouter", Some("openai/gpt-5"), &base).await;
+        let (args, env) = (read("args"), read("env"));
+        assert!(env.lines().any(|l| l == "ANTHROPIC_AUTH_TOKEN=sk-or-v1-secret") && env.lines().any(|l| l == "ANTHROPIC_BASE_URL=https://openrouter.ai/api"), "{env}");
+        assert!(!args.contains("sk-or-v1-secret"), "{args}");
+
+        // Claude's own runs get none of it, nor a key saved for OpenRouter.
+        run("claude", Some("opus"), &base).await;
+        let (args, env) = (read("args"), read("env"));
+        assert!(!env.contains("ANTHROPIC_BASE_URL") && !env.contains("sk-or-v1-secret") && env.contains("CLAUDE_CODE_OAUTH_TOKEN=oauth"), "{env}");
+        let settings: Value = serde_json::from_str(args.lines().skip_while(|l| *l != "--settings").nth(1).unwrap()).unwrap();
+        assert!(settings.get("env").is_none(), "{settings}");
+
+        // Without a key or a model nothing starts.
+        std::fs::remove_file(format!("{}.args", out.display())).unwrap();
+        assert_eq!(run("openrouter", Some("openai/gpt-5"), &[("PATH", "/bin")]).await.error.as_deref(), Some(super::super::providers::NO_OPENROUTER_KEY));
+        assert_eq!(run("lmstudio", None, &[("PATH", "/bin")]).await.error.as_deref(), Some("Choose a model for LM Studio first."));
+        assert!(read("args").is_empty());
     }
 
     #[tokio::test]

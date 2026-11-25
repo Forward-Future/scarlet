@@ -282,7 +282,7 @@ function CloseIcon() {
   );
 }
 
-export type IconName = "fullscreen" | "more" | "undo" | "refresh" | "play" | "pause" | "mic" | "stop" | "plus" | "chevron" | "check" | "checks" | "x" | "note" | "chat" | "diff" | "down" | "upload" | "export" | "link" | "trash" | "search" | "zoom" | "settings" | "help" | "compare" | "film" | "library" | "history" | "clock" | "stack" | "audio" | "image" | "arrow" | "monitor" | "review" | "star" | "trim" | "captions" | "scissors" | "bulb" | "pencil" | "box" | "point" | "file";
+export type IconName = "fullscreen" | "more" | "undo" | "refresh" | "play" | "pause" | "mic" | "stop" | "plus" | "chevron" | "check" | "checks" | "x" | "note" | "chat" | "diff" | "down" | "upload" | "export" | "link" | "trash" | "search" | "zoom" | "settings" | "help" | "compare" | "film" | "library" | "history" | "clock" | "stack" | "audio" | "image" | "arrow" | "monitor" | "review" | "star" | "trim" | "captions" | "scissors" | "bulb" | "pencil" | "box" | "point" | "file" | "paperclip";
 
 const iconPaths: Record<IconName, ReactNode> = {
   scissors: <><circle cx="4" cy="4" r="2" /><circle cx="4" cy="12" r="2" /><path d="M5.4 5.4 8 8m5.3-5.3-7.9 7.9m4.4-.7 3.5 3.5" /></>,
@@ -331,6 +331,7 @@ const iconPaths: Record<IconName, ReactNode> = {
   compare: <><path d="M2.75 5.25A1.75 1.75 0 0 1 4.5 3.5H8v9H4.5a1.75 1.75 0 0 1-1.75-1.75z" fill="currentColor" stroke="none" opacity=".45" /><rect x="2.75" y="3.5" width="10.5" height="9" rx="1.75" /><path d="M8 1.75v12.5" /></>,
   bulb: <path d="M5.6 10.4a4.2 4.2 0 1 1 4.8 0c-.4.3-.6.8-.6 1.3H6.2c0-.5-.2-1-.6-1.3zM6.6 14h2.8" />,
   file: <path d="M9.5 1.75H4.25a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1V5zm0 0V5h3.25" />,
+  paperclip: <path d="M12.2 6.8 6.9 12.1a2.7 2.7 0 0 1-3.8-3.8l5.8-5.8a1.8 1.8 0 0 1 2.55 2.55L5.7 10.8a.9.9 0 0 1-1.27-1.27L9.7 4.3" />,
 };
 
 export function Icon({ name, size = 14 }: { name: IconName; size?: number }) {

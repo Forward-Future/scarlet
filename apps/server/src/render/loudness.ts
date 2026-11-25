@@ -4,6 +4,7 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { audioMapArgs, heardAudioKey, LOCAL_MEDIA_INPUT, type HeardAudio } from "@scarlet/render";
 import type { Ctx } from "../context.js";
+import { logId } from "../logText.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { FFMPEG, ffmpegPosition } from "./ffmpeg.js";
 
@@ -75,7 +76,9 @@ export function measuredLoudness(ctx: Ctx, file: string, identity: unknown[],
     const measured = await ctx.track(measureLoudness(file, from, to, stop ? AbortSignal.any([work, stop]) : work, audio), projectId);
     if (saved) {
       const temp = `${saved}.${process.pid}.tmp`;
-      await writeFile(temp, JSON.stringify(measured)).then(() => rename(temp, saved)).catch(() => {});
+      // Measured again next time instead; the figure in hand is still right.
+      await writeFile(temp, JSON.stringify(measured)).then(() => rename(temp, saved))
+        .catch(error => ctx.log(`[render] loudness-cache-write-failed project=${logId(projectId!)} ${error instanceof Error ? error.message : String(error)}`));
     }
     return measured;
   }, signal ? { signal } : {});

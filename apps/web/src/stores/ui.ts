@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { clipsAt, type Timeline } from "@scarlet/timeline";
 import { AgentId, type EditRef } from "@scarlet/shared";
 import { desktop, isDesktop, type AgentPick } from "../lib/desktop";
+import { appLog, errorName } from "../lib/appLog";
 
 /** Playhead context the agent panel attaches to the next instruction. */
 export interface AgentContext {
@@ -19,8 +20,6 @@ export interface AgentContext {
   editIndex?: number;
   /** Original edit represented by this review row. Local to the renderer, including saved drafts. */
   reviewRef?: EditRef;
-  /** Number shown on the thread timeline. The agent uses changeId and editIndex for identity. */
-  editNumber?: number;
   /** The other edits of the moment the message is about, when the editor was on a moment of the list and not one edit. */
   momentEdits?: { changeId: string; spot: number; label?: string }[];
   /**
@@ -61,6 +60,33 @@ export function editTargetAt(time: number, version?: string, timeline?: Timeline
  */
 export const playheadPoints = new WeakSet<AgentContext>();
 
+/**
+ * Words put into a message where the cursor is: a time picked on the timeline. `replaces`, when it is still in the
+ * message, is what the new words take the place of (a marked stretch whose end moved); empty words take it out.
+ */
+export function spliceDraft(draft: string, at: number, text: string, replaces?: string): { text: string; caret: number } {
+  const old = replaces ? draft.indexOf(replaces) : -1;
+  if (old >= 0) {
+    if (text) return { text: draft.slice(0, old) + text + draft.slice(old + replaces!.length), caret: old + text.length };
+    // Taken out, with one of the spaces it stood between.
+    const before = draft.slice(0, old), after = draft.slice(old + replaces!.length);
+    const joined = before.endsWith(" ") && (after.startsWith(" ") || !after) ? before.slice(0, -1) + after : before + after;
+    return { text: joined, caret: Math.min(old, joined.length) };
+  }
+  if (!text) return { text: draft, caret: Math.min(at, draft.length) };
+  const pos = Math.max(0, Math.min(at, draft.length));
+  const before = draft.slice(0, pos), after = draft.slice(pos);
+  const lead = before && !/\s$/.test(before) ? " " : "", tail = /^\s/.test(after) ? "" : " ";
+  return { text: before + lead + text + tail + after, caret: before.length + lead.length + text.length + 1 };
+}
+/** The message box on the page, which knows where its cursor is. With none, the words go at the message's end. */
+export const draftInserter: { insert?: (text: string, replaces?: string) => void } = {};
+export function insertInDraft(text: string, replaces?: string) {
+  if (draftInserter.insert) return draftInserter.insert(text, replaces);
+  const box = useUiStore.getState();
+  box.setAgentDraft(spliceDraft(box.agentDraft, box.agentDraft.length, text, replaces).text);
+}
+
 /** The moment a new edit's message is about, when its target is one time on the timeline: not a cut, an edit or a stretch of words. */
 export function pointOf(context: AgentContext | "whole" | null | undefined) {
   return context && context !== "whole" && !context.changeId && context.end === undefined && !context.label ? context : undefined;
@@ -68,6 +94,8 @@ export function pointOf(context: AgentContext | "whole" | null | undefined) {
 
 const AGENT_KEY = "scarlet.agent";
 const RUN_TOKENS_KEY = "scarlet.runTokens";
+const NEW_LAYOUT_KEY = "scarlet.newLayout";
+const STYLE_GUIDES_KEY = "scarlet.styleGuides";
 const FIRST_EDIT_HINT_KEY = "scarlet.firstEditHint";
 const SIGN_IN_LATER_KEY = "scarlet.signInLater";
 
@@ -157,6 +185,14 @@ interface UiState {
   showRunTokens: boolean;
   setShowRunTokens(v: boolean): void;
 
+  /** Try the new three-column workspace layout (Beta). Off by default unless turned on in Settings → General. */
+  newLayout: boolean;
+  setNewLayout(v: boolean): void;
+
+  /** Try Style guides (Beta): reusable visual styles with previews and @name mentions. Off by default. */
+  styleGuidesBeta: boolean;
+  setStyleGuidesBeta(v: boolean): void;
+
   /** Context pinned to the next agent instruction (from transcript span, note popover, etc). */
   draftOwner: string | null;
   savedDrafts: Record<string, ComposerDraft>;
@@ -220,7 +256,9 @@ function loadDrafts(): Record<string, ComposerDraft> {
       if (draft.playheadPoint && agentContext && agentContext !== "whole") playheadPoints.add(agentContext);
       return [[owner, { agentDraft: draft.agentDraft, agentContext }]];
     }));
-  } catch {
+  } catch (error) {
+    // Unreadable drafts are dropped: the messages being written when Scarlet last closed are gone, and the log says so.
+    appLog("error", "drafts-unreadable", { name: errorName(error) }, { level: "warn" });
     return {};
   }
 }
@@ -277,6 +315,24 @@ export const useUiStore = create<UiState>((set, get) => ({
       else localStorage.setItem(RUN_TOKENS_KEY, "hidden");
     } catch { /* Keep the choice for this session. */ }
     set({ showRunTokens: v });
+  },
+
+  newLayout: (() => { try { return localStorage.getItem(NEW_LAYOUT_KEY) === "1"; } catch { return false; } })(),
+  setNewLayout: (v) => {
+    try {
+      if (v) localStorage.setItem(NEW_LAYOUT_KEY, "1");
+      else localStorage.removeItem(NEW_LAYOUT_KEY);
+    } catch { /* Keep the choice for this session. */ }
+    set({ newLayout: v });
+  },
+
+  styleGuidesBeta: (() => { try { return localStorage.getItem(STYLE_GUIDES_KEY) === "1"; } catch { return false; } })(),
+  setStyleGuidesBeta: (v) => {
+    try {
+      if (v) localStorage.setItem(STYLE_GUIDES_KEY, "1");
+      else localStorage.removeItem(STYLE_GUIDES_KEY);
+    } catch { /* Keep the choice for this session. */ }
+    set({ styleGuidesBeta: v });
   },
 
   draftOwner: null,
@@ -371,5 +427,12 @@ useUiStore.subscribe((state, previous) => {
   try {
     if (Object.keys(drafts).length) localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
     else localStorage.removeItem(DRAFTS_KEY);
-  } catch { /* Drafts stay in memory if storage is unavailable. */ }
+  } catch (error) {
+    // Drafts stay in memory if storage is unavailable, and would then be lost with a quit: the log says so, once.
+    if (!draftsUnsaved) appLog("error", "drafts-not-saved", { name: errorName(error), drafts: Object.keys(drafts).length }, { level: "warn" });
+    draftsUnsaved = true;
+    return;
+  }
+  draftsUnsaved = false;
 });
+let draftsUnsaved = false;

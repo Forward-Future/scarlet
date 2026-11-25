@@ -17,6 +17,14 @@ export function requestPosition({ reviewRef: _local, ...position }: AgentContext
   return position;
 }
 
+/** The same decision on several edits at once, as Mark all done records Keep on every low-risk edit. */
+export function recordEditReviews(projectId: string, refs: readonly (EditRef & { reviewRef?: EditRef })[], decision: EditReviewRequest["decision"]) {
+  for (const ref of refs) {
+    const { changeId, spot } = ref.reviewRef ?? ref;
+    void api.recordEditReview(projectId, { changeId, spot, decision }).catch(() => {});
+  }
+}
+
 export function recordEditReview(projectId: string, target: AgentContext | null | undefined, decision: EditReviewRequest["decision"]) {
   if (!target?.changeId || target.editIndex === undefined) return;
   // A draft saved before review telemetry still has its original local edit coordinates.

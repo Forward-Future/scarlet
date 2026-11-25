@@ -6,6 +6,29 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Dialogue cuts now place cleanly in rooms with steady background noise, like a fan, air conditioning or traffic hum, without cutting into soft word endings.
+- Settings › About (and the startup error screen) now have a Report a problem button that saves a log zip and opens a pre-filled bug report you can drag it into. It reminds you that reports are public and the logs show file and folder names.
+- In the beta three-column layout, the middle edits column can now be resized from its right edge, every row stays on a single line, and hovering a row shows the full line in a Scarlet tooltip.
+- Settings › Usage is now organized into cleaner Tokens and Storage cards with a token breakdown bar, 14-day activity chart, tabbed breakdowns by project, provider and model, live plan limits for signed-in subscriptions, and one-click Clear all for cached renders.
+- Cuts and edits now go by their time everywhere instead of a number: rows start with their time, the timeline shows plain dots (filled once kept, amber while they wait), and cards, the message box's tag and Scarlet's replies say "Cut 2:47" or "Edit 0:11", in both the current and the beta layout.
+- Diagnostics in Settings › Advanced is now cleaner, with separate rows for each set-up provider, clearer Open and Logs buttons, and internal paths tucked under Technical details.
+- Times you type in the message box are now plain gray text instead of sitting in gray boxes. They still jump the video there when clicked, and light up with an underline on hover.
+- Settings › Advanced is simplified to Transcription language, Preview quality and an on/off Hardware acceleration switch, saved immediately without a Save button; Scarlet handles the rest automatically.
+- On Windows, Install Gemini in Settings › Models now finishes, instead of saying the installation did not finish and Gemini isn't installed.
+- Scarlet can now edit with models running on your own computer through Ollama or LM Studio, or with hosted models through OpenRouter. Set them up under Other providers in Settings › Models: each shows up in the model selector only once it has models ready, and OpenRouter's models stay out of the selector until you turn on the ones you want.
+- After you click the timeline's zoom slider, its − or +, "Scarlet is editing", or Check or Show source on a card, Space plays and pauses and ← → skip again, instead of going to the control you clicked.
+- Pressing "Scarlet is editing" under the timeline now shows and lights the request also when it is folded to its heading, or sitting in the beta edits column.
+- With the Transcript (or the beta edits column) open, the chat and Transcript can no longer be dragged so wide that the player has no room between them.
+- Words you write in Settings › Talking to you stay in the field when they couldn't be saved, so you can save them again.
+- In Settings › Task models, adding or deleting a task right after renaming one no longer makes a row blink away.
+- Taking the tag off the message box, deleting what you wrote and pressing ⌘Z now brings your words back, instead of the tag.
+- On a marked frame, Undo now puts a mark you moved back where it was. Esc closes an open menu first and leaves your marks.
+- A link Scarlet writes to an address with brackets in it, such as a Wikipedia page, now opens the right page, and an address Scarlet doesn't open says itself whole on hover.
+- When FFmpeg is missing, its notice no longer fills the middle of the first screen, and an install you started still says Installing in Settings.
+- Settings › Listening names a model that is signed out by its name, instead of "default".
+- The Audio label beside a file's track picker in Media now matches the text around it.
+- Settings › General now has a "New workspace layout (Beta)" switch (off by default) to try the three-column edits panel, Low Risk Edits with Mark all done, chat bubbles, question panel over the message box, and one-row revisions, and switch back any time.
+- Low risk edits in For you are now a small switch, and turning it on or off no longer moves the chat: their rows open in place among the ones that wait and Scarlet's reply stays put. Their rows open and close with a smooth, staggered animation. Every row in For you now leads with its time, so the list no longer swaps numbers for times, and ↑ ↓ step down it in that order.
 - Settings › Models has Task models: choose which model does each kind of work, such as Cutting or Motion graphics, or add your own. The chat's model hands that work to the model you chose, and each edit made that way says which model made it on its card.
 - A request's list of edits now has more room under its For you, Working and Done tabs, so the first row no longer sits right against them.
 - When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.

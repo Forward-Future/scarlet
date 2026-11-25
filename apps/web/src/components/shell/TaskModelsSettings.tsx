@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { TASK_MODELS_MAX, taskModelChoice, taskModelId, type AgentHost, type AgentId, type TaskModelType } from "@scarlet/shared";
 import { AGENT_LABEL, onlineAgents, useHostsStore, type OnlineAgent } from "../../stores/hosts";
-import { modelChoices, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
+import { isModelHidden, modelChoices, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
 import { TaskModelPicker } from "../agent/TaskModelPicker";
 import { Icon, InlineError } from "../ui/primitives";
 import { useServerSetting } from "./useServerSetting";
@@ -19,7 +19,7 @@ export function taskModelName(hosts: readonly AgentHost[], by: { agent: string; 
  */
 export function TaskModelsSettings() {
   const { hosts, customOpenaiModels, customClaudeModels, customGeminiModels, status } = useHostsStore();
-  const { hidden } = useModelPreferences();
+  const prefs = useModelPreferences();
   const { value, error, choose } = useServerSetting("taskModels");
   const [focusId, setFocusId] = useState<string>();
   if (!value) return error ? <InlineError>{error}</InlineError> : null;
@@ -33,7 +33,7 @@ export function TaskModelsSettings() {
     setFocusId(id);
     save([...value, { id, name: "New task", description: "", model: "same" }]);
   };
-  const choicesFor = (type: TaskModelType) => all.filter(c => !hidden.includes(c.key) || c.key === type.model);
+  const choicesFor = (type: TaskModelType) => all.filter(c => !isModelHidden(prefs, c.key) || c.key === type.model);
   // A model chosen that isn't signed in now stays chosen, and says so. While the models are read, it isn't called missing.
   const missingFor = (type: TaskModelType) => {
     const saved = type.model !== "same" && status !== "loading" && !all.some(c => c.key === type.model) ? taskModelChoice(type) : undefined;
