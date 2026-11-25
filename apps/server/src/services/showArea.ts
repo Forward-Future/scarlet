@@ -11,7 +11,7 @@ import { AREA_HOLDS_AT, AREA_PICTURE_CHANGE, AREA_SIDES, SHOW_EDGE_HEIGHT, SHOW_
   type AreaBox, type AreaSide, type HeldArea, type ShowArea } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest, notFound } from "../errors.js";
-import { areaAt, wholePicture } from "@scarlet/shared";
+import { agentCapabilities, areaAt, wholePicture } from "@scarlet/shared";
 import { atomicWriteFile, errorMessage, rememberLast } from "../util.js";
 import { FINISHED_TASK, createTask } from "./tasks.js";
 import { pictureChanges } from "./pictureCuts.js";
@@ -147,9 +147,9 @@ const ASKS_AT_ONCE = 12;
 
 /**
  * Ask what viewers may see at these source seconds of a recording: a short run of its own for each, with the asking
- * request's agent and model, beside that request and outside the project's queue. Each looks at one full-size frame and
- * saves an area. Waits for them up to `waitMs`. A second an area already holds for starts none unless asked `again`, and
- * neither does one in a stretch another run is already looking at.
+ * request's agent and model, beside that request and outside the project's queue, when that model can see images. Each
+ * looks at one full-size frame and saves an area. Waits for them up to `waitMs`. A second an area already holds for
+ * starts none unless asked `again`, and neither does one in a stretch another run is already looking at.
  *
  * A recording with no area yet gets one look before the rest: a camera's answer is the whole picture, which holds for
  * all of it, and ten looks at once all said so (29 of one pass's 48 looks were at its camera, 2026-11-17). Once two
@@ -157,7 +157,10 @@ const ASKS_AT_ONCE = 12;
  */
 export async function askAreas(ctx: Ctx, media: VideoMedia, opts: { seconds: number[]; taskId: string; waitMs: number; again?: boolean }): Promise<{ asked: number; answered: number; waiting: number }> {
   const asker = ctx.repos.tasks.get(opts.taskId);
-  if (!asker || asker.projectId !== media.projectId || asker.agent === "api" || asker.kind === "area_check") return { asked: 0, answered: 0, waiting: 0 };
+  if (!asker || asker.projectId !== media.projectId || asker.agent === "api" || asker.kind === "area_check"
+    || !agentCapabilities(asker.agent, (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS, asker.model).images) {
+    return { asked: 0, answered: 0, waiting: 0 };
+  }
   const deadline = Date.now() + opts.waitMs;
   let state = await showArea(ctx, media, { waitMs: Math.min(opts.waitMs, 240_000) });
   if (!state.done) return { asked: 0, answered: 0, waiting: 0 };

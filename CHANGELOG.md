@@ -67,6 +67,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - When the chat's model hands work to the model you chose for it in Task models, that model now hears what you asked in your own words, not only the chat model's brief.
 - When the model you chose for a kind of work, such as Cutting, isn't sure about an edit, the edit now waits for you to check it, as when the chat's model flags one.
 - With Cutting given to another model in Task models, that model can now read the dialogue and check its cuts for repeats, instead of being refused.
+- With a model that can't see pictures, such as one from Ollama or LM Studio, Scarlet no longer has it look at a frame to find what viewers may see of a screen recording.
 
 ## November 23, 2026
 
