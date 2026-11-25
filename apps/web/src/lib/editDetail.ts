@@ -15,6 +15,15 @@ const QUOTE_MOST = 90;
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const seconds = (value: number) => `${Math.round(value * 10) / 10} s`;
 const plainName = (name: string) => name.replace(/\.[a-z0-9]{2,5}$/i, "");
+/**
+ * Default camera, phone, and screen-recorder names (such as "2026-11-24 10-26-50" or "IMG_4821") tell the editor
+ * nothing about what is in the clip, so the card leaves them out unless the clip has a label of its own.
+ */
+const RAW_MEDIA_NAME = /^(?:(?:screen\s*recording|screenshot|recording|cleanshot|movie\s*recording|audio\s*recording|video|audio|capture|clip|take)[\s_-]*)?(?:\d{4}[-_.]\d{2}[-_.]\d{2}(?:(?:[\s_T-]+|[\s_]+at[\s_]+)\d{1,2}[-_.:]\d{2}(?:[-_.:]\d{2})?(?:[\s_]*(?:am|pm))?)?|\d{8}[_-]\d{6,9})[\s_-]*(?:\(\d+\)|\d+)?$|^(?:img|vid|mov|mvi|dsc|dscf|dscn|pxl|dji|gopr|gh\d{2}|gx\d{2}|mah|clip|rec|cam|c|a\d{3}c\d{3})[_-]?\d{3,}(?:[_-][a-z0-9]+)*$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^\d+$/i;
+const helpfulName = (name: string | undefined) => {
+  const clean = name?.trim();
+  return clean && !RAW_MEDIA_NAME.test(plainName(clean)) ? clean : undefined;
+};
 const quote = (text: string) => {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat ? `“${flat.length > QUOTE_MOST ? `${flat.slice(0, QUOTE_MOST - 1).trimEnd()}…` : flat}”` : undefined;
@@ -82,8 +91,10 @@ export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind
   }
   const mediaName = (clip: Clip | undefined) => {
     if (clip?.kind !== "media") return;
+    const labeled = helpfulName(clip.label);
+    if (labeled) return labeled;
     const file = media.find(m => m.id === clip.mediaId);
-    return file && plainName(file.name);
+    return file && helpfulName(plainName(file.name));
   };
   const rangeOf = (clip: Clip | undefined) => {
     if (!clip) return;
@@ -104,7 +115,11 @@ export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind
       const track = typeof op.trackId === "string" ? trackOf.get(op.trackId) : undefined;
       const moves = levelWords(clip.volumeKeyframes, clip.volume ?? 1), cleaned = voiceWords(clip.effects);
       const sound = [moves && `${name ?? "Sound"} ${moves}`, cleaned !== undefined ? `Voice cleanup${cleaned ? ` ${cleaned}` : ""}` : undefined];
-      if (track?.kind === "audio") return [name && `Added ${name}${clip.volume !== undefined && clip.volume !== 1 ? `, ${gain(clip.volume)}` : ""}`, ...sound];
+      if (track?.kind === "audio") {
+        const added = name ? `Added ${name}${clip.volume !== undefined && clip.volume !== 1 ? `, ${gain(clip.volume)}` : ""}`
+          : clip.volume !== undefined && clip.volume !== 1 ? `Added sound, ${gain(clip.volume)}` : undefined;
+        return [added, ...sound];
+      }
       return [name, ...sound];
     }
     if (op.op === "updateClip") {

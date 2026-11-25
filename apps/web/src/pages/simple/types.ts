@@ -219,6 +219,11 @@ export function belongsTo(edit: ThreadEdit | undefined, change: Change) {
   return !!edit && (edit.changeId === change.id || edit.previous.some(ref => ref.changeId === change.id));
 }
 
+/** The change that made this edit as it stands now, falling back to an earlier attempt it replaced. */
+export function changeForEdit(changes: readonly Change[], edit: ThreadEdit | undefined) {
+  return edit && (changes.find(c => c.id === edit.changeId) ?? changes.find(c => belongsTo(edit, c)));
+}
+
 /** A request's words, short enough to lead a hover note: its first line, up to 32 characters. */
 export const shortTitle = (title: string) => {
   const line = title.split("\n")[0]!.trim();
