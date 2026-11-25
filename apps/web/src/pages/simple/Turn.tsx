@@ -23,6 +23,7 @@ import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useUiStore } from "../../stores/ui";
 import { PassSummary, ThreadResult } from "./PassSummary";
+import { useReviewDockStore } from "./reviewDockStore";
 import { callRowKey, isWorking, letGo, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "./types";
 
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
@@ -99,7 +100,7 @@ function ChangeReply({ thread, entry, actions }: { thread: Thread; entry: Extrac
  * `pinHost`, and takes its place in the chat when it's done. A request still waiting its turn isn't here at all; it's in
  * the tray on the message box.
  */
-export function Turn({ projectId, thread, actions, pinned, pinHost, list: passList, reportReviewMarkers, reportEvery, laterRequests = 0 }: { projectId: string; thread: Thread; actions: ChatActions; pinned?: string; pinHost: HTMLElement | null;
+export function Turn({ projectId, thread, actions, pinned, pinHost = null, list: passList, reportReviewMarkers, reportEvery, laterRequests = 0 }: { projectId: string; thread: Thread; actions: ChatActions; pinned?: string; pinHost?: HTMLElement | null;
   reportReviewMarkers?: ReportReviewMarkers;
   /** With no request picked the timeline marks every request's edits, so this one reports them all, not only the ones that wait. */
   reportEvery?: boolean;
@@ -149,9 +150,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
   // message box, open, on the timeline, or carrying an edit that asks for a look, which the timeline marks from this
   // list. Out of view it keeps its last list until it comes back.
   const section = useRef<HTMLElement>(null);
+  const dock = useReviewDockStore();
   const inView = useNearView(section, ".simple-chat");
   const asksForALook = useRef(false);
-  const { listed, rejected, located, head } = useThreadEdits(projectId, thread, inView || !!passList[0] || actions.marked === thread.id
+  const { listed, rejected, located, head } = useThreadEdits(projectId, thread, !!dock || inView || !!passList[0] || actions.marked === thread.id
     || (!!pinned && thread.tasks.some(t => t.id === pinned)) || (!!reportReviewMarkers && (!!reportEvery || asksForALook.current)));
   asksForALook.current = listed.some(edit => !!edit.check);
   const reviewed = useReviewed(projectId, thread);
@@ -389,8 +391,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const closed = entries.some(e => e.kind === "agent" && !e.onNote && ids.has((e.taskId ?? e.replyTo)!));
     // While every edit is listed, the list takes the place of Scarlet's reply; putting it away brings the reply back. The
     // short list of what needs the editor, shown without a click, leaves the reply where it is.
-    // Under For you, Working and Done the reply stays: there "all" only includes the low risk edits in For you's list.
-    const listing = run === owner && hasRows && passList[0] === "all" && !tabbed;
+    // Under For you, Working and Done, and with the fixed bottom lists dock, the reply stays in chat.
+    const listing = !dock && run === owner && hasRows && passList[0] === "all" && !tabbed;
     // Scarlet's recheck of a cut the editor approved, under that cut's row: its reason is its heading, not a line under its work.
     const autoHeading = inside && isRecheck(task);
     mine.forEach((e, i) => {
@@ -454,8 +456,8 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       : !!call && actions.listening?.changeId === pass!.change.id && actions.listening.index === call.index;
     const open = aimed ? () => actions.openEdit(thread, aimed, run.root) : call ? () => pass!.openCall(call.index)
       : final?.state === "approved" && run !== owner ? () => actions.play(thread, final) : undefined;
-    // The block holds the place above the message box while Scarlet is on it, or on a request drawn inside it.
-    const isPinned = !inside && (pinned === run.root || (!!pinned && nests.length > 0 && nested.has(pinned)));
+    // With the fixed bottom review dock, every request stays in .simple-chat above the lists.
+    const isPinned = !dock && !inside && (pinned === run.root || (!!pinned && nests.length > 0 && nested.has(pinned)));
     // The heading is the editor's words, with no name or number: "Edit 14" anywhere is an edit Scarlet made. A request
     // about one cut or edit says which before its words, in the tag the message box showed: "Cut 2" for a call, by its
     // time otherwise. A request about a whole edit says which the same way.
@@ -553,9 +555,10 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const pressable = markable || !!actions.fitTimeline;
     // Folded, everything under the band is out of sight, so the band says what waits on the editor there: For you and
     // how many calls or flagged edits still wait, and the dot for a question, its own or one under a row. Both when both.
-    const need = shut && run === owner ? forYou() : 0;
+    const ownerNeed = run === owner ? forYou() : 0;
+    const need = shut ? ownerNeed : 0;
     const asksUnder = shut && task.state !== "waiting_for_user" && below.some(({ run: about }) => about.task.state === "waiting_for_user");
-    const block = <div key={run.root} className={`unit${shut ? " is-collapsed" : ""}`} data-run={run.root} data-pinned={isPinned || undefined}>
+    const block = <div key={run.root} className={`unit${shut ? " is-collapsed" : ""}`} data-run={run.root} data-pinned={isPinned || undefined} data-has-need={ownerNeed > 0 || undefined}>
       {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}${isWorking(task.state) || worksUnder ? " is-live" : ""}`}
         aria-current={marked || undefined} onClick={pressable ? e => {
           if ((e.target as Element).closest('button, a, input, textarea, [role="menu"]') || window.getSelection()?.toString()) return;

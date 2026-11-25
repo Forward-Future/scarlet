@@ -93,7 +93,7 @@ export function useReviewTabHeight(host: RefObject<HTMLElement | null>, opts: Re
     clearFloor(el);
     const toHeight = content.getBoundingClientRect().height;
     if (animate && fromHeight - toHeight > 1 && canMove()) {
-      const inPin = !!el.closest(".simple-pin");
+      const inPin = !!el.closest(".simple-pin, .simple-review-dock");
       const keyframes = inPin
         ? [{ height: `${fromHeight}px`, flexBasis: `${fromHeight}px` }, { height: `${toHeight}px`, flexBasis: `${toHeight}px` }]
         : [{ height: `${fromHeight}px`, minHeight: `${fromHeight}px` }, { height: `${toHeight}px`, minHeight: `${toHeight}px` }];
@@ -228,7 +228,7 @@ export function useReviewTabHeight(host: RefObject<HTMLElement | null>, opts: Re
     if (hostRect.width === 0 && contentBox.height === 0) return;
 
     const width = Math.round(hostRect.width);
-    const inPin = !!el.closest(".simple-pin");
+    const inPin = !!el.closest(".simple-pin, .simple-review-dock");
     if ((mem.current.width > 0 && width > 0 && mem.current.width !== width) || (mem.current.prevTab !== undefined && mem.current.inPin !== inPin)) {
       mem.current.lockedHeight = 0;
       setHolding(false);
