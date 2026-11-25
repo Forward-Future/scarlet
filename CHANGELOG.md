@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- In the beta layout, Working and Done at the bottom of the edits column are now separated by a divider line.
 - Fixed playback gradually becoming poppy and laggy on longer edited videos by using one continuous audio track for cached previews and sweeping old streamed buffer edges cleanly behind the playhead.
 - Sending a kept or done edit back to Scarlet now keeps its row in place while it starts working, then fades it out and moves it to Working after a few seconds.
 - Hovering the left or right edge of an open cut or timed edit (captions, B-roll, graphics, overlays, zooms, reframes, music dips, and J/L split edits) on the timeline now reveals quiet handles you can drag to adjust timing right away, with a live frame and word readout, frame-by-frame close-up on hold, and ⌘Z undo.

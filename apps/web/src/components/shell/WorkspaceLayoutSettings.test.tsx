@@ -127,10 +127,15 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-low-done")?.textContent).toBe("Keep all");
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
-    // Working and Done banners stay visible at the foot even when empty (Working above Done), chat doesn't repeat "For you N", and every row leads with its time, never a number.
+    // Working and Done banners stay visible at the foot even when empty (Working above Done), separated by a divider line, chat doesn't repeat "For you N", and every row leads with its time, never a number.
     const footSections = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];
     expect(footSections.map(b => b.textContent)).toEqual(["Working0", "Done0"]);
     expect(footSections.every(b => b.disabled && b.classList.contains("is-none") && b.getAttribute("aria-expanded") === "false")).toBe(true);
+    expect(footSections[0]!.matches("[data-new-layout] .review-sec-body + .review-sec")).toBe(false);
+    expect(footSections[1]!.matches("[data-new-layout] .review-sec-body + .review-sec")).toBe(true);
+    const { readFileSync } = await import("node:fs");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-sec-body\s*\+\s*\.review-sec\s*\{[^}]*border-top:\s*1px solid var\(--color-line\)/);
     expect(container.querySelector("#simple-chat .simple-need-link")).toBeNull();
     expect(container.querySelector(".review-rail-list .edit-badge")).toBeNull();
     expect(container.querySelector(".review-rail-list .edit-row-time")?.textContent).toMatch(/^\d+:\d\d$/);
