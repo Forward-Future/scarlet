@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { clipsAt, type Timeline } from "@scarlet/timeline";
 import { AgentId, type EditRef } from "@scarlet/shared";
 import { desktop, isDesktop, type AgentPick } from "../lib/desktop";
+import { appLog, errorName } from "../lib/appLog";
 
 /** Playhead context the agent panel attaches to the next instruction. */
 export interface AgentContext {
@@ -252,7 +253,9 @@ function loadDrafts(): Record<string, ComposerDraft> {
       if (draft.playheadPoint && agentContext && agentContext !== "whole") playheadPoints.add(agentContext);
       return [[owner, { agentDraft: draft.agentDraft, agentContext }]];
     }));
-  } catch {
+  } catch (error) {
+    // Unreadable drafts are dropped: the messages being written when Scarlet last closed are gone, and the log says so.
+    appLog("error", "drafts-unreadable", { name: errorName(error) }, { level: "warn" });
     return {};
   }
 }
@@ -412,5 +415,12 @@ useUiStore.subscribe((state, previous) => {
   try {
     if (Object.keys(drafts).length) localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
     else localStorage.removeItem(DRAFTS_KEY);
-  } catch { /* Drafts stay in memory if storage is unavailable. */ }
+  } catch (error) {
+    // Drafts stay in memory if storage is unavailable, and would then be lost with a quit: the log says so, once.
+    if (!draftsUnsaved) appLog("error", "drafts-not-saved", { name: errorName(error), drafts: Object.keys(drafts).length }, { level: "warn" });
+    draftsUnsaved = true;
+    return;
+  }
+  draftsUnsaved = false;
 });
+let draftsUnsaved = false;

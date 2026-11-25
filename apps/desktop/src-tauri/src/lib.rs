@@ -3,6 +3,7 @@
 
 pub mod commands;
 pub mod config;
+pub mod copies;
 pub mod engine;
 pub mod host;
 pub mod util;
@@ -218,7 +219,19 @@ pub fn run() {
                 handle.state::<commands::ExportDestinations>().load(root.join("export-destinations.json"));
             }
             let config = Arc::new(Mutex::new(AppConfig::load(&paths.config_file)));
-            log::info!("Scarlet desktop {} starting; data {}; config {}", env!("CARGO_PKG_VERSION"), paths.data_dir.display(), paths.config_file.display());
+            // Which copy of Scarlet this is: the regular app, a review or test build, the demo or a development build
+            // each run under their own identifier, data and log, and a report starts from knowing which one was used.
+            let identifier = handle.config().identifier.clone();
+            let kind = if is_demo(&handle) { "demo" } else if cfg!(debug_assertions) { "debug" } else { "release" };
+            log::info!(
+                "Scarlet desktop {} starting; copy {identifier} ({kind} build, pid {}); data {}; config {}; log {}",
+                env!("CARGO_PKG_VERSION"),
+                std::process::id(),
+                paths.data_dir.display(),
+                paths.config_file.display(),
+                paths.log_dir.display()
+            );
+            copies::started(&identifier, &paths.log_dir, &paths.data_dir, env!("CARGO_PKG_VERSION"), kind);
 
             let mcp = match engine::resolve_engine_launch(&paths.home, paths.resource_dir.as_deref()) {
                 Ok(l) => {
@@ -248,6 +261,7 @@ pub fn run() {
         if let RunEvent::Exit = event {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 log::info!("exiting: cancelling tasks and stopping the engine");
+                copies::stopped();
                 state.login.cancel_all();
                 crisper::stop_setups_now();
                 state.host.stop_blocking();

@@ -5,6 +5,7 @@ import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-d
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isDialogueGuide } from "@scarlet/shared";
 import { api } from "../../lib/client";
+import { flushAppLog, startAppLog, stopAppLog } from "../../lib/appLog";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { dropTargets, fileDropZone } from "../../lib/dropTargets";
 import { useAttachmentsStore } from "../../stores/attachments";
@@ -96,6 +97,29 @@ it("puts nothing above the message box on the first import, even with the dialog
   expect(container.querySelector('button[aria-label="Make a first cut"]')).toBeNull();
   expect(container.querySelector(".composer-first-cut")).toBeNull();
   expect(container.querySelector("textarea")!.value).toBe("");
+});
+
+it("logs what each press of send did, never the words: sent, ignored and why, or failed", async () => {
+  const lines: string[] = [];
+  startAppLog(batch => { lines.push(...batch); });
+  try {
+    await show();
+    const enter = () => act(async () => { container.querySelector("textarea")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    await enter();
+    await type("Lower the music under the interview.");
+    await enter();
+    vi.mocked(useProjectStore.getState().createTask).mockRejectedValueOnce(new Error("The engine is busy."));
+    await type("Trim the intro.");
+    await enter();
+    flushAppLog();
+    const said = lines.filter(line => line.startsWith("[request]"));
+    expect(said[0]).toMatch(/ send-ignored reason=empty how=typed to=new-edit chars=0 aim=whole project=/);
+    expect(said.some(line => / send how=typed to=new-edit chars=36 /.test(line))).toBe(true);
+    expect(said.some(line => / send-failed how=typed chars=15 name=Error error="The engine is busy."/.test(line))).toBe(true);
+    expect(said.join("\n")).not.toMatch(/music|intro/);
+  } finally {
+    stopAppLog();
+  }
 });
 
 it("switches models above the draft and sends the edit with the selected model", async () => {

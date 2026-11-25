@@ -242,11 +242,17 @@ pub enum UiLogMessage {
 /// A renderer flush crosses the native bridge once. Keep each line a separate log record.
 #[tauri::command]
 pub fn desktop_log(level: Option<String>, message: UiLogMessage) {
-    let write = |message: &str| match level.as_deref() {
-        Some("error") => log::error!("[ui] {message}"),
-        Some("warn") => log::warn!("[ui] {message}"),
-        Some("debug") => log::debug!("[ui] {message}"),
-        _ => log::info!("[ui] {message}"),
+    let write = |message: &str| {
+        match level.as_deref() {
+            Some("error") => log::error!("[ui] {message}"),
+            Some("warn") => log::warn!("[ui] {message}"),
+            Some("debug") => log::debug!("[ui] {message}"),
+            _ => log::info!("[ui] {message}"),
+        }
+        // What became of a message is also kept where every copy of Scarlet writes, so it can be found from any.
+        if crate::copies::is_request_line(message) {
+            crate::copies::request_line(message);
+        }
     };
     match message {
         UiLogMessage::Line(line) => write(&line),
