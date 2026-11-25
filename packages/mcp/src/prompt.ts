@@ -440,8 +440,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     if (c.changeId && c.editIndex !== undefined) {
       // The editor sees what changed in the chat and why on the card, along with any review check.
       const about = ctx.change?.change.id === c.changeId ? selectedEdit(ctx.change.change, c.editIndex) : undefined;
-      const listed = c.editNumber !== undefined ? ` (edit ${c.editNumber} in the editor's list)` : "";
-      ctxLines.push(`- Selected edit index: ${c.editIndex}${listed}${about ? `, "${about.label.trim()}"` : ""}`);
+      ctxLines.push(`- Selected edit index: ${c.editIndex}${about ? `, "${about.label.trim()}"` : ""}`);
       if (about?.summary?.trim()) ctxLines.push(`- What you told the editor this edit did: "${about.summary.trim()}"`);
       if (about?.reason?.trim()) ctxLines.push(`- Why you made this edit: "${about.reason.trim()}"`);
       if (about?.check?.trim()) ctxLines.push(`- What you asked the editor to check on this edit: "${about.check.trim()}"`);

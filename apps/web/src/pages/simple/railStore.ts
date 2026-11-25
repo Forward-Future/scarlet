@@ -11,8 +11,6 @@ export type RailSection = "you" | "low" | "working" | "done";
 export interface RailInfo { you: number; optional: number; working: number; done: number; openFirst?(): void; openLast?(): void; openFirstLow?(): void; openLastLow?(): void;
   /** The edits of the request's low-risk rows, every place of each: what Mark all done keeps. */
   lowRiskEdits?(): Omit<ThreadEdit, "at">[];
-  /** Ordered row keys of this request's For you items (waiting, working, or decided) that take sequential rail numbers. */
-  numberedKeys?: readonly string[];
   /** Live located edits reported by this thread so question headers can name the exact edit. */
   edits?: readonly Omit<ThreadEdit, "at">[];
 }
@@ -26,50 +24,12 @@ export class RailStore {
   private hosts = new Map<string, HTMLElement>();
   private refs = new Map<string, (el: HTMLElement | null) => void>();
   private infos = new Map<string, RailInfo>();
-  private threadOrder: readonly string[] = [];
-  private reservedMax = 0;
-  private numbers = new Map<string, number>();
-  private numbersSig = "";
   private listeners = new Set<() => void>();
   private version = 0;
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.version;
   private changed() { this.version++; for (const listener of this.listeners) listener(); }
-
-  private recomputeNumbers(): boolean {
-    const next = new Map<string, number>();
-    let cursor = this.reservedMax;
-    const seenThreads = new Set<string>();
-    const visit = (threadId: string) => {
-      if (seenThreads.has(threadId)) return;
-      seenThreads.add(threadId);
-      const keys = this.infos.get(threadId)?.numberedKeys;
-      if (!keys?.length) return;
-      for (const key of keys) next.set(`${threadId}/${key}`, ++cursor);
-    };
-    for (const id of this.threadOrder) visit(id);
-    for (const id of this.infos.keys()) visit(id);
-    const sig = [...next.entries()].map(([k, n]) => `${k}=${n}`).join(",");
-    if (sig === this.numbersSig) return false;
-    this.numbers = next;
-    this.numbersSig = sig;
-    return true;
-  }
-
-  /** Sets the order requests appear in the rail and the highest number already reserved by a waiting dialogue pass. */
-  setNumbering(threadIds: readonly string[], reservedMax: number) {
-    const sameOrder = threadIds.length === this.threadOrder.length && threadIds.every((id, i) => id === this.threadOrder[i]);
-    if (sameOrder && reservedMax === this.reservedMax) return;
-    this.threadOrder = threadIds;
-    this.reservedMax = reservedMax;
-    if (this.recomputeNumbers()) this.changed();
-  }
-
-  /** The rail-wide number for one request's For you row, guaranteed never to collide across requests or with Low risk. */
-  numberOf(threadId: string, key: string): number | undefined {
-    return this.numbers.get(`${threadId}/${key}`);
-  }
 
   /** Where a request draws its rows of one list, once the column has made the place. */
   host(section: RailSection, threadId: string) { return this.hosts.get(`${section}/${threadId}`) ?? null; }
@@ -92,16 +52,12 @@ export class RailStore {
   report(threadId: string, info?: RailInfo) {
     const was = this.infos.get(threadId);
     if (!info) {
-      if (this.infos.delete(threadId)) {
-        this.recomputeNumbers();
-        this.changed();
-      }
+      if (this.infos.delete(threadId)) this.changed();
       return;
     }
     this.infos.set(threadId, info);
-    const numbersChanged = this.recomputeNumbers();
     const editsArrived = (was?.edits?.length ?? 0) !== (info.edits?.length ?? 0);
-    if (numbersChanged || editsArrived || !was || was.you !== info.you || was.optional !== info.optional || was.working !== info.working || was.done !== info.done) this.changed();
+    if (editsArrived || !was || was.you !== info.you || was.optional !== info.optional || was.working !== info.working || was.done !== info.done) this.changed();
   }
   info(threadId: string) { return this.infos.get(threadId); }
   total(section: Exclude<RailSection, "low"> | "optional") { let n = 0; for (const info of this.infos.values()) n += info[section]; return n; }

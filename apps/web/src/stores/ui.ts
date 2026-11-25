@@ -19,8 +19,6 @@ export interface AgentContext {
   editIndex?: number;
   /** Original edit represented by this review row. Local to the renderer, including saved drafts. */
   reviewRef?: EditRef;
-  /** Number shown on the thread timeline. The agent uses changeId and editIndex for identity. */
-  editNumber?: number;
   /** The other edits of the moment the message is about, when the editor was on a moment of the list and not one edit. */
   momentEdits?: { changeId: string; spot: number; label?: string }[];
   /**

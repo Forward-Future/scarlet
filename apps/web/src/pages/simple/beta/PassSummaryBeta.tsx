@@ -2,7 +2,7 @@ import { AimRow } from "../../../components/review/AimRow";
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
-import { EditBadge, EditVersion, RejectedMark, ThreadAction, ThreadEdits } from "../../../components/review/ThreadEdits";
+import { EditVersion, RejectedMark, ThreadAction, ThreadEdits } from "../../../components/review/ThreadEdits";
 import { asksEditor, editGroups, revisionWord, useAdding, useRejecting, useReviewed, useRevising, waitingPassRows, waitingRows } from "../../../components/review/threadEditState";
 import { Icon } from "../../../components/ui/primitives";
 import { useFloatingPosition } from "../../../lib/uiHooks";
@@ -170,7 +170,7 @@ interface PassRow {
   mark?: number;
   hover?: HoveredReviewRow;
   label: string;
-  /** A call's number; 0 for any other row. */
+  /** The order a call reached the editor in, never shown; 0 for any other row. */
   n: number;
   num?: number;
   state?: string;
@@ -212,7 +212,7 @@ interface Entry {
 /**
  * What a dialogue pass made, as the rows of its block. Once it has something for the editor to review, its rows sit
  * under three tabs and each is under exactly one. For you, shown until another is pressed, lists what waits on the
- * editor: open calls and flagged edits, each by its number while the pass waits, with Scarlet's note. Pressed, it opens
+ * editor: open calls and flagged edits, each by its time, with Scarlet's note. Pressed, it opens
  * the first one still waiting. A row the editor has just decided or sent back stays there a moment with its new word,
  * then fades and leaves. Beside the column of edits the edits Scarlet didn't flag are listed under Low risk at once; in
  * the chat alone, one line under those rows counts them ("112 low risk edits") and opens them. Either way they go in
@@ -306,14 +306,6 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   // look is kept on its own card, and waits there whether or not the rest of the pass has gone in.
   const waiting = pass && !quiet && !openCalls && !pass.scheduled && !pass.revising && !pass.unchecked;
   const showing = actions.showing, listening = actions.listening;
-  const editNumber = (e: Omit<ThreadEdit, "at">) => {
-    const passNum = pass?.editNumbers.get(editKey(e))?.n
-      ?? e.previous.map(p => pass?.editNumbers.get(editKey(p))?.n).find(n => n !== undefined);
-    if (passNum !== undefined) return passNum;
-    // In the edits column, only For you rows carry numbers; low-risk rows lead with their time so numbers never collide.
-    if (rail && !pass && isForYouEdit(e)) return rail.numberOf(thread.id, editKey(e.previous[0] ?? e));
-    return undefined;
-  };
   const rows: PassRow[] = [
     ...edits.flatMap((e): PassRow[] => {
       const key = editKey(e);
@@ -339,13 +331,13 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
       const at = (e as ThreadEdit).at ?? e.range.start;
       const displayAt = (!seen && !sent ? e.reviewRange?.start : undefined) ?? at;
-      // Listed with the calls, it has the number it has among them. One that came back revised with a reason of
+      // Listed with the calls, by its time. One that came back revised with a reason of
       // Scarlet's own ends on its version there, as a revised call does, until it is kept or sent back again.
       const rawKind = editRowWord(e);
       const kindWord = rail && rawKind === "Edit" ? undefined : rawKind;
       return [{ key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey),
         at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
-        label: (e.reason && e.summary) || e.label, n: 0, num: editNumber(e),
+        label: (e.reason && e.summary) || e.label, n: 0, num: undefined,
         state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: editRemovedLabel(e) ?? kindWord, word, revised, rejected: false, skipped: false,
         forYou, onlyForYou: false,
         // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
@@ -353,12 +345,12 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         version: e.previous.length ? e.previous.length + 1 : 0, title: revised || e.reason ? undefined : e.check,
         on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e), fresh: fresh.has(e.changeId) }];
     }),
-    // A call goes by its number, as on its card and on the timeline.
+    // A call goes by its time, as on its card and in the box's tag.
     ...(pass?.calls ?? []).map((c): PassRow => {
       const callWord = c.state === "revising" ? (revisionWord(c.run, { recheck: !!c.run && isRecheck(c.run), nextQueuedId: actions.nextQueuedId }) ?? "Revising…") : undefined;
       return { key: callRowKey(c), id: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at,
         hover: { threadId: thread.id, call: c.index },
-        label: c.summary, n: c.n, num: c.n, needs: c.state === "open", asks: c.state === "revising" && asksEditor(c.run), sentBack: c.state === "revising",
+        label: c.summary, n: c.n, num: undefined, needs: c.state === "open", asks: c.state === "revising" && asksEditor(c.run), sentBack: c.state === "revising",
         decided: c.state === "approved" || c.state === "skipped", skipped: c.state === "skipped",
         decision: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : undefined,
         state: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : callWord ?? (c.version > 1 ? `v${c.version}` : undefined),
@@ -379,7 +371,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       const key = editKey(e);
       return [{ key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey), at: e.range.start, displayAt: e.range.start, mark: undefined,
         hover: { threadId: thread.id, editKey: key },
-        label: e.label, n: 0, num: editNumber(e), state: "Rejected", decision: "Rejected",
+        label: e.label, n: 0, num: undefined, state: "Rejected", decision: "Rejected",
         value: "Rejected", word: undefined, revised: false, rejected: true, skipped: false,
         forYou, onlyForYou: false, busy: false, pending: false, needs: false, asks: false, sentBack: false, decided: false, version: 0,
         title: undefined, on: !!showing && (matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing)),
@@ -442,9 +434,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   if (tabbed && !rail) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was })), optionalOpen && tab === "you");
   const heldFrom = (from: "you" | "optional") => rail ? [] : entries.filter(e => (e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
   const inPlace = (place: RowPlace) => entries.filter(e => e.place === place);
-  // While the pass waits its rows go by their numbers, in the order each reached the editor; a list with a row that
-  // has none goes by time, as the list of every edit does.
-  const order: ListOrder = { numbers: !!pass?.calls.some(c => c.askOrder !== undefined) };
+  // Every list goes by time, as its rows lead with their times.
+  const order: ListOrder = { numbers: false };
   const optional = inPlace("optional");
   // The lists on screen, top to bottom. With nothing to review there is the one list of every edit.
   type Drawn = { id: "all" | RowPlace; label: string; rows: Entry[] };
@@ -513,12 +504,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   // What the request has in each list of the column, and the way to its first and last row that waits.
   const waits = () => inListOrder(inPlace("you"), order).filter(e => e.row.needs || e.row.asks);
   const lowRisk = () => inListOrder(optional, order).filter(e => !!e.row.open);
-  const passNumberedKeys = rail && !pass
-    ? entries.filter(e => e.row.forYou && !e.row.rejected && !e.row.onlyForYou).map(e => e.row.id)
-    : undefined;
   useEffect(() => {
     rail?.report(thread.id, empty ? undefined : { you: need, optional: optional.length, working: inPlace("working").length, done: inPlace("done").length,
-      numberedKeys: passNumberedKeys, edits,
+      edits,
       openFirst: () => waits()[0]?.row.open?.(), openLast: () => waits().at(-1)?.row.open?.(),
       openFirstLow: () => lowRisk()[0]?.row.open?.(), openLastLow: () => lowRisk().at(-1)?.row.open?.(),
       lowRiskEdits: () => { const keys = new Set(optional.flatMap(keysOf)); return edits.filter(e => keys.has(editKey(e))); } });
@@ -531,53 +519,37 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const fold = (key: string) => setUnfolded(was => { const next = new Set(was); if (!next.delete(key)) next.add(key); return next; });
   const pastHour = drawn.some(list => list.rows.some(({ row }) => clockLabel(row.displayAt).length > 5));
   const rowList = ({ id, label, rows: list }: Drawn) => {
-    // A list is its rows' numbers while the pass waits and each has one: a call is its number, Scarlet's note and,
-    // once it's settled, sent back or revised, a word for where it stands, and an edit that asks for a look is listed
-    // with them by its number too, counted on from the calls, so the list is one run of numbers. Any other list
-    // leads with each row's time and keeps its version and amount: the time is bold amber on a tint while the row
-    // needs the editor, and a decided row is ticked.
-    const short = rail ? id !== "optional" && id !== "all" && list.every(e => e.num !== undefined || (e.row.rejected && !e.row.n && e.row.forYou))
-      : !!pass && id !== "all" && list.every(e => e.num !== undefined);
-    // A list that leads with times widens their column for all its rows once one on screen is past an hour
-    // ("1:02:07"), in the other list too: For you's rows and the optional ones under them keep one edge.
-    const hours = !short && pastHour;
-    return <ol key={id} className={short ? "simple-pass-list is-short" : hours ? "simple-pass-list has-hours" : "simple-pass-list"} aria-label={label}>
+    // Every list leads with each row's time, never a number, and keeps its version and amount: the time is bold amber
+    // on a tint while the row needs the editor, and a decided row is ticked. A list widens its time column for all its
+    // rows once one on screen is past an hour ("1:02:07"), in the other list too: For you's rows and the optional ones
+    // under them keep one edge.
+    return <ol key={id} className={pastHour ? "simple-pass-list has-hours" : "simple-pass-list"} aria-label={label}>
       {list.map(entry => {
         const { row, members, more, moment, unfolded: open } = entry;
         // Under the tabs a decided row says how it was decided; the list of every edit keeps its amount, ticked.
         const value = id === "all" ? row.value : row.decision ?? row.value;
-        const numbered = row.num !== undefined;
         const isAskingCurrent = !!askingRowKey && askingRowKey === row.key;
-        const lead = (short || numbered) && row.rejected && !row.n
-          ? <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
-          : numbered
-            ? <EditBadge n={row.num!} kept={row.decided && !row.skipped && !row.rejected} check={row.needs || row.asks} />
-            : <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}{(row.needs || row.asks) && <span>, needs you</span>}</span>;
-        const aimLead = (short || numbered) && row.rejected && !row.n
-          ? <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
-          : numbered
-            ? <EditBadge n={row.num!} kept={row.decided && !row.skipped && !row.rejected} check={row.needs || row.asks} />
-            : <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}</span>;
+        const lead = <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}{(row.needs || row.asks) && <span>, needs you</span>}</span>;
+        const aimLead = <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}</span>;
         return <li key={row.key} className={linger.of(entry.key)?.leaving ? "is-leaving" : undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
           data-log-control="open-pass-item" data-log-label={moment ? "Moment" : "Pass item"} disabled={!row.open} title={row.title || row.label} onClick={letGo(() => row.open?.())}
           aria-label={more ? `${clockLabel(row.displayAt)} ${row.label}, ${more.replace("+ ", "and ")}` : row.rejected ? `${clockLabel(row.displayAt)} ${row.label}, rejected` : undefined}
           onPointerEnter={() => actions.lightMark(row.mark, row.hover)} onPointerLeave={() => actions.lightMark()}>
           {lead}
-          <span className="simple-pass-label">{numbered ? row.label : <>{(row.rejected || row.skipped) && <RejectedMark />}{row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-pass-words">{row.label}</span>
+          <span className="simple-pass-label"><>{(row.rejected || row.skipped) && <RejectedMark />}{row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-pass-words">{row.label}</span>
             {row.version > 0 && <EditVersion n={row.version} hover={spent.get(row.key)} />}{row.fresh && <small className="edit-version is-new">New</small>}
             {/* What else the moment holds, which unfolds its edits under the row and folds them again. */}
             {more && moment && <span className="simple-pass-more" aria-expanded={!!open} title={open ? "Hide its edits" : "Show its edits"}
-              onClick={e => { e.stopPropagation(); fold(moment); }}>{more}</span>}</>}</span>
+              onClick={e => { e.stopPropagation(); fold(moment); }}>{more}</span>}</></span>
           {/* The word a row ends on (v2, Kept, Revising…) says on hover what the requests about its cut or edit took:
               their time and tokens, nothing else. The rest of the row keeps the row's own hover. */}
           {/* Every row ends on a word (2026-11-21, the editor's ask): where it stands once it has moved, or else what it is. */}
           {/* One whose request stopped to ask the editor something says Needs your answer, in amber and still: it is their turn. */}
-          {short ? (row.state ?? row.value) && <span className={row.asks ? "simple-pass-value is-need" : row.busy ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{row.state ?? row.value}</span>
-            : row.word ? null
+          {row.word ? null
             : value && <span className={row.busy && !row.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(row.key)}>{value}</span>}
           {/* An applied edit sent back, or come back revised, ends on that word in place of its amount: quiet while
               Scarlet is on it, amber once it is back and waits on the editor. One word a row, on the row's own line. */}
-          {!short && row.word && <span className={`simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={spent.get(row.key)}>{row.word}</span>}
+          {row.word && <span className={`simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={spent.get(row.key)}>{row.word}</span>}
         </button>
         <AimRow on={!!row.on}>{aimLead}<span className="composer-aim-words">{row.label}</span></AimRow>
         {under(entry).map(nest => nest.node)}
@@ -645,8 +617,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
 
 /**
  * What any other request made, as the rows of its block: one sentence, then a link that opens the edits themselves,
- * numbered as on the timeline. Edits of one name that overlap exactly are one edit. Once Scarlet flagged one, the rows
- * sit under three tabs, as a pass's do, each with the number it has in the whole list: For you lists the flagged edits
+ * each by its time. Edits of one name that overlap exactly are one edit. Once Scarlet flagged one, the rows
+ * sit under three tabs, as a pass's do: For you lists the flagged edits
  * not yet decided and counts them, with the edits Scarlet didn't flag under Low risk beside the column of edits, or
  * behind one line under them in the chat alone ("3 optional");
  * Working has the ones sent back, each with its request under its row; Done has the ones kept or rejected. A row just
@@ -780,15 +752,11 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     setOpen(was => was === "all" ? was : undefined);
     if (flagged.length && !flagged.some(edit => !!actions.showing && matchesEdit(actions.showing, edit))) actions.openEdit(thread, flagged[0]!);
   };
-  const railNumberFor = rail
-    ? (edit: Omit<ThreadEdit, "at">) => isForYou(edit) ? rail.numberOf(thread.id, editKey(edit.previous[0] ?? edit)) : undefined
-    : undefined;
   const rows = (label: string | undefined, only?: (e: Omit<ThreadEdit, "at">) => boolean) =>
     <ThreadEdits projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
       leaving={only && (edit => !!held(edit)?.leaving)}
       nextQueuedId={actions.nextQueuedId}
       hideGenericKind={!!rail}
-      numberFor={railNumberFor}
       askingKey={askingRowKey}
       onPlay={ref => actions.openEdit(thread, ref)}
       onHover={ref => actions.lightMark(undefined, ref && { threadId: thread.id, editKey: editKey(ref) })}
@@ -796,12 +764,9 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   const optional = countOf("optional");
   // The low-risk rows' edits, top to bottom: the first edit of each row of the edits Scarlet didn't flag.
   const lowRisk = () => groups.flatMap(({ members }) => placeOf.get(editKey(members[0]!.edit)) === "optional" ? [members[0]!.edit] : []);
-  const numberedKeys = rail
-    ? forYouGroups.map(({ members }) => editKey(members[0]!.edit.previous[0] ?? members[0]!.edit))
-    : undefined;
   useEffect(() => {
     rail?.report(thread.id, { you: need, optional, working: countOf("working"), done: countOf("done"),
-      numberedKeys, edits,
+      edits,
       openFirst: () => { if (flagged[0]) actions.openEdit(thread, flagged[0]); }, openLast: () => { const last = flagged.at(-1); if (last) actions.openEdit(thread, last); },
       openFirstLow: () => { const first = lowRisk()[0]; if (first) actions.openEdit(thread, first); },
       openLastLow: () => { const last = lowRisk().at(-1); if (last) actions.openEdit(thread, last); },

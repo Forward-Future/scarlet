@@ -5,7 +5,7 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { useAgentAvailability } from "../../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../../components/review/RunBundle";
-import { editGroups, listPlaces, useReviewed, useRevising, useThreadEdits, waitingPassRows, waitingRows } from "../../../components/review/threadEditState";
+import { useReviewed, useRevising, useThreadEdits, waitingPassRows, waitingRows } from "../../../components/review/threadEditState";
 import { Icon } from "../../../components/ui/primitives";
 import { TipButton } from "../../../components/ui/TipButton";
 import { errorMessage } from "../../../lib/client";
@@ -160,14 +160,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const waits = (edit: ThreadEdit) => !!edit.check && !reviewed(edit) && !revising(edit);
     const reported = reportEvery ? located : located.filter(waits);
     if (!reported.length) return;
-    // Each dot has the number its row has in the rail (or chat), which an edit keeps when another is rejected.
-    const order = listPlaces(thread, located, rejected);
-    const numbers = new Map(editGroups(located).flatMap(({ members }) => {
-      const first = members[0]!.edit;
-      const num = rail ? rail.numberOf(thread.id, editKey(first.previous[0] ?? first)) ?? order.number(first)! : order.number(first)!;
-      return members.map(({ edit }) => [edit, num] as const);
-    }));
-    const markers = reported.map(edit => ({ edit, number: numbers.get(edit)!, total: order.total,
+    const markers = reported.map(edit => ({ edit,
       state: reviewed(edit) ? "kept" as const : waits(edit) ? "check" as const : undefined }));
     reportReviewMarkers(thread.id, { head, markers });
     return () => reportReviewMarkers(thread.id);
@@ -498,7 +491,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // A recheck Scarlet began itself is headed too, by its reason after the Auto tag: where it stands and its controls
     // are at that heading's right, as a request's are, and not said again on a row under it.
     const headed = !!request || autoHeading;
-    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} under={inside} callNumber={actions.callNumber}
+    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} under={inside} callTime={actions.callTime}
         say={said.length ? <div className="req-said">{said}</div> : undefined} told={told} result={rows} recovery={recovery}
         // Under its call's row, that row is the cut it saved, with Scarlet's note: the note isn't said again under it.
         // A pass's calls are listed for as long as it waits, so a request keyed to one is always under its row.

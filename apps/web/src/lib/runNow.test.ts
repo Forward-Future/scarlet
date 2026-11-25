@@ -23,7 +23,7 @@ it("says the latest call on the project as the work it is, with where in the rec
   // A cut is named by its call's number, the one on its card. One Scarlet hasn't asked about has no number to say.
   expect(said(tool("dialogue_review_inspect", { index: 4, count: 4 }))).toBe("Listening to 4 flagged cuts");
   expect(said(tool("dialogue_review_inspect", { index: 4, count: 4, wholePicture: true }))).toBe("Listening to a flagged cut");
-  expect(runNow([tool("dialogue_review_inspect", { changeId: "chg", index: 57 })], undefined, (id, index) => id === "chg" && index === 57 ? 2 : undefined)).toBe("Listening to Cut 2");
+  expect(runNow([tool("dialogue_review_inspect", { changeId: "chg", index: 57 })], undefined, (id, index) => id === "chg" && index === 57 ? 167 : undefined)).toBe("Listening to the cut at 2:47");
   // A call with no words of its own here reads as it does elsewhere; one Scarlet can't name says nothing.
   expect(said(tool("captions_generate"))).toBe("Making captions");
   expect(said(tool("export_otio"))).toBe("Exporting the video for Resolve");

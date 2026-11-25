@@ -435,7 +435,7 @@ export function saveCutAssessments(ctx: Ctx, change: Change, task: Task | undefi
       + "Give each its own: the words this cut takes out or keeps, and what to listen for at its join.");
   }
   // Each new ask is numbered after every ask before it: in the order Scarlet makes them, and within one save in
-  // timeline order. The editor's number for a call goes by it. A pass whose asks aren't numbered yet, as one saved
+  // timeline order. The calls keep that order. A pass whose asks aren't numbered yet, as one saved
   // before the engine numbered them, numbers the asks it already has first, in timeline order, so none of the calls
   // the editor has seen moves. Once a pass numbers its asks, one left without a number is a cut no one checked that
   // the editor sent back, and it stays with those.

@@ -181,11 +181,15 @@
 .simple-timeline-cut.is-kept { background: rgba(244, 241, 233, .55); }
 .simple-timeline-cut.is-kept span { border-color: rgba(244, 241, 233, .35); background: rgba(12, 12, 12, .78); }
 .simple-timeline-mark { position: absolute; z-index: 1; pointer-events: none; }
-.simple-timeline-mark.is-dot { top: calc(var(--ruler-height) - 4px); width: 8px; height: 8px; margin-left: -4px; border-radius: 50%;
-  background: var(--color-muted); box-shadow: 0 0 0 1px #1a1918; }
-/* A dot with no number is amber too while it asks for a look. */
-.simple-timeline-mark.is-dot[data-state="check"] { background: var(--color-warn); }
-.simple-timeline-mark.is-dot.is-hot, .simple-timeline-mark.is-dot.is-on { background: var(--color-fg); }
+/* An edit's or a call's marker is a plain dot, with no number or time on it: hovering it says when it is. Filled once
+   kept, amber while it asks for a look. Dots that would touch share one pill, which a press zooms into. */
+.simple-timeline-mark.is-dot { top: calc(var(--ruler-height) - 4.5px); width: 9px; height: 9px; margin-left: -4.5px; box-sizing: border-box;
+  border: 1.2px solid var(--color-muted); border-radius: 50%; background: var(--color-raised); box-shadow: 0 0 0 1px #1a1918; }
+.simple-timeline-mark.is-dot.is-pill { width: 15px; margin-left: -7.5px; border-radius: 4.5px; }
+.simple-timeline-mark.is-dot[data-state="check"] { border-color: var(--color-warn); background: var(--color-warn); }
+.simple-timeline-mark.is-dot[data-state="kept"] { border-color: var(--color-fg); background: var(--color-fg); }
+.simple-timeline-mark.is-dot.is-hot, .simple-timeline-mark.is-dot.is-on { border-color: var(--color-fg); }
+.simple-timeline-mark.is-dot.is-hot:not([data-state]), .simple-timeline-mark.is-dot.is-on:not([data-state]) { background: #3a3a3a; }
 .simple-timeline-mark.is-dot.is-on { box-shadow: 0 0 0 3px rgba(255, 255, 255, .16); }
 /* Hovering anywhere along the markers picks the nearest one, and lifts it over the playhead and the others. */
 .simple-timeline-hover { position: absolute; z-index: 2; left: 0; right: 0; top: calc(var(--ruler-height) - 12px); height: 32px; }
@@ -195,7 +199,7 @@
 .simple-timeline-mark.is-hot, .simple-timeline-mark.is-on { z-index: 4; }
 .simple-timeline-mark.is-on { z-index: 5; }
 /* Hovering a marker shows only the frame and its time, as anywhere on the timeline. A marker that holds a cut or an
-   edit waiting on the editor adds one amber line under the time naming it: "Cut 23 needs you". */
+   edit waiting on the editor adds one amber line under the time naming it: "Cut at 2:47 needs you". */
 .simple-timeline-need { display: block; padding: 6px 10px 7px; border-top: 1px solid var(--color-line); text-align: left;
   font-size: 12px; line-height: 1.35; color: var(--color-warn); }
 
@@ -266,17 +270,6 @@
 .review-compare { display: inline-flex; }
 .review-compare:empty { display: none; }
 
-/* An applied edit's dot and a waiting call's carry their number, as in the chat: filled once kept, amber while it asks for a look. */
-.simple-timeline-mark.is-numbered { top: calc(var(--ruler-height) - 9px); width: 17px; height: 17px; margin-left: -8.5px; display: grid; place-items: center;
-  border: 1.2px solid var(--color-muted); border-radius: 9px; background: var(--color-raised); box-shadow: 0 0 0 1px #1a1918; }
-.simple-timeline-number { white-space: nowrap; font-size: 10px; font-weight: 600; line-height: 1; font-style: normal; color: var(--color-fg); font-variant-numeric: tabular-nums; pointer-events: none; }
-.simple-timeline-mark.is-numbered[data-state="check"] { border-color: var(--color-warn); }
-.simple-timeline-mark.is-numbered[data-state="check"] .simple-timeline-number { color: var(--color-warn); }
-.simple-timeline-mark.is-numbered[data-state="kept"] { border-color: var(--color-fg); background: var(--color-fg); }
-.simple-timeline-mark.is-numbered[data-state="kept"] .simple-timeline-number { color: var(--color-bg); }
-.simple-timeline-mark.is-numbered.is-hot, .simple-timeline-mark.is-numbered.is-on { border-color: var(--color-fg); }
-.simple-timeline-mark.is-numbered.is-hot:not([data-state="kept"]), .simple-timeline-mark.is-numbered.is-on:not([data-state="kept"]) { background: #3a3a3a; }
-.simple-timeline-mark.is-numbered.is-on { box-shadow: 0 0 0 3px rgba(255, 255, 255, .16); }
 /* An edit applied a moment ago arrives with a moment: its marker pops in with one ring that spreads and fades. A cut's
    red first closes up where the footage came out. With motion reduced, the marker is simply there. */
 .simple-timeline-mark[data-landed] { animation: timeline-land .42s cubic-bezier(.2, .9, .3, 1.35) both; }
