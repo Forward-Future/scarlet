@@ -436,7 +436,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     : tab === "you" ? [
       // With low risk edits included they are in the one list, in their place in the video among the rows that wait.
       { id: "you", label: pass && calls.length ? "Calls that need you" : "Edits that need you",
-        rows: inListOrder([...inPlace("you"), ...heldFrom("you"), ...lowRows], order) },
+        rows: inListOrder(entries.filter(e => e.place === "you" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "you") || lowKeys.has(e.key)), order) },
     ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided", rows: inListOrder(inPlace(tab), order) }];
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
   // For you opens the first waiting row on the timeline, or leaves it open if the editor is already on one.

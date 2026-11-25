@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 25, 2026
+
+- With low risk edits turned on in For you, Keep, Reject, and Revise now move straight to the next edit in the list instead of skipping ahead.
+
 ## November 24, 2026
 
 - Pressing ⌘Z right after rejecting a cut now brings back its Keep and Revise card instead of leaving it saying Rejected.
