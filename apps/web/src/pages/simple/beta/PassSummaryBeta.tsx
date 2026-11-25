@@ -455,11 +455,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       place: members.some(m => asks.has(m.key)) ? "you" : rowPlace(members, { waits: m => m.needs || m.asks, sent: m => m.pending, kept: m => m.decided }),
       at: Math.min(...members.map(m => m.at)) });
   }
-  // A row that has just left For you for Working or Done stays a moment where it was only in tabbed chat mode.
+  // A row that has just left For you for Working or Done, or Done for Working, stays a moment where it was only in tabbed chat mode.
   // In the edits column, For you, Working, and Done are all visible at once, so a kept or sent-back edit moves straight
   // there without appearing twice.
-  if (tabbed && !rail) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was })), optionalOpen && tab === "you");
-  const heldFrom = (from: "you" | "optional") => rail ? [] : entries.filter(e => (e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
+  if (tabbed && !rail) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })), optionalOpen && tab === "you", tab === "done");
+  const heldFrom = (from: "you" | "optional" | "done") => rail ? [] : entries.filter(e => (from === "done" ? e.place === "working" : e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
   const inPlace = (place: RowPlace) => entries.filter(e => e.place === place);
   // Every list goes by time, as its rows lead with their times.
   const order: ListOrder = { numbers: false };
@@ -476,7 +476,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     : tab === "you" ? [
       { id: "you", label: pass && calls.length ? "Calls that need you" : "Edits that need you", rows: inListOrder([...inPlace("you"), ...heldFrom("you")], order) },
       ...(optionalOpen ? [{ id: "optional" as const, label: "Low risk edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
-    ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided", rows: inListOrder(inPlace(tab), order) }];
+    ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided",
+      rows: inListOrder(tab === "done" ? [...inPlace("done"), ...heldFrom("done")] : inPlace(tab), order) }];
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
   // For you opens the first waiting row on the timeline, or leaves it open if the editor is already on one.
   const showNeeded = () => {
@@ -562,7 +563,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         const aimLead = <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}</span>;
         const tipText = moment && row.title ? row.title : row.label;
         const tipDetail = !moment && row.title && row.title !== row.label ? row.title : undefined;
-        const leaving = (id === "you" || id === "optional") && !!linger.of(entry.key)?.leaving;
+        const heldRow = linger.of(entry.key);
+        const leaving = !rail && !!heldRow?.leaving && id === heldRow.from;
         const canUnkeepRow = !!row.unkeep && !leaving;
         return <li key={row.key} className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
           data-log-control="open-pass-item" data-log-label={moment ? "Moment" : "Pass item"} disabled={!row.open}
@@ -712,7 +714,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   // editor (a question, or one that stopped early) keeps its row in For you.
   const asks = new Set(nests.flatMap(nest => nest.needs ? [nest.key] : []));
   const rowOf = new Map<string, string>(), placeOf = new Map<string, RowPlace>();
-  const tracked: { key: string; place: RowPlace; was: string[] }[] = [];
+  const tracked: { key: string; place: RowPlace; was: string[]; busy?: boolean }[] = [];
   if (tabbed) {
     for (const { members } of groups) {
       const row = members.map(m => m.edit), key = editKey(row[0]!);
@@ -720,7 +722,8 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
         : rowPlace(row, { waits: e => !!e.check && (asksEditor(revising(e)) || (!reviewed(e) && !revising(e))), sent: e => !!revising(e), kept: e => reviewed(e) });
       for (const e of row) rowOf.set(editKey(e), key);
       placeOf.set(key, place);
-      tracked.push({ key, place, was: row.flatMap(e => e.previous.map(editKey)) });
+      const busy = row.some(e => { const r = revising(e); return !!r && isWorking(r.state); });
+      tracked.push({ key, place, was: row.flatMap(e => e.previous.map(editKey)), busy });
     }
     for (const e of gone) {
       const key = editKey(e);
@@ -728,15 +731,21 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       placeOf.set(key, "done");
       tracked.push({ key, place: "done", was: e.previous.map(editKey) });
     }
-    // A row that has just left For you for Working or Done stays a moment only in tabbed chat mode.
+    // A row that has just left For you for Working or Done, or Done for Working, stays a moment only in tabbed chat mode.
     // In the edits column, Working and Done are right below, so a decided or sent-back edit moves there once.
-    if (!rail) linger.track(tracked, optionalOpen && tab === "you");
+    if (!rail) linger.track(tracked, optionalOpen && tab === "you", tab === "done");
   }
   const place = (e: Omit<ThreadEdit, "at">) => placeOf.get(rowOf.get(editKey(e)) ?? "");
-  const held = (e: Omit<ThreadEdit, "at">) => !rail && (place(e) === "working" || place(e) === "done") ? linger.of(rowOf.get(editKey(e)) ?? "") : undefined;
+  const held = (e: Omit<ThreadEdit, "at">) => {
+    if (rail) return undefined;
+    const at = place(e);
+    const h = at === "working" || at === "done" ? linger.of(rowOf.get(editKey(e)) ?? "") : undefined;
+    return h && (h.from !== "done" || at === "working") ? h : undefined;
+  };
   const inYou = (e: Omit<ThreadEdit, "at">) => place(e) === "you" || held(e)?.from === "you";
   const inOptional = (e: Omit<ThreadEdit, "at">) => place(e) === "optional" || held(e)?.from === "optional";
-  const onScreen = (e: Omit<ThreadEdit, "at">) => tab === "you" ? inYou(e) || (optionalOpen && inOptional(e)) : place(e) === tab;
+  const inDone = (e: Omit<ThreadEdit, "at">) => place(e) === "done" || held(e)?.from === "done";
+  const onScreen = (e: Omit<ThreadEdit, "at">) => tab === "you" ? inYou(e) || (optionalOpen && inOptional(e)) : tab === "done" ? inDone(e) : place(e) === tab;
   const countOf = (at: RowPlace) => tracked.filter(row => row.place === at).length;
   const some = (only: (e: Omit<ThreadEdit, "at">) => boolean) => edits.some(only) || gone.some(only);
   // Every edit belongs to For you: For you already lists them all.
@@ -799,9 +808,13 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     setOpen(was => was === "all" ? was : undefined);
     if (flagged.length && !flagged.some(edit => !!actions.showing && matchesEdit(actions.showing, edit))) actions.openEdit(thread, flagged[0]!);
   };
-  const rows = (label: string | undefined, only?: (e: Omit<ThreadEdit, "at">) => boolean) =>
-    <ThreadEdits projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
-      leaving={only && (edit => !!held(edit)?.leaving)}
+  const isLeaving = (from: "you" | "optional" | "done") => (edit: Omit<ThreadEdit, "at">) => {
+    const h = held(edit);
+    return !!h?.leaving && h.from === from;
+  };
+  const rows = (label: string | undefined, only?: (e: Omit<ThreadEdit, "at">) => boolean, leaveFrom?: "you" | "optional" | "done", listKey?: string) =>
+    <ThreadEdits key={listKey} projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
+      leaving={only && leaveFrom ? isLeaving(leaveFrom) : undefined}
       nextQueuedId={actions.nextQueuedId}
       hideGenericKind={!!rail}
       inRail={!!rail}
@@ -854,13 +867,15 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     {seeTab}
     {!tabbed && showsList && rows(undefined)}
     {tabbed && tab === "you" && <>
-      {some(inYou) ? rows("Edits that need you", inYou) : optional === 0 && <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
+      {some(inYou) ? rows("Edits that need you", inYou, "you", "you") : optional === 0 && <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
       {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
       {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
-      {optionalOpen && some(inOptional) && rows("Low risk edits", inOptional)}
+      {optionalOpen && some(inOptional) && rows("Low risk edits", inOptional, "optional", "optional")}
     </>}
-    {tabbed && tab !== "you" && (countOf(tab) > 0 ? rows(tab === "working" ? "With Scarlet" : "Decided", e => place(e) === tab)
-      : <p className="simple-review-empty">{EMPTY_TAB[tab]}</p>)}
+    {tabbed && tab === "working" && (countOf("working") > 0 ? rows("With Scarlet", e => place(e) === "working", undefined, "working")
+      : <p className="simple-review-empty">{EMPTY_TAB.working}</p>)}
+    {tabbed && tab === "done" && (some(inDone) ? rows("Decided", inDone, "done", "done")
+      : <p className="simple-review-empty">{EMPTY_TAB.done}</p>)}
     {nests.filter(nest => !listed.has(nest.key)).map(nest => nest.node)}
   </div>;
 }
