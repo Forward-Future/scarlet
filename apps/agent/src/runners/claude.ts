@@ -14,7 +14,7 @@ import type { AgentUsage, PlanStep } from "@scarlet/shared";
  */
 const CLAUDE_PLAN_TOOLS = ["TaskCreate", "TaskUpdate", "TodoWrite"];
 /** Claude Code's own tools a request's agent has beside Scarlet's: a shell, files and the web. */
-export const CLAUDE_WORKSPACE_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"];
+const CLAUDE_WORKSPACE_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch"];
 /** Allowed without asking. `WebFetch(domain:*)` also lets the shell's sandbox reach any web address. */
 const CLAUDE_WORKSPACE_ALLOWED = [...CLAUDE_WORKSPACE_TOOLS, "WebFetch(domain:*)"];
 /**
@@ -24,7 +24,7 @@ const CLAUDE_WORKSPACE_ALLOWED = [...CLAUDE_WORKSPACE_TOOLS, "WebFetch(domain:*)
  * `timeline_propose`'s, `dialogue_apply_cuts`'s or `dialogue_check_repeats`'s (claude 2.1.329, 2026-11-21). A tool
  * marked `anthropic/alwaysLoad` (`ALWAYS_LOADED_TOOLS` in the MCP server) is sent whole from the start.
  */
-export const CLAUDE_TOOL_SEARCH = "ToolSearch";
+const CLAUDE_TOOL_SEARCH = "ToolSearch";
 const PLAN_READS = new Set(["TaskList", "TaskGet", "TodoRead"]);
 const STEP_STATE: Record<string, PlanStep["state"]> = { pending: "pending", in_progress: "in_progress", completed: "done" };
 
@@ -281,7 +281,7 @@ export function claudeCanRunBare(env: NodeJS.ProcessEnv): boolean {
 
 /** Build the exact command line (pure, for tests and for reporting). */
 export function buildClaudeCommand(
-  opts: Pick<RunAgentOptions, "model" | "effort" | "fast" | "serviceTier" | "systemPrompt" | "instruction" | "mcp" | "resumeSession" | "plan" | "workspace">,
+  opts: Pick<RunAgentOptions, "model" | "effort" | "fast" | "serviceTier" | "systemPrompt" | "instruction" | "mcp" | "resumeSession" | "plan" | "workspace" | "settingsEnv">,
   bin: string,
   tmpDir: string,
   bare = false,
@@ -330,7 +330,8 @@ export function buildClaudeCommand(
     ...(opts.model ? ["--model", opts.model] : []),
     ...(opts.effort ? ["--effort", opts.effort] : []),
     "--settings",
-    JSON.stringify({ sandbox, ...(permissions && { permissions }), ...(opts.serviceTier ? { fastMode: opts.serviceTier === "fast" } : opts.fast ? { fastMode: true } : {}) }),
+    // A provider run's address and model go here too (`settingsEnv`): the flag's settings outrank the user's files.
+    JSON.stringify({ sandbox, ...(permissions && { permissions }), ...(opts.settingsEnv && { env: opts.settingsEnv }), ...(opts.serviceTier ? { fastMode: opts.serviceTier === "fast" } : opts.fast ? { fastMode: true } : {}) }),
   ];
   return {
     file: bin,
@@ -344,7 +345,7 @@ export function buildClaudeCommand(
 const TOOL_DEADLINE_MS = 300_000;
 
 /** Claude Code's MCP tool deadline: the user's own when it is longer, never shorter than the one Scarlet's waits assume. */
-export function mcpToolTimeout(user: string | undefined): string {
+function mcpToolTimeout(user: string | undefined): string {
   const theirs = Number(user);
   return Number.isFinite(theirs) && theirs > TOOL_DEADLINE_MS ? String(Math.floor(theirs)) : String(TOOL_DEADLINE_MS);
 }

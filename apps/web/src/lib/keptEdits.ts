@@ -15,10 +15,42 @@ export { editKey };
 const PREFIX = "scarlet.kept-edits.v1";
 const listeners = new Set<() => void>();
 /**
- * The parsed set for each key, with the stored text it came from so a change in storage is noticed.
+ * A stored set of keys as parsed, with the stored text it came from so a change in storage is noticed.
  * sessionOnly marks a record that storage refused; it stands until storage holds something else.
  */
-const cache = new Map<string, { raw: string | null; value: ReadonlySet<string>; sessionOnly?: boolean }>();
+type StoredSet = { raw: string | null; value: ReadonlySet<string>; sessionOnly?: boolean };
+/** The parsed set for each key. */
+const cache = new Map<string, StoredSet>();
+
+/** The set `raw` holds under `key`, parsed once. `unreadable` hears of stored text that isn't JSON. */
+function cachedSet(sets: Map<string, StoredSet>, key: string, raw: string | null, unreadable?: (error: unknown) => void): ReadonlySet<string> {
+  const known = sets.get(key);
+  // A record storage refused stands for the session, whatever storage still holds.
+  if (known && (known.raw === raw || known.sessionOnly)) return known.value;
+  let value: ReadonlySet<string> = new Set();
+  try {
+    const saved = JSON.parse(raw ?? "null");
+    if (Array.isArray(saved)) value = new Set(saved.filter((k): k is string => typeof k === "string"));
+  } catch (error) {
+    unreadable?.(error);
+  }
+  sets.set(key, { raw, value });
+  return value;
+}
+
+/** Store `value` under `key`. A set storage refuses stands for the session: `refused` hears why, and it returns false. */
+function storeSet(sets: Map<string, StoredSet>, key: string, value: ReadonlySet<string>, refused?: (error: unknown) => void): boolean {
+  const raw = JSON.stringify([...value]);
+  try {
+    localStorage.setItem(key, raw);
+    sets.set(key, { raw, value });
+    return true;
+  } catch (error) {
+    refused?.(error);
+    sets.set(key, { raw: null, value, sessionOnly: true });
+    return false;
+  }
+}
 
 /**
  * What a Keep records. An edit that a later save gave a new reason to look is kept under that save's edit, and a doubt
@@ -30,6 +62,8 @@ export const reviewKey = (ref: EditRef & { recheck?: string; reviewRef?: EditRef
   return ref.recheck ? `${key}@${ref.recheck}` : key;
 };
 const storageKey = (projectId: string, threadId: string) => `${PREFIX}/${projectId}/${threadId}`;
+/** A Keep's `reviewKey` in one thread of one project, for what this session has sent or taken back. */
+const sessionKey = (projectId: string, threadId: string, key: string) => `${projectId}/${threadId}/${key}`;
 
 let lastReadFailure: string | undefined;
 
@@ -44,21 +78,18 @@ function read(projectId: string, threadId: string): ReadonlySet<string> {
     if (name !== lastReadFailure) appLog("review", "keep-read-failed", { project: projectId, thread: threadId, name }, { level: "warn" });
     lastReadFailure = name;
   }
-  const known = cache.get(key);
-  // A record storage refused stands for the session, whatever storage still holds.
-  if (known && (known.raw === raw || known.sessionOnly)) return known.value;
-  let value: ReadonlySet<string> = new Set();
-  try {
-    const saved = JSON.parse(raw ?? "null");
-    if (Array.isArray(saved)) value = new Set(saved.filter((k): k is string => typeof k === "string"));
-  } catch (error) {
+  return cachedSet(cache, key, raw, error => {
     appLog("review", "keep-read-failed", { project: projectId, thread: threadId, name: errorName(error) }, { level: "warn" });
-  }
-  cache.set(key, { raw, value });
-  return value;
+  });
 }
 
 export type KeptRef = EditRef & { recheck?: string; reviewRef?: EditRef } & Partial<Pick<ThreadEdit, "label" | "check" | "range">>;
+
+/** The edits among `refs` that aren't kept yet: the ones a Keep of them all would newly keep, and ⌘Z would take back. */
+export function notYetKept<T extends KeptRef>(projectId: string, threadId: string, refs: readonly T[]): T[] {
+  const kept = read(projectId, threadId);
+  return refs.filter(ref => !kept.has(reviewKey(ref)));
+}
 
 export function keepEdits(projectId: string, threadId: string, refs: KeptRef[], version?: string) {
   const key = storageKey(projectId, threadId);
@@ -66,19 +97,14 @@ export function keepEdits(projectId: string, threadId: string, refs: KeptRef[], 
   const next = new Set(before);
   for (const ref of refs) next.add(reviewKey(ref));
   if (next.size === before.size) return false;
-  const raw = JSON.stringify([...next]);
   const fields = { project: projectId, thread: threadId, count: next.size - before.size };
-  try {
-    localStorage.setItem(key, raw);
-    cache.set(key, { raw, value: next });
-    appLog("review", "kept", fields);
-  } catch (error) {
+  const stored = storeSet(cache, key, next, error => {
     appLog("review", "keep-persist-failed", { ...fields, name: errorName(error) }, { level: "warn" });
-    cache.set(key, { raw: null, value: next, sessionOnly: true });
-  }
+  });
+  if (stored) appLog("review", "kept", fields);
   const fresh = refs.filter(ref => !before.has(reviewKey(ref)));
   // Sent here with what the editor read, so the hook doesn't send each one again, bare.
-  for (const ref of fresh) sent.add(`${projectId}/${threadId}/${reviewKey(ref)}`);
+  for (const ref of fresh) sent.add(sessionKey(projectId, threadId, reviewKey(ref)));
   for (const listener of listeners) listener();
   sendKeeps(projectId, threadId, fresh.map(ref => {
     const { changeId, spot } = ref.reviewRef ?? ref;
@@ -98,17 +124,12 @@ export function unkeepEdits(projectId: string, threadId: string, refs: KeptRef[]
   const keys = new Set(refs.map(reviewKey));
   const next = new Set([...before].filter(k => !keys.has(k)));
   for (const k of keys) {
-    sent.delete(`${projectId}/${threadId}/${k}`);
-    unkept.add(`${projectId}/${threadId}/${k}`);
+    sent.delete(sessionKey(projectId, threadId, k));
+    unkept.add(sessionKey(projectId, threadId, k));
   }
-  const raw = JSON.stringify([...next]);
-  try {
-    localStorage.setItem(key, raw);
-    cache.set(key, { raw, value: next });
-  } catch (error) {
+  storeSet(cache, key, next, error => {
     appLog("review", "keep-persist-failed", { project: projectId, thread: threadId, count: keys.size, name: errorName(error) }, { level: "warn" });
-    cache.set(key, { raw: null, value: next, sessionOnly: true });
-  }
+  });
   appLog("review", "unkept", { project: projectId, thread: threadId, count: keys.size });
   for (const listener of listeners) listener();
   const edits = refs.map(ref => {
@@ -134,13 +155,13 @@ const unkept = new Set<string>();
 
 function sendKeeps(projectId: string, threadId: string, edits: KeepEditsRequest["edits"], version?: string) {
   if (!edits.length) return;
-  for (const edit of edits) unkept.delete(`${projectId}/${threadId}/${edit.changeId}/${edit.spot}${edit.recheck ? `@${edit.recheck}` : ""}`);
+  for (const edit of edits) unkept.delete(sessionKey(projectId, threadId, reviewKey(edit)));
   toEngine(() => api.keepEdits(projectId, { threadId, ...(version && { version }), edits }), error => {
     appLog("review", "keep-send-failed", { project: projectId, thread: threadId, count: edits.length, name: errorName(error) }, { level: "warn" });
     // A Keep that didn't reach the engine (it was restarting, or reconnecting) is sent on by the hook at the thread's
     // next update. A few times only: one the engine keeps refusing isn't asked for at every update.
     for (const edit of edits) {
-      const key = `${projectId}/${threadId}/${edit.changeId}/${edit.spot}${edit.recheck ? `@${edit.recheck}` : ""}`;
+      const key = sessionKey(projectId, threadId, reviewKey(edit));
       const tries = (failedSends.get(key) ?? 0) + 1;
       failedSends.set(key, tries);
       if (tries < SEND_TRIES) sent.delete(key);
@@ -158,8 +179,7 @@ function engineKeys(thread: Thread | undefined): ReadonlySet<string> {
   for (const change of [...thread.changes, ...thread.flagged ?? []]) {
     for (const kept of change.kept ?? []) {
       if (kept.threadId !== thread.id) continue;
-      const key = `${change.id}/${kept.spot}`;
-      keys.add(kept.recheck ? `${key}@${kept.recheck}` : key);
+      keys.add(reviewKey({ changeId: change.id, spot: kept.spot, recheck: kept.recheck }));
     }
   }
   return keys;
@@ -187,9 +207,9 @@ export function useKeptEdits(projectId: string, thread: Thread | undefined): Rea
   // A Keep made before the engine recorded them, or that didn't reach it, is sent on.
   useEffect(() => {
     if (!threadId) return;
-    const missing = [...local].filter(key => !engine.has(key) && !sent.has(`${projectId}/${threadId}/${key}`));
+    const missing = [...local].filter(key => !engine.has(key) && !sent.has(sessionKey(projectId, threadId, key)));
     if (!missing.length) return;
-    for (const key of missing) sent.add(`${projectId}/${threadId}/${key}`);
+    for (const key of missing) sent.add(sessionKey(projectId, threadId, key));
     sendKeeps(projectId, threadId, missing.flatMap(key => {
       const match = /^(.+)\/(\d+)(?:@(.+))?$/.exec(key);
       return match ? [{ changeId: match[1]!, spot: Number(match[2]), ...(match[3] && { recheck: match[3] }) }] : [];
@@ -198,75 +218,9 @@ export function useKeptEdits(projectId: string, thread: Thread | undefined): Rea
   return useMemo(() => engine.size ? new Set([...local, ...engine]) : local, [local, engine]);
 }
 
-/**
- * To-do markers the editor parked for later ("Later") in this window, per thread. Kept separate from Keeps so the
- * engine does not treat them as finished; marking a deferred to-do Done still overrides it and sends the Keep.
- */
-const DEFER_PREFIX = "scarlet.deferred-edits.v1";
-const deferListeners = new Set<() => void>();
-const deferCache = new Map<string, { raw: string | null; value: ReadonlySet<string>; sessionOnly?: boolean }>();
-const deferStorageKey = (projectId: string, threadId: string) => `${DEFER_PREFIX}/${projectId}/${threadId}`;
-
-function readDeferred(projectId: string, threadId: string): ReadonlySet<string> {
-  const key = deferStorageKey(projectId, threadId);
-  let raw: string | null = null;
-  try { raw = localStorage.getItem(key); } catch { /* ignore */ }
-  const known = deferCache.get(key);
-  if (known && (known.raw === raw || known.sessionOnly)) return known.value;
-  let value: ReadonlySet<string> = new Set();
-  try {
-    const saved = JSON.parse(raw ?? "null");
-    if (Array.isArray(saved)) value = new Set(saved.filter((k): k is string => typeof k === "string"));
-  } catch { /* ignore */ }
-  deferCache.set(key, { raw, value });
-  return value;
-}
-
-export function deferEdits(projectId: string, threadId: string, refs: KeptRef[]) {
-  const key = deferStorageKey(projectId, threadId);
-  const before = readDeferred(projectId, threadId);
-  const next = new Set(before);
-  for (const ref of refs) next.add(reviewKey(ref));
-  if (next.size === before.size) return false;
-  const raw = JSON.stringify([...next]);
-  try {
-    localStorage.setItem(key, raw);
-    deferCache.set(key, { raw, value: next });
-  } catch {
-    deferCache.set(key, { raw: null, value: next, sessionOnly: true });
-  }
-  appLog("review", "deferred", { project: projectId, thread: threadId, count: next.size - before.size });
-  for (const listener of deferListeners) listener();
-  return true;
-}
-
-export function undeferEdits(projectId: string, threadId: string, refs: KeptRef[]) {
-  const key = deferStorageKey(projectId, threadId);
-  const before = readDeferred(projectId, threadId);
-  const keys = new Set(refs.map(reviewKey));
-  const next = new Set([...before].filter(k => !keys.has(k)));
-  const raw = JSON.stringify([...next]);
-  try {
-    localStorage.setItem(key, raw);
-    deferCache.set(key, { raw, value: next });
-  } catch {
-    deferCache.set(key, { raw: null, value: next, sessionOnly: true });
-  }
-  appLog("review", "undeferred", { project: projectId, thread: threadId, count: keys.size });
-  for (const listener of deferListeners) listener();
-}
-
-export function useDeferredEdits(projectId: string, thread: Thread | undefined): ReadonlySet<string> {
-  const threadId = thread?.id;
-  return useSyncExternalStore(subscribeDeferred, () => threadId ? readDeferred(projectId, threadId) : empty);
-}
-
 const empty: ReadonlySet<string> = new Set();
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => { listeners.delete(listener); };
-}
-function subscribeDeferred(listener: () => void) {
-  deferListeners.add(listener);
-  return () => { deferListeners.delete(listener); };
-}
+const subscriber = (to: Set<() => void>) => (listener: () => void) => {
+  to.add(listener);
+  return () => { to.delete(listener); };
+};
+const subscribe = subscriber(listeners);

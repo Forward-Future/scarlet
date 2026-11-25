@@ -55,12 +55,13 @@ export interface LocalRuntime {
   reason?: string;
 }
 
-export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whisperGpu" | "crisperAdapter">, settings: Settings): LocalRuntime {
+export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whisperCliBundled" | "whisperGpu" | "crisperAdapter">, settings: Settings): LocalRuntime {
   const paths = crisperPaths(ctx.paths.root);
   // A release without presets could still use the installer-provided launcher and weights.
   const legacyPreset = !settings.localModel && settings.whisperCppPath && settings.whisperModelPath &&
     resolve(settings.whisperCppPath) === resolve(paths.legacyCli) && resolve(settings.whisperModelPath) === resolve(paths.model);
-  const selected = legacyPreset ? "crisperwhisper" : selectedLocalModel(settings);
+  const existingCrisper = !settings.localModel && !settings.whisperCppPath && !settings.whisperModelPath && crisperInstallation(paths) !== "missing";
+  const selected = legacyPreset || existingCrisper ? "crisperwhisper" : selectedLocalModel(settings);
   const installation = selected === "crisperwhisper" ? crisperInstallation(paths) : undefined;
   if (installation === "ready") {
     // The worker selects the device at runtime. Keep it in the shared audio lane since the aligner
@@ -81,7 +82,7 @@ export function resolveLocalRuntime(ctx: Pick<Ctx, "paths" | "whisperCli" | "whi
   const binary = customBinary || ctx.whisperCli || (model ? "whisper-cli" : undefined);
   const presetIssue = installation === "installing" ? "CrisperWhisper setup is in progress. " : installation === "missing" ? "CrisperWhisper is not installed. " : "";
   if (!binary) return { selected, reason: presetIssue + "The bundled Whisper runtime is unavailable." };
-  const bundledBinary = !customBinary && binary === ctx.whisperCli;
+  const bundledBinary = !customBinary && binary === ctx.whisperCli && ctx.whisperCliBundled !== false;
   return { selected, active: selected === "custom" ? "custom" : "whispercpp", binary, model,
     adapterOwnsModel: settings.localModel === "custom" && !!customBinary && !model,
     separateWhisperLane: bundledBinary && bundledWhisperOnGpu(), gpuBinary: bundledBinary ? ctx.whisperGpu : undefined,

@@ -132,7 +132,7 @@ fn support_field(key: &str, value: &str) -> Option<String> {
             "shutdown" | "stale" | "thread_policy_mismatch" | "thread_start_failed" | "timeout" | "transcripts" | "unsettled" |
             "viewer_gone" | "worker_gone" | "worker_lost" | "write" | "cli_unavailable" | "request_failed" | "invalid_response" |
             "repeated_cursor" | "timed_out" | "process_failed" | "incomplete_response"),
-        "provider" => matches!(value, "claude" | "codex" | "gemini" | "api" | "whispercpp" | "openai"),
+        "provider" => matches!(value, "claude" | "codex" | "gemini" | "ollama" | "lmstudio" | "openrouter" | "api" | "whispercpp" | "openai"),
         "control" => matches!(value,
             "transcript-word" | "send-request" | "save-queued-request" | "approve-call" | "skip-call" | "revise-call" |
             "toggle-transcript" | "toggle-before" | "undo-edit" | "revise-edit" | "keep-edit" | "mark-done" | "apply-edit" |

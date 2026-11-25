@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Task } from "@scarlet/shared";
+import { requestRoots } from "../../lib/requestRuns";
 import { useWorkingLines } from "../../lib/workingLines";
 import { TimelineWorking } from "./TimelineWorking";
 
@@ -51,4 +52,86 @@ it("counts several requests at work and goes on to the next one in the chat with
   } finally {
     chat.remove();
   }
+});
+
+it("brings a request that was picked up again into view, by the block it began in", async () => {
+  const chat = document.createElement("aside");
+  chat.id = "simple-chat";
+  // The chat keeps a request's one block, named for its first attempt. After a pause or a restart Scarlet works on it
+  // under a later attempt, and after Retry under one that only the failed attempt names.
+  chat.innerHTML = `<div class="unit" data-run="a"><div class="req"><div class="req-now" id="a-now"></div></div></div>
+    <div class="unit" data-run="b"><div class="req"><div class="req-now" id="b-now"></div></div></div>`;
+  document.body.append(chat);
+  const scrolled: string[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value(this: HTMLElement) { scrolled.push(this.id); } });
+  const resumed = { id: "a_again", resumeRootId: "a" } as Task;
+  const retried = [{ id: "b", retryTaskId: "b_again" }, { id: "b_again" }] as Task[];
+  try {
+    await act(async () => root.render(<TimelineWorking tasks={[resumed, retried[1]!]} rootOf={requestRoots([resumed, ...retried])} />));
+    const status = container.querySelector<HTMLButtonElement>(".timeline-working")!;
+    await act(async () => status.click());
+    await act(async () => status.click());
+    expect(scrolled).toEqual(["a-now", "b-now"]);
+    expect(chat.querySelector("#b-now")!.hasAttribute("data-flash")).toBe(true);
+    // With nothing to say which request an attempt belongs to, one that was resumed still names it.
+    await act(async () => root.render(<TimelineWorking tasks={[resumed]} />));
+    await act(async () => container.querySelector<HTMLButtonElement>(".timeline-working")!.click());
+    expect(scrolled).toEqual(["a-now", "b-now", "a-now"]);
+    // Folded to its band, a request has nothing else in view: its band comes into the middle and lights.
+    const folded = chat.querySelector<HTMLElement>('[data-run="a"]')!;
+    folded.classList.add("is-collapsed");
+    folded.insertAdjacentHTML("afterbegin", '<div class="unit-msg" id="a-band"></div>');
+    await act(async () => container.querySelector<HTMLButtonElement>(".timeline-working")!.click());
+    expect(scrolled.at(-1)).toBe("a-band");
+    expect(chat.querySelector("#a-band")!.hasAttribute("data-flash")).toBe(true);
+  } finally {
+    chat.remove();
+  }
+});
+
+it("finds and lights revisions inside the beta edits rail, open or folded, and drops focus on pointer click", async () => {
+  const layout = document.createElement("main");
+  layout.setAttribute("data-new-layout", "");
+  layout.innerHTML = `<aside id="simple-review-rail" class="review-rail">
+    <button type="button" class="review-sec" id="working-head">Working</button>
+    <div class="review-sec-body" id="working-body">
+      <ol class="simple-edits"><li id="rev-row"><div class="subunit" data-run="rev"><div class="req"><div class="req-now" id="rev-now"></div></div></div></li></ol>
+    </div>
+  </aside>`;
+  document.body.append(layout);
+  const scrolled: string[] = [];
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value(this: HTMLElement) { scrolled.push(this.id); } });
+  try {
+    await act(async () => root.render(<TimelineWorking tasks={[task("rev")]} />));
+    const status = container.querySelector<HTMLButtonElement>(".timeline-working")!;
+    // Open in beta one-row style: scrolls and flashes the visible <li>, not the visually hidden .req-now.
+    status.focus();
+    await act(async () => status.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    expect(scrolled.at(-1)).toBe("rev-row");
+    expect(layout.querySelector("#rev-row")!.hasAttribute("data-flash")).toBe(true);
+    expect(document.activeElement).not.toBe(status);
+    // Folded Working section: scrolls and flashes the visible Working header.
+    layout.querySelector<HTMLElement>("#working-body")!.hidden = true;
+    await act(async () => status.click());
+    expect(scrolled.at(-1)).toBe("working-head");
+    expect(layout.querySelector("#working-head")!.hasAttribute("data-flash")).toBe(true);
+  } finally {
+    layout.remove();
+  }
+});
+
+it("renders project-wide Pause beside Scarlet is editing and Resume when paused", async () => {
+  const onToggle = vi.fn();
+  await act(async () => root.render(<TimelineWorking tasks={[task("a")]} pause={{ paused: false, onToggle }} />));
+  const pauseBtn = container.querySelector<HTMLButtonElement>(".timeline-working-pause")!;
+  expect(pauseBtn.textContent).toBe("Pause");
+  await act(async () => pauseBtn.click());
+  expect(onToggle).toHaveBeenCalledTimes(1);
+
+  await act(async () => root.render(<TimelineWorking tasks={[]} pause={{ paused: true, onToggle }} />));
+  expect(container.querySelector(".timeline-working-paused")?.textContent).toBe("Editing paused");
+  const resumeBtn = container.querySelector<HTMLButtonElement>(".timeline-working-pause.is-resume")!;
+  expect(resumeBtn.textContent).toBe("Resume");
+  await act(async () => resumeBtn.click());
+  expect(onToggle).toHaveBeenCalledTimes(2);
 });

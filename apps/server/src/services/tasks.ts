@@ -7,6 +7,7 @@ import {
   isSkillEdit,
   planText,
   PROJECT_EDIT_TASK_KINDS,
+  questionChoicesOf,
   reviewItemPath,
   skillCommands,
   splitAgentTarget,
@@ -25,7 +26,7 @@ import { badRequest, conflict } from "../errors.js";
 import { clip, logId, since } from "../logText.js";
 import { recordTaskFinished, recordTaskRequested } from "../telemetry/events.js";
 import { actorFor, agentName, logActivity, quote } from "./activity.js";
-import { applyChoicesWhenDone, retireStaleSaves } from "./changes.js";
+import { applyChoicesWhenDone, applySettledCuts, retireStaleSaves } from "./changes.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { notify } from "./notify.js";
 import { restoreUnreplacedProposal } from "./revisionState.js";
@@ -243,7 +244,7 @@ export function appendTaskEvent(ctx: Ctx, task: Task, ev: TaskEvent): { task: Ta
   let next: Task = task;
   if (task.state === "claimed") next = { ...next, state: "running", startedAt: next.startedAt ?? receivedAt };
   if (ev.type === "question") {
-    next = { ...recordWorkThrough(next, receivedAt), state: "waiting_for_user", question: ev.text };
+    next = { ...recordWorkThrough(next, receivedAt), state: "waiting_for_user", question: ev.text, questionChoices: questionChoicesOf(ev.data) };
     notify(ctx, `Agent question: ${ev.text.slice(0, 80)}`, {
       body: ev.text,
       projectId: task.projectId,
@@ -251,7 +252,7 @@ export function appendTaskEvent(ctx: Ctx, task: Task, ev: TaskEvent): { task: Ta
     });
   } else if (ev.type === "answer") {
     const operation = editsDialogue(task.kind) && requestedDialogue(ctx, ev.text);
-    next = { ...next, workedMs: pausedWork(ctx, task), state: "queued", hostId: null, question: null,
+    next = { ...next, workedMs: pausedWork(ctx, task), state: "queued", hostId: null, question: null, questionChoices: undefined,
       ...(operation && operation !== taskDialogueOperation(task) && { context: { ...task.context, dialogueOperation: operation, dialogueRange: undefined }, repeatAudit: undefined }),
       ...(task.cutConflict && { cutConflict: { ...task.cutConflict, answered: true, retried: undefined } }) };
   } else if (ev.type === "change" && typeof ev.data?.changeId === "string") {
@@ -361,12 +362,18 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
     const finished = { ...task, state: "done" as const };
     ctx.repos.tasks.put(finished);
     for (const change of own()) applyChoicesWhenDone(ctx, change);
+    // A pass with calls still waiting puts the cuts it settled into the video as it finishes, so the video is the edit as it will be.
+    for (const change of own()) applySettledCuts(ctx, change);
     retireStaleSaves(ctx, task);
     // A run resumed after a quit may finish without saving another part. Its earlier attempts' pass still applies.
     const attempts = task.resumeRootId && runAttemptIds(task.projectId, task.resumeRootId);
     if (attempts) for (const change of ctx.repos.changes.select(`project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') IN (${attempts.sql})`,
         [task.projectId, ...attempts.params])) {
       if (change.taskId !== task.id) applyChoicesWhenDone(ctx, change);
+    }
+    if (attempts) for (const change of ctx.repos.changes.select(`project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') IN (${attempts.sql})`,
+        [task.projectId, ...attempts.params])) {
+      if (change.taskId !== task.id) applySettledCuts(ctx, change);
     }
   }
   // A dialogue pass that says it is done is done, whatever its repeat check still lists. What the check last measured
@@ -436,21 +443,23 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
 }
 
 /** The side checks of one kind a request started that haven't finished. */
-function openChecks(ctx: Ctx, task: Task, kind: "learning_check" | "area_check" | "listen_check"): Task[] {
+function openChecks(ctx: Ctx, task: Task, kind: "learning_check" | "area_check" | "listen_check" | "hand_off"): Task[] {
   if (!editsDialogue(task.kind)) return [];
   return ctx.repos.tasks.select("project_id = ? AND kind = ? AND json_extract(json, '$.context.checksTaskId') = ?", [task.projectId, kind, task.id])
     .filter(check => !FINISHED_TASK.has(check.state));
 }
 
 /**
- * A request that has ended leaves no look at a frame waiting to start, and no listen at all: none would serve it, and a look left waiting
+ * A request that has ended leaves no look at a frame waiting to start, and no listen or hand-off at all: none would serve it, and a look left waiting
  * would hold back the next request's asks about the same recording. One already looking finishes, since what it finds
  * is kept for the recording.
  */
 export function dropWaitingLooks(ctx: Ctx, task: Task): void {
   for (const check of openChecks(ctx, task, "area_check")) if (check.state === "queued") cancelTask(ctx, check);
-  // What a listen hears is told only to the run that asked, so one under way stops as well.
+  // What a listen hears is told only to the run that asked, so one under way stops as well. A hand-off works for the
+  // run that handed it the work, which is over.
   for (const check of openChecks(ctx, task, "listen_check")) cancelTask(ctx, check);
+  for (const check of openChecks(ctx, task, "hand_off")) cancelTask(ctx, check);
 }
 
 /**
@@ -475,6 +484,7 @@ export function cancelTask(ctx: Ctx, task: Task, opts: { withdrawn?: boolean } =
   // put back in line by a pause, where the attempt that resumes it asks again.
   for (const check of openChecks(ctx, task, "area_check")) cancelTask(ctx, check);
   for (const check of openChecks(ctx, task, "listen_check")) cancelTask(ctx, check);
+  for (const check of openChecks(ctx, task, "hand_off")) cancelTask(ctx, check);
   ctx.bus.taskQueued({ taskId: saved.id, projectId: saved.projectId });
   return saved;
 }

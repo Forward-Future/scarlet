@@ -1,8 +1,8 @@
 import os from "node:os";
-import { beginRevision, planText, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
+import { beginRevision, planText, questionChoicesOf, taskNeedsTranscripts, taskPlan, taskRecoveryAction, type RunChoice, type Task } from "@scarlet/shared";
 import { processIsAlive, type Ctx } from "../context.js";
 import { now } from "../db.js";
-import { conflict, notFound } from "../errors.js";
+import { badRequest, conflict, notFound } from "../errors.js";
 import { logId } from "../logText.js";
 import { recordTaskFinished } from "../telemetry/events.js";
 import { getTranscriptionProvider, presetLabel } from "../transcribe/index.js";
@@ -16,6 +16,12 @@ import { RESUMABLE } from "./taskPrompts.js";
 
 /** A run that keeps losing its worker stops carrying on by itself after this many attempts, and waits for the editor. */
 const LOST_WORKER_ATTEMPTS = 3;
+/**
+ * A run waiting for its transcripts that can't be resumed stops waiting after this many tries, so the editor can ask
+ * again or carry on, instead of being tried and logged every half minute for as long as Scarlet is open.
+ */
+const READY_RESUME_ATTEMPTS = 3;
+const readyResumeFailures = new WeakMap<Ctx, Map<string, number>>();
 
 function completedTranscriptAfter(ctx: Ctx, projectId: string, mediaId: string, since: string) {
   return ctx.repos.transcripts.select(
@@ -46,7 +52,7 @@ function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, 
   const again = quit || lost < LOST_WORKER_ATTEMPTS;
   let carriesOn = false;
   // A learning check cut short isn't run again: its request has moved on, and the next message is read anyway.
-  if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check" && saved.kind !== "area_check" && saved.kind !== "listen_check") {
+  if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check" && saved.kind !== "area_check" && saved.kind !== "listen_check" && saved.kind !== "hand_off") {
     try {
       // All of the next attempt or none of it: one left half made would run beside a run that still offers Resume.
       ctx.db.savepoint(() => resumeTask(ctx, saved, {}));
@@ -98,6 +104,7 @@ export function holdProjectEditing(ctx: Ctx, projectId: string) {
 
 /** Release the queue under the same lock as claims. */
 export function resumeProjectEditing(ctx: Ctx, projectId: string, choice: RunChoice = {}) {
+  if (choice.agent === "api") throw badRequest("agent_unavailable", "Choose Claude, Codex or Gemini to run this request.");
   return ctx.db.transaction(() => {
     const previous = ctx.repos.projects.header(projectId);
     if (!previous) throw notFound("project");
@@ -159,15 +166,16 @@ function settleTask(ctx: Ctx, task: Task, unstarted: boolean, lastSeen?: string 
   }
 
   const changeIds = savedChanges(ctx, [task]).map(c => c.id);
-  const lastEvent = ctx.db.prepare(`SELECT json_extract(json, '$.type') AS type, json_extract(json, '$.text') AS text, at
+  const lastEvent = ctx.db.prepare(`SELECT json_extract(json, '$.type') AS type, json_extract(json, '$.text') AS text, at,
+    json_extract(json, '$.data.choices') AS choices
     FROM task_events WHERE task_id = ? ORDER BY at DESC, rowid DESC LIMIT 1`)
-    .get(task.id) as { type: string; text: string; at: string } | undefined;
+    .get(task.id) as { type: string; text: string; at: string; choices: string | null } | undefined;
   // An interrupt reported by a live worker stops now. A lost worker is measured through its latest activity.
   const observed = [task.startedAt, lastSeen, lastEvent?.at].filter((at): at is string => !!at && at <= finishedAt).sort().at(-1);
   const { workedMs } = recordWorkThrough(task, lastSeen === undefined ? finishedAt : observed ?? finishedAt);
   if (task.resultSkillId) return finish({ state: "done", changeIds, workedMs, summary: "The skill was saved before the interruption." });
   if (lastEvent?.type === "question") return saveTask(ctx, { ...recordWorkThrough(task, lastEvent.at),
-    changeIds, state: "waiting_for_user", question: lastEvent.text, hostId: null });
+    changeIds, state: "waiting_for_user", question: lastEvent.text, questionChoices: lastEvent.choices ? questionChoicesOf({ choices: JSON.parse(lastEvent.choices) }) : undefined, hostId: null });
   // Preserve the answer and task workspace of requests stranded by the old host protocol.
   const pendingAnswer = task.state === "running" && lastEvent?.type === "answer" && lastEvent.at >= (task.startedAt ?? "");
   if ((unstarted && !changeIds.length) || pendingAnswer) {
@@ -400,6 +408,8 @@ export function continueWhenReady(ctx: Ctx, id: string, on: boolean): { task: Ta
     const task = ctx.repos.tasks.get(id)!;
     if (task.retryTaskId) return task;
     if (!taskNeedsTranscripts(task)) throw conflict("not_waiting", "This edit isn’t waiting for a transcript.");
+    // The editor's own ask starts the tries afresh.
+    if (on) readyResumeFailures.get(ctx)?.delete(id);
     if (!!task.continueWhenReady === on) return task;
     ctx.log(`[task] ${id} ${on ? "will resume when its transcripts are ready" : "no longer waits for its transcripts"}`);
     return saveTask(ctx, { ...task, continueWhenReady: on || undefined });
@@ -433,6 +443,12 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
       saveTask(ctx, { ...task, continueWhenReady: undefined });
     }
   }, "immediate");
+  const stopWaiting = ctx.db.transaction((id: string, tries: number) => {
+    const task = ctx.repos.tasks.get(id);
+    if (!task?.continueWhenReady || task.retryTaskId) return;
+    ctx.log(`[task] ${task.id} stopped waiting: it couldn’t resume after ${tries} tries`);
+    saveTask(ctx, { ...task, continueWhenReady: undefined });
+  }, "immediate");
   const resumed: Task[] = [];
   for (const { id } of armed) {
     try {
@@ -440,6 +456,19 @@ export function continueReadyRuns(ctx: Ctx, projectId?: string): Task[] {
       if (retry) resumed.push(retry);
     } catch (err) {
       ctx.log(`[task] ${id} couldn’t check its transcripts: ${errorMessage(err)}`);
+      const failures = readyResumeFailures.get(ctx) ?? new Map<string, number>();
+      readyResumeFailures.set(ctx, failures);
+      const tries = (failures.get(id) ?? 0) + 1;
+      if (tries < READY_RESUME_ATTEMPTS) {
+        failures.set(id, tries);
+        continue;
+      }
+      failures.delete(id);
+      try {
+        stopWaiting(id, tries);
+      } catch (err) {
+        ctx.log(`[task] ${id} couldn’t stop waiting: ${errorMessage(err)}`);
+      }
     }
   }
   return resumed;

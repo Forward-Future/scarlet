@@ -86,6 +86,11 @@ it("names the × of a dialog and of a drawer on hover, with the key that closes 
   expect([...el.querySelectorAll('dialog [aria-label="Close"]')].map(x => x.getAttribute("title"))).toEqual(["Close (Esc)", "Close (Esc)"]);
 });
 
+it("starts a drawer's keyboard on its first field, not on its ×", async () => {
+  await act(async () => root.render(<Drawer open onClose={() => {}} title="Project settings"><input aria-label="Name" defaultValue="Interview" /></Drawer>));
+  expect(document.activeElement).toBe(el.querySelector('input[aria-label="Name"]'));
+});
+
 it("names every × in the app on hover", () => {
   const sources = import.meta.glob<string>(["/src/**/*.tsx", "!**/*.test.*"], { eager: true, query: "?raw", import: "default" });
   // A button that holds nothing but the × icon, and what its opening tag says.

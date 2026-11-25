@@ -99,7 +99,11 @@ try {
   });
   session = sessionId;
   assert.ok(session);
-  await until("Scarlet project library", () => execute("return document.body?.innerText.includes('New project')"));
+  await until("Scarlet project library", () => execute(`
+    const later = document.querySelector('button.first-sign-in-later');
+    if (later) later.click();
+    return document.body?.innerText.includes('New project');
+  `));
   const voiceInput = await execute(`
     return typeof navigator.mediaDevices?.getUserMedia === "function" && typeof MediaRecorder === "function"
       && ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].some(type => MediaRecorder.isTypeSupported(type));

@@ -4,15 +4,15 @@
  * a drifting one as answers that grow. Each stretch is measured once and kept beside the waveform. This is evidence
  * for the model, never a verdict: whether and how far to shift the sound is its call.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { curvePeak, fileInDirectory, lipSyncStretch, type CropBox, type LipSyncReading } from "@scarlet/render";
+import { curvePeak, fileInDirectory, heardAudio, heardAudioKey, lipSyncStretch, type CropBox, type LipSyncReading } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { atomicWriteFile, rememberLast } from "../util.js";
 import { faceSamples, type FaceSample } from "./faces.js";
-import { r3 } from "./pictureReading.js";
+import { r3, readingIdentity, type VideoMedia } from "./pictureReading.js";
 import { pictureDecoder, pictureLane } from "./pictureWork.js";
 
 /** Bump when the measurement changes. Kept stretches are measured again. */
@@ -22,8 +22,6 @@ const MAX_SHIFT = 1.5;
 /** Stretches measured by default, and their length: six of 30 s found the same 0.65 s on a 35-minute recording, each 0.6-0.7 s. */
 export const LIP_SYNC_STRETCHES = 6;
 export const LIP_SYNC_SECONDS = 30;
-
-type VideoMedia = MediaAsset & { projectId: string };
 
 export interface LipSyncStretch {
   /** Source seconds measured. */
@@ -101,12 +99,16 @@ interface Kept { identity: string; stretches: Record<string, LipSyncStretch> }
 
 const keptFiles = new Map<string, Promise<Kept>>();
 const measuring = new Map<string, Promise<LipSyncStretch>>();
+/** The save of each file under way, the next waiting for it. */
+const saving = new Map<string, Promise<void>>();
 const MAX_KEPT = 32;
 const STILL_FINDING = "The faces in this stretch are still being found: ask again.";
 const STILL_MEASURING = "Still being measured: ask again.";
 
 function identity(media: MediaAsset) {
-  return createHash("sha256").update(JSON.stringify([LIP_SYNC_VERSION, media.hash ?? media.path, media.duration, MAX_SHIFT])).digest("hex");
+  // A reading against a track the editor chose is that track's. The first track's readings keep their name.
+  const heard = heardAudioKey(heardAudio(media));
+  return readingIdentity(LIP_SYNC_VERSION, media, MAX_SHIFT, ...heard === null ? [] : [heard]);
 }
 
 /** Measure each stretch of a recording not measured yet, waiting up to `waitMs` for the answers; the rest carry on and are kept. */
@@ -131,7 +133,15 @@ export async function lipSync(ctx: Ctx, media: VideoMedia, range: { from?: numbe
     } catch { /* Not measured yet. */ }
     return { identity: identity(media), stretches: {} };
   })(), MAX_KEPT);
-  const save = () => atomicWriteFile(path, JSON.stringify(kept), `${path}.${randomUUID()}.tmp`);
+  // Stretches finish together, so their saves go one after another, each with all that is kept by then: run side by
+  // side, an earlier save that landed last would leave the file without stretches measured after it.
+  const save = () => {
+    const next = (saving.get(path) ?? Promise.resolve()).catch(() => {})
+      .then(() => atomicWriteFile(path, JSON.stringify(kept), `${path}.${randomUUID()}.tmp`));
+    saving.set(path, next);
+    void next.catch(() => {}).finally(() => { if (saving.get(path) === next) saving.delete(path); });
+    return next;
+  };
 
   const measure = (stretch: { from: number; to: number }) => {
     const key = `${stretch.from}-${stretch.to}`;
@@ -152,7 +162,7 @@ export async function lipSync(ctx: Ctx, media: VideoMedia, range: { from?: numbe
       } else {
         const decoder = await pictureDecoder(ctx.settings().render.hwaccel);
         const reading = await pictureLane(ctx).run(() => lipSyncStretch(file, { start: stretch.from, end: stretch.to },
-          { box: face.mouth satisfies CropBox, width, height, fps, maxShift: MAX_SHIFT, decoder, signal }), { signal });
+          { box: face.mouth satisfies CropBox, width, height, fps, maxShift: MAX_SHIFT, decoder, signal, audio: heardAudio(media) }), { signal });
         const { curve, ...measured } = reading;
         result = { ...stretch, face, reading: measured, curve };
       }

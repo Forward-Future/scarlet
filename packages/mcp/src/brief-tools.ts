@@ -17,11 +17,12 @@ export const ALWAYS_LOAD = "anthropic/alwaysLoad";
 /** The most of a tool's first sentence its line in the index keeps: the listing grows by at most this per tool. */
 export const INDEX_LINE_MAX = 160;
 
-/** A tool's line in the index: its name and the first sentence of its description. */
-export function indexLine(name: string, description: string): string {
+/** A tool's line in the index: its name and the first sentence of its description, kept within `maxLead` characters. */
+export function indexLine(name: string, description: string, maxLead = INDEX_LINE_MAX): string {
+  if (maxLead <= 0) return name;
   const first = /^[\s\S]*?[.!?](?=\s+[A-Z(`"“]|\s*$)/.exec(description.trim())?.[0] ?? description.trim();
   const lead = first.replace(/\s+/g, " ");
-  return `${name}: ${lead.length > INDEX_LINE_MAX ? `${lead.slice(0, INDEX_LINE_MAX - 1).trimEnd()}…` : lead}`;
+  return `${name}: ${lead.length > maxLead ? `${lead.slice(0, Math.max(1, maxLead - 1)).trimEnd()}…` : lead}`;
 }
 
 /** A tool's name as a harness may give it, without the prefix it adds for the scarlet server. */
@@ -55,7 +56,7 @@ function unionAnnotations(tools: readonly Tool[]): ToolAnnotations {
  * so the harness keeps replies inline instead of spilling them to a file. The listing grows by one index line per tool,
  * whatever the tool's size. Called once every tool is registered.
  */
-export function listToolsBriefly(server: McpServer, maxChars = DEFAULT_RESULT_CHARS) {
+export function listToolsBriefly(server: McpServer, maxChars = DEFAULT_RESULT_CHARS, maxDescriptionChars?: number) {
   // The SDK lists registered tools from this handler. Wrapping it keeps its conversion of each tool's input schema.
   const handlers = (server.server as unknown as { _requestHandlers?: Map<string, ListTools | CallTool> })._requestHandlers;
   const listed = handlers?.get("tools/list") as ListTools | undefined;
@@ -129,7 +130,19 @@ export function listToolsBriefly(server: McpServer, maxChars = DEFAULT_RESULT_CH
     // A side check's few tools are all listed whole: there is nothing to call through tool_call.
     if (!indexed.length) return { tools: whole };
     const help = tools.find(t => t.name === TOOL_HELP)!, call = tools.find(t => t.name === TOOL_CALL)!;
-    const index = indexed.map(t => indexLine(t.name, t.description ?? "")).join("\n");
-    return { tools: [...whole, help, { ...call, description: `${CALL_LEAD}\n\nTools:\n${index}`, annotations: unionAnnotations(indexed) }] };
+    const head = `${CALL_LEAD}\n\nTools:\n`;
+    const formatIndex = (lead: number) => indexed.map(t => indexLine(t.name, t.description ?? "", lead)).join("\n");
+    let index = formatIndex(INDEX_LINE_MAX);
+    if (maxDescriptionChars && head.length + index.length > maxDescriptionChars) {
+      // Fit every tool into the harness's description ceiling so none at the end of the list are cut off unseen.
+      const namesCost = indexed.reduce((sum, t) => sum + t.name.length + 3, 0);
+      let lead = Math.min(INDEX_LINE_MAX, Math.max(0, Math.floor((maxDescriptionChars - head.length - namesCost) / indexed.length)));
+      index = formatIndex(lead);
+      while (lead > 0 && head.length + index.length > maxDescriptionChars) {
+        lead = Math.max(0, lead - 4);
+        index = formatIndex(lead);
+      }
+    }
+    return { tools: [...whole, help, { ...call, description: `${head}${index}`, annotations: unionAnnotations(indexed) }] };
   }) satisfies ListTools);
 }

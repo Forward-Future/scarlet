@@ -45,7 +45,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
   const previous = busy?.file ?? (job?.phase === "failed" && job.context === context ? job.file : undefined);
   const exported = job?.phase === "done" ? job : undefined;
   const exportedCurrentEdit = exported?.context === context;
-  // Advanced export: the folder for finishing the edit in another app. Otherwise the video or its captions.
+  // For Resolve, Final Cut or Premiere: the folder for finishing the edit in another app. Otherwise the video or its captions.
   const [advanced, setAdvanced] = useState(previous?.format === "folder");
   const [plainFormat, setPlainFormat] = useState<"mp4" | "srt" | "vtt">(previous?.format === "srt" || previous?.format === "vtt" ? previous.format : "mp4");
   const format: ExportFile["format"] = advanced ? "folder" : plainFormat;
@@ -69,6 +69,8 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
   const [revealError, setRevealError] = useState("");
   // A percent shows only while it moves.
   const counting = !!busy && exportCounting(busy);
+  // Sections an earlier render already encoded start the bar partway. That head start is shown as reused, not as speed.
+  const reused = counting && busy.reused && Math.round(busy.reused.progress * 100) >= 1 ? busy.reused : undefined;
   // An export that stopped is explained here, so the menu's mark for it goes once this is open.
   const failed = job?.phase === "failed";
   useEffect(() => { if (failed) exportFailureSeen(current.id); }, [failed, current.id]);
@@ -115,9 +117,9 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     void exportFile(current, { format, name, video, ...(captions && exportTrackId ? { trackId: exportTrackId } : {}) });
   };
   const switchTo = !busy && !exportedCurrentEdit && <button type="button" className="btn-quiet mr-auto" onClick={() => setAdvanced(!advanced)}>
-    {advanced ? "Back" : "Advanced export"}
+    {advanced ? "Back" : "For Resolve, Final Cut or Premiere…"}
   </button>;
-  return <Modal open title={advanced ? "Advanced export" : "Export"} width={600} onClose={onClose} footer={running ? <>
+  return <Modal open title={advanced ? "Export for Resolve, Final Cut or Premiere" : "Export"} width={600} onClose={onClose} footer={running ? <>
     {busy.phase === "rendering" && <button type="button" className="btn-quiet" onClick={busy.cancel}>Cancel export</button>}
     <button type="button" className="btn-primary" onClick={onClose}>Continue editing</button>
   </> : <>
@@ -176,10 +178,14 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
       invalidRange ? `Enter a range between 0:00 and ${playbackClock(duration)}, at least one frame long.` : sampleOnly ? "The isolated demo saves its included MP4. Custom video settings are available in library projects." : ""}</InlineError>}
     {busy && <div className="mt-3">
       {busy.phase === "choosing" ? <p className="text-xs text-muted" role="status">Choose a location…</p> :
-        <ActivityProgress label={`Export progress for ${busy.file.name}`} value={counting ? busy.progress : undefined}>
+        <ActivityProgress label={`Export progress for ${busy.file.name}`} value={counting ? busy.progress : undefined} reused={reused?.progress}>
           {busy.phase === "saving" ? (busy.file.format === "folder" ? "Saving the folder…" : "Saving file…") : busy.waiting ? "Waiting to start" : Math.round(busy.progress * 100) >= PICTURE_DONE ? "Finishing…"
             : `Exporting${busy.context !== context ? " an earlier version" : ""}${counting ? ` · ${pct(busy.progress)}` : ""}`}
         </ActivityProgress>}
+      {reused && <p className="mt-1 flex flex-wrap gap-x-3.5 text-[11px] text-muted tnum" data-testid="export-reused">
+        <span><span className="activity-progress-swatch" />Reused from an earlier export · {clock(reused.seconds)}</span>
+        <span><span className="activity-progress-swatch is-new" />Exporting now</span>
+      </p>}
       {running && <p className="mt-2 text-xs text-muted">Your export continues in the background while you edit.</p>}
     </div>}
     {exported && <p className="mt-3 flex items-center gap-2 text-xs" role="status">

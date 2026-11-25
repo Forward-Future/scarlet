@@ -20,7 +20,7 @@ import {
   type TaskEvent,
 } from "@scarlet/shared";
 import { timelineDuration, type MediaClip, type TimeRange } from "@scarlet/timeline";
-import { colorEvidence, pct1 } from "./analysis.js";
+import { addedAfterRequest, colorEvidence, pct1 } from "./analysis.js";
 import { createAudioOption, percentBox } from "./mcp-schema.js";
 import type { MediaSession } from "./media-session.js";
 import { eachRecording, RecordingList, recordingsAsked, requireMediaAsset, type SessionErrorHelpers } from "./media-state.js";
@@ -58,12 +58,30 @@ export function listening(caps: AgentCapabilities, canWrite: boolean): { by: "re
   return undefined;
 }
 
+/**
+ * Deliver a base64 WAV to a hearing model: inline for a harness that forwards MCP audio blocks, or written as a WAV
+ * file to the task folder for a harness whose file viewer hears audio (`audioFiles`).
+ */
+export async function deliverWav(
+  listen: { by: "result" | "file" },
+  wav: string,
+  name: string,
+  meta: Record<string, unknown>,
+  how: string,
+  writeArtifact?: (path: string, data: Uint8Array) => Promise<string>,
+): Promise<ToolResult["content"]> {
+  if (listen.by !== "file") return [{ type: "audio", mimeType: "audio/wav", data: wav }];
+  const file = await writeArtifact!(name, Buffer.from(wav, "base64"));
+  return [{ type: "text", text: JSON.stringify({ listen: file, ...meta, how }) }];
+}
+
 export function registerInspectionTools(deps: InspectionToolsDeps) {
   const { tool, client, projectId, taskId, task, caps, fetchImpl, session, errors, scanScopes, waitLeft, readPassage, postEvent, writeArtifact, listener } = deps;
   const { getProject, getHeader, nextBaseAsk, moveBase, baseTimeline, transcriptWords } = session;
   const { withoutOnce } = errors;
-  const hearing = caps.audio;
-  const audioOption = createAudioOption(hearing);
+  const listen = listening(caps, !!writeArtifact);
+  const defaultAudio = listen?.by === "file";
+  const audioOption = createAudioOption(!!listen, defaultAudio);
 
   /** One frame of a source recording, or of `area` of it in percent, `width` pixels wide. */
   async function sourceFrame(mediaId: string, t: number, width: number, area?: readonly number[], grid?: boolean) {
@@ -94,6 +112,8 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
         id: m.id, name: m.name, kind: m.kind, duration: m.duration, fps: m.fps, width: m.width, height: m.height,
         hasAudio: m.hasAudio, hasTranscript: Boolean(m.transcriptId), ...(m.provenance && { provenance: m.provenance }), ...(m.graphic && { graphic: m.graphic }),
         ...(colorEvidence(m.color) && { color: colorEvidence(m.color) }),
+        ...(m.editorNote && { editorNote: m.editorNote }),
+        ...(addedAfterRequest(m, task?.createdAt) && { addedAfterThisRequest: true }),
       }));
       const tl = detail.timeline;
       moveBase(tl, asked);
@@ -105,6 +125,7 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
         editContext: task && { ...task.context, dialogueRange: session.localRange },
         duration: tl ? timelineDuration(tl) : 0,
         media,
+        ...(media.some(m => m.addedAfterThisRequest) && { addedLater: "The editor added the files marked addedAfterThisRequest after sending this request. They aren't part of it unless the editor's words name them." }),
         tracks: tl ? tl.tracks.map((t) => ({ id: t.id, kind: t.kind, name: t.name, clips: t.clips.length, muted: t.muted, hidden: t.hidden })) : [],
       });
     },
@@ -147,7 +168,14 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
     for (const { jpeg, wav, ...window } of result.windows) {
       content.push({ type: "text", text: JSON.stringify(window) });
       if (caps.images) content.push({ type: "image", mimeType: "image/jpeg", data: jpeg });
-      if (hearing && wav) content.push({ type: "audio", mimeType: "audio/wav", data: wav });
+      if (listen && wav) {
+        const tag = `${window.id}-${window.label.toLowerCase().replace(/\W+/g, "-")}-${window.range.start.toFixed(2)}-${window.range.end.toFixed(2)}`;
+        const how = window.label === "After"
+          ? "Open this WAV file with your own file viewer to hear the rendered join as the viewer will hear it."
+          : "Open this WAV file with your own file viewer to hear the original passage around this edge.";
+        content.push(...await deliverWav(listen, wav, `listen/review-${tag}.wav`,
+          { label: window.label, version: window.id, range: window.range }, how, writeArtifact));
+      }
     }
     return { content };
   }
@@ -204,8 +232,6 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
       }
       return { content };
     });
-
-  const listen = listening(caps, !!writeArtifact);
 
   /**
    * A passage of a recording for the model to hear: the audio itself, or the WAV file written to the task folder and
@@ -273,8 +299,8 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
   const { includeAudio: _reviewAudio, ...cutReviewShape } = CutReviewOptions;
   tool("change_review_cut",
     "Compare one chronological cut or changed spot on the original and proposed versions. Reports new black frames, freezes and abrupt mix-level changes (dB)." + (caps.images ? " Includes labeled composite frames." : "") + " Read total to review the next index. For how a dialogue join sounds, use timeline_join_audit.",
-    { ...cutReviewShape, ...audioOption("Attach a short WAV of each side") },
-    args => inspect(() => client.reviewCut(projectId, { ...args, includeAudio: hearing && args.includeAudio === true })));
+    { ...cutReviewShape, ...audioOption(listen?.by === "file" ? "Write a short WAV file of each side to your task folder to open with your file viewer and hear" : "Attach a short WAV of each side") },
+    args => inspect(() => client.reviewCut(projectId, { ...args, includeAudio: !!listen && (args.includeAudio ?? defaultAudio) })));
 
   // Only the run that looks at one frame gives an area. A pass given the same power answered for a whole recording at
   // once, from scripts and small frames: 230 areas in ten calls, one inside the editor's box of eleven (2026-11-16).

@@ -4,7 +4,7 @@
  */
 import { z } from "zod/v3";
 import { DEFAULT_RESULT_CHARS, ScarletApiError, type ProjectDetail, type ScarletClient, type WaveformResponse } from "@scarlet/shared";
-import { timelineDuration, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
+import { sourceAt, timelineDuration, type Project, type Timeline, type TimeRange, type TranscriptWord } from "@scarlet/timeline";
 import { auditJoin, formatTimelineTranscript, heardOnlyVerbatim, joinTook, newJoins, timelineJoins, timelineWords, type HeardOnly, type JoinAudit, type TimelineJoin, type TimelineWord } from "./timeline-perception.js";
 import { pictureEntranceReader } from "./picture-entrance.js";
 import { levelProfile, pauseStats, retakeGroups } from "./media-profile.js";
@@ -54,6 +54,8 @@ interface PerceptionDeps {
 const OUT_WINDOW = [1, .3] as const;
 const IN_WINDOW = [.3, 1] as const;
 const MAX_AUDITS = 40;
+/** The picture readings a recording has, by their endpoint, and what each reads of it. */
+const PICTURE_READS = { "screen-text": "its text", "screen-motion": "its picture's changes", "picture-cuts": "its cuts", faces: "its faces" } as const;
 
 export function registerPerception(deps: PerceptionDeps) {
   const { tool, client } = deps;
@@ -83,12 +85,17 @@ export function registerPerception(deps: PerceptionDeps) {
    * The recordings whose picture plays in a range of a timeline and their source seconds there: `mediaId`, or by default
    * every one whose sound isn't heard (the screen beside a camera), else every one.
    */
-  function pictureSources(tl: Timeline, project: Project, range: { start: number; end: number }, heardFrom: ReadonlySet<string>, mediaId?: string) {
+  function pictureSources(tl: Timeline, project: Project, range: { start: number; end: number }, heardFrom: ReadonlySet<string>, mediaId?: string, onlyPlaying = false) {
     const pictures = new Map<string, Array<{ sourceIn: number; sourceOut: number }>>();
     for (const track of tl.tracks) if (track.kind === "video" && !track.hidden) for (const c of track.clips) {
       if (c.kind !== "media" || c.enabled === false || project.media.find(m => m.id === c.mediaId)?.kind !== "video") continue;
       if (c.timelineIn > range.end || c.timelineIn + (c.sourceOut - c.sourceIn) / (c.speed ?? 1) < range.start) continue;
-      pictures.set(c.mediaId, [...pictures.get(c.mediaId) ?? [], c]);
+      // Screen motion reads only the source seconds the range plays (keeping the start inside the recording, which a clip
+      // can run past), so a short range of a long recording reads its own minute first; screen text joins a line across
+      // neighbouring minutes, so it reads the clip's whole span.
+      const a = sourceAt(c, range.start), b = sourceAt(c, range.end), end = project.media.find(m => m.id === c.mediaId)?.duration ?? Infinity;
+      pictures.set(c.mediaId, [...pictures.get(c.mediaId) ?? [],
+        onlyPlaying ? { sourceIn: Math.max(c.sourceIn, Math.min(a, b, end)), sourceOut: Math.min(c.sourceOut, Math.max(a, b)) } : c]);
     }
     if (mediaId && !pictures.has(mediaId)) throw new Error(`${mediaId}'s picture doesn't play in ${range.start.toFixed(1)}-${range.end.toFixed(1)} s of version ${tl.version}.`);
     const shown = mediaId ? [mediaId] : [...pictures.keys()].filter(id => !heardFrom.has(id));
@@ -98,12 +105,12 @@ export function registerPerception(deps: PerceptionDeps) {
     });
   }
 
-  /** A picture reading of each recording (`screen-text`, `screen-motion`, `picture-cuts`), waiting up to `wait` seconds for what isn't read yet. */
-  async function readPictures<T>(kind: "screen-text" | "screen-motion" | "picture-cuts", sources: Array<{ id: string; from: number; to: number }>, wait: number) {
+  /** A picture reading of each recording (`screen-text`, `screen-motion`, `picture-cuts`, `faces`), waiting up to `wait` seconds for what isn't read yet. */
+  async function readPictures<T>(kind: keyof typeof PICTURE_READS, sources: Array<{ id: string; from: number; to: number }>, wait: number) {
     const reads = await Promise.all(sources.map(async ({ id, from, to }) => ({ id,
       read: await client.get<{ from: number; to: number; readSeconds: number; done: boolean; error?: string } & T>(
         `/projects/${encodeURIComponent(deps.projectId)}/media/${encodeURIComponent(id)}/${kind}?from=${from}&to=${to}&wait=${wait}`) })));
-    const what = kind === "screen-text" ? "its text" : kind === "picture-cuts" ? "its cuts" : "its picture's changes";
+    const what = PICTURE_READS[kind];
     const unread = reads.filter(({ read }) => !read.done).map(({ id, read }) =>
       `${id}: ${read.readSeconds.toFixed(0)} of ${(read.to - read.from).toFixed(0)} s of ${what} read so far${read.error ? `, stopped: ${read.error}` : ", still reading: call again for the rest"}`);
     return { reads, unread };
@@ -128,7 +135,7 @@ export function registerPerception(deps: PerceptionDeps) {
   async function motionOn(tl: Timeline, project: Project, range: { start: number; end: number }, opts: { mediaId?: string; wait: number }) {
     const transcripts = await wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>());
     const heard = new Set(transcripts.size ? timelineWords(tl, transcripts, range).map(w => w.mediaId) : []);
-    const sources = pictureSources(tl, project, range, heard, opts.mediaId);
+    const sources = pictureSources(tl, project, range, heard, opts.mediaId, true);
     const { reads, unread } = await readPictures<{ seconds: MotionSecond[] }>("screen-motion", sources, opts.wait);
     return { spans: motionSpans(tl, new Map(reads.map(({ id, read }) => [id, read.seconds])), range), ids: sources.map(s => s.id), unread };
   }
@@ -147,14 +154,12 @@ export function registerPerception(deps: PerceptionDeps) {
       readPictures<{ cuts: RecordingCut[] }>("picture-cuts", sources, wait),
       wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>()),
       // Where the speaker looks, in the picture of the recording heard beside each stretch: its face seen longest there.
-      Promise.all(clocks.filter(c => videos.has(c.id)).map(async ({ id, from, to }) => {
-        const read = await client.get<{ from: number; to: number; readSeconds: number; done: boolean; error?: string;
-          tracks: Array<{ track: number; seconds: number }>; spans: Array<{ track: number; start: number; end: number; eyesDown?: number; box: number[] }> }>(
-          `/projects/${encodeURIComponent(deps.projectId)}/media/${encodeURIComponent(id)}/faces?from=${from}&to=${to}&wait=${wait}`);
-        const main = [...read.tracks].sort((a, b) => b.seconds - a.seconds)[0]?.track;
-        return { id, spans: read.spans.filter(s => s.track === main),
-          unread: read.done ? undefined : `${id}: ${read.readSeconds.toFixed(0)} of ${(read.to - read.from).toFixed(0)} s of its faces read so far${read.error ? `, stopped: ${read.error}` : ", still reading: call again for the rest"}` };
-      })).catch(() => []),
+      readPictures<{ tracks: Array<{ track: number; seconds: number }>; spans: Array<{ track: number; start: number; end: number; eyesDown?: number; box: number[] }> }>(
+        "faces", clocks.filter(c => videos.has(c.id)), wait).then(({ reads, unread }) => ({ unread,
+        spans: reads.map(({ id, read }) => {
+          const main = [...read.tracks].sort((a, b) => b.seconds - a.seconds)[0]?.track;
+          return [id, read.spans.filter(s => s.track === main)] as const;
+        }) })).catch(() => ({ spans: [], unread: [] })),
     ]);
     return {
       evidence: {
@@ -164,9 +169,9 @@ export function registerPerception(deps: PerceptionDeps) {
         detail: new Map(motion.reads.map(({ id, read }) => [id, read.detail ?? []])),
         cuts: new Map(cuts.reads.map(({ id, read }) => [id, read.cuts])),
         words: transcripts.size ? timelineWords(tl, transcripts, range) : [],
-        eyes: new Map(eyes.map(e => [e.id, e.spans])),
+        eyes: new Map(eyes.spans),
       },
-      unread: [...text.unread, ...motion.unread, ...cuts.unread, ...eyes.flatMap(e => e.unread ? [e.unread] : [])],
+      unread: [...text.unread, ...motion.unread, ...cuts.unread, ...eyes.unread],
     };
   }
 
@@ -267,7 +272,12 @@ export function registerPerception(deps: PerceptionDeps) {
       const sliceHeard = slice.length === words.length ? allHeard : allHeard.filter(h => h.start <= slice.at(-1)!.end + 1e-3);
       const body = formatTimelineTranscript(slice, sliceJoins,
         { detail, fps: project.settings.fps, all, removed: join => joinTook(join, transcripts), heard: sliceHeard });
-      const more = words.length > slice.length ? `\nShowing ${slice.length} of ${words.length} words; continue with from=${(slice.at(-1)!.end + 0.001).toFixed(3)}.` : "";
+      // Words are in order of their start: one said over the last word shown can end before it does. The next page
+      // starts at the earliest such word, so it isn't skipped; otherwise just after the last word shown.
+      const last = slice.at(-1);
+      const overlapped = last ? words.slice(slice.length).filter(w => w.end < last.end + 0.001) : [];
+      const nextFrom = overlapped.length ? Math.min(...overlapped.map(w => w.start)) : (last?.end ?? range.start) + 0.001;
+      const more = words.length > slice.length ? `\nShowing ${slice.length} of ${words.length} words; continue with from=${nextFrom.toFixed(3)}.` : "";
       return `Version ${tl.version}, ${range.start.toFixed(2)}–${range.end.toFixed(2)} of ${duration.toFixed(2)} s timeline: ${words.length} words, ${joins.length} joins.\n${body}${more}`;
     };
     let output = render(shown);

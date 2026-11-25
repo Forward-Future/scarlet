@@ -31,10 +31,17 @@ function input(event: TaskEvent): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+/** The places a batch call lists, for tools that take a batch. */
+function listed(args: Record<string, unknown>) {
+  const { windows, times, ranges } = args;
+  return [windows, times, ranges].find(Array.isArray) as unknown[] | undefined;
+}
+
 /** How many places one call looked at, for tools that take a batch. */
 function places(event: TaskEvent) {
-  const { windows, times, ranges, count, wholePicture } = input(event);
-  const list = [windows, times, ranges].find(Array.isArray) as unknown[] | undefined;
+  const args = input(event);
+  const { count, wholePicture } = args;
+  const list = listed(args);
   // One inspection can check several consecutive cuts.
   const cuts = toolName(event) === "dialogue_review_inspect" && !wholePicture && typeof count === "number" && Number.isSafeInteger(count) && count > 0 ? count : undefined;
   return list?.length || cuts || 1;
@@ -53,9 +60,8 @@ function spans(event: TaskEvent): TimeRange[] {
     const end = seconds(v.to ?? v.end);
     return { start, end: end !== undefined && end > start ? end : start };
   };
-  const { windows, times, ranges } = input(event);
-  const list = [windows, times, ranges].find(Array.isArray) as unknown[] | undefined;
-  return (list ?? [input(event)]).map(span).filter((s): s is TimeRange => !!s);
+  const args = input(event);
+  return (listed(args) ?? [args]).map(span).filter((s): s is TimeRange => !!s);
 }
 
 /** "at 0:24, 1:33 and 3:05" for a few places, "from 0:00 to 57:44" for many. */
@@ -87,7 +93,7 @@ const toolSteps: Record<string, StepSpec> = {
   project_get: project, timeline_get: project, timeline_summary: project, timeline_at: project, timeline_diff: project,
   skills_list: project, media_list: project, graphic_get: project,
   attachment_read: { group: "attachment", verb: "Read", doing: "Reading", detail: n => n > 1 ? `${n} attached files` : "an attached file", once: true }, change_list: project, change_get: project, notes_list: project,
-  timeline_transcript: { group: "edit-transcript", verb: "Read", doing: "Reading", detail: () => "the edit’s transcript", once: true },
+  timeline_transcript: { group: "edit-transcript", verb: "Read", doing: "Reading", detail: () => "the video’s words", once: true },
   timeline_join_audit: { group: "joins", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} joins` : "a join", once: true },
   transcript_get: transcript,
   transcript_search: { group: "search", verb: "Searched", doing: "Searching", once: true, detail: (n, _, first) => {
@@ -106,14 +112,17 @@ const toolSteps: Record<string, StepSpec> = {
   lip_sync: { group: "lip-sync", verb: "Checked", doing: "Checking", detail: () => "the lip sync", once: true },
   dialogue_check_repeats: sound,
   dialogue_check_join: { group: "joins", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} joins` : "a join", once: true },
-  dialogue_review_inspect: { group: "inspect", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} suggested cuts` : "a suggested cut", once: true },
-  dialogue_review_save: { group: "save", verb: "Saved", doing: "Saving", detail: () => "the cut recommendations" },
+  dialogue_review_inspect: { group: "inspect", verb: "Checked", doing: "Checking", detail: n => n > 1 ? `${n} flagged cuts` : "a flagged cut", once: true },
+  dialogue_review_save: { group: "save", verb: "Saved", doing: "Saving", detail: () => "the flagged cuts" },
   dialogue_revise_cut: { group: "revise", verb: "Moved", doing: "Moving", detail: () => "the cut" },
   render_request: { group: "render", verb: "Rendered", doing: "Rendering", detail: () => "a preview" },
 };
 
 /** How each step's verb reads while it's still going: "Read" → "Reading". */
 const ongoing = new Map(Object.values(toolSteps).map(spec => [spec.verb, spec.doing]));
+
+/** Where one sentence of the agent's ends and the next begins. */
+const sentenceBreak = /(?<=[.!?…”"])\s+/u;
 
 const hostLines = /^(?:Starting the editing agent\.?|Edit resumed\.?|warning:|\(thinking\)|Claude Code session started)/i;
 
@@ -122,7 +131,7 @@ export function noteText(text: string) {
   if (!text.trim() || hostLines.test(text.trim())) return undefined;
   const brief = editConfirmation(text);
   if (!brief) return undefined;
-  const sentences = brief.split(/(?<=[.!?…”"])\s+/u);
+  const sentences = brief.split(sentenceBreak);
   return sentences.slice(0, 2).join(" ");
 }
 
@@ -151,7 +160,7 @@ export function runAim(events: readonly TaskEvent[]): { text: string; note: stri
     if (kind === "editor_progress" && (event.data?.scanPage || typeof event.data?.reviewCounter === "string")) return undefined;
     if (kind && kind !== "editor_progress") continue;
     const note = eventNote(event);
-    if (note) return { text: note.split(/(?<=[.!?…”"])\s+/u)[0]!, note };
+    if (note) return { text: note.split(sentenceBreak)[0]!, note };
   }
   return undefined;
 }
@@ -176,6 +185,11 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
     if (!group) return;
     group.item.detail = group.spec.detail(group.count, group.found, group.first);
     group = undefined;
+  }
+  function addNote(at: string, text: string) {
+    notes.add(text);
+    items.push({ kind: "note", at, text });
+    finishGroup();
   }
   const scans = new Map<string, { item: Extract<RunItem, { kind: "step" }>; start: number; ranges: TimeRange[]; end: number }>();
   const edited = new Set<string>();
@@ -206,7 +220,7 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
       } else if (row) {
         waits.delete(key);
         const took = Math.max(0, Date.parse(at) - Date.parse(row.at));
-        Object.assign(row, failed ? { verb: "Couldn’t", detail: `prepare ${name}` } : { verb: "Waited", detail: `${lengthLabel(took / 1000)} for ${name}` });
+        Object.assign(row, failed ? { verb: "Couldn’t", detail: `prepare ${name}` } : { verb: "Waited", detail: `${workTimeLabel(took, false)} for ${name}` });
         // The next read of the same thing is the real one.
         for (const k of seen) if (k.includes(JSON.stringify(mediaId))) seen.delete(k);
       }
@@ -237,13 +251,13 @@ export function runItems(task: Task, events: readonly TaskEvent[], changes: read
       }
       if (typeof event.data.reviewCounter === "string") continue;
       const text = eventNote(event);
-      if (text && !notes.has(text)) { notes.add(text); items.push({ kind: "note", at, text }); finishGroup(); }
+      if (text && !notes.has(text)) addNote(at, text);
       continue;
     }
     if (event.type === "log" && !event.data?.kind) {
       const text = eventNote(event);
       // The agent's last message is the reply under the bundle, not an update inside it.
-      if (text && !notes.has(text) && !(final && event.text.trim() === final) && !(reply && event.text.trim() === reply)) { notes.add(text); items.push({ kind: "note", at, text }); finishGroup(); }
+      if (text && !notes.has(text) && !(final && event.text.trim() === final) && !(reply && event.text.trim() === reply)) addNote(at, text);
       continue;
     }
     if (event.type === "change") {
@@ -297,6 +311,12 @@ function firstWords(text: string, words = 7) {
   return kept.join(" ").replace(/[,;:]$/, "") + "…";
 }
 
+/** What a request that changed nothing and said nothing comes to. */
+export const NOTHING_CHANGED = "Nothing changed";
+
+/** What a request paused with the project's editing waits for. */
+export const PAUSED_HINT = "Editing is paused. Resume picks this up where it left off.";
+
 /** A few words for the folded run: what it did, not how. */
 export function runSummary(task: Task, change?: Change): string {
   if (task.state === "failed" && !change) return "Couldn’t finish";
@@ -304,7 +324,7 @@ export function runSummary(task: Task, change?: Change): string {
     const cuts = change.cutReasons ?? [];
     if (cuts.length) {
       const removed = cuts.reduce((sum, c) => sum + Math.max(0, c.end - c.start), 0);
-      const verb = change.state === "approved" ? "Removed" : "Suggested";
+      const verb = change.state === "approved" ? "Took out" : "Suggested";
       return `${verb} ${lengthLabel(removed)} in ${plural(cuts.length, "cut")}`;
     }
     // Several named edits are listed under the reply, so the run line only counts them.
@@ -317,7 +337,7 @@ export function runSummary(task: Task, change?: Change): string {
   // Only what the chat would show as Scarlet's words: a reply that was commands, or the request said back, says
   // nothing here either.
   const said = editConfirmation(taskChatText(task), requestText(task));
-  return said ? firstWords(said) : "Done";
+  return said ? firstWords(said) : NOTHING_CHANGED;
 }
 
 /**

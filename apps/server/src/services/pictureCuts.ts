@@ -8,10 +8,9 @@
  * pictures in two seconds (2026-11-18). What a stretch of a recording shows between its frames is measured here; whether
  * a picture plays too briefly is the model's call.
  */
-import { createHash } from "node:crypto";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
-import { pictureReader, r3, withFrames, type VideoMedia } from "./pictureReading.js";
+import { pictureReader, r3, readingIdentity, withFrames, type VideoMedia } from "./pictureReading.js";
 
 /** Bump when the reading changes: the sampling, the grid or what counts as a cut. Kept readings are read again. */
 const CUTS_VERSION = 1;
@@ -74,8 +73,7 @@ export function cutsIn(greys: readonly Float32Array[], times: readonly number[],
 }
 
 function identity(media: MediaAsset) {
-  return createHash("sha256").update(JSON.stringify([CUTS_VERSION, media.hash ?? media.path, media.duration,
-    CUTS_FPS, CUT_COLS, CUT_ROWS, CHANGED, HOLD, LEAST, CUTS_WINDOW])).digest("hex");
+  return readingIdentity(CUTS_VERSION, media, CUTS_FPS, CUT_COLS, CUT_ROWS, CHANGED, HOLD, LEAST, CUTS_WINDOW);
 }
 
 /** Compare a window's frames one after another, with a few frames' margin either side, and keep its cuts. */

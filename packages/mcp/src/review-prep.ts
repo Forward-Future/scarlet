@@ -41,7 +41,7 @@ export class ReviewInspections {
   private queues = new Map<string, Queue>();
   private closed = false;
 
-  constructor(private compute: Compute, private opts: { lookahead?: number; workers?: number; kept?: number } = {}) {}
+  constructor(private compute: Compute, private opts: { lookahead?: number; workers?: number; kept?: number; defaultAudio?: boolean } = {}) {}
 
   private key(change: Change, r: InspectionRequest) {
     return JSON.stringify([change.id, change.fromVersion, change.toVersion, r.index, r.audio, r.wholePicture]);
@@ -103,7 +103,7 @@ export class ReviewInspections {
     try {
       while (!this.closed && q.next < q.total && q.next < q.reached + (this.opts.lookahead ?? 8)) {
         const index = q.next++;
-        await this.prepare(q.change, { index, audio: false, wholePicture: false }, "next").catch(() => undefined);
+        await this.prepare(q.change, { index, audio: this.opts.defaultAudio ?? false, wholePicture: false }, "next").catch(() => undefined);
       }
     } finally { q.workers--; }
   }

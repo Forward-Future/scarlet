@@ -21,6 +21,7 @@ import {
   plain,
   quietMargin,
   removedSlack,
+  roomAfterBreath,
   roomBeforeBreath,
   roomToneAfter,
   soundingWord,
@@ -48,7 +49,7 @@ export interface WordCut extends TimeRange {
   room: { start?: TimeRange; end?: TimeRange };
   /** Kept words beside the cut that sound somewhere other than their timing, and where the edge found them. */
   retimed: string[];
-  /** A breath measured after the last kept word, where the start looked for quiet or room tone, and where the start is beside it. */
+  /** A breath measured beside a kept word, where the edge looked for quiet or room tone, and where the edge is beside it. */
   breath?: string;
 }
 
@@ -95,7 +96,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
   // The pause the join should play, word to word, and how much of it follows the cut, in the recording's seconds.
   const air = leave === undefined ? { after: pace.after, before: voiceIn ?? pace.before } : splitLeave(leave, pace, voiceIn);
   const problems: string[] = [], dips: string[] = [], retimed: string[] = [];
-  let breathFound: string | undefined;
+  const breathNotes: { start?: string; end?: string } = {};
   // The kept word beside each edge, where the recording says it is.
   const heard = (kept: Word | undefined, neighbour: Word | undefined, side: "start" | "end") => {
     if (!kept) return kept;
@@ -114,7 +115,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
   const used: { start?: TimeRange; end?: TimeRange } = {}, room: WordCut["room"] = {};
   const edge = (kept: Word | undefined, removed: Word, side: "start" | "end", timed = false) => {
     room[side] = undefined;
-    if (side === "start") breathFound = undefined;
+    breathNotes[side] = undefined;
     if (!kept) return side === "start" ? 0 : Infinity;
     const lo = side === "start" ? kept.end : removed.end, hi = side === "start" ? removed.start : kept.start;
     const inGap = (page: JoinPage["edges"]) => {
@@ -140,26 +141,27 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
     const run = (page && !pageReaches(page, beside) ? nearest(inGap(pageAt(beside))) : undefined) ?? seen;
     if (run) {
       used[side] = seen ?? run;
+      // A breath beside the kept word: outside the quiet run (between the word and the quiet), or held in the quiet.
+      // Until 2026-11-21 the start edge always cut it; now the model decides (`breath`), the default is the skill's
+      // ("cut"), and both outgoing and incoming breaths are measured and reported the same way.
+      const runPage = page ? pageAt(side === "start" ? run.start : run.end) ?? page : undefined;
+      const outside = runPage && (side === "start" ? roomBeforeBreath(runPage, kept, run) : roomAfterBreath(runPage, kept, run));
+      const inside = runPage && !outside ? breathInRun(runPage, kept, run, side) : undefined;
+      const keptSide = inside && (side === "start" ? { start: inside.breath.end, end: run.end } : { start: run.start, end: inside.breath.start });
+      const roomKeep = keptSide && keptSide.end - keptSide.start >= 2 * quietMargin ? keptSide : undefined;
+      const quiet = outside && breath === "cut" ? outside.room : roomKeep && breath === "keep" ? roomKeep : run;
+      const found = outside ?? inside;
       // Asked for less than the margin before the voice, the edge goes to the end of the quiet, where the word starts.
       if (side === "end" && air && air.before < quietMargin) {
-        room[side] = { start: run.start + quietMargin, end: onsetLimit(pageAt(run.end) ?? page, run.end) };
-        return Math.max(run.start + quietMargin, run.end - air.before);
+        room[side] = { start: quiet.start + quietMargin, end: onsetLimit(pageAt(quiet.end) ?? page, quiet.end) };
+        const at = Math.max(quiet.start + quietMargin, quiet.end - air.before);
+        if (found) breathNotes[side] = breathNote(kept, found, at, breath, inside && breath === "keep" && !roomKeep ? "since the quiet before it is too short to end a cut in" : undefined, side);
+        return at;
       }
-      // A breath after the kept word: before the quiet, which then starts after it, or held in the quiet from its
-      // start. Until 2026-11-21 the edge always went before it, in the room right after the word; now the model
-      // decides (`breath`), the default is the skill's and the same as before, and the breath is reported either way.
-      const runPage = side === "start" && page ? pageAt(run.start) ?? page : undefined;
-      const outside = runPage && roomBeforeBreath(runPage, kept, run);
-      const inside = runPage && !outside ? breathInRun(runPage, kept, run) : undefined;
-      // Kept, the edge goes in the quiet after the breath, padded as any edge in quiet is: for a breath the run holds,
-      // the rest of the run, when that is long enough to place an edge in.
-      const afterInside = inside && { start: inside.breath.end, end: run.end };
-      const roomAfter = afterInside && afterInside.end - afterInside.start >= 2 * quietMargin ? afterInside : undefined;
-      const quiet = outside && breath === "cut" ? outside.room : roomAfter && breath === "keep" ? roomAfter : run;
       room[side] = { start: quiet.start + quietMargin, end: quiet.end - quietMargin };
       const at = padEdge(quiet, side, air);
-      const found = outside ?? inside;
-      if (found) breathFound = breathNote(kept, found, at, breath, inside && breath === "keep" && !roomAfter ? "since the quiet after it is too short to start a cut in" : undefined);
+      if (found) breathNotes[side] = breathNote(kept, found, at, breath, inside && breath === "keep" && !roomKeep
+        ? `since the quiet ${side === "start" ? "after" : "before"} it is too short to ${side === "start" ? "start" : "end"} a cut in` : undefined, side);
       return at;
     }
     // No run of silence: the two words run together. The lowest level between them, reaching a little way into each
@@ -180,7 +182,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
       const found = next && breathBetween(page!, kept, low.room!, next);
       const at = found && breath === "keep" ? (next.start + next.end) / 2 : low.at;
       room[side] = found && breath === "keep" ? next : low.room;
-      if (found) breathFound = breathNote(kept, found, at, breath);
+      if (found) breathNotes[side] = breathNote(kept, found, at, breath, undefined, side);
       return at;
     }
     const at = lo <= hi ? (lo + hi) / 2 : side === "start" ? removed.start : removed.end;
@@ -222,6 +224,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
   // One edge between words that run together leaves the other in silence, where the ear resets. With both there, a
   // short word comes out of the middle of running speech: a doubled “the” cut that way took the kept “the” with it.
   if (dips.length === 2) problems.push(`No pause on either side of “${text}”: both edges sit between words that run together.`);
+  const breathFound = [breathNotes.start, breathNotes.end].filter(Boolean).join(" ") || undefined;
   return { start, end, problems, dips, text, room, retimed, ...(breathFound && { breath: breathFound }) };
 }
 

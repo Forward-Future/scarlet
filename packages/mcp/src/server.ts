@@ -4,7 +4,7 @@
  * be run over stdio (see cli.ts) or embedded in-process.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod/v3";
@@ -26,12 +26,12 @@ import {
   type TaskEvent,
 } from "@scarlet/shared";
 import type { Author } from "@scarlet/timeline";
-import { registerChangeAndAssetTools, registerExportAndTaskTools } from "./admin-tools.js";
+import { registerChangeAndAssetTools, registerExportAndTaskTools, type TaskModelOffer } from "./admin-tools.js";
 import { toolAnnotations } from "./annotations.js";
 import { ALWAYS_LOAD, listToolsBriefly } from "./brief-tools.js";
 import { DialogueEvidence } from "./dialogue-decisions.js";
 import { registerDialogueReviewTools } from "./dialogue-review-tools.js";
-import { registerDialogueTools, type StagedReviewState } from "./dialogue-tools.js";
+import { registerDialogueTools } from "./dialogue-tools.js";
 import { keptEditsNote } from "./editor-kept.js";
 import { registerGraphics } from "./graphics-tools.js";
 import { listening, registerInspectionTools } from "./inspection-tools.js";
@@ -41,6 +41,7 @@ import { createMediaSession } from "./media-session.js";
 import { createRevisionTracker, createSessionErrorHelpers } from "./media-state.js";
 import { registerPerception } from "./perception-tools.js";
 import { createProposePipeline } from "./propose-pipeline.js";
+import type { StagedReviewState } from "./staged-review.js";
 import { registerTimelineTools } from "./timeline-tools.js";
 import {
   describeError,
@@ -77,6 +78,8 @@ const LISTEN_CHECK_TOOLS: ReadonlySet<string> = new Set(["source_audio"]);
  */
 export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["project_get", "timeline_get", "task_log", "task_question"]);
 const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "listen_check", "learning_check", "skill_edit", "skill_from_change"]);
+/** Tools a request that only tightens local pauses refuses: it saves classified pauses with dialogue_apply_cuts. */
+const NOT_FOR_LOCAL_PAUSES: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "dialogue_check_repeats"]);
 const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
 
 /** When the tool call under way has to have answered by, in ms since the epoch: its harness's tool wait from when it began. */
@@ -104,6 +107,11 @@ export interface ScarletMcpContext {
    * one, the request has `listen`; without one, no tool offers to hear.
    */
   listener?: Listener;
+  /**
+   * The kinds of work the editor gave other models in Task models, signed in now, from the engine's answer about the
+   * task. With any, the request has `hand_off`.
+   */
+  taskModels?: TaskModelOffer[];
   /** Directory where the server may write files (OTIO exports). Defaults to the OS temp dir. */
   workDir?: string;
   /** fetch used for binary endpoints (frames). Defaults to global fetch. */
@@ -119,8 +127,9 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   // A request is launched with its harness's own shell, file and web tools; a run that edits no video (a side check, a
   // skill's revision) with Scarlet's alone, and a client Scarlet didn't launch as it says of itself.
   const harness = ctx.capabilities ?? agentCapabilities(ctx.agent, undefined, ctx.author?.model);
-  // A listen has its harness's file tools too, since Gemini hears a passage only by opening its file (`taskPrompt`).
-  const caps = ctx.task && (isProjectEditTask(ctx.task) || ctx.task.kind === "listen_check") ? workspaceCapabilities(harness) : harness;
+  // A listen has its harness's file tools too, since Gemini hears a passage only by opening its file (`taskPrompt`). A
+  // hand-off edits the video for its request, with the tools a request has.
+  const caps = ctx.task && (isProjectEditTask(ctx.task) || ctx.task.kind === "listen_check" || ctx.task.kind === "hand_off") ? workspaceCapabilities(harness) : harness;
 
   type DialogueOperation = ReturnType<typeof taskDialogueOperation>;
   let legacyOperation: Promise<DialogueOperation> | undefined;
@@ -242,27 +251,36 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const running = new Map<ScarletToolName, Set<Promise<unknown>>>();
   /** Each tool's parameters, as the SDK checks a call's arguments against them. */
   const toolParameters = new Map<string, z.ZodTypeAny>();
+  /** Whether this session offers a tool: what its harness can use, and the few tools a side check or a skill's revision has. */
+  function offers(name: ScarletToolName): boolean {
+    if (name === "source_audio" && !listening(caps, true)) return false;
+    // Only a harness with file tools can put anything in the artifact directory for asset_add to import.
+    if (name === "asset_add" && !caps.files) return false;
+    if (authoring && !SKILL_FROM_CHANGE_TOOLS.has(name)) return false;
+    if (!caps.images && IMAGE_TOOLS.has(name)) return false;
+    // A request to revise a skill edits no video. It gets the tools for talking to the editor and for the skill.
+    if (ctx.task?.kind === "skill_edit" && !SKILL_EDIT_TOOLS.has(name)) return false;
+    // A rule approved in Learnings is saved with no one to answer a question: what the save can't settle goes back to
+    // the editor beside the rule, in its closing words.
+    if (name === "task_question" && ctx.task?.kind === "skill_edit" && ctx.task.context.learningId) return false;
+    // Every request is read for a standing rule by a learning check, which has that tool and the skills. The run that
+    // edits doesn't offer rules as well, so the editor never gets the same rule twice in two wordings.
+    if (ctx.task?.kind === "learning_check" ? !LEARNING_CHECK_TOOLS.has(name) : name === "learning_suggest") return false;
+    if (ctx.task?.kind === "area_check" && !AREA_CHECK_TOOLS.has(name)) return false;
+    if (ctx.task?.kind === "listen_check" && !LISTEN_CHECK_TOOLS.has(name)) return false;
+    // A hand-off does one piece of a request's work for the model running it. Nobody waits on its questions: what it
+    // can't settle goes back in its closing words.
+    if (ctx.task?.kind === "hand_off" && (name === "task_question" || name === "hand_off")) return false;
+    return true;
+  }
+
   function tool<Shape extends z.ZodRawShape>(
     name: ScarletToolName,
     description: string,
     shape: Shape,
     handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<ToolResult>,
   ) {
-    if (name === "source_audio" && !listening(caps, true)) return;
-    // Only a harness with file tools can put anything in the artifact directory for asset_add to import.
-    if (name === "asset_add" && !caps.files) return;
-    if (authoring && !SKILL_FROM_CHANGE_TOOLS.has(name)) return;
-    if (!caps.images && IMAGE_TOOLS.has(name)) return;
-    // A request to revise a skill edits no video. It gets the tools for talking to the editor and for the skill.
-    if (ctx.task?.kind === "skill_edit" && !SKILL_EDIT_TOOLS.has(name)) return;
-    // A rule approved in Learnings is saved with no one to answer a question: what the save can't settle goes back to
-    // the editor beside the rule, in its closing words.
-    if (name === "task_question" && ctx.task?.kind === "skill_edit" && ctx.task.context.learningId) return;
-    // Every request is read for a standing rule by a learning check, which has that tool and the skills. The run that
-    // edits doesn't offer rules as well, so the editor never gets the same rule twice in two wordings.
-    if (ctx.task?.kind === "learning_check" ? !LEARNING_CHECK_TOOLS.has(name) : name === "learning_suggest") return;
-    if (ctx.task?.kind === "area_check" && !AREA_CHECK_TOOLS.has(name)) return;
-    if (ctx.task?.kind === "listen_check" && !LISTEN_CHECK_TOOLS.has(name)) return;
+    if (!offers(name)) return;
     const inputSchema = unsharedShape(shape);
     toolParameters.set(name, z.object(inputSchema));
     const alwaysLoad = ALWAYS_LOADED_TOOLS.has(name) || FEW_TOOL_TASKS.has(ctx.task?.kind ?? "");
@@ -280,7 +298,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         let outcome: ToolOutcome;
         let result: ToolResult;
         try {
-          if (["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "dialogue_check_repeats"].includes(name) && await localPausesMode())
+          if (NOT_FOR_LOCAL_PAUSES.has(name) && await localPausesMode())
             throw new Error("This request only tightens local pauses. Save classified pauses with dialogue_apply_cuts.");
           if (PASS_WIDE_TOOLS.has(name)) {
             const selected = await revision.useStagedCut();
@@ -322,11 +340,13 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     return change;
   }
 
+  const writeFile = async (path: string, data: Uint8Array) => writeArtifact(await artifactDir(), path, data);
+
   // Register tools in exact canonical order.
   const inspection = registerInspectionTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, task: ctx.task, caps, listener: ctx.listener,
     fetchImpl, session, errors, scanScopes, waitLeft, readPassage: revision.readPassage, postEvent,
-    writeArtifact: async (path, data) => writeArtifact(await artifactDir(), path, data),
+    writeArtifact: writeFile,
   });
 
   const proposePipeline = createProposePipeline({
@@ -344,18 +364,23 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     task: ctx.task, author: ctx.author, caps, joinWaitMs: ctx.joinWaitMs, evidence, session,
     errors, proposePipeline, scanScopes, stagedState, dialogueOperation, waitLeft, finished,
     readPassage: revision.readPassage, postEvent, prepareReview: id => reviewTools.prepareReview(id),
-    getPerception: () => perception,
+    writeArtifact: writeFile, getPerception: () => perception,
   });
 
   const reviewTools = registerDialogueReviewTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, task: ctx.task, author: ctx.author,
     caps, session, errors, revision, stagedState, localPausesMode,
     rendersDone: inspection.rendersDone, inspect: inspection.inspect, postEvent,
-    getPerception: () => perception,
+    writeArtifact: writeFile, getPerception: () => perception,
   });
 
   // The only close handler: a second assignment would replace this one.
-  server.server.onclose = () => { diagnosticSessionClosed = true; inspection.close(); reviewTools.close(); };
+  server.server.onclose = () => {
+    diagnosticSessionClosed = true; inspection.close(); reviewTools.close();
+    // The folder made for this session's files when the harness gave none (listening copies, exports, downloaded
+    // videos) is this session's alone: it goes with it. A folder the harness gave is left as it is.
+    if (tempDir) void tempDir.then(dir => rm(dir, { recursive: true, force: true })).catch(err => console.error("[scarlet-mcp] removing the session's temporary files:", err));
+  };
 
   const perception = registerPerception({
     tool, client, projectId: ctx.projectId,
@@ -391,13 +416,13 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
 
   registerExportAndTaskTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, startedAt, task: ctx.task,
-    agent: ctx.agent, getHeader: session.getHeader, artifactDir, postEvent,
+    agent: ctx.agent, getHeader: session.getHeader, artifactDir, postEvent, taskModels: ctx.taskModels, waitLeft,
   });
 
   watchRefusedArguments(server, async (name, args, began, result) => {
     const parameters = toolParameters.get(name);
     if (parameters && !(await parameters.safeParseAsync(args ?? {})).success) await reportResult(name, "failed", began, 0, result);
   });
-  if (caps.briefTools) listToolsBriefly(server, caps.resultChars);
+  if (caps.briefTools) listToolsBriefly(server, caps.resultChars, caps.toolDescriptionChars);
   return server;
 }

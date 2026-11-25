@@ -1,4 +1,4 @@
-//! Data model shared with the Scarlet server (subset of packages/shared/src/api.ts)
+//! Data model shared with the Scarlet server (subset of packages/shared/src/agents.ts and tasks.ts)
 //! plus the runner event types from apps/agent/src/runners/types.ts.
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 use crate::util::{js_len, js_slice_prefix};
 
 pub const CLI_AGENTS: [&str; 3] = ["claude", "codex", "gemini"];
+/// Model servers whose runs go through Claude Code (`host::providers`). Not CLIs: nothing installs, signs in to or
+/// updates them, and they have no subscription quota.
+pub const EXTRA_PROVIDERS: [&str; 3] = ["ollama", "lmstudio", "openrouter"];
 
 // ---------------------------------------------------------------------------
 // Agents & hosts
@@ -52,6 +55,9 @@ pub struct AgentAvailability {
     pub plan: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// A newer published version of the CLI that Scarlet can update it to in place (`host::update`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,6 +250,21 @@ pub fn record_plan(last: &mut Option<Vec<PlanStep>>, steps: Vec<PlanStep>, suppr
     let event = plan_event(&steps);
     *last = Some(steps);
     Some(event)
+}
+
+/// The live status line while a CLI compacts its session's context (COMPACTING in apps/agent/src/runners/types.ts).
+pub fn compacting_event() -> RunnerEvent {
+    RunnerEvent::with("log", "Compacting context", serde_json::json!({"kind":"compaction","active":true}))
+}
+
+/// A compaction that ended without a report of one (COMPACTION_ENDED in apps/agent/src/runners/types.ts).
+pub fn compaction_ended_event() -> RunnerEvent {
+    RunnerEvent::with("log", "Compacting context", serde_json::json!({"kind":"compaction","active":false}))
+}
+
+/// A finished compaction, for a CLI that says nothing more about it (COMPACTED in apps/agent/src/runners/types.ts).
+pub fn compacted_event() -> RunnerEvent {
+    RunnerEvent::with("log", "Context compacted", serde_json::json!({"kind":"compaction"}))
 }
 
 /// Extract a non-empty string slice from an optional JSON value.

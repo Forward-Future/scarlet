@@ -241,6 +241,18 @@ it("plays from a point picked in an edit's passage after it ran to its end", () 
   expect(video.paused).toBe(true);
 });
 
+it("steps over a waiting call's footage in an edit's passage, and plays on to the passage's end", () => {
+  release = player.previewRange({ start: 40, end: 50 }, FPS, undefined, false, false, [{ start: 43, end: 46 }]);
+  reach(42.9);
+  reach(43.01);
+  expect(video.currentTime).toBe(46);
+  expect(video.paused).toBe(false);
+  reach(49);
+  reach(50.02);
+  expect(video.paused).toBe(true);
+  expect(usePlayerStore.getState().time).toBe(50);
+});
+
 it("leaves a listen or passage that ran to its end paused when the editor marks a range, and plays one that was playing", () => {
   release = player.previewRange({ start: 40, end: 50 }, FPS);
   reach(49);

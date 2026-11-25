@@ -1,7 +1,10 @@
 import { detachedAudioClip, makeTrack } from "./builders.js";
 import { applyOps, type ProposedOp, type TimelineOp } from "./ops.js";
-import type { MediaAsset, MediaClip, Timeline, TimeRange, Track } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { MediaAsset } from "./mediaSchema.js";
+import type { MediaClip, Timeline, Track } from "./timelineSchema.js";
 import { clipEnd, sourceAt, uniqueId } from "./time.js";
+import { plays, type Placed } from "./audible.js";
 
 /**
  * Split edits: a join whose sound cuts at another moment than its picture. With a J cut the next shot's sound starts
@@ -49,16 +52,15 @@ export interface SplitJoinPlaced {
   right: { clipId: string; mediaId: string; trackId: string; sourceIn: number };
 }
 
-type Placed = { clip: MediaClip; track: Track };
-
-const plays = (track: Track, clip: MediaClip) => !track.muted && track.kind !== "caption" && clip.enabled && clip.volume > 0;
 const clock = (seconds: number) => {
-  const m = Math.floor(seconds / 60), s = seconds - m * 60;
+  // Rounded to the hundredth first, so 59.996 s reads 1:00.00 and not 0:60.00.
+  const hundredths = Math.round(seconds * 100);
+  const m = Math.floor(hundredths / 6000), s = (hundredths - m * 6000) / 100;
   return `${m}:${s.toFixed(2).padStart(5, "0")}`;
 };
 
 /** The two picture clips that meet at a join, from the clip it leads into or its time on a video track. */
-export function pictureJoin(timeline: Timeline, target: SplitJoinTarget, fps: number): { left: Placed; right: Placed } {
+function pictureJoin(timeline: Timeline, target: SplitJoinTarget, fps: number): { left: Placed; right: Placed } {
   let right: Placed | undefined;
   if (target.clipId) {
     for (const track of timeline.tracks) {
@@ -324,6 +326,7 @@ export function putBackSplit(head: Timeline, before: Timeline, after: Timeline, 
     if (back.in) {
       Object.assign(clip, { timelineIn: origin.timelineIn, sourceIn: origin.sourceIn });
       if (origin.keyframes) clip.keyframes = structuredClone(origin.keyframes); else delete clip.keyframes;
+      if (origin.volumeKeyframes) clip.volumeKeyframes = structuredClone(origin.volumeKeyframes); else delete clip.volumeKeyframes;
       if (origin.splitEdit?.leads !== undefined && !added.has(id)) record.leads = origin.splitEdit.leads; else delete record.leads;
     }
     if (back.out) {

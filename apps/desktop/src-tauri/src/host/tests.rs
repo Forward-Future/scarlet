@@ -3,8 +3,10 @@ use std::path::Path;
 use super::catalog::describe_agents;
 use super::task_runner::{drain_events, log_completion, outcome, stalled_reason, timed_out_reason, Outcome};
 use super::types::{CompleteTaskRequest, RunResult, RunnerEvent};
-use super::workspace::real_path;
+use super::workspace::{claude_config_dir, claude_project_dir, real_path, remove_claude_sessions, remove_control_files};
 use super::*;
+use super::manager::{remember_host_id, run_limits, DEFAULT_STALL_MINUTES};
+use crate::config::AppConfig;
 use crate::util::now_iso;
 
 type EmittedEvents = Arc<StdMutex<Vec<(String, Value)>>>;
@@ -634,6 +636,47 @@ async fn prepares_a_private_folder_and_an_mcp_identity_for_each_attempt() {
     assert!(hostile.file_name().unwrap().to_string_lossy().chars().all(|c| c.is_ascii_hexdigit()));
 }
 
+/// An app opened from the Dock or Finder, or on Windows, doesn't have `~/.local/bin` on its PATH, where Scarlet's Setup
+/// puts ffmpeg and ffprobe. A request's shell gets launchers for them all the same, and may read their folder.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_request_gets_the_media_tools_setup_installed_off_the_apps_path() {
+    const BARE: &str = "SCARLET_TEST_BARE_PATH";
+    if std::env::var_os(BARE).is_none() {
+        // Run again in a process of its own, with the bare PATH such an app starts with and no login shell to ask.
+        let name = concat!(module_path!(), "::a_request_gets_the_media_tools_setup_installed_off_the_apps_path");
+        let name = name.split_once("::").unwrap().1;
+        let bare = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([name, "--exact", "--nocapture"])
+            .env(BARE, "1").env("PATH", bare.path()).env("SHELL", "/usr/bin/false")
+            .env_remove("FFMPEG_PATH").env_remove("FFPROBE_PATH")
+            .output().unwrap();
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && text.contains("1 passed"), "{text}");
+        return;
+    }
+    let engine = api::fake::engine(|route, _| match route {
+        r if r.contains("/prompt") => (200, r#"{"systemPrompt":"SYSTEM","instruction":"Cut the pauses","workspace":true}"#.into()),
+        _ => (200, "{}".into()),
+    }).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (rt, _) = runtime(&engine.url, dir.path());
+    let installed = crate::ffmpeg::install_dir(&rt.paths.home);
+    std::fs::create_dir_all(&installed).unwrap();
+    for tool in ["ffmpeg", "ffprobe"] {
+        std::fs::write(installed.join(tool), "#!/bin/sh\n").unwrap();
+    }
+    let prepared = rt.prepare(&task("tsk_tools"), false).await.unwrap();
+    let ws = prepared.workspace.unwrap();
+    let tools = prepared.cwd.join(super::workspace::TOOLS_DIR);
+    assert_eq!(ws.bin_dir.as_deref(), Some(tools.as_path()));
+    for tool in ["ffmpeg", "ffprobe"] {
+        assert_eq!(std::fs::read_to_string(tools.join(tool)).unwrap(), super::workspace::launcher(&installed.join(tool).to_string_lossy()));
+    }
+    assert!(ws.read_dirs.contains(&installed), "{:?}", ws.read_dirs);
+}
+
 #[tokio::test]
 async fn the_claim_loop_registers_again_when_forgotten_and_runs_what_it_claims() {
     let claims = std::sync::atomic::AtomicUsize::new(0);
@@ -707,6 +750,36 @@ async fn side_checks_run_in_slots_of_their_own() {
     assert_eq!(rt.idle_agents().await, (vec![], true));
     rt.running.lock().unwrap().remove("chk_1");
     assert_eq!(rt.check_agents().await, (vec!["gemini".to_string()], false));
+}
+
+#[tokio::test]
+async fn a_local_model_server_runs_one_request_and_one_check_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut rt, _) = runtime("http://127.0.0.1:1", dir.path());
+    Arc::get_mut(&mut rt).unwrap().max_parallel = 4;
+    let ready = |id: &str| AgentAvailability {
+        id: id.into(),
+        installed: true,
+        logged_in: Some(true),
+        models: Some(vec!["m".into()]),
+        ..Default::default()
+    };
+    // A provider that isn't reachable, has no tool models, or had its key refused takes no work.
+    let off = AgentAvailability { id: "lmstudio".into(), ..Default::default() };
+    let empty = AgentAvailability { models: Some(vec![]), ..ready("lmstudio") };
+    let refused = AgentAvailability { logged_in: Some(false), ..ready("openrouter") };
+    *rt.agents.write().await = vec![ready("claude"), ready("ollama"), off, empty, refused.clone()];
+    assert_eq!(rt.idle_agents().await, (vec!["claude".to_string(), "ollama".to_string()], false));
+    *rt.agents.write().await = vec![ready("ollama"), ready("openrouter")];
+    let run = |agent: &str, check: bool| Arc::new(RunningTask::new("prj_1".into(), agent.into(), CancellationToken::new(), PathBuf::new()).side_check(check));
+    // One request on Ollama fills it: the computer has one GPU. OpenRouter takes four as the CLIs do.
+    rt.running.lock().unwrap().insert("tsk_1".into(), run("ollama", false));
+    rt.running.lock().unwrap().insert("tsk_2".into(), run("openrouter", false));
+    assert_eq!(rt.idle_agents().await, (vec!["openrouter".to_string()], true));
+    // Its own side check still has a slot, so the request never waits behind itself. A second doesn't.
+    assert_eq!(rt.check_agents().await, (vec!["ollama".to_string(), "openrouter".to_string()], false));
+    rt.running.lock().unwrap().insert("chk_1".into(), run("ollama", true));
+    assert_eq!(rt.check_agents().await, (vec!["openrouter".to_string()], true));
 }
 
 #[test]
@@ -966,6 +1039,14 @@ fn finished_task_folders_keep_only_artifacts_and_old_ones_are_pruned() {
 }
 
 #[test]
+fn names_a_claude_project_folder_as_claude_code_does_for_a_path_with_an_emoji() {
+    // Claude Code reads the path as JavaScript does, in UTF-16 units: 🎬 is two of them, so two dashes. é is one.
+    let claude = Path::new("/c");
+    let cwd = Path::new("/Users/me/🎬 Café/tasks-v2/ab12");
+    assert_eq!(claude_project_dir(cwd, claude), Some(claude.join("projects").join("-Users-me----Caf--tasks-v2-ab12")));
+}
+
+#[test]
 fn removes_only_the_claude_project_folder_named_after_the_task_folder() {
     let home = tempfile::tempdir().unwrap();
     // Escaping checked against Claude Code 2.1.316: real path, every non-alphanumeric character as "-".
@@ -1081,7 +1162,7 @@ fn mcp_spec_points_at_the_engine_mcp_subcommand() {
     assert!(!spec.args.contains(&"--model".to_string()));
     assert!(!spec.env.contains_key("SCARLET_TASK"));
     // The generated Claude MCP config embeds exactly this spec.
-    let cfg: Value = serde_json::from_str(&runner_claude::mcp_config_json(&spec)).unwrap();
+    let cfg: Value = serde_json::from_str(&runner_claude::command::mcp_config_json(&spec)).unwrap();
     assert_eq!(cfg["mcpServers"]["scarlet"]["command"], json!("node"));
     assert_eq!(cfg["mcpServers"]["scarlet"]["args"][1], json!("mcp"));
     assert_eq!(cfg["mcpServers"]["scarlet"]["env"]["SCARLET_PROJECT"], json!("p"));

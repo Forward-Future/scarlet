@@ -138,6 +138,49 @@ describe("audio_sync", () => {
     } finally { await c.close(); }
   });
 
+  // A pass judged a screen recording from thirty frames, left it out and made a To do of every quote read off it (2026-11-23).
+  describe("words said on the other recording's screen", () => {
+    const said: Transcript = { id: "t1", mediaId: "m1", segments: [{ id: "s1", start: 0, end: 30, text: "", words: [
+      { text: "Here's", start: 4, end: 4.3 }, { text: "Elon:", start: 4.4, end: 4.8 },
+      ...["superintelligence", "has", "arrived,", "welcome", "to", "the", "singularity."].map((text, i) => ({ text, start: 10 + i * .5, end: 10.4 + i * .5 })),
+      { text: "Anyway,", start: 20, end: 20.4 }, { text: "moving", start: 20.5, end: 20.9 }, { text: "on.", start: 21, end: 21.3 }] }] };
+    // The screen rolled 2.5 s after the camera, and its sound is the mic's: the tweet is up from its 6 s to 12 s.
+    const tweet = { start: 6, end: 12, text: "Superintelligence has arrived. Welcome to the singularity.", box: [0.3, 0.4, 0.7, 0.45] };
+    beforeEach(() => {
+      mock.state.project.media = [...mock.state.project.media, { id: "scr", kind: "video", name: "screen.mp4", path: "screen.mp4", duration: 27.5, width: 3840, height: 2160, hasAudio: true }];
+      levels.scr = mic;
+      mock.state.transcripts = { m1: said };
+      mock.state.extra = (req, res) => req.path === "/projects/prj_test/media/scr/screen-text"
+        ? reply(res, { from: 0, to: 27.5, readSeconds: 27.5, done: true, spans: [tweet, { start: 0, end: 27.5, text: "Here's my outline of the talk", box: [0, 0, 0.2, 0.05] }] }) : false;
+    });
+    afterEach(() => { mock.state.extra = undefined; mock.state.transcripts = {}; delete levels.scr; });
+
+    it("lists where they are, in the speech's seconds and the picture's, whichever is the reference", async () => {
+      const c = await connect();
+      try {
+        const forward = JSON.parse(textOf(await ok(c, "audio_sync", { referenceId: "m1", secondaryId: "scr" })));
+        expect(forward.secondaryStartRelativeToReference).toBe(2.5);
+        expect(forward.saidOnScreen).toEqual({ speech: "m1", picture: "scr", readings: 1,
+          list: [{ from: 10, to: 13.4, pictureAt: [7.5, 10.9], said: "superintelligence has arrived, welcome to the singularity." }] });
+        const back = JSON.parse(textOf(await ok(c, "audio_sync", { referenceId: "scr", secondaryId: "m1" })));
+        expect(back.saidOnScreen.list).toEqual(forward.saidOnScreen.list);
+        // Only the screen's text is read, never the camera's.
+        expect(mock.requests.filter(r => r.path.endsWith("/screen-text")).map(r => r.path)).toEqual(Array(2).fill("/projects/prj_test/media/scr/screen-text"));
+      } finally { await c.close(); }
+    });
+
+    it("says how far a screen's text is read, and adds nothing beside a recording with no picture", async () => {
+      mock.state.extra = (req, res) => req.path === "/projects/prj_test/media/scr/screen-text"
+        ? reply(res, { from: 0, to: 27.5, readSeconds: 8, done: false, spans: [] }) : false;
+      const c = await connect();
+      try {
+        const partial = JSON.parse(textOf(await ok(c, "audio_sync", { referenceId: "m1", secondaryId: "scr" })));
+        expect(partial.saidOnScreen).toMatchObject({ readings: 0, list: [], textRead: "8 of 28 s of scr's text read so far: call audio_sync again for the rest" });
+        expect(JSON.parse(textOf(await ok(c, "audio_sync", { referenceId: "m1", secondaryId: "m2" }))).saidOnScreen).toBeUndefined();
+      } finally { await c.close(); }
+    });
+  });
+
   it("says what to do about the same recording twice, an unknown one, and levels that stop short", async () => {
     const c = await connect();
     try {
@@ -743,6 +786,41 @@ describe("source_audio", () => {
 });
 
 // Claude and most Codex models can't hear: a model that can (Gemini first) listens for them and answers in words (2026-11-22).
+// Task models: the editor gives a kind of work to a model of their choosing, and the request hands such work to it (2026-11-24).
+describe("hand_off", () => {
+  const base = { state: "running", projectId: "prj_test", agent: "claude", hostId: "host_a", createdBy: { type: "human", name: "Editor" } } as const;
+  const edit = Task.parse({ ...base, id: "edit-task", kind: "edit", instruction: "Add a lower third", context: {} });
+  const helper = Task.parse({ ...base, id: "hand-task", kind: "hand_off", agent: "gemini", instruction: "Add a lower third",
+    context: { checksTaskId: "edit-task", handOff: { typeId: "motion-graphics", name: "Motion graphics", brief: "Add a lower third" } } });
+  const offers = [{ id: "motion-graphics", name: "Motion graphics", description: "Titles and lower thirds.", by: { agent: "gemini", model: "gemini-3-pro" } }];
+  it("hands a kind of work to the model the editor chose, says so once in the chat, and gives back what it saved", async () => {
+    let answer: unknown = { state: "working", handoffId: "hand-task", by: { agent: "gemini", model: "gemini-3-pro" } };
+    mock.state.extra = (req, res) => req.path === "/projects/prj_test/hand-off" ? reply(res, answer) : false;
+    const c = await connect({ taskId: edit.id, task: edit, taskModels: offers });
+    try {
+      const listed = (await c.listTools()).tools.find(t => t.name === "hand_off");
+      expect(listed?.description).toContain("- Motion graphics (gemini-3-pro): Titles and lower thirds.");
+      expect(textOf(await ok(c, "hand_off", { type: "Motion graphics", brief: "Lower third for Ana from 5 s to 9 s" })))
+        .toBe("gemini-3-pro is still working on it (handoffId hand-task). Carry on with the rest of the request, then call hand_off again with this handoffId for what it saved.");
+      expect(sent("/projects/prj_test/hand-off")[0]!.body).toEqual({ taskId: "edit-task", type: "Motion graphics", brief: "Lower third for Ana from 5 s to 9 s" });
+      answer = { state: "done", handoffId: "hand-task", summary: "Saved chg_1.", changeIds: ["chg_1"], by: { agent: "gemini", model: "gemini-3-pro" } };
+      expect(JSON.parse(textOf(await ok(c, "hand_off", { handoffId: "hand-task" })))).toMatchObject({ by: "gemini-3-pro", saved: ["chg_1"], said: "Saved chg_1." });
+      const told = mock.requests.filter(r => r.path.endsWith("/tasks/edit-task/events") && (r.body as { text?: string }).text?.startsWith("Handed"));
+      expect(told.map(r => (r.body as { text: string }).text)).toEqual(["Handed motion graphics to gemini-3-pro."]);
+    } finally { await c.close(); }
+  });
+  it("is offered only to a request with work given to another model, and a hand-off can't ask the editor or hand off again", async () => {
+    const sessions = [await connect({ taskId: edit.id, task: edit }), await connect({ taskId: helper.id, task: helper, taskModels: offers })];
+    try {
+      const [none, handing] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      expect(none).not.toContain("hand_off");
+      expect(handing).not.toContain("hand_off");
+      expect(handing).not.toContain("task_question");
+      expect(handing).toContain("timeline_propose");
+    } finally { await Promise.all(sessions.map(c => c.close())); }
+  });
+});
+
 describe("listen", () => {
   const base = { state: "running", projectId: "prj_test", agent: "claude", hostId: "host_a", createdBy: { type: "human", name: "Editor" } } as const;
   const edit = Task.parse({ ...base, id: "edit-task", kind: "edit", instruction: "Cut the dialogue", context: {} });
@@ -768,16 +846,20 @@ describe("listen", () => {
   });
   it("is offered only where it helps: never to a model that hears, nor with no listener signed in", async () => {
     const codexAudio = Task.parse({ ...edit, agent: "codex", model: "gpt-6-astra-audio" });
+    const agyClaude = Task.parse({ ...edit, agent: "gemini", model: "claude-opus-5-5" });
     const sessions = [
       await connect({ taskId: edit.id, task: edit }),
       await connect({ agent: "codex", taskId: codexAudio.id, task: codexAudio, capabilities: agentCapabilities("codex", undefined, "gpt-6-astra-audio"), listener: { agent: "gemini" } }),
+      await connect({ agent: "gemini", taskId: agyClaude.id, task: agyClaude, capabilities: { ...agentCapabilities("gemini", undefined, "claude-opus-5-5"), files: true, briefTools: false }, listener: { agent: "gemini" } }),
     ];
     try {
-      const [none, hears] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      const [none, hears, agyThirdParty] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
       expect(none).not.toContain("listen");
       expect(none).not.toContain("source_audio");
       expect(hears).not.toContain("listen");
       expect(hears).toContain("source_audio");
+      expect(agyThirdParty).toContain("listen");
+      expect(agyThirdParty).not.toContain("source_audio");
     } finally { await Promise.all(sessions.map(c => c.close())); }
   });
   it("gives the run that listens the passage as a file and nothing else", async () => {
@@ -881,7 +963,7 @@ describe("tool annotations", () => {
   // Every tool that saves an edit, a recommendation, a file or a message to the editor. A harness may retry or
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
   const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
-    "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
+    "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "hand_off", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
     "graphic_render", "style_guide_save", "transcript_fix"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);
 
@@ -957,13 +1039,14 @@ describe("tool annotations", () => {
 
   it("marks exactly the tools that change something as writes, and nothing as destructive", () => {
     expect(every.filter(name => !toolAnnotations(name).readOnlyHint).sort()).toEqual([...writes].sort());
-    for (const name of every.filter(n => n !== "web_capture")) {
+    for (const name of every.filter(n => n !== "web_capture" && n !== "web_video")) {
       const a = toolAnnotations(name);
       // A read may be repeated; a write may not, and every edit stays reversible.
       expect(a).toMatchObject({ idempotentHint: a.readOnlyHint, destructiveHint: false, openWorldHint: false });
     }
     // A page from the web changes nothing in the project, and reads the open web, which may say something else next time.
     expect(toolAnnotations("web_capture")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+    expect(toolAnnotations("web_video")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true });
     // A name Scarlet doesn't know is never taken for a read.
     expect(toolAnnotations("timeline_delete_everything").readOnlyHint).toBe(false);
   });
@@ -974,12 +1057,14 @@ describe("tool annotations", () => {
     const check = Task.parse({ ...task, id: "check-task", kind: "learning_check", context: { checksTaskId: "asked-task" } });
     const edit = Task.parse({ ...task, id: "edit-task", kind: "edit", instruction: "Add B-roll", context: {} });
     const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: check.id, task: check }),
-      await connect({ agent: "codex", taskId: edit.id, task: edit }), await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" } })];
+      await connect({ agent: "codex", taskId: edit.id, task: edit }), await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" },
+        taskModels: [{ id: "motion-graphics", name: "Motion graphics", by: { agent: "gemini" } }] })];
     try {
       const tools = (await Promise.all(sessions.map(c => c.listTools()))).flatMap(l => l.tools);
       // The hearing session lists every editing tool; the skill request adds the tool that saves its revision, the
       // check that reads a request the one that offers a rule, the edit request the one that captures a page, and a
-      // request whose model can't hear, with a model signed in that can, the one that has it listen.
+      // request whose model can't hear, with a model signed in that can, the one that has it listen, and with work the
+      // editor gave another model, the one that hands it off.
       expect([...new Set(tools.map(t => t.name))].sort()).toEqual(every.filter(name => name !== "skill_save_from_change").sort());
       for (const t of tools) expect(t.annotations, t.name).toEqual(toolAnnotations(t.name));
     } finally { await Promise.all(sessions.map(c => c.close())); }
@@ -1061,6 +1146,32 @@ describe("timeline_join_audit", () => {
       const second = textOf(await ok(c, "timeline_transcript", { detail: "words", from: Number(next![2]) }));
       expect(second.length).toBeLessThanOrEqual(2_000);
       expect(second).toContain(`#${next![1]} `);
+    } finally { await c.close(); }
+  });
+
+  it("pages timeline_transcript without skipping a word said over the last one a page shows", async () => {
+    // Two speakers on two mics: each short “yeah” on m2 starts and ends inside a longer word on m1.
+    const long = Array.from({ length: 200 }, (_, i) => ({ text: `long_${String(i).padStart(3, "0")}`, start: i * 0.2, end: i * 0.2 + 0.19 }));
+    const short = Array.from({ length: 200 }, (_, i) => ({ text: `yeah_${String(i).padStart(3, "0")}`, start: i * 0.2 + 0.05, end: i * 0.2 + 0.1 }));
+    mock.state.transcripts.m1 = { id: "t-long", mediaId: "m1", segments: [{ id: "s1", start: 0, end: 40, text: "long", words: long }] };
+    mock.state.transcripts.m2 = { id: "t-short", mediaId: "m2", segments: [{ id: "s2", start: 0, end: 40, text: "yeah", words: short }] };
+    const tl = emptyTimeline("prj_test");
+    tl.version = "crosstalk";
+    tl.tracks[1]!.clips = [makeMediaClip("m1", 0, 40, 0)];
+    tl.tracks.push({ id: "a2", kind: "audio", name: "Mic", muted: false, hidden: false, clips: [makeMediaClip("m2", 0, 40, 0)] } as Timeline["tracks"][number]);
+    mock.state.timeline = tl;
+    const c = await connect({ agent: "gemini", capabilities: { images: true, audio: false, files: false, plan: false, resultChars: 2_000 } });
+    try {
+      const seen = new Set<string>();
+      let from: number | undefined;
+      for (let page = 0; page < 100; page++) {
+        const read = textOf(await ok(c, "timeline_transcript", { detail: "words", ...(from !== undefined && { from }) }));
+        for (const m of read.matchAll(/(long|yeah)_\d{3}/g)) seen.add(m[0]);
+        const next = /continue with from=([\d.]+)\./.exec(read);
+        if (!next) break;
+        from = Number(next[1]);
+      }
+      expect([...short.map(w => w.text), ...long.map(w => w.text)].filter(t => !seen.has(t))).toEqual([]);
     } finally { await c.close(); }
   });
 
@@ -1599,6 +1710,41 @@ describe("screen_text", () => {
     expect(await description(await connect())).toContain("media_frame at a line's start second shows that frame");
     const blind = await connect({ capabilities: { images: false, audio: false, files: false } });
     expect(await description(blind)).not.toContain("media_frame");
+  });
+});
+
+describe("screen_motion", () => {
+  const screen = { id: "scr", kind: "video" as const, name: "screen.mp4", path: "screen.mp4", duration: 1801, fps: 30, width: 1920, height: 1080, hasAudio: false };
+  beforeEach(() => {
+    mock.state.project.media = [...mock.state.project.media, screen];
+    mock.state.extra = (req, res) => req.path.endsWith("/media/scr/screen-motion")
+      ? reply(res, { mediaId: "scr", from: Number(req.query.get("from")), to: Number(req.query.get("to")), seconds: [], detail: [], readSeconds: 1, done: true }) : false;
+  });
+  const asked = async (clips: MediaClip[], args: Record<string, unknown>) => {
+    const tl = emptyTimeline("prj_test");
+    tl.version = "screen";
+    tl.tracks[0]!.clips = clips;
+    mock.state.timeline = tl;
+    mock.requests.length = 0;
+    const c = await connect();
+    try { await ok(c, "screen_motion", args); } finally { await c.close(); }
+    const query = sent("/projects/prj_test/media/scr/screen-motion", "GET").at(-1)!.query;
+    return [Number(query.get("from")), Number(query.get("to"))];
+  };
+
+  it("reads only the source seconds the asked range plays, a second either side", async () => {
+    // Five seconds near the end of a 30-minute recording: its own minute, not the whole recording.
+    expect(await asked([makeMediaClip("scr", 0, 1801, 0, { volume: 0 })], { from: 1505, to: 1510 })).toEqual([1504, 1511]);
+    // A range given backwards asks for the same seconds.
+    expect(await asked([makeMediaClip("scr", 0, 1801, 0, { volume: 0 })], { from: 1510, to: 1505 })).toEqual([1504, 1511]);
+    // At double speed from source 200, timeline 150-160 plays source 300-320.
+    expect(await asked([makeMediaClip("scr", 200, 400, 100, { volume: 0, speed: 2 })], { from: 150, to: 160 })).toEqual([299, 321]);
+    // Two clips of the recording, each partly in the range: the end of one and the start of the next.
+    expect(await asked([makeMediaClip("scr", 0, 60, 0, { volume: 0 }), makeMediaClip("scr", 1000, 1060, 60, { volume: 0 })], { from: 55, to: 65 })).toEqual([54, 1006]);
+    // With no range, the whole of what plays.
+    expect(await asked([makeMediaClip("scr", 30, 90, 0, { volume: 0 })], {})).toEqual([29, 91]);
+    // A clip that runs past its recording's end: the range in that tail still asks from inside the recording.
+    expect(await asked([makeMediaClip("scr", 0, 1810, 0, { volume: 0 })], { from: 1805, to: 1808 })).toEqual([1800, 1809]);
   });
 });
 

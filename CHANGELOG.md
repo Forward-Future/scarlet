@@ -4,9 +4,207 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
-## November 22, 2026
+## November 24, 2026
 
 - Dialogue cuts now place cleanly in rooms with steady background noise, like a fan, air conditioning or traffic hum, without cutting into soft word endings.
+- In the beta three-column layout, the middle edits column can now be resized from its right edge, every row stays on a single line, and hovering a row shows the full line in a Scarlet tooltip.
+- Settings › Usage is now organized into cleaner Tokens and Storage cards with a token breakdown bar, 14-day activity chart, tabbed breakdowns by project, provider and model, live plan limits for signed-in subscriptions, and one-click Clear all for cached renders.
+- Cuts and edits now go by their time everywhere instead of a number: rows start with their time, the timeline shows plain dots (filled once kept, amber while they wait), and cards, the message box's tag and Scarlet's replies say "Cut 2:47" or "Edit 0:11", in both the current and the beta layout.
+- Diagnostics in Settings › Advanced is now cleaner, with separate rows for each set-up provider, clearer Open and Logs buttons, and internal paths tucked under Technical details.
+- Times you type in the message box are now plain gray text instead of sitting in gray boxes. They still jump the video there when clicked, and light up with an underline on hover.
+- Settings › Advanced is simplified to Transcription language, Preview quality and an on/off Hardware acceleration switch, saved immediately without a Save button; Scarlet handles the rest automatically.
+- On Windows, Install Gemini in Settings › Models now finishes, instead of saying the installation did not finish and Gemini isn't installed.
+- Scarlet can now edit with models running on your own computer through Ollama or LM Studio, or with hosted models through OpenRouter. Set them up under Other providers in Settings › Models: each shows up in the model selector only once it has models ready, and OpenRouter's models stay out of the selector until you turn on the ones you want.
+- After you click the timeline's zoom slider, its − or +, "Scarlet is editing", or Check or Show source on a card, Space plays and pauses and ← → skip again, instead of going to the control you clicked.
+- Pressing "Scarlet is editing" under the timeline now shows and lights the request also when it is folded to its heading, or sitting in the beta edits column.
+- With the Transcript (or the beta edits column) open, the chat and Transcript can no longer be dragged so wide that the player has no room between them.
+- Words you write in Settings › Talking to you stay in the field when they couldn't be saved, so you can save them again.
+- In Settings › Task models, adding or deleting a task right after renaming one no longer makes a row blink away.
+- Taking the tag off the message box, deleting what you wrote and pressing ⌘Z now brings your words back, instead of the tag.
+- On a marked frame, Undo now puts a mark you moved back where it was. Esc closes an open menu first and leaves your marks.
+- A link Scarlet writes to an address with brackets in it, such as a Wikipedia page, now opens the right page, and an address Scarlet doesn't open says itself whole on hover.
+- When FFmpeg is missing, its notice no longer fills the middle of the first screen, and an install you started still says Installing in Settings.
+- Settings › Listening names a model that is signed out by its name, instead of "default".
+- The Audio label beside a file's track picker in Media now matches the text around it.
+- Settings › General now has a "New workspace layout (Beta)" switch (off by default) to try the three-column edits panel, Low Risk Edits with Mark all done, chat bubbles, question panel over the message box, and one-row revisions, and switch back any time.
+- Low risk edits in For you are now a small switch, and turning it on or off no longer moves the chat: their rows open in place among the ones that wait and Scarlet's reply stays put. Their rows open and close with a smooth, staggered animation. Every row in For you now leads with its time, so the list no longer swaps numbers for times, and ↑ ↓ step down it in that order.
+- Settings › Models has Task models: choose which model does each kind of work, such as Cutting or Motion graphics, or add your own. The chat's model hands that work to the model you chose, and each edit made that way says which model made it on its card.
+- A request's list of edits now has more room under its For you, Working and Done tabs, so the first row no longer sits right against them.
+- When Claude Code, Codex or Gemini is installed in a way Scarlet can't start, Scarlet now uses another copy it can start, or shows it as not installed, instead of failing every request at once. A request that can't start now says why.
+- A transcript fix on words that run from one speaker's line into the next keeps each word with the speaker who said it.
+- A transcript fix that adds a word, such as Claude to Claude Code, no longer doubles the word where the transcript already said it right (“Claude Code Code”), and making the fix again changes nothing.
+- When Scarlet moves a clip's voice to the dialogue track, for a crossfade, a J or L cut or to line up its picture, the voice keeps the audio track you chose and its volume changes, such as music dipping under speech, instead of going back to the first track at a flat level.
+- A picture or logo held on the timeline now shows its frame at any point of its clip, in hover previews and marked frames, instead of failing after its first two seconds.
+- A HEIC photo from an iPhone, or an AVIF picture, now plays and exports in the video instead of stopping the render.
+- An EQ on a clip with a frequency below zero or far above hearing no longer stops the video from rendering.
+- A voice cleaned up with voice cleanup now plays to the very end of each cut, instead of going silent for its last moment.
+- A J or L cut Scarlet makes now shows the right time in the list: one at 3 seconds could read 0:02, and one past an hour read 62:05 instead of 1:02:05.
+- A cut whose clean edge would reach outside the part of the video you selected, or into footage you marked to keep, now always waits for you, even when Scarlet was told to apply joins it isn't sure of.
+- A cut's row in a request's list now quotes the words beside it as the transcript has them, even when the row was first shown while Scarlet was still placing the transcript's words.
+- With OpenAI transcription, a voice message or note that the recorder saved without its length is now transcribed in full, not just its first second.
+- With note cleanup on, a spoken note whose tidied-up version got cut off partway now keeps your own words, instead of sending Scarlet half a request.
+- Media and its link in the header now show each video's playback cache again after you leave a project and come straight back, instead of showing nothing until a file changed.
+- An undo or a rejected edit that went through no longer says it failed, or leaves the old cut on screen, when the new timeline takes a moment to load: Scarlet loads it again by itself.
+- ⌘Z on a revision whose version you've applied since no longer stops Scarlet's work on it while saying it couldn't undo it.
+- A project's card in the library now flips through its footage on hover after its video finishes importing, and after Scarlet's engine restarts, instead of staying on its poster until Scarlet is reopened.
+- Rewording a rule in Learnings with a Japanese, Chinese or Korean keyboard no longer throws away what you wrote when you press Esc or Enter to finish a word.
+- Typing a note in Media with a Japanese, Chinese or Korean keyboard no longer saves it, or closes it, when you press Enter or Esc to finish a word.
+- Moving the end of a marked range with → near the end of the video no longer pushes it past the end, where its handle disappeared and the arrows stopped working.
+- M, or a marking tool, pressed while the video plays now pauses it and starts marking that frame, instead of only pausing.
+- Saving a timeline or captions file while Scarlet's engine restarts is tried again, instead of failing at once with "Export destination expired".
+- Loudness checks on a recording no longer keep failing after Scarlet was closed while saving one: Scarlet measures it again.
+- A file Scarlet can't read now says so by its own name, without the full path of Scarlet's library folder.
+- A WebM screen or voice recording saved without its length now imports with its real length, so reading its text, faces and sound, and choosing voices in it, work instead of saying it's still being prepared.
+- With a damaged copy of the Whisper model saved, an open Settings no longer keeps your computer busy checking it again every few seconds: it is checked once.
+- Changing a project's settings while its video is being edited no longer leaves the old cut on screen when the new timeline takes a moment to load: Scarlet loads it again by itself.
+- An edit set to carry on once its transcripts are ready that can't start again now stops waiting after a few tries, so you can carry on yourself, instead of waiting forever.
+- A Scarlet agent whose agent.json was edited by hand to a time limit or task count that isn't a positive number now uses the usual limits, instead of taking no requests or stopping each run as soon as it starts.
+
+## November 23, 2026
+
+- A request's list no longer shows Scarlet's small finishing touches as edits of their own: a two-frame fade on a join or a voice moved to the dialogue track goes with the edit it finishes, and anything Scarlet wants you to check about it shows on that edit.
+- Two cuts at the same spot in the video are now one cut, which plays and shows all the footage that came out there.
+- A to-do Scarlet leaves inside a zoom or a crop now says To do, with Add, instead of Zoom.
+- A clip Scarlet takes from another recording, such as one you played on screen, and puts into the video now says Insert instead of Put back.
+- A request that punched in at several spots under the same name now says how many zooms it made, instead of naming the same edit over and over.
+- In Media, “Tell Scarlet what this is” and its Cancel button no longer show an underline.
+- A request's edits are now under three tabs: For you has only what waits on you, Working what Scarlet is revising, and Done what you kept or rejected. The edits Scarlet didn't flag sit behind one line under For you ("112 optional"), and a row you act on stays a moment before it leaves.
+- Edits in a list now combine into one row only when they overlap on the timeline exactly, so edits in separate places or that only partly overlap each stay on their own row.
+- When Scarlet lines up your screen recording with your camera, it now sees right away where the words you say are on that screen, so quotes and pages you read from it are less likely to be left out of the video.
+- Edits made at separate places in the video now stay individual rows in the edit list instead of being bundled into one spanning range, a crop or reframe beside a zoom no longer gets labeled Zoom or shows zoom numbers from another clip, and a Check note attaches only to an edit on that time range.
+- While you review an edit, cuts still waiting on your call play as Scarlet would make them, and show on the timeline as a gap with their number, so retakes nearby no longer look missed.
+- When Scarlet can't take out a repeated line cleanly, it now asks you about the cut instead of leaving the line in and marking a To do.
+- The talking-head example skill no longer includes Matt’s own camera setup or editor name, so any editor can adapt it.
+- Scarlet now knows what was said earlier in the chat, so a message like “tell me the timestamps” or “the two clips you just found” is read as being about the request before it, links and times Scarlet showed you while it worked included.
+- What Scarlet finds for you at a place in the video, such as a clip to play there, is now listed under your request and opens on the timeline like any edit, and a web address in Scarlet's reply or on an edit's card is a link that opens in your browser.
+- An export that starts partway through now shows that part striped on its bar, with how much of the video it reused from an earlier export, so a head start no longer looks like the export skipped ahead.
+- The timeline's waveform now draws how loud the sound plays as its solid part, with the peaks fainter around it, so two parts that sound as loud look as tall, such as an inserted sponsor read beside your own voice.
+- A level Scarlet changes over part of a clip now shows on the timeline's waveform and in that edit's Before and After.
+- An edit that evens out a clip's level is now called Audio on its card instead of Music dip.
+- For a request that made several edits, "See all" or "See both" now sits at the end of the sentence, as "See edit" does, until you open the list.
+- Footage a cut removes now reads "Took out" everywhere, or "Takes out" on a cut that hasn't gone in yet, and footage put back reads "Put back", instead of "Removed" and "Added".
+- A call you rejected before its pass went in now opens from its row in For you as a rejected edit does: the timeline goes to where its footage plays, and its card shows Scarlet's note and Rejected.
+- A request whose only edit you rejected keeps that edit's row, with its × and Rejected, and a press on it shows the edit again.
+- Rejecting an edit no longer renumbers the others: the list and the timeline's dots keep the numbers they had, such as 1, ×, 3.
+- When Scarlet stops revising a cut or an edit to ask you something, its row says "Needs your answer" in amber and For you counts it.
+- Pause now shows once in the whole chat, on the request above the message box, instead of once for every request Scarlet has; each request keeps its own Stop.
+- The ⋯ menu and a project's menu in the library now say "Pause media processing" and "Resume media processing", and a request that waits on a transcript says "Needs transcript" instead of "Paused".
+- A folded request's heading says what waits on you under it: "For you" with its count, and the amber dot when Scarlet has a question.
+- N on an open cut or edit aims your message at the frame you're on, as pausing there does.
+- Speaking while you change a queued request's words puts what you said in the message box, where it waits for the tick like words you typed.
+- Taking a request out of the queue with its × puts its words in the message box when the box is empty, so you can change them and send again.
+- While the mic records, its red button is named "Send (Esc to discard)", and Esc throws the recording away without sending anything.
+- Files and a marked frame attached to an answer to Scarlet's question now go with the answer.
+- A time typed in a message, such as "make it 1:30 long", shows the same "At 1:30" tag as a picked moment, with its × to take it off.
+- An edit Scarlet touched up afterwards, such as an inserted segment it then trimmed a black frame from, now stays in the chat with its See edit link instead of disappearing.
+- Collapsing the request above the message box now hides its list of edits too, instead of only turning the arrow.
+- A request's heading is one line, with the rest on hover; the request Scarlet is working on and the one you picked keep two.
+- With a request's list of edits open, the sentence above it counts the edits instead of naming them a second time.
+- A question no longer has an Answer link under it while the message box is already answering it; the link is back whenever the box is aimed elsewhere.
+- A queued request's pencil and × show when you point at its row.
+- A row in a list of edits is one line, so a long list reads at a glance: the row that's open reads in full, and its card has the whole note.
+- A row ends on one word: an edit sent back says Revising… where its amount was, and one that came back says Revised there in amber, instead of on a second line.
+- A request under a cut's or edit's row is just your words, Stop, and what Scarlet is doing: Scarlet's opening sentence, the time and the tokens no longer repeat there.
+- Pause shows once, on the request's band, while Scarlet works on cuts or edits under it, instead of beside every Stop.
+- A request's time and tokens stay in view only while Scarlet works on it; rest the pointer on any other request's heading to see them.
+- Requests you folded sit together as one list, with no gap between them.
+- A rule Scarlet learned is one line in the chat, cut short when long; rest the pointer on it or open Learnings to read all of it.
+- The rows of a pass's For you list start on one edge.
+- A To do now has Add (A), Revise (R) and the × that rejects it: Revise lets you tell Scarlet how to change what it proposed, and Later is gone, so L always speeds up playback.
+- When a pass can't go in, Retry now sits right after the reason, instead of above it.
+- The line under a working request says what Scarlet is doing in plainer words, such as "Looking over the change", "Asking you a question" and "Tidying up its notes", and no longer ends in a number that didn't match your list of edits.
+- The check Scarlet runs at the end of a pass has one name everywhere: the closing check for repeats.
+- When something goes wrong, the red line says what happened and what to do in plain words, such as "Make this pass's calls in For you first", instead of the engine's own wording or a code.
+- A call that couldn't be saved now says so, with why and to press Keep or Reject edit again.
+- A request that changed nothing now says "Nothing changed" instead of "Done".
+- Sending a message while the model button says "Connecting…" now says "Still connecting. Try again in a moment." instead of asking you to sign in.
+- A pass with no calls for you now says its cuts are "ready" instead of "proposed", and the cuts Scarlet is still checking are called flagged cuts everywhere.
+- Lines the app writes for Scarlet now all say "Scarlet", never "I", and waits read as "3m 41s" so they can't be mistaken for a place in the video.
+- Scrolling a long list of edits above the message box no longer scrolls the request's heading out of sight or leaves blank space under the list.
+- Scarlet now writes card notes and To dos in short, plain sentences instead of technical specs with timestamps, durations, or beat-by-beat breakdowns.
+- Scarlet can use a video from the web as B-roll: give it a link (YouTube and most video sites) or ask it to find one, and it takes just the part that fits. The edit’s card shows where the clip came from.
+- A To do Scarlet left for you, such as a spot for B-roll, now has Add (A), Later (L) and a × that rejects it: Add has Scarlet make or find what the to-do asks for and put it in the video there, and the × takes the to-do away.
+- Choosing words in the Transcript and pressing “Ask about this” now shows the same `Range` tag above the message box as a stretch marked on the timeline, with its × to take it off before you send.
+- A request that couldn't finish says why under its heading when the model gave a reason, such as a usage limit or a sign-in that ran out, so you know before pressing Retry.
+- A request you pick up again while a dialogue pass waits for your calls says “Waits for your calls” in its block, with the same mark that starts it before them, instead of only “Queued”.
+- When Scarlet has several questions waiting, the message box answers them one at a time in the order asked: its tag says which (“Answer 1 of 2”), and Answer in the chat is on the question it will answer.
+- In See all, cuts that went in with a pass through your calls are ticked as kept, as Keep and the timeline already counted them.
+- Scarlet's own recheck under a cut's row says where it stands once, at the right of its heading with Pause and Stop, with no second “Stopped” or “Needs your answer” row.
+- With the chat dragged to its narrowest, the project's name keeps its room while the model button shows its dial alone, and a heading that says “Working on 3 at once” sets its time and tokens aside so your words stay readable.
+- The rest of the chat no longer fades when an edit is opened from a request's own line.
+- The words that say what Scarlet is doing, and Revising… on a row, shimmer while it works; they had stopped moving in the chat.
+- ⌘Z in a message box you have just emptied brings your words back instead of taking back your last Keep, and it puts back a marked range you took off the box.
+- ⌘Z takes back Keep or Reject edit on a call, which waits for you again, and after Keep on a moment it leaves an edit you had already kept on its own kept.
+- Closing a cut's card without deciding and pressing play no longer ticks that cut as kept.
+- With See all open while a pass waits, ↑ and ↓ follow the list row by row through its edits and calls, and an edit a pass made in many places is one stop: Keep keeps every place.
+- In For you, a flagged edit that came back revised says v2 while a pass waits, and a call you rejected shows at its time in the video as it is now.
+- A request that was paused for a transcript and then finished shows Scarlet's reply once, and “Transcribing the recordings” no longer drops back each time one of several transcripts is done.
+- A request about one cut or edit that was paused or restarted after it saved leaves the chat once it is done, and one that waits for a transcript keeps its way to finish through later requests.
+- After a restart or a pause, a request keeps the sentence Scarlet opened it with and says “Picking up where it left off” until its first step, and a press on “Scarlet is editing” under the timeline still brings it into view.
+- “9:16” in a message such as “make a 9:16 short” is read as the picture's shape, not as a time in the video.
+- A file that can't be added while your message waits for it keeps the message in the box and says why, instead of going out without it.
+- Esc ends the marking of a frame without closing the edit that's open, takes a marked range off from the empty message box at once, and closes the Transcript from its empty search field.
+- Backspace in an empty box takes off an Answer tag too, a paused time leaves an open cut's tag once you play on and erase what you wrote, and opening an edit while you change a queued request's words no longer puts those words at risk.
+- After a click on Pause, a suggestion's line or the queue's heading, Space plays the video instead of pressing that control again.
+- At the narrowest chat a stopped request's Resume is no longer cut off, a list of edits above the message box no longer slides sideways, and a tall request there can't push the message box off the window.
+- Ask Scarlet for a list of ideas and where they go, such as B-roll to add, and each one lands as a To do at its place on the timeline, listed in For you, instead of a long list in the chat.
+- Clicking anywhere else in the chat lets go of the purple request, just like pressing Esc.
+- When Scarlet tries to cut in the middle of a word you're still saying, it's now told exactly where the quiet is on either side, so it fixes the cut in one try instead of measuring again.
+- Each request in the chat has a small arrow at its left that collapses it to one line, and expands it again.
+- Purple on a request now means one thing: its edits are the ones on the timeline. Click a request to pick it, running or finished, and click it again or press Esc to let go and see every request's edits on the timeline.
+- Edit-number pills near the start or end of the timeline no longer overlap the pill beside them.
+- An edit running on Gemini now picks up where it left off after Scarlet restarts, instead of starting its work over.
+- After Scarlet restarts, each request's list of edits comes back the way you left it, so a change you asked for on one edit stays under that edit's row.
+- Playing through the video no longer leaves faint vertical dashes along the timeline ruler.
+- During a dialogue pass, cuts Scarlet has checked and is sure of go into the video as it works, instead of waiting until you've answered every For you item, so the video you watch is the edit as it will be.
+- Rejecting an edit Scarlet has to put back itself now stays under that edit's row in the chat while Scarlet finishes, instead of jumping into a block of its own.
+- In See all, edits are grouped on one row only when they change the same part of the video: cuts a few seconds apart now each have their own row.
+- A stretch you mark on the timeline's ruler now stays while you play it, pause it and click around the timeline, so you can listen to it and adjust its ends. Esc takes it off.
+- In Media, “Tell Scarlet what this is” under a file lets you say what it is and how to use it, such as a finished sponsor read to drop in whole, and Scarlet leaves a file you add while it's editing alone unless you mention it.
+- Settings › General has Talking to you: write in your own words how Scarlet should talk to you in the chat and on its cards, the same in every project and with every model.
+- Edits run on Gemini no longer pick up the personal instructions you wrote for your own Gemini chats, as Claude and Codex edits already didn't.
+- When Scarlet moves a later take to the front of the video, the footage before it no longer shows as one huge cut: only what the video never uses shows as cut.
+- When the disk is full, Scarlet now says so instead of showing a confusing “cannot rollback” error.
+- After an update, a request's estimated cost uses the prices that came with the new version instead of an older price list Scarlet fetched before.
+- Recordings with more than one audio track, such as OBS captures or multi-mic podcasts, have an Audio track picker in Media: choose one track or mix them all, and Scarlet listens to, plays and exports that choice, and transcribes the recording again when you change it.
+- Third-party models run through Antigravity (such as Claude Opus 5.5) now use Gemini to listen to cuts instead of receiving audio files they cannot hear, and no longer appear in the Listening model picker.
+- Dialogue passes on an already-assembled recording stay on batched dialogue cuts instead of rebuilding the whole timeline in one pass, and unsure joins during assembly ask to listen or stage for review rather than forcing exact timestamps.
+- Clicking a dotted cut on the Before timeline, even a very narrow one without a label, now opens that edit so you can see which one it is, while dragging across it still scrubs.
+- New installs now transcribe with the bundled Whisper model by default instead of requiring a separate CrisperWhisper setup; existing CrisperWhisper setups keep using it, and you can still switch in Settings › General.
+- A first edit Scarlet builds from the pieces to keep now lists every stretch of the recording it left out as a cut, the talk before your first line and after your last too, and the request says how much came out in all.
+- What a request says it took out now adds up to the footage that is out, however Scarlet saved its edits: a cut made beside or over an earlier one is listed at the join where its footage is missing and counted once.
+- An edit Scarlet made in many places under one name, such as a fade on every dialogue join, is one row with its count of places in a first edit's list, and is counted once.
+- Scarlet can crossfade dialogue joins whose sound pieces sit a millisecond or two apart, instead of lining them up first and settling for fades.
+- L on a to-do's card sets it aside for later instead of changing the playback speed; Shift+L still slows playback.
+- Shift+← and Shift+→ move exactly one frame when the video is paused between two frames, instead of none or two.
+- A Gemini request no longer fails when Gemini turns down the effort level Scarlet picks by default.
+- The player no longer gets stuck on “Rendering clip…” when you open another cut while one is still loading.
+- After you switch models while answering Scarlet's question, the request stays on the model you chose.
+- The glow round the player keeps its softer colours in the installed app.
+- CrisperWhisper transcribes faster: Scarlet keeps the model loaded between parts of a recording and the short passages it reads while editing, instead of loading it again each time.
+- A microphone track that goes silent whenever its speaker isn't talking no longer fills its transcript with the same sentence repeated over the silence, and transcribes much faster.
+- Once your edits are decided and nothing is waiting on you, Export at the top turns white until you export the video, and the export for another editing app is now called “For Resolve, Final Cut or Premiere…”.
+- Scarlet now tells you when Claude Code, Codex or Gemini has a newer version, with a small dot on the model button, and updates it for you with one press from the model menu or Settings › General, the same way you installed it.
+- Project settings now opens with the cursor in the Name field, so you can type a new name straight away instead of a space or Enter closing it.
+- A video with "vlog" in its title or comment is no longer taken for flat V-Log camera footage.
+- Correcting a word like “Scarlett's” or “it's” in the transcript now finds it, and correcting “that fine” no longer turns “that's fine” into “this's fine”.
+- An edit's card says only what that edit did: a camera inset no longer also names the punch-in on the clip right after it, and the punch-in no longer names the inset.
+- Searching the Transcript now finds a word with an apostrophe in it whether it was written with a straight or a curly one, so “Wendy’s” finds “Wendy's” and “don't” finds “don’t”.
+- With motion reduced, the Transcript now follows the playhead without gliding as the video plays.
+- A range typed with a plain hyphen, like “cut 1:20-1:45”, now marks its end time in the message box and on the timeline, not only its start.
+- With a call open, the Transcript shows the words around it as the player does, so pressing a word lands where it should and “Ask about this” on words in the call stays about that call.
+- Add another plan, from the empty library, stays open instead of flickering on and off.
+- When Scarlet reads a music track, its last section now ends where the track ends instead of up to a second past it.
+- Scarlet now counts what you ask to change on an edit it already made when it learns a rule from your decisions.
+- The sound picture Scarlet looks at around a cut now lines up with the words and the cut on recordings whose sound starts a moment after the picture, as phone and camera videos often do.
+- Opened from the Dock, Finder or the Start menu, Scarlet can now use the FFmpeg that Setup installed in the commands it runs while editing.
+- When Scarlet checks where a long screen recording's picture changes around one moment, it reads that moment first instead of working through the whole recording from the start, so the answer comes back in seconds.
+- When an update fails to download, Scarlet waits longer before downloading it again instead of starting over every few minutes, and Check for updates in Settings still tries again right away.
+- A first cut asked for while Scarlet is still reading a new recording ahead of time no longer reads the same minute of it twice, so it gets through the recording sooner.
+
+## November 22, 2026
+
+- Setup no longer needs a terminal or Node.js: Scarlet now installs FFmpeg inside the app with one click on Mac and Windows, and Claude Code and Codex install directly as standalone apps.
 - The Transcript panel is cleaner and easier to read: timestamps line up in a quiet left column, sparse remarks flow inline with small pause markers instead of breaking onto single-word lines, repeated "Voice unclear" headers are gone, and search now has previous, next, and clear buttons.
 - Scarlet no longer drops a cut it got right because the transcript and the recording spell or time a word differently, so a false start it found isn't left in.
 - A cut placed at the end of a word that runs straight into the next one no longer clips the word's last sound, like the “s” of “complaints”.

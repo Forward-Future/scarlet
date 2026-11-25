@@ -1,4 +1,5 @@
-import type { Clip, MediaClip, Timeline, TimeRange } from "./schema.js";
+import type { TimeRange } from "./schemaBase.js";
+import type { Clip, MediaClip, Timeline } from "./timelineSchema.js";
 import { shiftClip, straightenCrossfades } from "./ops.js";
 import { clipEnd } from "./time.js";
 
@@ -123,4 +124,20 @@ export function putBackLooks(head: Timeline, before: Timeline, after: Timeline, 
     }
   }
   return undone ? tl : undefined;
+}
+
+/**
+ * The timeline with the markers one edit left taken off again: a to-do the change marked for the editor, which changed
+ * nothing in the video there. `before` and `after` are the versions the change was made on and made; `range` is the
+ * edit's stretch on `after`. Each marker the change added there comes off by its id, wherever later edits moved it.
+ *
+ * It answers nothing where the change added no marker there, or none of them is on the timeline any more, so the caller
+ * can ask Scarlet instead.
+ */
+export function putBackMarkers(head: Timeline, before: Timeline, after: Timeline, range: TimeRange, fps: number): Timeline | undefined {
+  const had = new Set(before.markers.map(m => m.id));
+  const near = 1 / fps;
+  const added = new Set(after.markers.filter(m => !had.has(m.id) && m.time >= range.start - near && m.time <= range.end + near).map(m => m.id));
+  if (!head.markers.some(m => added.has(m.id))) return;
+  return { ...head, markers: head.markers.filter(m => !added.has(m.id)) };
 }

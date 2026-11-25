@@ -1,15 +1,19 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { callNumbers, taskNeedsTranscripts, type SpeakerProgress, type Task, type TaskEvent } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { useProjectStore } from "../../stores/project";
+import { stagedCuts } from "../../lib/threads";
 import { useUiStore } from "../../stores/ui";
+import { blurOnPointerClick } from "../../lib/hotkeys";
 import { runProgress } from "../../lib/runProgress";
 import { runNow, STARTING } from "../../lib/runNow";
 import { runningTranscription, transcriptionProgressLabel, transcriptsProgress } from "../../lib/transcriptionProgress";
-import { isWorkingTask, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
-import { pendingMediaWaits, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
+import { isWorkingTask, PAUSED_HINT, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
+import { toolName, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
 import { usePublishWorkingLine } from "../../lib/workingLines";
+import { Linked } from "../ui/Linked";
+import { Icon } from "../ui/primitives";
 import { RequestMetrics, Tokens } from "./RequestMetrics";
 
 export { RequestMetrics };
@@ -24,10 +28,14 @@ const voicePhase: Record<SpeakerProgress["phase"], string> = {
  * next, as a card's note does: there is no button, only the pointer changes over it, and the reply ends in an ellipsis
  * while it's folded. However much Scarlet writes, a request stays a few lines tall.
  */
-export function Said({ text, lead, className, children }: { text: string; lead?: ReactNode; className?: string; children?: ReactNode }) {
+export function Said({ text, lead, className, fixed, children }: { text: string; lead?: ReactNode; className?: string;
+  /** A request's heading: its words stay folded, and a press there is the heading's. Resting on them says them whole. */
+  fixed?: boolean; children?: ReactNode }) {
   const { ref, clipped, open, opens, toggle } = useClippedExpand<HTMLParagraphElement>(text);
+  if (fixed) return <p ref={ref} className={`${className ? `${className} ` : ""}said`} title={clipped ? text : undefined}>{lead}{children ?? text}</p>;
+  // An address in the words is a link that opens in the browser; the rest of the words fold and open as before.
   return <p ref={ref} className={`${className ? `${className} ` : ""}said${open ? " is-open" : clipped ? " is-clipped" : ""}`}
-    title={clipped && !open ? "Show all of it" : undefined} aria-expanded={opens ? open : undefined} onClick={opens ? toggle : undefined}>{lead}{children ?? text}</p>;
+    title={clipped && !open ? "Show all of it" : undefined} aria-expanded={opens ? open : undefined} onClick={opens ? toggle : undefined}>{lead}{children ?? <Linked text={text} />}</p>;
 }
 
 /**
@@ -40,7 +48,8 @@ export function Said({ text, lead, className, children }: { text: string; lead?:
  *   plan, no list of what it did, and no percent but one: while the recordings are transcribed it says how far along
  *   they are. Its words shimmer. With no heading above it, Stop ends the line.
  * - When Scarlet asks something, or a request waits its turn: one row saying so, with its one action. A block whose
- *   heading already says where it stands (`banded`) leaves a question to the heading: its dot, the question and Answer.
+ *   heading already says where it stands (`banded`) leaves a question to the heading's dot: the question itself sits on
+ *   top of the message box.
  *   With no heading, the row opens the steps Scarlet took before it asked.
  * - When a run stops early: the row that says what it saved, with its one action.
  * - `say`: Scarlet's words, when it has any for the editor.
@@ -50,9 +59,11 @@ export function Said({ text, lead, className, children }: { text: string; lead?:
 interface RunBundleProps {
   task: Task;
   events: readonly TaskEvent[];
+  /** The history of the attempt Scarlet opened the request in, once the request was picked up again under this one. */
+  opening?: readonly TaskEvent[];
   changes: readonly Change[];
-  /** The number a call of the waiting pass goes by in the window, when the window has numbered it. */
-  callNumber?(changeId: string, cutIndex: number): number | undefined;
+  /** Where a call of the waiting pass is in the video, as the window says it. */
+  callTime?(changeId: string, cutIndex: number): number | undefined;
   finalChange?: Change;
   /** Scarlet's words for the editor: a reply, a question, or why it stopped. */
   say?: ReactNode;
@@ -65,9 +76,17 @@ interface RunBundleProps {
   /** The request sits under the row of the cut it is about, and that row is what it saved, with Scarlet's note on it. */
   listedAbove?: boolean;
   /** The block's heading says how the run ended ("Stopped"), so its rows don't say it again. */
+  /** Under the row of the cut or edit it is about: the row says what it is, so Scarlet's opening sentence isn't shown. */
+  under?: boolean;
   banded?: boolean;
   /** The project's editing is paused, so a run in line waits for Continue. */
   paused?: boolean;
+  /**
+   * What a run in line waits for when that is the editor, in the queue's own words ("Waits for your calls"), and the
+   * way to start it without them when there is one. A request picked up again isn't in the queue's tray, so its block
+   * says it.
+   */
+  held?: { words: string; startNow?(): void };
   /** Show what a finished run made, from its own row; or put it away again while it's `showing`. */
   onOpen?(): void;
   showing?: boolean;
@@ -82,8 +101,8 @@ interface RunBundleProps {
   onWaitForTranscripts?(on: boolean): void;
 }
 
-/** What a pass sent back to check the finished cut is doing, whatever it said on its way in. */
-const FINAL_CHECK = "Final check of the finished cut";
+/** What a pass sent back to check the video for repeats is doing, whatever it said on its way in. */
+const FINAL_CHECK = "Closing check for repeats";
 /** The events of a pass's latest run, once the engine has sent it back to check for repeats; every event otherwise. */
 const sinceRerun = (task: Task, events: readonly TaskEvent[]) => {
   const from = task.repeatAudit?.returns ? task.startedAt : undefined;
@@ -101,42 +120,52 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events: all, changes, callNumber, say, result, onStop, actions }: RunBundleProps) {
+function WorkingRun({ task, events: all, opening, changes, callTime, say, result, onStop, actions, under }: RunBundleProps) {
   // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
   // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
   const events = useMemo(() => sinceRerun(task, all), [task, all]);
   // That check is named for what it is, above the line that says what it's on this moment.
   const rerun = !!task.repeatAudit?.returns;
-  const aim = useMemo(() => rerun ? { text: FINAL_CHECK, note: "" } : runAim(events), [events, rerun]);
+  // The sentence is written once: a request picked up after a pause or a restart keeps the one it opened with.
+  const aim = useMemo(() => rerun ? { text: FINAL_CHECK, note: "" } : (opening && runAim(opening)) ?? runAim(events), [events, rerun, opening]);
   const progress = useMemo(() => runProgress(events), [events]);
   const voices = useProjectStore(s => s.current?.speakerProgress);
   const voice = progress.read && !progress.read.seconds ? progress.recordings?.map(id => voices?.[id]).find(Boolean) : undefined;
-  // A call goes by the number the window shows for it, which it keeps; one the window hasn't numbered, by its place among the asks.
-  const numberOf = useRef(callNumber);
-  numberOf.current = callNumber;
+  // A call goes by its time, as the window shows it; one the window hasn't placed, by where the pass staged it.
+  const timeOf = useRef(callTime);
+  timeOf.current = callTime;
   const doing = useMemo(() => runNow(events, aim?.note, (changeId, index) => {
     const pass = changes.find(c => c.id === changeId);
-    return numberOf.current?.(String(changeId), Number(index)) ?? (pass && callNumbers(pass, 0, false).get(index));
+    return timeOf.current?.(String(changeId), Number(index))
+      ?? (pass && callNumbers(pass, 0, false).has(index) ? stagedCuts(pass)[index]?.start : undefined);
   }), [events, aim, changes]);
   // While the run waits on its recordings' transcripts, the line says how far along they are: the one figure there.
   const tasks = useProjectStore(s => s.current?.tasks);
   const media = useProjectStore(s => s.current?.media);
   const transcripts = useMemo(() => {
     if (doing !== TRANSCRIPT_WAIT) return;
-    const ids = [...pendingMediaWaits(events)].flatMap(key => key.startsWith("transcript/") ? [key.slice("transcript/".length)] : []);
-    const progress = transcriptsProgress(tasks ?? [], media ?? [], ids);
+    // The figure is of every recording the run has waited for, saved or not. Counted over the ones still pending, it
+    // dropped back each time one of several transcripts was saved. One whose transcript couldn't be made is left out.
+    const ids = new Set<string>();
+    for (const { type, data } of events) {
+      if (type !== "log" || data?.kind !== "media_wait" || data.wait !== "transcript" || typeof data.mediaId !== "string") continue;
+      if (data.done && data.failed) ids.delete(data.mediaId);
+      else ids.add(data.mediaId);
+    }
+    const progress = transcriptsProgress(tasks ?? [], media ?? [], [...ids]);
     return progress && progress.stage !== "queued" ? transcriptionProgressLabel(progress) : undefined;
   }, [doing, events, tasks, media]);
   // A run cut short, by Scarlet closing or restarting or by a pause, carries on under a new task. Until that attempt
   // makes its first call the line says so: the editor who just reopened Scarlet sees the edit wasn't started over.
-  const pickingUp = !!task.resumeRootId && !rerun && !voice && (!doing || doing === STARTING);
+  // A model that thinks before that call hasn't made it: "Thinking" doesn't take the words away.
+  const pickingUp = !!task.resumeRootId && !rerun && !voice && !events.some(e => e.type === "tool" && toolName(e) !== "task_log");
   const words = transcripts ? `Transcribing the recordings · ${transcripts}`
     : pickingUp ? PICKING_UP
     : doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? STARTING : WORKING);
   // The timeline's status says the same words, so the editor can tell what Scarlet is on without the chat in view.
   usePublishWorkingLine(task.id, words);
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
-    {aim && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
+    {aim && !under && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
     <div className="req-row req-now">
       <StepMark state="working" />
       {/* The words shimmer while Scarlet works. A narrow chat shortens them to two lines; hovering says them whole. */}
@@ -148,7 +177,7 @@ function WorkingRun({ task, events: all, changes, callNumber, say, result, onSto
   </div>;
 }
 
-function WaitingRun({ task, events, changes, say, result, banded, paused, onStop, actions }: RunBundleProps) {
+function WaitingRun({ task, events, changes, say, result, banded, paused, held, onStop, actions }: RunBundleProps) {
   const usage = useRunUsage(task.id, !banded);
   const asking = task.state === "waiting_for_user";
   const waiting = task.state === "queued";
@@ -159,10 +188,12 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, onStop
     return shownItems(runItems(task, events, changes).filter(item => !(item.kind === "note" && item.text === aim?.note)));
   }, [asking, banded, task, events, changes]);
   const lines = useMemo(() => open ? tidy(runLines(task, events, shown, Date.now())) : [], [open, task, events, shown]);
-  // A request in line again says Queued, the word its cut's card and the tray use, or Paused while it waits for Continue.
-  const label = waiting ? paused ? "Paused" : "Queued" : "Needs your answer";
-  // A question's steps open from its line. A question under a heading has no such line: the heading's dot, the question
-  // and Answer say it. Nor has a paused request: its heading says Paused.
+  // A request in line again says Queued, the word its cut's card and the tray use, or Paused while it waits for Resume.
+  // One the editor holds back says so, as the tray does of the request that's next: it won't start by itself.
+  const waitsOnEditor = waiting && !paused ? held : undefined;
+  const label = waiting ? paused ? "Paused" : waitsOnEditor?.words ?? "Queued" : "Needs your answer";
+  // A question's steps open from its line. A question under a heading has no such line: the heading's dot says it, and
+  // the question is on top of the message box. Nor has a paused request: its heading says Paused.
   const line = !(banded && (asking || (waiting && paused)));
   const opens = asking && shown.length > 0;
   return <div className="req" data-state={asking ? "asking" : "working"} aria-label="Scarlet’s work" aria-busy={!asking}>
@@ -170,11 +201,13 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, onStop
       <button type="button" className="req-toggle" aria-expanded={opens ? open : undefined} disabled={!opens}
         title={opens ? open ? "Hide the details" : "Show the details" : undefined} onClick={() => setOpen(!open)}>
         {asking && <span className="req-dot" aria-hidden />}
-        <span role="status" title={waiting && paused ? "Editing is paused. Continue, above the message box, picks this up where it left off." : label}
-          className={asking ? "req-ask" : undefined}>{label}</span>
+        <span role="status" title={waiting && paused ? PAUSED_HINT : label}
+          className={asking || waitsOnEditor ? "req-ask" : undefined}>{label}</span>
       </button>
       <div className="req-right">
         {asking && <Tokens usage={usage} />}
+        {waitsOnEditor?.startNow && <button type="button" className="queue-start" aria-label="Start now" title="Start now, before your calls"
+          onClick={waitsOnEditor.startNow}><Icon name="play" size={10} /></button>}
         {actions || (onStop && <button type="button" className="simple-link run-stop" onClick={onStop}>Stop</button>)}
       </div>
     </div>}
@@ -186,6 +219,10 @@ function WaitingRun({ task, events, changes, say, result, banded, paused, onStop
 
 function FinishedRun({ task, finalChange, say, told, result, recovery, summary, listedAbove, showing, banded, onOpen, onResume, onWaitForTranscripts }: RunBundleProps) {
   const usage = useRunUsage(task.id, !banded);
+  const summaryBtn = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (showing) summaryBtn.current?.scrollIntoView?.({ block: "nearest" });
+  }, [showing]);
   // Finished. A run that ended without the transcripts it waited for says so, since what it saved is only part of the request.
   const paused = taskNeedsTranscripts(task);
   const stopped = task.state === "cancelled";
@@ -217,8 +254,9 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
     {paused && <TranscriptWait task={task} onResume={onResume} onWait={onWaitForTranscripts} aside={waits && usage?.totalTokens ? aside : undefined} />}
     {say}
     {rows ?? (!(waits || (((told && !opens) || madeAbove) && !usage?.totalTokens)) && <div className="req-row req-result">
-      {madeAbove ? null : opens ? <button type="button" className={madeClass} aria-current={showing || undefined}
-          title={summary ? `${made}\nShow on the timeline` : "Show on the timeline"} onClick={opens}><span>{made}</span></button>
+      {/* The line stays on screen once pressed: clicked, it lets go of the focus, so Space plays instead of pressing it again. */}
+      {madeAbove ? null : opens ? <button ref={summaryBtn} type="button" className={madeClass} aria-current={showing || undefined}
+          title={summary ? `${made}\nShow on the timeline` : "Show on the timeline"} onClick={e => { blurOnPointerClick(e); opens(); }}><span>{made}</span></button>
         : <span className={madeClass} title={summary}><span>{made}</span></span>}
       {/* What a stopped run saved is one line, and its one action follows on it. */}
       {actsOnLine && action}
@@ -233,9 +271,12 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
 const WORKING = "Working on your edit";
 const PICKING_UP = "Picking up where it left off";
 
-/** How a run that didn't finish ended, in the words its block says: paused for its transcripts, stopped, or failed. */
+/**
+ * How a run that didn't finish ended, in the words its block says: waiting for its transcripts, stopped, or failed.
+ * "Paused" is kept for editing the editor paused with Pause, which Resume picks up; this one waits on a transcript.
+ */
 export function runEnded(task: Task) {
-  return taskNeedsTranscripts(task) ? `Paused · needs ${task.needsTranscripts!.length > 1 ? "transcripts" : "transcript"}`
+  return taskNeedsTranscripts(task) ? `Needs ${task.needsTranscripts!.length > 1 ? "transcripts" : "transcript"}`
     : task.state === "cancelled" ? "Stopped" : task.state === "failed" ? "Couldn’t finish" : undefined;
 }
 

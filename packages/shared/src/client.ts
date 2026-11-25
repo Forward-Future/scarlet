@@ -4,70 +4,22 @@
  */
 import type { EditReviewRequest } from "./telemetry.js";
 import type { Listener, ListenResult } from "./capabilities.js";
+import type { HandOffResult } from "./taskModels.js";
 import type { z } from "zod/v3";
-import { requireSecureEngineUrl } from "./engineTransport.js";
+import { apiPathId, appendFields, ClientTransport, isMissingRouteError, ScarletApiError, withQuery } from "./clientTransport.js";
 import type { TranscriptSearchResult } from "./transcriptSearch.js";
-import type { ThreadEdit } from "./threadTimeline.js";
+import type { ThreadEdit } from "./threadEdits.js";
 import type { StorageCleanup, StorageProject } from "./storage.js";
 import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, DialogueDetections, SourceAudioRequest, SoundPictureRequest, SoundPictureLayout, SheetRequest, TimelinePicturesRequest, InspectionReviewRequest, InspectionResult, PictureActivityRequest, PictureActivityWindow, RepeatAuditRequest, RepeatAuditResult } from "./inspection.js";
-import type { Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
-import type {
-  ActivityEntry,
-  MusicReading,
-  KeepEditsRequest,
-  UnkeepEditsRequest,
-  KeptEdit,
-  AgentHost,
-  ApproveResponse,
-  TrashedProject,
-  CompleteTaskRequest,
-  CreateNoteRequest,
-  CreateTaskRequest,
-  RewordTaskRequest,
-  FullRenderKeys,
-  PlaybackCacheStatus,
-  SourceCacheStatus,
-  ProjectDetail,
-  ProjectSummary,
-  ProposeChangeRequest,
-  Render,
-  RenderFileInfo,
-  RenderRequest,
-  ReviseRequest,
-  ServerSettings,
-  Skill,
-  SkillVersion,
-  GraphicRenderResponse,
-  SaveStyleGuideRequest,
-  TaskAttachment,
-  RecordTaskUsageRequest,
-  Task,
-  TaskEvent,
-  TaskPrompt,
-  TaskSkillDraft,
-  EditSkillRequest,
-  ApproveLearningRequest,
-  ReviseLearningRequest,
-  RunChoice,
-  Learning,
-  SuggestLearningRequest,
-  UpdateNoteRequest,
-  UsageGroupBy,
-  UsageResponse,
-  UpsertSkillRequest,
-  User,
-  VersionSummary,
-  WaveformResponse,
-  RetakeGroup,
-  DialogueCutsRequest,
-  JoinCrossfades,
-  FlagEditRequest,
-  CutChoicesRequest,
-  StagedCutRevision,
-  LocalModelStatus,
-  TelemetryUnavailable,
-  HandoffResponse,
-} from "./api.js";
+import type { AudioTrackSelection, Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
+import type { ActivityEntry, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
+import type { AgentHost, RunChoice } from "./agents.js";
+import type { CompleteTaskRequest, CreateTaskRequest, PictureMarks, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
+import type { KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
+import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLearningRequest } from "./learnings.js";
+import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
+import type { GraphicRenderResponse, SaveStyleGuideRequest } from "./graphics.js";
+import type { Skill, SkillVersion, EditSkillRequest, UpsertSkillRequest } from "./skills.js";
 
 /**
  * File extension for a recorded clip. Chromium (Windows) records webm/opus;
@@ -83,196 +35,16 @@ function audioExt(audio: Blob): string {
   return ".webm";
 }
 
-/** A query string from the fields that are set. */
-const query = (q: Record<string, unknown>) =>
-  new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
-
-const withQuery = (path: string, q: Record<string, unknown>) => {
-  const qs = query(q);
-  return qs ? `${path}${path.includes("?") ? "&" : "?"}${qs}` : path;
-};
-
-const appendFields = (fd: FormData, fields: Record<string, string | undefined>) => {
-  for (const [k, v] of Object.entries(fields)) if (v !== undefined) fd.append(k, v);
-};
-
-const isMissingRouteError = (err: unknown, predicate: (message: string) => boolean): boolean =>
-  err instanceof ScarletApiError && err.status === 404 && err.code === "not_found" && predicate(err.message);
-
-/** Route IDs are single opaque segments. URL parsers normalize even encoded dot segments. */
-export function apiPathId(id: string): string {
-  if (!id || id === "." || id === ".." || /[/\\?#%\u0000-\u001f\u007f]/.test(id)) {
-    throw new Error("Invalid resource ID");
-  }
-  return encodeURIComponent(id);
-}
-
-export class ScarletApiError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly code: string,
-    message: string,
-    public readonly details?: unknown,
-  ) {
-    super(message);
-    this.name = "ScarletApiError";
-  }
-}
-
-export interface ClientOptions {
-  baseUrl: string; // e.g. http://localhost:4000
-  token?: string | (() => string | undefined);
-  fetch?: typeof fetch;
-  /** Let a client trace failures after the response headers arrive. */
-  readResponse?: (response: Response) => Promise<string>;
-  /** Allow editor thumbnails to sample a source's prepared preview. */
-  previewFrames?: boolean;
-}
-
-/** A host snapshots this identity when it claims the task. Reconnecting must retain the original start. */
-export interface TaskAttempt { taskId: string; startedAt?: string }
-export const REQUEST_ID_HEADER = "X-Scarlet-Request-Id";
-
-/** The native webview can use an origin where randomUUID is unavailable. */
-export function newRequestId() {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
-  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
-}
-export const TASK_HEADER = "X-Scarlet-Task";
-export const ATTEMPT_HEADER = "X-Scarlet-Task-Started-At";
-
 type ThreadEdits = { version: string | null; edits: ThreadEdit[] };
 type ThreadEditLists = { version: string | null; lists: Record<string, ThreadEdit[]>; failed?: Record<string, string> };
 type ThreadEditBatch = { ids: Set<string>; read: Promise<ThreadEditLists> };
 
-export class ScarletClient {
-  private readonly baseUrl: string;
-  private readonly tokenSource?: string | (() => string | undefined);
-  private readonly fetchImpl: typeof fetch;
-  private readonly readResponse: (response: Response) => Promise<string>;
-  private readonly previewFrames: boolean;
-
+export class ScarletClient extends ClientTransport {
   private readonly editBatches = new Map<string, ThreadEditBatch>();
-
-  private readonly projectScope?: string;
-
-  constructor(opts: ClientOptions, projectId?: string, private readonly attempt?: TaskAttempt) {
-    this.projectScope = projectId === undefined ? undefined : apiPathId(projectId);
-    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
-    if (opts.token) requireSecureEngineUrl(this.baseUrl);
-    this.tokenSource = opts.token;
-    this.fetchImpl = opts.fetch ?? globalThis.fetch.bind(globalThis);
-    this.readResponse = opts.readResponse ?? (response => response.text());
-    this.previewFrames = opts.previewFrames ?? false;
-  }
 
   /** Bind individual MCP resource lookups and mutations to their owning project. */
   forProject(projectId: string, attempt = this.attempt): ScarletClient {
     return new ScarletClient({ baseUrl: this.baseUrl, token: this.tokenSource, fetch: this.fetchImpl, readResponse: this.readResponse, previewFrames: this.previewFrames }, projectId, attempt);
-  }
-
-  async withResource<T>(collection: "notes" | "media" | "changes" | "renders" | "tasks", id: string, request: (path: string) => Promise<T>): Promise<T> {
-    const path = `/${collection}/${apiPathId(id)}`;
-    if (!this.projectScope) return request(path);
-    const project = `/projects/${this.projectScope}`;
-    try {
-      return await request(project + path);
-    } catch (err) {
-      // Standalone MCP can connect to an older engine. Only its explicit missing-route
-      // response permits the legacy route, after checking the project's own listing.
-      if (!isMissingRouteError(err, message =>
-          ["GET", "POST", "PATCH"].some(method => message.startsWith(`no route for ${method} /api${project}${path}`)))) throw err;
-    }
-    const listed = await this.get<Record<string, { id: string }[]>>(`${project}/${collection}`);
-    if (!listed[collection]?.some(row => row.id === id)) {
-      throw new ScarletApiError(404, "project_resource_missing", "Resource not found in this project");
-    }
-    return request(path);
-  }
-
-  get token(): string | undefined {
-    return typeof this.tokenSource === "function" ? this.tokenSource() : this.tokenSource;
-  }
-
-  url(path: string): string {
-    return `${this.baseUrl}/api${path}`;
-  }
-
-  /** Absolute URL for a media/render file, with the token as a query param for <video src>. */
-  fileUrl(path: string, params?: Record<string, unknown>): string {
-    const t = this.token;
-    return withQuery(`${this.url(path)}${t ? `?token=${encodeURIComponent(t)}` : ""}`, params ?? {});
-  }
-
-  wsUrl(): string {
-    const http = new URL(this.baseUrl);
-    http.protocol = http.protocol === "https:" ? "wss:" : "ws:";
-    const t = this.token;
-    return `${http.origin}/ws${t ? `?token=${encodeURIComponent(t)}` : ""}`;
-  }
-
-  async request<T>(method: string, path: string, body?: unknown, init: RequestInit = {},
-    readBinary?: (data: ArrayBuffer) => T): Promise<T> {
-    const headers: Record<string, string> = {};
-    if (init.headers) new Headers(init.headers).forEach((value, key) => { headers[key] = value; });
-    const callerAuthorization = headers.authorization !== undefined;
-    if (callerAuthorization) requireSecureEngineUrl(this.baseUrl);
-    if (this.attempt) {
-      headers[TASK_HEADER] = this.attempt.taskId;
-      if (this.attempt.startedAt) headers[ATTEMPT_HEADER] = this.attempt.startedAt;
-    }
-    const t = this.token;
-    if (t) {
-      delete headers.authorization;
-      headers.Authorization = `Bearer ${t}`;
-    }
-    let payload: BodyInit | undefined;
-    if (body instanceof FormData) payload = body;
-    else if (body !== undefined) {
-      delete headers["content-type"];
-      headers["Content-Type"] = "application/json";
-      payload = JSON.stringify(body);
-    }
-    const res = await this.fetchImpl(this.url(path), { ...init, method, headers, body: payload,
-      ...((t || callerAuthorization) && { redirect: "error" }) });
-    if (res.status === 204) return undefined as T;
-    if (readBinary && res.ok && res.headers.get("Content-Type") === "application/octet-stream") {
-      return readBinary(await res.arrayBuffer());
-    }
-    const text = await this.readResponse(res);
-    let json: unknown = undefined;
-    try {
-      json = text ? JSON.parse(text) : undefined;
-    } catch {
-      // A reply that claims success without JSON (a proxy's page, another program on the port) reaches the caller as nothing.
-      // Say so here, by route alone: the query and the reply can hold what the editor typed.
-      if (res.ok) console.warn(`[scarlet] [api] ${method} ${path.split("?")[0]}: ${res.status} reply was not JSON`);
-    }
-    if (!res.ok) {
-      const err = (json as { error?: { code?: string; message?: string; details?: unknown } } | undefined)?.error;
-      throw new ScarletApiError(res.status, err?.code ?? "http_error", err?.message ?? (text || res.statusText), err?.details);
-    }
-    return json as T;
-  }
-
-  get<T>(path: string) {
-    return this.request<T>("GET", path);
-  }
-  post<T>(path: string, body?: unknown) {
-    return this.request<T>("POST", path, body);
-  }
-  patch<T>(path: string, body?: unknown) {
-    return this.request<T>("PATCH", path, body);
-  }
-  put<T>(path: string, body?: unknown) {
-    return this.request<T>("PUT", path, body);
-  }
-  delete<T>(path: string) {
-    return this.request<T>("DELETE", path);
   }
 
   // Auth
@@ -391,6 +163,10 @@ export class ScarletClient {
   listen(projectId: string, request: { taskId: string; mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string }, wait: number) {
     return this.post<ListenResult>(`/projects/${encodeURIComponent(projectId)}/listen?wait=${Math.max(0, Math.round(wait))}`, request);
   }
+  /** Hand one kind of work to the model the editor chose for it in Task models, and wait up to `wait` seconds for it. */
+  handOff(projectId: string, request: { taskId: string; type?: string; brief?: string; handoffId?: string }, wait: number) {
+    return this.post<HandOffResult>(`/projects/${encodeURIComponent(projectId)}/hand-off?wait=${Math.max(0, Math.round(wait))}`, request);
+  }
   reviewCut(projectId: string, request: z.input<typeof InspectionReviewRequest>) {
     return this.post<InspectionResult>(`/projects/${encodeURIComponent(projectId)}/review-cut`, request);
   }
@@ -411,6 +187,14 @@ export class ScarletClient {
   /** Take a file Scarlet couldn't read out of the project. The engine refuses one the video or its history uses. */
   removeMedia(projectId: string, mediaId: string) {
     return this.delete<Record<string, never>>(`/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}`);
+  }
+  /** Save what the editor says a file is and how to use it. An empty note takes it off. */
+  setMediaNote(mediaId: string, note: string) {
+    return this.put<{ media: MediaAsset }>(`/media/${encodeURIComponent(mediaId)}/note`, { note });
+  }
+  /** Choose which audio track (or all tracks mixed) Scarlet reads from a multi-track recording. */
+  setMediaAudioTrack(mediaId: string, audioTrack: AudioTrackSelection) {
+    return this.put<{ media: MediaAsset }>(`/media/${encodeURIComponent(mediaId)}/audio-track`, { audioTrack });
   }
   waveform(mediaId: string, from: number, to: number, points = 1000, cachedOnly = false, speechActivity = false) {
     return this.withResource("media", mediaId, path => this.get<WaveformResponse>(withQuery(`${path}/waveform`, {
@@ -503,7 +287,7 @@ export class ScarletClient {
   }
   /** Put back what applied edits the editor rejected changed, with no model. Refused (409) where the engine can't. */
   rejectEdits(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
-    edits: { changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean; at?: number; before?: { version: string; removed: TimeRange } }[] }) {
+    edits: { changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean; marker?: boolean; at?: number; before?: { version: string; removed: TimeRange } }[] }) {
     return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/rejected-edits`, body);
   }
   checkout(projectId: string, version: string) {
@@ -543,6 +327,8 @@ export class ScarletClient {
       droppedFromReview?: Array<{ changeId: string; version: string; start: number; end: number; why: string }>;
       /** Cuts left out because they would have swapped a held staged cut for other edges Scarlet couldn't place either. */
       heldCutsStay?: Array<{ asked: TimeRange; staged: TimeRange; why: string }>;
+      /** Earlier staged cuts Scarlet checked and settled as cuts, never asked about, that went into the video with this save. */
+      settledApplied?: { cuts: number; why: string };
       /** The project head after this submission. Older engines omit it. */
       head?: string }>(
       `/projects/${encodeURIComponent(projectId)}/dialogue-cuts`, body);
@@ -683,8 +469,9 @@ export class ScarletClient {
   renderFileUrl(renderId: string, waitForPlayback = false) {
     return this.fileUrl(`/renders/${renderId}/file`, waitForPlayback ? { wait: "1" } : undefined);
   }
-  mediaFileUrl(mediaId: string, proxy = false) {
-    return this.fileUrl(`/media/${mediaId}/${proxy ? "proxy" : "file"}`);
+  mediaFileUrl(mediaId: string, proxy = false, audioTrack?: AudioTrackSelection) {
+    return this.fileUrl(`/media/${mediaId}/${proxy ? "proxy" : "file"}`,
+      proxy && audioTrack !== undefined ? { track: String(audioTrack) } : undefined);
   }
   sourceCache(mediaId: string, prepare = false) {
     const url = `/media/${encodeURIComponent(mediaId)}/playback-cache`;
@@ -710,7 +497,8 @@ export class ScarletClient {
     return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]> }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
   }
   task(taskId: string, events: "all" | "conversation" | "none" = "all") {
-    return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener }>(path + (events === "all" ? "" : "?events=" + events)));
+    return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener;
+      taskModels?: Array<{ id: string; name: string; description?: string; by: { agent: string; model?: string; label?: string } }> }>(path + (events === "all" ? "" : "?events=" + events)));
   }
   waitForTranscription(taskId: string) {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; waited?: boolean }>(path + "?wait=transcript"));
@@ -730,8 +518,9 @@ export class ScarletClient {
   continueWhenReady(taskId: string, on: boolean) {
     return this.post<{ task: Task; resumed?: Task }>(`/tasks/${taskId}/continue-when-ready`, { on });
   }
-  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice) {
-    return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { ...runWith, text, skillIds });
+  /** Answer Scarlet's question. Files attached to the answer are kept with the request, as its own are. */
+  answerTask(taskId: string, text: string, skillIds?: string[], runWith?: RunChoice, files?: { attachments: TaskAttachment[]; pictureMarks?: PictureMarks }) {
+    return this.post<{ task: Task }>(`/tasks/${taskId}/answer`, { ...runWith, text, skillIds, ...files });
   }
   /** Keep a queued request from starting while the editor changes its words, or let it go. Renew it to keep holding. */
   holdForRewording(taskId: string, on: boolean) {
@@ -756,9 +545,9 @@ export class ScarletClient {
   postTaskEvent(taskId: string, event: TaskEvent, startedAt?: string) {
     return this.withResource("tasks", taskId, path => this.post<Record<string, never>>(path + "/events", { ...event, startedAt }));
   }
-  /** Hosts add the CLI session that asked (null: none), so the answer can continue it. */
-  async postTaskQuestion(taskId: string, startedAt: string | undefined, text: string, signal?: AbortSignal, host?: { sessionId: string | null }) {
-    const ack = await this.withResource("tasks", taskId, path => this.request<{ waiting?: unknown } | null>("POST", path + "/question", { startedAt, text, ...host }, { signal }));
+  /** Hosts add the CLI session that asked (null: none), so the answer can continue it. `choices` are the short answers the question offers. */
+  async postTaskQuestion(taskId: string, startedAt: string | undefined, text: string, signal?: AbortSignal, host?: { sessionId: string | null }, choices?: readonly string[]) {
+    const ack = await this.withResource("tasks", taskId, path => this.request<{ waiting?: unknown } | null>("POST", path + "/question", { startedAt, text, ...host, ...(choices?.length && { choices }) }, { signal }));
     if (typeof ack?.waiting !== "boolean") throw new Error("The engine did not acknowledge the question.");
     return { waiting: ack.waiting };
   }

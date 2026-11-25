@@ -1,8 +1,11 @@
 /**
  * Convenience constructors used by the server, MCP tools and tests.
  */
-import type { MediaAsset, MediaClip, Project, ProjectSettings, Timeline, Track, TranscriptWord } from "./schema.js";
-import { Project as ProjectSchema, Timeline as TimelineSchema } from "./schema.js";
+import type { MediaAsset, TranscriptWord } from "./mediaSchema.js";
+import type { MediaClip, Timeline, Track } from "./timelineSchema.js";
+import type { Project, ProjectSettings } from "./projectSchema.js";
+import { Timeline as TimelineSchema } from "./timelineSchema.js";
+import { Project as ProjectSchema } from "./projectSchema.js";
 import { contentHash, newId } from "./ids.js";
 
 export const ASPECT_PRESETS: Record<string, { width: number; height: number }> = {
@@ -84,17 +87,21 @@ export function makeMediaClip(
   };
 }
 
-/** Build a detached audio copy of a media clip for a dialogue audio track. */
+/**
+ * Build a detached audio copy of a media clip for a dialogue audio track. The copy plays the same sound: the clip's
+ * audio stream, and its level changes on the same footage, timed from the copy's own start.
+ */
 export function detachedAudioClip(
   clip: MediaClip,
   id: string,
   overrides: Partial<Pick<MediaClip, "sourceIn" | "sourceOut" | "timelineIn" | "audioFadeIn" | "audioFadeOut">> = {},
 ): MediaClip {
+  const timelineIn = overrides.timelineIn ?? clip.timelineIn;
   return makeMediaClip(
     clip.mediaId,
     overrides.sourceIn ?? clip.sourceIn,
     overrides.sourceOut ?? clip.sourceOut,
-    overrides.timelineIn ?? clip.timelineIn,
+    timelineIn,
     {
       id,
       label: clip.label,
@@ -103,6 +110,8 @@ export function detachedAudioClip(
       volume: clip.volume,
       audioFadeIn: overrides.audioFadeIn ?? clip.audioFadeIn,
       audioFadeOut: overrides.audioFadeOut ?? clip.audioFadeOut,
+      ...(clip.audioTrack !== undefined && { audioTrack: clip.audioTrack }),
+      ...(clip.volumeKeyframes?.length && { volumeKeyframes: clip.volumeKeyframes.map(k => ({ ...k, time: k.time + clip.timelineIn - timelineIn })) }),
     },
   );
 }

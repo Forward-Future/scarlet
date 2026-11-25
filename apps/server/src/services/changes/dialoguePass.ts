@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
-import { cutAnchorOn, cutScope, selectedRange, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, type StagedCutRevision, type User } from "@scarlet/shared";
+import { cutAnchorOn, cutScope, selectedRange, taskDialogueOperation, type DialogueCutsRequest, type JoinCrossfades, type Task, type User } from "@scarlet/shared";
 import {
-  applyReviewRemovals,
   describeDialogueRemovals,
-  frameAligned,
   frameAlignedRemoval,
   historyLineage,
   isPublishedCall,
@@ -17,17 +15,18 @@ import {
   type TimeRange,
 } from "@scarlet/timeline";
 import type { Ctx } from "../../context.js";
-import { now } from "../../db.js";
-import { badRequest, conflict, HttpError, notFound } from "../../errors.js";
+import { badRequest, conflict, notFound } from "../../errors.js";
+import { logId } from "../../logText.js";
 import { errorMessage, round3 } from "../../util.js";
-import { currentCutRanges, placeRevision } from "../stagedCutRecovery.js";
+import { runAttemptIds } from "../runAttempts.js";
+import { currentCutRanges } from "../stagedCutRecovery.js";
 import { editsDialogue, FINISHED_TASK, saveTask } from "../tasks.js";
-import { resolveTimeline, storeVersion } from "../timeline.js";
-import { CALL_WITH_EDITOR, capitalized, CARRIED, EDITOR_ASKED_MEANWHILE, editorAskedSince, editorsCut, LEFT_OF_STAGED_CUT, putAway, REVISED, saveChange } from "./common.js";
+import { resolveTimeline } from "../timeline.js";
+import { CARRIED, EDITOR_ASKED_MEANWHILE, editorAskedSince, LEFT_OF_STAGED_CUT, putAway, saveChange } from "./common.js";
 import { prepareCutReview } from "./cutReview.js";
-import { cutCrossfade, fadeJoins, joinCrossfadeReport } from "./joinCrossfades.js";
+import { cutCrossfade, joinCrossfadeReport, storeRevisedCutPreview } from "./joinCrossfades.js";
 import { persistProposal } from "./propose.js";
-import { activeStagedCut, dialogueParts, requireUnscopedEdit, revisedPass, selectedStagedCut } from "./stagedCutLineage.js";
+import { activeStagedCut, dialogueParts, requireUnscopedEdit } from "./stagedCutLineage.js";
 
 /** What Scarlet did to submitted dialogue cuts on its own, each with why, so the agent reads what was saved. */
 export interface DialogueCutsAdjustments {
@@ -39,19 +38,153 @@ export interface DialogueCutsAdjustments {
   droppedFromReview?: Array<{ changeId: string; version: string; start: number; end: number; why: string }>;
   /** Cuts left out because they would have replaced a staged cut held for its join with other edges, applied only by unsureJoins cut. */
   heldCutsStay?: Array<{ asked: TimeRange; staged: TimeRange; why: string }>;
+  /** Staged cuts Scarlet checked and settled as cuts, never asked about, that went into the video with this save. */
+  settledApplied?: { cuts: number; why: string };
+}
+
+/**
+ * A staged cut Scarlet checked and settled as a cut without asking the editor. The video shows the edit as it will be,
+ * so such a cut goes in when the pass next saves instead of waiting for the editor's last call (the editor's decision,
+ * 2026-11-23). Calls stay in the review whatever is decided on them, so For you keeps every call under its number with
+ * its decision; so do a cut no one has checked, one Scarlet would keep, and one an earlier build staged for the
+ * editor's approval.
+ */
+function settledAsCut(r: { legacySuggest?: true }, choice: CutChoice["choice"] | undefined, assessment: CutAssessment | undefined): boolean {
+  if (!assessment || assessment.provisional || assessment.verdict === "ask" || assessment.askOrder !== undefined) return false;
+  return choice ? choice === "cut" : assessment.verdict === "cut" && !r.legacySuggest;
+}
+
+/** Whether a waiting pass holds a cut that is settled as a cut and isn't in the video yet. */
+export function hasSettledCut(change: Change): boolean {
+  if (change.state !== "ready" || change.intent !== "suggestion" || !change.cutReasons?.length) return false;
+  return change.cutReasons.some(r => {
+    const choice = change.cutChoices?.find(c => covers(c, r))?.choice;
+    return settledAsCut(r, choice, change.cutAssessments?.find(a => covers(a, r)));
+  });
+}
+
+/** `a` holds all of `r`, give or take a hundredth of a millisecond. */
+const covers = (a: TimeRange, r: TimeRange) => r.start >= a.start - 1e-5 && r.end <= a.end + 1e-5;
+/** The footage a cut takes: its restorable range when it has one. */
+const outer = (c: { start: number; end: number; originalRange?: { start: number; end: number } }) => c.originalRange ?? c;
+const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }) => a.start < b.end - 1e-6 && a.end > b.start + 1e-6;
+
+/** Why confident cuts wait for the editor here instead of applying, or nothing when they apply. The agent sent them as cuts, so it is told. */
+function whyConfidentCutsWait(sourceTask: Task | null | undefined, branch: string | undefined): string | undefined {
+  if (!sourceTask) return "No request of the editor's is attached, so every cut waits for them.";
+  if (sourceTask.context.reviewAllCuts) return "The editor asked to review every cut.";
+  if (sourceTask.createdBy.type !== "human") return "Scarlet started this request, not the editor, so its cuts wait for them.";
+  if (!editsDialogue(sourceTask.kind)) return `A ${sourceTask.kind} request stages its cuts for the editor.`;
+  if (sourceTask.context.branch !== branch) return "The editor moved to another version of the edit while this request ran.";
+  return undefined;
+}
+
+/** Refuse a plan whose ranges can't be cut from a timeline of `duration` seconds. */
+function assertCutRanges(cuts: readonly TimeRange[], duration: number): void {
+  const sorted = [...cuts].sort((a, b) => a.start - b.start);
+  // Say which range is wrong: the agent sees only this message, and a plan it can't place it submits again unchanged.
+  const span = (c: TimeRange) => `${c.start.toFixed(2)}–${c.end.toFixed(2)} s`;
+  const empty = sorted.find(c => c.end <= c.start), past = sorted.find(c => c.end > duration);
+  const second = sorted.findIndex((c, i) => i > 0 && c.start < sorted[i - 1]!.end);
+  if (empty) throw badRequest("invalid_cuts", `The range ${span(empty)} is empty. Give each range an end after its start.`);
+  if (past) throw badRequest("invalid_cuts", `The range ${span(past)} runs past the end of the timeline at ${duration.toFixed(2)} s.`);
+  if (second > 0) throw badRequest("invalid_cuts", `The ranges ${span(sorted[second - 1]!)} and ${span(sorted[second]!)} overlap. End the first where the second starts, or merge them.`);
+  if (sorted.reduce((n, c) => n + c.end - c.start, 0) >= duration - 1e-7) throw badRequest("invalid_cuts", "These ranges remove the whole timeline. Retain some footage.");
+}
+
+/** A cut of a plan as it goes onto the frame grid. */
+type FrameCut = TimeRange & { submitted?: true; review?: boolean; preserveEdges?: boolean; originalRange?: TimeRange };
+
+/**
+ * Whole frames: a cut of a whole number of frames moves everything after it by whole frames, so the cached preview
+ * sections after it still match. Rounding inward never removes more than the plan; a sub-frame cut rounds to the nearest
+ * frame, and stops at the end of an edit that ends between two frames: a cut past the end has no review.
+ * `rebasing`: the plan moves onto the current version, so the submitted range and kept footage no longer apply as given.
+ */
+function onWholeFrames<C extends FrameCut>(planned: C[], fps: number, duration: number, { range, kept, rebasing }: { range?: TimeRange; kept: readonly TimeRange[]; rebasing: boolean }):
+  { cuts: C[]; onFrames?: DialogueCutsAdjustments["onFrames"] } {
+  const bounded = !!range || kept.length > 0;
+  let cuts = planned;
+  const asPlanned = cuts.map(c => ({ start: c.start, end: c.end }));
+  const beforeFrames = cuts;
+  cuts = cuts.map((c, i) => {
+    if (c.preserveEdges) return c; // A manual trim can put the same source frames between project frames.
+    // The submitted limits refer to the submitted version. When rebasing, round within the
+    // mapped removal itself so a nearby frame on the new timeline cannot escape those limits.
+    const scope = c.submitted ? (bounded && rebasing ? c : range) : undefined;
+    const retained = c.submitted && !rebasing ? kept : [];
+    const before = asPlanned[i - 1], after = asPlanned[i + 1];
+    const gaps = [...retained];
+    if (before && c.start > before.end && c.start - before.end < 1 / fps) gaps.push({ start: before.end, end: c.start });
+    if (after && c.end < after.start && after.start - c.end < 1 / fps) gaps.push({ start: c.end, end: after.start });
+    const { start, end } = frameAlignedRemoval(c, fps, scope, gaps);
+    return { ...c, start, end: Math.min(end, duration) };
+  });
+  // Two cuts that met at one instant still meet. Rounded inward each, they would leave a frame of footage between
+  // them that nobody decided to keep, so their shared edge goes to the nearest frame instead.
+  for (let i = 1; i < cuts.length; i++) {
+    const before = cuts[i - 1]!, after = cuts[i]!;
+    if (Math.abs(asPlanned[i]!.start - asPlanned[i - 1]!.end) > 1e-9 || after.start - before.end < 1e-9) continue;
+    if (before.preserveEdges && after.preserveEdges) continue;
+    const shared = before.preserveEdges ? before.end : after.preserveEdges ? after.start : Math.round(asPlanned[i]!.start * fps) / fps;
+    if (shared <= before.start || shared >= after.end) continue;
+    cuts[i - 1] = { ...before, end: shared };
+    cuts[i] = { ...after, start: shared };
+  }
+  const frame = 1 / fps;
+  // What putting the agent's cuts on whole frames moved, so it reads the saved ranges and not its own.
+  const shifts = cuts.flatMap((c, i) => {
+    const was = beforeFrames[i]!;
+    if (!c.submitted) return [];
+    const moved = Math.max(Math.abs(c.start - was.start), Math.abs(c.end - was.end));
+    return moved > 1e-6 ? [moved] : [];
+  });
+  const onFrames = shifts.length ? { cuts: shifts.length, largestShift: round3(Math.max(...shifts)),
+    why: `Cuts are saved on whole frames at ${fps} fps, rounded inward and never past the timeline's end; timelineEdits has the saved ranges.` } : undefined;
+  if (cuts.some((c, i) => i > 0 && (c.preserveEdges || cuts[i - 1]!.preserveEdges) && overlaps(c, cuts[i - 1]!)))
+    throw conflict("cut_changed", "A new range reaches into a carried cut after frame alignment. Check their shared edge.");
+  // A staged cut carries the range the editor can restore. Moving the cut beside it onto a frame can carry that
+  // cut's edge a few milliseconds into the range: a removal that met a staged retake at 265.46 s ended on frame
+  // 7,964 at 265.4667 s, and the whole plan was refused. The range gives way by that much; a real overlap is still refused.
+  cuts = cuts.map(c => {
+    if (!c.originalRange || c.preserveEdges) return c;
+    let { start, end } = c.originalRange;
+    for (const other of cuts) {
+      if (other === c || other.review) continue;
+      if (other.start < start && other.end > start && other.end - start <= frame + 1e-9) start = other.end;
+      if (other.end > end && other.start < end && end - other.start <= frame + 1e-9) end = other.start;
+    }
+    return start === c.originalRange.start && end === c.originalRange.end ? c : { ...c, originalRange: { start, end } };
+  });
+  return { cuts, onFrames };
 }
 
 /**
  * Both writes commit together; optional ranges start on the kept version. Stable IDs make response-loss retries safe.
  * `fold` gathers the waiting parts of a run that has finished, with no cuts of its own: only Scarlet's own repair saves under such a run.
  */
-export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body: DialogueCutsRequest, { fold = false, checkAttempt }: { fold?: boolean; checkAttempt?: () => void } = {}): {
+type DialogueCutsResult = {
   changes: Change[]; carriedForward?: number; editorDecided?: TimeRange[]; heldForReview?: TimeRange[];
   alreadyRemoved?: { changeId: string; index: number; version: string; at: number }[];
   /** The requested crossfade on the joins these cuts made. Absent when nothing was saved. */
   joinCrossfades?: JoinCrossfades;
-} & DialogueCutsAdjustments {
-  return ctx.db.transaction(() => ctx.bus.asSaved(() => {
+} & DialogueCutsAdjustments;
+
+export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body: DialogueCutsRequest, options: { fold?: boolean; checkAttempt?: () => void } = {}): DialogueCutsResult {
+  try {
+    return saveDialogueCuts(ctx, user, projectId, body, { ...options, settle: true });
+  } catch {
+    // Settled cuts go in with the save only when that is all it changes: one that would bring two waiting calls together,
+    // or anything else the save refuses with them in, stays in the review as before and the save goes ahead without it.
+    // A save refused for its own reasons is refused again here, as it was before.
+    return saveDialogueCuts(ctx, user, projectId, body, { ...options, settle: false });
+  }
+}
+
+function saveDialogueCuts(ctx: Ctx, user: User, projectId: string, body: DialogueCutsRequest,
+  { fold = false, checkAttempt, settle }: { fold?: boolean; checkAttempt?: () => void; settle: boolean }): DialogueCutsResult {
+  // Its own transaction, or a part of the one open: putting settled cuts in follows the editor's call inside its save.
+  return ctx.db.savepoint(() => ctx.bus.asSaved(() => {
     const { fromVersion, taskId, author, noteIds } = body;
     checkAttempt?.();
     const sourceTask = taskId ? ctx.repos.tasks.get(taskId) : undefined;
@@ -123,7 +256,6 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       if (branch && branch !== project.branch || !lineage.has(fromVersion) || waiting.some(c => !lineage.has(c.fromVersion)))
         throw conflict("cut_changed", "The recovered review belongs to a different edit. Continue the pass on its original cut.");
     }
-    const covers = (a: TimeRange, r: TimeRange) => r.start >= a.start - 1e-5 && r.end <= a.end + 1e-5;
     const editorChoice = (change: Change, r: TimeRange) => change.cutChoices?.find(c => covers(c, r))?.choice;
     const assessmentOf = (change: Change, r: TimeRange) => change.cutAssessments?.find(a => covers(a, r));
     const changed = new Set<TimeRange>();
@@ -212,11 +344,9 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       }
       return { ...change, cutReasons: reasons, cutAssessments: assessments, cutChoices: choices };
     });
-    const outer = (c: { start: number; end: number; originalRange?: { start: number; end: number } }) => c.originalRange ?? c;
-    const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }) => a.start < b.end - 1e-6 && a.end > b.start + 1e-6;
     /** `asked` is where the plan put a cut the editor hasn't called, before it is moved onto the frame grid and the current version. */
     type Planned = DialogueCutsRequest["cuts"][number] & { crossfade?: number; legacySuggest?: true; assessment?: CutAssessment; choice?: CutChoice["choice"]; asked?: TimeRange;
-      submitted?: true; recovered?: boolean; preserveEdges?: boolean; protectedSlot?: string; lapsed?: true };
+      submitted?: true; recovered?: boolean; preserveEdges?: boolean; protectedSlot?: string; lapsed?: true; settled?: true };
     // The editor's call on a staged cut stands: a later part doesn't decide that range again.
     const moveToHead = (r: TimeRange) => {
       if (!toHead) return r;
@@ -253,14 +383,8 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       }
     }
     const heldRanges = [...protectedCuts.keys()];
-    const requested = sourceTask && sourceTask.createdBy.type === "human" && editsDialogue(sourceTask.kind) &&
-      sourceTask.context.branch === project.branch && !sourceTask.context.reviewAllCuts;
-    // Why confident cuts wait for the editor here instead of applying. The agent sent them as cuts, so it is told.
-    const stagedWhy = requested ? undefined : !sourceTask ? "No request of the editor's is attached, so every cut waits for them."
-      : sourceTask.context.reviewAllCuts ? "The editor asked to review every cut."
-      : sourceTask.createdBy.type !== "human" ? "Scarlet started this request, not the editor, so its cuts wait for them."
-      : !editsDialogue(sourceTask.kind) ? `A ${sourceTask.kind} request stages its cuts for the editor.`
-      : "The editor moved to another version of the edit while this request ran.";
+    const stagedWhy = whyConfidentCutsWait(sourceTask, project.branch);
+    const requested = !stagedWhy;
     const candidates = body.cuts.map(c => ({ ...c, crossfade: frames / fps, ...(current && { ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }),
       asked: { start: c.start, end: c.end } }));
     const overruled = candidates.filter(c => decided.some(d => overlaps(outer(c), d)));
@@ -282,11 +406,23 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     });
     const planned = candidates.filter(c => !overruled.includes(c) && !held.includes(c) && !replacesHeld.includes(c));
     const carried: Planned[] = [];
+    let settledCount = 0;
+    // A cut Scarlet settled goes in under what it found when it checked it.
+    const settledWords = (r: { reason: string; summary?: string }, assessment: CutAssessment | undefined) =>
+      assessment ? { reason: assessment.reason, summary: assessment.summary ?? r.summary } : { reason: r.reason, summary: r.summary };
     // A note on staged cuts that touch is about all of them: how many staged cuts each note covers.
     const noted = new Map<CutAssessment, number>();
+    // A note settles its staged cuts only while it still covers them all: once this save decides one of them again, the
+    // join the note was about is gone, and the rest wait for a new look as before.
+    const decidedAgain = new Set<CutAssessment>();
+    for (const change of earlier) for (const r of change.cutReasons!) {
+      const assessment = assessmentOf(change, r);
+      if (assessment && !editorChoice(change, r) && planned.some(c => overlaps(outer(c), outer(r)))) decidedAgain.add(assessment);
+    }
     for (const change of earlier) for (const r of change.cutReasons!) {
       const choice = editorChoice(change, r), lapsed = choice === "cut" && changed.has(r);
       const assessment = assessmentOf(change, r);
+      const settled = settle && requested && !lapsed && !decidedAgain.has(assessment!) && settledAsCut(r, choice, assessment);
       if (assessment) noted.set(assessment, (noted.get(assessment) ?? 0) + 1);
       // Touching ranges in one call can have overlapping original trim boundaries.
       const protectedSlot = protectedCuts.get(r);
@@ -303,23 +439,16 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
         if (over.length && left >= LEFT_OF_STAGED_CUT) drop(change, r, `A cut in this save (${over.map(c => `${c.asked.start.toFixed(2)}–${c.asked.end.toFixed(2)} s`).join(", ")}) takes part of this staged cut's footage, so it left the review, and ${left.toFixed(2)} s of what it would have removed plays on.`);
         continue;
       }
-      carried.push({ start: r.start, end: r.end, review: true, reason: r.reason, summary: r.summary, ...(r.held && { held: r.held }), ...(r.unheard && { unheard: true as const }), crossfade: r.crossfade ?? change.joinFades?.duration, ...(r.originalRange && { originalRange: r.originalRange }),
+      if (settled) settledCount++;
+      carried.push({ start: r.start, end: r.end, review: !settled, ...(settled ? settledWords(r, assessment) : { reason: r.reason, summary: r.summary }), ...(r.held && { held: r.held }), ...(r.unheard && { unheard: true as const }), crossfade: r.crossfade ?? change.joinFades?.duration, ...(r.originalRange && !settled && { originalRange: r.originalRange }), ...(settled && { settled: true as const }),
         ...(r.kind && { kind: r.kind }), ...(r.legacySuggest && { legacySuggest: true }), ...((current || protectedSlot) && { preserveEdges: true }), protectedSlot, ...(recoveredCuts.has(r) && { recovered: true }),
         ...(assessment && { assessment }), ...(choice && !lapsed ? { choice } : { asked: { start: r.start, end: r.end }, ...(lapsed && { lapsed }) }) });
     }
     let cuts: Planned[] = [...planned.map(c => ({ ...c, submitted: true as const })), ...carried].sort((a, b) => a.start - b.start);
     let duration = timelineDuration(base);
-    const sorted = [...body.cuts].sort((a, b) => a.start - b.start);
-    // Say which range is wrong: the agent sees only this message, and a plan it can't place it submits again unchanged.
-    const span = (c: TimeRange) => `${c.start.toFixed(2)}–${c.end.toFixed(2)} s`;
-    const empty = sorted.find(c => c.end <= c.start), past = sorted.find(c => c.end > duration);
-    const second = sorted.findIndex((c, i) => i > 0 && c.start < sorted[i - 1]!.end);
-    if (empty) throw badRequest("invalid_cuts", `The range ${span(empty)} is empty. Give each range an end after its start.`);
-    if (past) throw badRequest("invalid_cuts", `The range ${span(past)} runs past the end of the timeline at ${duration.toFixed(2)} s.`);
-    if (second > 0) throw badRequest("invalid_cuts", `The ranges ${span(sorted[second - 1]!)} and ${span(sorted[second]!)} overlap. End the first where the second starts, or merge them.`);
-    if (sorted.reduce((n, c) => n + c.end - c.start, 0) >= duration - 1e-7) throw badRequest("invalid_cuts", "These ranges remove the whole timeline. Retain some footage.");
+    assertCutRanges(body.cuts, duration);
     // A pass that repeats only calls already on this version has nothing to save or announce.
-    if (!planned.length && (held.length || heldCutsStay.length) && waiting.length === 1 && !alreadyRemoved.length && waiting[0]!.fromVersion === head) {
+    if (!planned.length && !settledCount && (held.length || heldCutsStay.length) && waiting.length === 1 && !alreadyRemoved.length && waiting[0]!.fromVersion === head) {
       return { changes: waiting, carriedForward: carried.length, ...(held.length && { heldForReview: held.map(c => c.asked) }),
         ...(droppedFromReview.length && { droppedFromReview }), ...(heldCutsStay.length && { heldCutsStay }),
         ...(overruled.length && { editorDecided: overruled.map(c => c.asked) }) };
@@ -328,66 +457,15 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
       if (!current) cuts = cuts.map(c => ({ ...c, ...moveToHead(c), ...(c.originalRange && { originalRange: moveToHead(c.originalRange) }) }));
       duration = timelineDuration(resolveTimeline(ctx, project, head));
     }
-    // Whole frames: a cut of a whole number of frames moves everything after it by whole frames, so the cached preview
-    // sections after it still match. Rounding inward never removes more than the plan; a sub-frame cut rounds to the nearest
-    // frame, and stops at the end of an edit that ends between two frames: a cut past the end has no review.
-    const bounded = !!body.range || kept.length > 0;
-    const asPlanned = cuts.map(c => ({ start: c.start, end: c.end }));
-    const beforeFrames = cuts;
-    cuts = cuts.map((c, i) => {
-      if (c.preserveEdges) return c; // A manual trim can put the same source frames between project frames.
-      // The submitted limits refer to the submitted version. When rebasing, round within the
-      // mapped removal itself so a nearby frame on the new timeline cannot escape those limits.
-      const scope = c.submitted ? (bounded && toHead ? c : body.range) : undefined;
-      const retained = c.submitted && !toHead ? kept : [];
-      const before = asPlanned[i - 1], after = asPlanned[i + 1];
-      const gaps = [...retained];
-      if (before && c.start > before.end && c.start - before.end < 1 / fps) gaps.push({ start: before.end, end: c.start });
-      if (after && c.end < after.start && after.start - c.end < 1 / fps) gaps.push({ start: c.end, end: after.start });
-      const { start, end } = frameAlignedRemoval(c, fps, scope, gaps);
-      return { ...c, start, end: Math.min(end, duration) };
-    });
-    // Two cuts that met at one instant still meet. Rounded inward each, they would leave a frame of footage between
-    // them that nobody decided to keep, so their shared edge goes to the nearest frame instead.
-    for (let i = 1; i < cuts.length; i++) {
-      const before = cuts[i - 1]!, after = cuts[i]!;
-      if (Math.abs(asPlanned[i]!.start - asPlanned[i - 1]!.end) > 1e-9 || after.start - before.end < 1e-9) continue;
-      if (before.preserveEdges && after.preserveEdges) continue;
-      const shared = before.preserveEdges ? before.end : after.preserveEdges ? after.start : Math.round(asPlanned[i]!.start * fps) / fps;
-      if (shared <= before.start || shared >= after.end) continue;
-      cuts[i - 1] = { ...before, end: shared };
-      cuts[i] = { ...after, start: shared };
-    }
-    const frame = 1 / fps;
-    // What putting the agent's cuts on whole frames moved, so it reads the saved ranges and not its own.
-    const shifts = cuts.flatMap((c, i) => {
-      const was = beforeFrames[i]!;
-      if (!c.submitted) return [];
-      const moved = Math.max(Math.abs(c.start - was.start), Math.abs(c.end - was.end));
-      return moved > 1e-6 ? [moved] : [];
-    });
-    const onFrames = shifts.length ? { cuts: shifts.length, largestShift: round3(Math.max(...shifts)),
-      why: `Cuts are saved on whole frames at ${fps} fps, rounded inward and never past the timeline's end; timelineEdits has the saved ranges.` } : undefined;
-    if (cuts.some((c, i) => i > 0 && (c.preserveEdges || cuts[i - 1]!.preserveEdges) && overlaps(c, cuts[i - 1]!)))
-      throw conflict("cut_changed", "A new range reaches into a carried cut after frame alignment. Check their shared edge.");
-    // A staged cut carries the range the editor can restore. Moving the cut beside it onto a frame can carry that
-    // cut's edge a few milliseconds into the range: a removal that met a staged retake at 265.46 s ended on frame
-    // 7,964 at 265.4667 s, and the whole plan was refused. The range gives way by that much; a real overlap is still refused.
-    cuts = cuts.map(c => {
-      if (!c.originalRange || c.preserveEdges) return c;
-      let { start, end } = c.originalRange;
-      for (const other of cuts) {
-        if (other === c || other.review) continue;
-        if (other.start < start && other.end > start && other.end - start <= frame + 1e-9) start = other.end;
-        if (other.end > end && other.start < end && end - other.start <= frame + 1e-9) end = other.start;
-      }
-      return start === c.originalRange.start && end === c.originalRange.end ? c : { ...c, originalRange: { start, end } };
-    });
+    const aligned = onWholeFrames(cuts, fps, duration, { range: body.range, kept, rebasing: !!toHead });
+    cuts = aligned.cuts;
+    const onFrames = aligned.onFrames;
     const satisfied = { ...(alreadyRemoved.length && { alreadyRemoved }), ...(droppedFromReview.length && { droppedFromReview }), ...(heldCutsStay.length && { heldCutsStay }) };
     if (!cuts.length) return { changes: [], ...satisfied };
     const applied = cuts.filter(c => requested && !c.review);
     const stagedConfident = stagedWhy ? cuts.filter(c => c.submitted && !c.review).length : 0;
-    const adjusted = { ...satisfied, ...(onFrames && { onFrames }), ...(stagedConfident && { stagedForEditor: { cuts: stagedConfident, why: stagedWhy! } }) };
+    const adjusted = { ...satisfied, ...(onFrames && { onFrames }), ...(stagedConfident && { stagedForEditor: { cuts: stagedConfident, why: stagedWhy! } }),
+      ...(settledCount && { settledApplied: { cuts: settledCount, why: "Staged cuts you checked and settled as cuts went into the video with this save. They left the review." } }) };
     if (protectedCuts.size) {
       let prior: Planned | undefined, removedBetween = 0;
       for (const cut of cuts) {
@@ -398,6 +476,17 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
         removedBetween = 0;
       }
     }
+    // A staged cut's restorable range stops where a settled neighbor now goes in: that footage is out of the video.
+    cuts = cuts.map(c => {
+      if (!c.review || !c.originalRange) return c;
+      let { start, end } = c.originalRange;
+      for (const other of applied) {
+        if (!other.settled || !overlaps(other, { start, end })) continue;
+        if (other.end <= c.start + 1e-6) start = Math.max(start, other.end);
+        else if (other.start >= c.end - 1e-6) end = Math.min(end, other.start);
+      }
+      return start === c.originalRange.start && end === c.originalRange.end ? c : { ...c, originalRange: { start, end } };
+    });
     if (cuts.some(c => c.originalRange && (c.originalRange.end > duration + 1e-6 || applied.some(other => overlaps(other, c.originalRange!))))) {
       throw badRequest("invalid_cuts", "A staged cut's original boundaries reach into a range this plan removes. Keep them within the footage that stays for review.");
     }
@@ -419,7 +508,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     const changes: Change[] = [];
     if (applied.length) {
       const { change } = persistProposal(ctx, user, projectId, { fromVersion: head, intent: "requested", ops: ops(applied),
-        description: whole && own ? own : describeDialogueRemovals(applied), taskId, author, noteIds }, ids[0], applied.map(({ start, end, reason, summary, kind, crossfade, check }) => ({ start, end, reason, summary, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(check && { check }) })));
+        description: whole && own ? own : describeDialogueRemovals(applied), taskId, author, noteIds }, ids[0], applied.map(({ start, end, reason, summary, kind, crossfade, check }) => ({ start, end, reason, summary, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(check && { check }) })), { fold });
       if (change.state !== "approved") throw conflict("cut_changed", "The confident cuts could not be applied to this version.");
       changes.push(change);
       version = change.appliedVersion ?? change.toVersion;
@@ -457,8 +546,7 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
         const inside = within({ start, end });
         if (inside.some(c => c.recovered)) {
           const source = resolveTimeline(ctx, project, version);
-          const previewVersion = storeVersion(ctx, project.id, fadeJoins(ctx, project.id, applyReviewRemovals(source, [{ start, end }], change.toVersion), [{ at: start, duration: cutCrossfade(change, { start, end }) }]).timeline,
-            { parent: version, description: "Preview this revised cut" }).version;
+          const previewVersion = storeRevisedCutPreview(ctx, project.id, source, { start, end }, { reviewId: change.toVersion, crossfade: cutCrossfade(change, { start, end }), parent: version });
           cutEdits.push({ index, version, range: { start, end }, previewVersion });
         }
         const assessment = inside[0]?.assessment;
@@ -491,194 +579,29 @@ export function submitDialogueCuts(ctx: Ctx, user: User, projectId: string, body
     const editorDecided = [...overruled.map(c => c.asked), ...joined].sort((a, b) => a.start - b.start);
     return { changes, ...adjusted, ...(held.length && { heldForReview: held.map(c => c.asked) }), ...(carried.length && { carriedForward: carried.length }), ...(editorDecided.length && { editorDecided }),
       joinCrossfades: joinCrossfadeReport(frames, changes) };
-  }), "immediate")();
+  }));
 }
 
 /**
- * Move one staged cut of a pending dialogue pass. Every other cut and its review note carries over into a
- * replacement pass from the same version, so the editor's other calls stay valid. The moved cut waits for
- * the editor again.
+ * Put a waiting pass's settled cuts into the video outside a save of its run's own, once the run has finished. While the
+ * run still works they go in with its next save instead, so the review it is checking doesn't move under it. Returns the pass's review as it stands after, or nothing when nothing went in.
  */
-export function reviseStagedCut(ctx: Ctx, user: User, named: Change, namedIndex: number, body: StagedCutRevision, checkAttempt?: () => void) {
-  // The pass is saved bare, then with its notes and the editor's calls: a window is told of it once, complete.
-  const result = ctx.db.transaction(() => ctx.bus.asSaved(() => {
-    const { reason, summary, taskId, author, noteIds } = body;
-    checkAttempt?.();
-    let project = ctx.repos.projects.header(named.projectId);
-    if (!project) throw notFound("project");
-    const task = taskId ? ctx.repos.tasks.get(taskId) : null;
-    if (taskId && task?.projectId !== named.projectId) throw badRequest("invalid_task", "Task must belong to this project.");
-    if (task?.context.branch && task.context.branch !== project.branch) {
-      const branch = ctx.db.prepare("SELECT head FROM cut_branches WHERE project_id = ? AND name = ?")
-        .get(project.id, task.context.branch) as { head: string | null } | undefined;
-      if (!branch?.head) throw conflict("cut_review_stale", "The branch containing this cut is no longer available.");
-      project = { ...project, branch: task.context.branch, head: branch.head };
-    }
-    const selected = selectedStagedCut(ctx, task);
-    const local = task && taskDialogueOperation(task) === "local-pauses";
-    if (local && !selected) throw badRequest("local_pauses", "Only the staged pause selected by the editor can be revised here.");
-    if (selected && (selected.change.id !== named.id || selected.index !== namedIndex)) {
-      // A queued request can name a predecessor. Only its original slot or the same slot in its live successor is writable.
-      const current = activeStagedCut(ctx, project, selected.change, selected.index);
-      const requested = activeStagedCut(ctx, project, named, namedIndex);
-      if (current.change.id !== requested.change.id || current.index !== requested.index)
-        throw badRequest("wrong_cut", "Choose the staged cut selected for this request.");
-    }
-    const range = frameAligned(body, project.settings.fps);
-    const write = ["staged-cut", named.id, taskId, namedIndex, range.start, range.end,
-      ...(body.version ? [body.version] : []), ...(body.keep ? ["keep"] : []), ...(body.crossfadeFrames !== undefined ? [{ crossfadeFrames: body.crossfadeFrames }] : [])];
-    const idFor = (attempt: number) => `chg_${createHash("sha256").update(JSON.stringify(attempt ? [...write, attempt] : write)).digest("hex")}_review`;
-    let attempt = 0, id = idFor(attempt);
-    let saved: Change | null = null;
-    for (let prior; (prior = ctx.repos.changes.get(id)); id = idFor(++attempt)) saved = prior;
-    const receipt = (change: Change, slot: { index: number; carried: boolean; change: Change }) =>
-      ({ change, index: slot.index, ...(slot.carried && { carried: true as const }),
-        ...(slot.change.id !== named.id && slot.change.taskId !== taskId && { replaced: slot.change.id }) });
-    if (saved) {
-      const recorded = activeStagedCut(ctx, project, named, namedIndex, saved.id);
-      const successor = saved.rejectReason === REVISED && task && !FINISHED_TASK.has(task.state) ? revisedPass(ctx, saved) : undefined;
-      if (!successor || successor.state !== "ready" || successor.taskId !== taskId) return receipt(saved, recorded);
-      // The same run can move one cut twice, then decide its first boundary played better.
-      // A repeated batch needs its original receipt to identify the next move in the batch.
-      const sameSlot = (c: Change) => {
-        const span = prepareCutReview(ctx, c).review?.cuts[recorded.index]?.removed;
-        return JSON.stringify([span, span && cutCrossfade(c, span), c.cutEdits?.find(e => e.index === recorded.index),
-          c.cutChoices?.find(choice => choice.index === recorded.index)?.choice]);
-      };
-      if (sameSlot(saved) === sameSlot(successor)) return receipt(saved, recorded);
-    }
-    // Queued requests identify the pass as it was when they were sent. Use its latest waiting revision
-    // so a second cut keeps the footage and the decisions already recovered for the first.
-    const target = activeStagedCut(ctx, project, named, namedIndex);
-    const { change, index } = target;
-    if (body.requireCurrentCut && change.id !== named.id)
-      throw conflict("cut_review_moved", "The staged cut changed while measuring its pause. Repeat the word-based trim on the current cut.",
-        { changeId: change.id, index });
-    if (change.intent !== "suggestion" || !change.ops?.length || (change.state !== "ready" && change.state !== "revising"))
-      throw conflict("invalid_state", "Only a pending dialogue pass has staged cuts to revise.");
-    if (task && FINISHED_TASK.has(task.state)) throw conflict("task_finished", "This task has already finished.");
-    const review = prepareCutReview(ctx, change).review;
-    if (!review || review.firstCut) throw badRequest("cuts_unsupported", "This edit has no individual cuts.");
-    if (change !== named && !target.carried && prepareCutReview(ctx, named).review?.cuts.length !== review.cuts.length)
-      throw conflict("cut_review_moved", `Change ${named.id} was replaced by ${change.id}, which lists its cuts differently. Find this cut there and revise it on that change.`);
-    const cuts = review.cuts.map(c => c.removed);
-    const old = cuts[index];
-    if (!old) throw badRequest("wrong_cut", "Choose a staged cut in this pass.");
-    if (selected && !body.keep) {
-      const selectedReview = selected.change.id === change.id ? review : prepareCutReview(ctx, selected.change).review;
-      if (!selectedReview?.cuts[selected.index]) throw badRequest("wrong_cut", "The selected cut is unavailable.");
-      const version = body.version ?? named.fromVersion;
-      const input = version === selectedReview.original.version ? selectedReview.original : resolveTimeline(ctx, project, version);
-      const location = currentCutRanges(ctx, project, selected.change, selectedReview, input)(selected.index);
-      const anchor = location.kind === "gone" ? undefined : location.range;
-      if (local) {
-        const prior = change.cutReasons?.filter(c => c.start < old.end && c.end > old.start);
-        if (!prior?.length || prior.some(c => c.kind !== "pause") || !anchor || range.start < anchor.start || range.end > anchor.end)
-          throw badRequest("local_pauses", "Stay inside the selected, classified pause when revising it.");
-      }
-      const frame = 1 / project.settings.fps;
-      // Every move stays attached to the passage the editor chose, even after several overlapping moves or a rebase.
-      // An unlocatable passage goes through the existing conflict and editor-answer flow in placeRevision.
-      if (anchor && (range.start >= anchor.end + frame - 1e-6 || range.end <= anchor.start - frame + 1e-6))
-        throw badRequest("wrong_cut", "The new range must touch the passage selected for revision.");
-    }
-    const namedByTask = task?.context.changeId && task.context.cutIndex !== undefined && task.context.changeId !== named.id
-      ? ctx.repos.changes.get(task.context.changeId) : undefined;
-    const currentTaskCut = namedByTask?.projectId === project.id && task?.context.cutIndex !== undefined
-      ? activeStagedCut(ctx, project, namedByTask, task.context.cutIndex, change.id) : undefined;
-    const scoped = !!selected || !!task && (currentTaskCut?.change.id === change.id && currentTaskCut.index === index ||
-      task.context.changeId === named.id && task.context.cutIndex === namedIndex ||
-      task.context.changeId === change.id && task.context.cutIndex === index ||
-      task.cutConflict?.changeId === change.id && task.cutConflict.index === index);
-    const was = change.cutAssessments?.find(a => a.index === index);
-    const autonomous = !scoped && (!!task || body.author?.type === "agent");
-    if (autonomous && (was && (isPublishedCall(was) || was.askOrder !== undefined) || change.cutChoices?.some(c => c.index === index)))
-      throw conflict("cut_with_editor", `${capitalized(editorsCut(change, index))} at ${old.start}–${old.end} s is with the editor. Only a revision they request can change this cut. ${CALL_WITH_EDITOR}`);
-    // A cut staged on a same-word join (`unheard`) couldn't be moved by the pass (`cut_unheard`, 2026-11-17). Since
-    // 2026-11-21 the pass moves it as any staged cut: the model decides, and the default is in the skill. The mark
-    // stays only on a cut left where Scarlet placed it, since a moved cut has another join.
-    const unheard = !!change.cutReasons?.some(r => r.unheard && r.start < old.end - 1e-6 && r.end > old.start + 1e-6);
-    const aFrame = 1 / project.settings.fps;
-    const moves = Math.abs(range.start - old.start) > aFrame + 1e-6 || Math.abs(range.end - old.end) > aFrame + 1e-6;
-    const placement = placeRevision(ctx, project, change, review, index, body, range, task, scoped, named.fromVersion);
-    if ("conflict" in placement) {
-      const { reason: conflictReason, range: conflictRange } = placement.conflict;
-      const currentVersion = project.head!;
-      if (task && scoped) {
-        const last = task.cutConflict;
-        const samePassage = last?.version === currentVersion && last.range?.start === conflictRange?.start && last.range?.end === conflictRange?.end;
-        saveTask(ctx, { ...task, cutConflict: { version: currentVersion, range: conflictRange, ...((target.carried || currentTaskCut) && { changeId: change.id, index }), approved: last?.approved,
-          ...(samePassage && { answered: last?.answered, retried: last?.retried }) } });
-      }
-      // Commit the location before returning the error. A restarted agent or an editor answering its question needs it.
-      return conflict("cut_review_stale", conflictReason, { changeId: change.id, index, currentVersion, range: conflictRange });
-    }
-    const { start, end } = placement.slot;
-    const ranges = cuts.map((c, i) => i === index ? { start, end } : c);
-    const overlapsOld = (r: { start: number; end: number }) => r.start < old.end - 1e-6 && r.end > old.start + 1e-6;
-    const kind = (change.cutReasons ?? []).find(r => overlapsOld(r) && r.kind)?.kind;
-    const crossfade = body.crossfadeFrames !== undefined ? body.crossfadeFrames / project.settings.fps : cutCrossfade(change, old);
-    const legacySuggest = change.cutReasons?.some(r => overlapsOld(r) && r.legacySuggest);
-    const cutReasons = (change.cutReasons ?? []).filter(r => !overlapsOld(r)).map(r => {
-      const duration = r.crossfade ?? change.joinFades?.duration;
-      return duration ? { ...r, crossfade: duration } : r;
-    });
-    cutReasons.push({ start, end, reason, summary, ...(kind && { kind }), ...(crossfade && { crossfade }), ...(legacySuggest && { legacySuggest }), ...(unheard && !moves && { unheard: true as const }) });
-    cutReasons.sort((a, b) => a.start - b.start);
-    const { change: revised } = persistProposal(ctx, user, change.projectId, { fromVersion: change.fromVersion, intent: "suggestion", autoApprove: false,
-      ops: [...ranges].reverse().map(r => ({ op: "rippleDelete" as const, start: r.start, end: r.end })),
-      description: change.description, taskId, author, noteIds: [...new Set([...change.noteIds, ...(noteIds ?? [])])] }, id, cutReasons);
-    // A later attempt from the same run replaces an earlier one, so only one pass waits for the editor.
-    if (taskId) for (const earlier of ctx.repos.changes.select("project_id = ? AND state = 'ready' AND json_extract(json, '$.taskId') = ? AND id != ?",
-      [change.projectId, taskId, id])) {
-      if (earlier.fromVersion === change.fromVersion && earlier.intent === "suggestion")
-        putAway(ctx, earlier, REVISED, revised.id);
-    }
-    // The editor's calls on the other cuts carry over, including ones made while this revision ran. The revised cut
-    // needs a new call.
-    const latest = ctx.repos.changes.get(change.id) ?? change;
-    if (latest.state === "ready") {
-      putAway(ctx, latest, REVISED, revised.id);
-    } else if (latest.state === "revising" && !selected && taskId && latest.revisionFrom?.taskId === taskId) {
-      // A pass-wide revision can move several slots. Keep its review state and let the
-      // next move find this successor with the preceding move and the editor’s calls.
-      saveChange(ctx, { ...latest, replacedBy: revised.id });
-    }
-    const cutChoices = (latest.cutChoices ?? []).filter(c => c.index !== index);
-    const approved = task?.cutConflict?.approved && scoped;
-    // A cut the editor sent back stays theirs to call once revised, even when the revision leaves its footage in: it
-    // waits for them to approve the new version, and doesn't apply the pass by itself (2026-11-14).
-    const keepsForEditor = !!placement.keep && scoped && !approved;
-    if ((placement.keep && !keepsForEditor) || approved) cutChoices.push({ index, start, end, choice: placement.keep ? "keep" : "cut" });
-    const cutEdits = (latest.cutEdits ?? []).filter(e => e.index !== index);
-    const edit = placement.edit;
-    if (edit) {
-      let previewVersion = edit.previewVersion;
-      if (!placement.keep && edit.range.end > edit.range.start) {
-        const source = resolveTimeline(ctx, project, edit.version);
-        previewVersion = storeVersion(ctx, project.id, fadeJoins(ctx, project.id, applyReviewRemovals(source, [edit.range], revised.toVersion), [{ at: edit.range.start, duration: crossfade }]).timeline,
-          { parent: source.version, description: "Preview this revised cut" }).version;
-      }
-      cutEdits.push({ ...edit, previewVersion });
-    }
-    const carried = { ...(cutChoices.length && { cutChoices }), ...(cutEdits.length && { cutEdits }) };
-    const updatedTask = scoped && task?.cutConflict && ctx.repos.tasks.get(task.id);
-    if (updatedTask) saveTask(ctx, { ...updatedTask, cutConflict: undefined });
-    if (!change.cutAssessments?.length && !placement.keep) return receipt(Object.keys(carried).length ? saveChange(ctx, { ...revised, ...carried }) : revised, target);
-    const verdict: CutAssessment["verdict"] = keepsForEditor ? "ask" : placement.keep ? "keep" : approved ? "cut" : "ask";
-    const sentBack = scoped || was?.revised;
-    // Moving an unchecked candidate invalidates its assessment. Only a recommendation on the new footage publishes it.
-    const provisional = verdict === "ask" && autonomous;
-    const updated: CutAssessment = { index, start, end, verdict, reason, summary, ...(provisional && { provisional: true }),
-      ...(verdict === "ask" && sentBack && { revised: true }), ...(keepsForEditor && { proposes: "keep" as const }), ...(was?.askOrder && { askOrder: was.askOrder }) };
-    // The cuts Scarlet never checked stay unassessed: they are the editor's calls ("Not checked yet."), and keeping one
-    // of them doesn't settle the rest (2026-11-15).
-    const cutAssessments = [...(change.cutAssessments ?? []).filter(a => a.index !== index), updated].sort((a, b) => a.index - b.index);
-    const decided = new Set(cutChoices.map(c => c.index));
-    const done = cuts.every((_, i) => decided.has(i) || cutAssessments.some(a => a.index === i && a.verdict !== "ask"));
-    const applyWhenDone = (placement.keep || approved) && done && scoped ? { userId: user.id, at: now() } : undefined;
-    return receipt(saveChange(ctx, { ...revised, cutAssessments, ...carried, applyWhenDone }), target);
-  }), "immediate")();
-  if (result instanceof HttpError) throw result;
-  return result;
+export function applySettledCuts(ctx: Ctx, change: Change): Change | undefined {
+  if (!change.id.endsWith("_review") || !change.taskId || !hasSettledCut(change)) return;
+  const task = ctx.repos.tasks.get(change.taskId);
+  const project = ctx.repos.projects.header(change.projectId);
+  if (!task || !project?.head || (task.context.branch && task.context.branch !== project.branch)) return;
+  const attempts = runAttemptIds(project.id, task.resumeRootId ?? task.id);
+  if (ctx.repos.tasks.select(`project_id = ? AND id IN (${attempts.sql})`, [project.id, ...attempts.params]).some(t => !FINISHED_TASK.has(t.state))) return;
+  const user = (task.createdBy.id && ctx.repos.users.get(task.createdBy.id)) || ctx.repos.users.primary();
+  if (!user) return;
+  try {
+    const { changes, settledApplied } = submitDialogueCuts(ctx, user, project.id, { taskId: change.taskId, fromVersion: project.head, cuts: [],
+      description: change.description, author: change.author, noteIds: change.noteIds }, { fold: true });
+    if (!settledApplied) return;
+    ctx.db.afterCommit(() => ctx.log(`[review] settled_applied change=${logId(change.id)} project=${logId(project.id)} cuts=${settledApplied.cuts}`));
+    return changes.find(c => c.intent === "suggestion") ?? changes[0];
+  } catch (error) {
+    ctx.log(`[review] Could not put the settled cuts of ${change.id} into the video: ${errorMessage(error)}`);
+  }
 }

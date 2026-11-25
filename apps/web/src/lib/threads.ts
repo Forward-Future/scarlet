@@ -1,8 +1,8 @@
-import { closingCheckFailed, taskDialogueOperation, matchesEdit, noteThread, DialogueScanPage, requestText, taskRecoveryAction, taskWasStopped, type Task, type TaskEvent, type Thread, type ThreadEdit } from "@scarlet/shared";
+import { closingCheckFailed, harnessOf, taskDialogueOperation, matchesEdit, noteThread, DialogueScanPage, requestText, taskRecoveryAction, taskWasStopped, type Task, type TaskEvent, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { clock, parseTimestamp } from "./format";
 import { cutSummary, dialogueReceipt, mergeRanges, rangesOverlap, reviewReasons, type TimeRange, type Author, type Change, type Note } from "@scarlet/timeline";
-import { appliedEditSummary } from "../components/review/cutReviewDetails";
-import { editConfirmation, taskChatText } from "./taskActivity";
+import { appliedEditSummary, passReceipt } from "../components/review/cutReviewDetails";
+import { editConfirmation, readsPlain, taskChatText } from "./taskActivity";
 import { runIsActive } from "./taskRun";
 
 export { buildThreads, type Thread } from "@scarlet/shared";
@@ -54,9 +54,9 @@ export const isRecheck = (task: Task) => task.kind === "revise" && task.createdB
  * revision, after an Auto tag, so the editor reads who started it and why before its work (2026-11-22).
  */
 export const RECHECK_WORDS = "The footage changed after you approved it.";
-/** What Scarlet says about a suggestion it is to make again: while the redo waits its turn, then once Scarlet is on it. */
-const REDO_WAITS = "The video changed while this suggestion was waiting. I’ll redo it on the video as it is now.";
-const REDOING = "The video changed while this suggestion was waiting. I’m redoing it on the video as it is now.";
+/** What the chat says about a suggestion Scarlet is to make again: while the redo waits its turn, then once Scarlet is on it. */
+const REDO_WAITS = "The video changed while this suggestion was waiting. Scarlet will redo it on the video as it is now.";
+const REDOING = "The video changed while this suggestion was waiting. Scarlet is redoing it on the video as it is now.";
 const legacyInterruption = "The agent was interrupted after saving its proposed changes. You can review them here.";
 
 function taskForChange(tasks: Task[], change: Change) {
@@ -176,6 +176,45 @@ export function requestTarget(task: Task, made: Change | undefined, changes: rea
   return edit ? { note, edit } : { note, changeId: change.id, call: index };
 }
 
+/** A run that failed with nothing more to say about it. Its block's own row says so, so the chat doesn't repeat it. */
+export const COULDNT_FINISH = "Scarlet couldn’t finish this edit.";
+/**
+ * Why a run or a render failed, when what its host or model reported reads as a sentence the editor can act on ("You've
+ * hit your usage limit"). A CLI that ended by itself reports its name and code, then the end of what it wrote: its last
+ * line is the reason. A command, a path or a tool's output says nothing to the editor, and gives none.
+ */
+export function failureReason(error: string | undefined): string | undefined {
+  const exit = /^\S+ exited with code \S+?(?::\s*([\s\S]*))?$/.exec(error?.trim() ?? "");
+  const line = (exit ? exit[1] ?? "" : error ?? "").split(/\r?\n/).map(l => l.trim()).filter(Boolean).at(-1) ?? "";
+  const said = line.replace(/^(?:[A-Za-z]*error|fatal|failed)\s*:\s*/i, "").replace(/\s+/g, " ").trim();
+  // A line of a stack trace, or one that names a file, is the program talking to its author.
+  const trace = /^at\s|(?:^|[\s("'])(?:~?\/|[A-Za-z]:\\)\S|\.\w{1,5}:\d+/.test(said);
+  if (said.split(" ").length < 3 || said.length > 200 || trace || !readsPlain(said)) return undefined;
+  return `${said.charAt(0).toUpperCase()}${said.slice(1)}${/[.!?…]$/.test(said) ? "" : "."}`;
+}
+
+/** What the chat says of a run that failed or was stopped. */
+function failureText(t: Task, hasEdit: boolean) {
+  if (t.state === "cancelled") return "Edit stopped.";
+  // The host stopped the run: its agent went silent ("stalled: … N minutes"), or it reached an optional
+  // time cap ("timed out after N minutes", or a bare "timed out" from hosts that stopped every run at 45).
+  const quiet = /^stalled\b.*?(\d+) minutes?/.exec(t.error ?? "");
+  const limit = /^timed out(?: after (\d+) minutes?)?/.exec(t.error ?? "");
+  const kept = hasEdit ? " What it saved is kept." : "";
+  if (quiet) return `Scarlet went quiet for ${quiet[1]} ${quiet[1] === "1" ? "minute" : "minutes"}, so the edit was stopped.${kept}`;
+  if (limit) return (limit[1] ? `The edit reached its ${limit[1]}-minute limit.` : "The edit ran out of time.") + kept;
+  if (t.interrupted) return hasEdit ? "Scarlet was interrupted after saving changes." : "The edit was interrupted before it finished.";
+  if (harnessOf(t.agent) === "claude" && t.error?.includes("Sandbox required but unavailable")) {
+    return "Claude Code couldn’t start because its required shell sandbox was unavailable.";
+  }
+  // The reason the host or the model gave is what the editor can act on before trying again. With none that reads, the
+  // heading's "Couldn't finish" has said all there is.
+  return failureReason(t.error) ?? COULDNT_FINISH;
+}
+
+/** The run's agent, as the author of what it said. */
+const agentAuthor = (task: Task): Author => ({ type: "agent", id: task.agent, name: task.agent, model: task.model });
+
 /** Saved conversation entries in chronological order. */
 export function threadConversation(thread: Thread, notes: Note[], events: Record<string, TaskEvent[]> = {}, firstCuts?: Map<string, FirstCutDelivery>) {
   const out: ThreadEntry[] = [];
@@ -228,13 +267,15 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       out.push({ kind: "system", at: t.finishedAt ?? t.createdAt ?? "", text: "Scarlet was interrupted after saving changes.", tone: "warn" });
     }
     // A dialogue pass's summary is Scarlet's receipt of what it saved. What Scarlet said as it finished is its reply.
-    if (t.state === "done" && (t.reply || !hasEdit)) {
+    // An attempt that was carried on, as one paused for its transcripts is, leaves the reply to the attempt that
+    // finishes the request: the engine hands a pass's words on to it, and they read twice otherwise.
+    if (t.state === "done" && !t.retryTaskId && (t.reply || !hasEdit)) {
       const reply = taskChatText(t, t.reply || t.summary);
       const full = editConfirmation(reply, requested, "full");
       if (full) {
         const text = editConfirmation(reply, requested) ?? full;
         out.push({ kind: "agent", at: t.finishedAt ?? t.createdAt ?? "", text, fullText: full === text ? undefined : full,
-          author: { type: "agent", id: t.agent, name: t.agent, model: t.model } });
+          author: agentAuthor(t) });
       }
     }
     // The pass finished and its closing check for repeats couldn't run. The pass stands; the check can be run again.
@@ -254,21 +295,8 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       // stood before that one.
       const aboutOne = t.context.cutIndex !== undefined || t.context.editIndex !== undefined;
       const available = (aboutOne || t === thread.tasks.at(-1)) && !thread.active && !thread.question && !t.retryTaskId && recovery;
-      let text = "I couldn’t finish this edit.";
-      if (t.agent === "claude" && t.error?.includes("Sandbox required but unavailable")) {
-        text = "Claude Code couldn’t start because its required shell sandbox was unavailable.";
-      }
-      if (t.interrupted) text = hasEdit ? "Scarlet was interrupted after saving changes." : "The edit was interrupted before it finished.";
-      // The host stopped the run: its agent went silent ("stalled: … N minutes"), or it reached an optional
-      // time cap ("timed out after N minutes", or a bare "timed out" from hosts that stopped every run at 45).
-      const quiet = /^stalled\b.*?(\d+) minutes?/.exec(t.error ?? "");
-      const limit = /^timed out(?: after (\d+) minutes?)?/.exec(t.error ?? "");
-      const kept = hasEdit ? " What it saved is kept." : "";
-      if (quiet) text = `Scarlet went quiet for ${quiet[1]} ${quiet[1] === "1" ? "minute" : "minutes"}, so the edit was stopped.${kept}`;
-      else if (limit) text = (limit[1] ? `The edit reached its ${limit[1]}-minute limit.` : "The edit ran out of time.") + kept;
-      if (stopped) text = "Edit stopped.";
       out.push({ kind: "system", at: t.finishedAt ?? t.createdAt ?? "",
-        text, tone: stopped || taskWasStopped(t) ? "warn" : "bad",
+        text: failureText(t, hasEdit), tone: stopped || taskWasStopped(t) ? "warn" : "bad",
         action: available ? { taskId: t.id, label: recovery === "resume" ? "Resume agent" : "Retry edit" } : undefined });
     }
     for (let i = start; i < out.length; i++) out[i]!.taskId = t.id;
@@ -285,15 +313,16 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
       const finalSummary = task && !dialogueTasks.has(task.id) ? editConfirmation(summary, request) : undefined;
       const description = editConfirmation(cutSummary(c.description), request);
       const text = c.state === "approved" ? appliedEditSummary(c)
-        : c.state === "failed" ? "I couldn’t prepare the preview for this edit."
-        : dialogueReceipt(c) ?? finalSummary ?? description ?? "I prepared a version for you to review.";
+        : c.state === "failed" ? `Scarlet couldn’t prepare the preview for this edit.${failureReason(c.error) ? ` ${failureReason(c.error)}` : ""}`
+        : passReceipt(c) ?? finalSummary ?? description ?? "Scarlet prepared a version for you to review.";
       const at = c.state === "approved" ? c.updatedAt ?? c.createdAt
         : finalReply && parseTimestamp(task.finishedAt) > parseTimestamp(c.createdAt) ? task.finishedAt : c.createdAt;
       out.push({ kind: "change", taskId: task?.id, at: at ?? "", change: c, text });
       const completion = editConfirmation(summary, request, "full");
-      if (task && completion && completion !== text && c.state === "approved" && finalSummary) {
+      // Nor does an attempt that was carried on close the request: the attempt that finished it does.
+      if (task && !task.retryTaskId && completion && completion !== text && c.state === "approved" && finalSummary) {
         out.push({ kind: "agent", at: task.finishedAt ?? task.createdAt ?? "", text: completion, change: c, replyTo: task.id,
-          author: { type: "agent", id: task.agent, name: task.agent, model: task.model } });
+          author: agentAuthor(task) });
       }
     }
     // Applied after the video had moved on, a suggestion goes back to Scarlet to be made again. It says so once, in
@@ -301,7 +330,7 @@ export function threadConversation(thread: Thread, notes: Note[], events: Record
     // and what happens to it. What the redo makes, or how it ended, takes the line's place.
     const redo = thread.tasks.find(t => isRedo(t) && t.context.changeId === c.id && runIsActive(t));
     if (redo) out.push({ kind: "agent", taskId: task?.id, at: redo.createdAt ?? c.updatedAt ?? "", text: redo.state === "queued" && !redo.startedAt ? REDO_WAITS : REDOING,
-      author: { type: "agent", id: redo.agent, name: redo.agent, model: redo.model } });
+      author: agentAuthor(redo) });
     for (const feedback of notes.filter(n => n.changeId === c.id)) {
       // The note's own words are what its request was sent as. A reply to it is Scarlet's, and never part of them.
       const words = noteThread(feedback).text;

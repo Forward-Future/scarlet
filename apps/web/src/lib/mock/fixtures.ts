@@ -3,7 +3,7 @@
  * generated public/sample.mp4 (20 s), a few versions (including a branch),
  * changes in every state, notes, renders, tasks, hosts, skills and settings.
  */
-import { isDialogueGuide } from "@scarlet/shared";
+import { DEFAULT_TASK_MODELS, isDialogueGuide } from "@scarlet/shared";
 import type {
   Learning,
   AgentHost,
@@ -13,6 +13,7 @@ import type {
   Skill,
   SkillVersion,
   Task,
+  TaskAttachment,
   TaskEvent,
   User,
   VersionSummary,
@@ -48,14 +49,12 @@ export interface MockDb {
   taskEvents: Record<string, TaskEvent[]>;
   hosts: AgentHost[];
   skills: Skill[];
-  /** Graphics saved to reuse, picked with $name in the message box. Library-wide, like skills. */
   /** Files dropped on the message box, by project. */
-  attachments: Record<string, { id: string; name: string; size: number; mime?: string }[]>;
+  attachments: Record<string, TaskAttachment[]>;
   /** Rules Scarlet picked up from requests, waiting for the editor. */
   learnings: Learning[];
   skillVersions: Record<string, SkillVersion[]>;
   settings: ServerSettings;
-  invites: string[];
 }
 
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
@@ -703,7 +702,9 @@ export function buildDb(chatLayouts = false): MockDb {
     render: { handleSeconds: 1.5, previewHeight: DEFAULT_PREVIEW_HEIGHT, concurrency: 2, hwaccel: "auto" },
     defaultAgent: "claude",
     checkIn: "balanced",
+    talkingToYou: "",
     listening: "auto",
+    taskModels: DEFAULT_TASK_MODELS,
   };
 
   return {
@@ -728,7 +729,6 @@ export function buildDb(chatLayouts = false): MockDb {
     learnings,
     skillVersions,
     settings,
-    invites: [],
   };
 }
 

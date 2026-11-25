@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { chooseListener, hearingModels, listenerKey, type AgentId, type Listener } from "@scarlet/shared";
-import { api, errorMessage } from "../../lib/client";
-import { PreferenceSelect } from "../ui/PreferenceSelect";
+import type { AgentId } from "@scarlet/shared";
 import { ModelProviders } from "../agent/ModelProviders";
 import { Link } from "react-router-dom";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "../agent/ModelRefresh";
 import { AGENT_LABEL, onlineAgents, useHostsStore } from "../../stores/hosts";
-import { modelChoices, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
+import { isModelHidden, modelChoices, OPT_IN_PROVIDERS, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
 import { FavoriteButton } from "../agent/FavoriteButton";
-import { Icon, InlineError, Loading, SectionTitle, Toggle } from "../ui/primitives";
+import { Icon, Loading, SectionTitle, Toggle } from "../ui/primitives";
 
 interface ScrollCue {
   canScrollUp: boolean;
@@ -42,9 +40,17 @@ function formatScrollCue(activeBelow: number, hiddenBelow: number, totalHidden: 
   return "More models below";
 }
 
+/** Where sign-in is managed: the setup dialog's own step when there is one, otherwise Settings. */
+export function ManageSignIn({ onSignIn }: { onSignIn?: () => void }) {
+  return onSignIn
+    ? <button className="underline" onClick={onSignIn}>Manage sign-in</button>
+    : <Link to="/settings#hosts" className="underline">Manage sign-in</Link>;
+}
+
 export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
   const { hosts, customOpenaiModels, customClaudeModels, customGeminiModels, status, error } = useHostsStore();
-  const { hidden, favorites, setVisible } = useModelPreferences();
+  const prefs = useModelPreferences();
+  const { favorites, setVisible } = prefs;
   const [provider, setProvider] = useState<AgentId>();
   const [search, setSearch] = useState("");
   const [scrollCue, setScrollCue] = useState<ScrollCue>(EMPTY_SCROLL_CUE);
@@ -57,12 +63,13 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
   const providers = agents.filter(a => choices.some(m => m.agent === a.id)).map(a => a.id);
   const active = providers.find(id => id === provider) ?? providers[0];
   const catalog = choices.filter(m => m.agent === active);
-  const visible = catalog.filter(m => !hidden.includes(m.key)).length;
+  const isHidden = (key: string) => isModelHidden(prefs, key);
+  const visible = catalog.filter(m => !isHidden(m.key)).length;
   const matches = catalog.filter(m => `${m.label} ${m.model ?? ""}`.toLowerCase().includes(query));
 
-  const favoriteRows = matches.filter(m => !hidden.includes(m.key) && favorites.includes(m.key));
-  const activeRows = matches.filter(m => !hidden.includes(m.key) && !favorites.includes(m.key));
-  const hiddenRows = matches.filter(m => hidden.includes(m.key));
+  const favoriteRows = matches.filter(m => !isHidden(m.key) && favorites.includes(m.key));
+  const activeRows = matches.filter(m => !isHidden(m.key) && !favorites.includes(m.key));
+  const hiddenRows = matches.filter(m => isHidden(m.key));
   const sections: { id: "favorites" | "models" | "hidden"; label: string; count?: number; rows: ModelChoice[] }[] = [
     { id: "favorites" as const, label: "Favorites", rows: favoriteRows },
     { id: "models" as const, label: "Models", rows: activeRows },
@@ -107,7 +114,7 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
 
   useLayoutEffect(() => {
     measureScroll();
-  }, [measureScroll, active, search, matches.length, hidden, favorites]);
+  }, [measureScroll, active, search, matches.length, prefs.hidden, prefs.shown, favorites]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -126,23 +133,22 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
   const scrollBehavior = (): ScrollBehavior =>
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
 
-  const scrollMore = () => {
+  /** Scroll the list to the top `to` picks for it, then measure what is left below. */
+  const scrollList = (to: (el: HTMLDivElement) => number) => {
     const el = listRef.current;
     if (!el) return;
-    const step = Math.max(Math.round(el.clientHeight * 0.8), 160);
-    const nextTop = Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + step);
-    if (typeof el.scrollTo === "function") el.scrollTo({ top: nextTop, behavior: scrollBehavior() });
-    else el.scrollTop = nextTop;
+    const top = to(el);
+    if (typeof el.scrollTo === "function") el.scrollTo({ top, behavior: scrollBehavior() });
+    else el.scrollTop = top;
     measureScroll();
   };
 
-  const scrollToTop = () => {
-    const el = listRef.current;
-    if (!el) return;
-    if (typeof el.scrollTo === "function") el.scrollTo({ top: 0, behavior: scrollBehavior() });
-    else el.scrollTop = 0;
-    measureScroll();
-  };
+  const scrollMore = () => scrollList(el => {
+    const step = Math.max(Math.round(el.clientHeight * 0.8), 160);
+    return Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + step);
+  });
+
+  const scrollToTop = () => scrollList(() => 0);
 
   const scrollCueLabel = formatScrollCue(scrollCue.activeBelow, scrollCue.hiddenBelow, hiddenRows.length);
 
@@ -153,9 +159,7 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
       {!choices.length && (status === "loading" ? <Loading label="Reading models…" /> :
         // Every model a signed-in agent offers is listed, so none at all means its list couldn't be read.
         agents.length ? <p className="mt-4 text-[13px] text-muted">Couldn’t read the model list. Refresh models to try again, and update Claude Code, Codex or Gemini if it still fails.</p> :
-        <p className="mt-4 text-[13px] text-muted">Models appear when Claude Code, Codex or Gemini is online. {onSignIn
-          ? <button className="underline" onClick={onSignIn}>Manage sign-in</button>
-          : <Link to="/settings#hosts" className="underline">Manage sign-in</Link>}</p>)}
+        <p className="mt-4 text-[13px] text-muted">Models appear when Claude Code, Codex or Gemini is online. <ManageSignIn onSignIn={onSignIn} /></p>)}
       {active && <div className="mt-4">
         <ModelProviders providers={providers} active={active} onChange={id => { setProvider(id); setSearch(""); }} />
         <div className="flex flex-wrap items-center gap-2 py-3">
@@ -166,6 +170,7 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
           <span className="text-xs text-dim">{visible} of {catalog.length} shown</span>
           <button className="btn-quiet" aria-label={`${visible ? "Hide" : "Show"} all ${AGENT_LABEL[active]} models`} onClick={() => setVisible(catalog.map(m => m.key), visible === 0)}>{visible ? "Hide all" : "Show all"}</button>
         </div>
+        {OPT_IN_PROVIDERS.includes(active) && !visible && !query && <p className="pb-3 text-[13px] text-muted">{AGENT_LABEL[active]} offers {catalog.length} models. Turn on the models you want to see in the selector.</p>}
         {!matches.length && <p className="py-4 text-[13px] text-muted">No matching models.</p>}
         {matches.length > 0 && <>
           <div className="relative">
@@ -223,82 +228,6 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
           )}
         </>}
       </div>}
-    </section>
-  );
-}
-
-/**
- * Which model listens to cuts for the models that can't hear (Claude, most of Codex's): Automatic, the best one signed
- * in; one the editor picks; or Off. Saved for every project, as Checking with you is.
- */
-export function ListeningSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
-  const { hosts, status } = useHostsStore();
-  const [value, setValue] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let current = true;
-    void api.settings().then(r => { if (current) setValue(r.settings.listening); }).catch(e => { if (current) setError(errorMessage(e)); });
-    return () => { current = false; };
-  }, []);
-  if (!value) return error ? <InlineError>{error}</InlineError> : null;
-  const agents = hosts.filter(h => h.online).flatMap(h => h.agents);
-  const nameOf = (l: Listener) => l.agent === "gemini" && !l.model ? "Gemini"
-    : agents.find(a => a.id === l.agent)?.modelLabels?.[l.model ?? ""] ?? l.model ?? AGENT_LABEL[l.agent as AgentId];
-  const models = hearingModels(agents);
-  const picked = value !== "auto" && value !== "off" ? value : undefined;
-  const missing = picked && !models.some(l => listenerKey(l) === picked);
-  const pickedName = picked && (missing ? picked.split(":").slice(1).join(":") : nameOf(models.find(l => listenerKey(l) === picked)!));
-  const options = [
-    { value: "auto", label: "Automatic" },
-    ...models.map(l => ({ value: listenerKey(l) as string, label: nameOf(l) })),
-    ...(missing ? [{ value: picked, label: `${pickedName} (not signed in)` }] : []),
-    { value: "off", label: "Off" },
-  ];
-  const listener = chooseListener(agents, value);
-  const choose = async (next: string) => {
-    const previous = value;
-    setValue(next);
-    setError("");
-    setBusy(true);
-    try {
-      setValue((await api.updateSettings({ listening: next })).settings.listening);
-    } catch (e) {
-      setValue(previous);
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const signIn = onSignIn
-    ? <button className="underline" onClick={onSignIn}>Manage sign-in</button>
-    : <Link to="/settings#hosts" className="underline">Manage sign-in</Link>;
-  const catches = "so Scarlet catches a stumble or a clipped word the transcript misses.";
-  return (
-    <section className="card transcription-preferences check-in-preferences" aria-labelledby="listening-heading">
-      <div className="transcription-header">
-        <div className="transcription-heading">
-          <span className="transcription-glyph"><Icon name="audio" size={22} /></span>
-          <div>
-            <h2 id="listening-heading">Listening</h2>
-            <p>Which model listens to cuts for models that can’t hear.</p>
-          </div>
-        </div>
-        <div className="min-w-0">
-          <label className="label" htmlFor="listening-model">Listening model</label>
-          <PreferenceSelect id="listening-model" value={value} disabled={busy} options={options} onChange={next => void choose(next)}
-            valueLabel={value === "auto" && listener ? `Automatic · ${nameOf(listener)}` : undefined} />
-        </div>
-      </div>
-      {/* One span: the status line lays its children out side by side, and this is one sentence. */}
-      <p className="transcription-status text-muted"><span>{
-        value === "off" ? "Off: models that can’t hear read the transcript and a picture of the sound instead."
-        : missing ? <>{pickedName} isn’t signed in, so nothing listens for now. Sign in again or choose another model. {signIn}</>
-        : listener ? <>{nameOf(listener)} listens to cuts for models that can’t hear, {catches}</>
-        : status === "loading" ? "Looking for models that can hear…"
-        : <>No model here can hear. Sign in to Gemini so Scarlet listens to cuts instead of only reading the transcript. {signIn}</>
-      }</span></p>
-      {error && <InlineError>{error}</InlineError>}
     </section>
   );
 }

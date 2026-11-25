@@ -40,5 +40,6 @@ export function useMediaProcessing() {
     }
   }
 
+  // `label` is the word inside Media, where the panel says what it is about; `description` says it whole, for a menu.
   return { label, description: `${label} media processing`, icon: paused ? "play" as const : "pause" as const, available, busy, error, toggle };
 }

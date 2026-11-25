@@ -1,14 +1,31 @@
-import { AgentOptionId, type AgentId } from "@scarlet/shared";
+import { AgentOptionId, type AgentId, type ExtraProvider } from "@scarlet/shared";
 import { MODEL_ID } from "../modelCatalog.js";
+import { providerRunEnv, resolveProviders } from "../providers.js";
 import { runClaude } from "./claude.js";
 import { runCodex } from "./codex.js";
 import { runGemini } from "./gemini.js";
 import type { RunAgentFn, RunAgentOptions, RunAgentResult } from "./types.js";
 
+/**
+ * An extra provider's runs: Claude Code pointed at the provider, with the chosen model for every tier. Claude's own
+ * effort and fast mode mean nothing to another provider's model, so they are left out.
+ */
+export function providerRunner(agent: ExtraProvider): RunAgentFn {
+  return async (opts) => {
+    const base = opts.env ?? process.env;
+    const built = providerRunEnv(agent, opts.model, base, resolveProviders(opts.providers, base));
+    if ("error" in built) return { ok: false, summary: "", error: built.error };
+    return runClaude({ ...opts, effort: undefined, fast: undefined, serviceTier: undefined, env: built.env, settingsEnv: built.settingsEnv });
+  };
+}
+
 export const RUNNERS: Record<Exclude<AgentId, "api">, RunAgentFn> = {
   claude: runClaude,
   codex: runCodex,
   gemini: runGemini,
+  ollama: providerRunner("ollama"),
+  lmstudio: providerRunner("lmstudio"),
+  openrouter: providerRunner("openrouter"),
 };
 
 export function runnerFor(agent: AgentId): RunAgentFn {
@@ -30,6 +47,8 @@ export const runAgent: RunAgentFn = async (opts: RunAgentOptions): Promise<RunAg
 export * from "./types.js";
 export { parseClaudeLine, newClaudeState, buildClaudeCommand, runClaude, claudeRunUsage } from "./claude.js";
 export { addUsage, claudeUsage, codexUsage, geminiUsage, tokenCount } from "./usage.js";
-export { parseCodexLine, newCodexState, buildCodexCommand, runCodex, tomlString, tomlInlineTable } from "./codex.js";
-export { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiAcpUpdate, parseGeminiLine, permissionOutcome, runGemini } from "./gemini.js";
+export { parseCodexLine, newCodexState } from "./codexParse.js";
+export { buildCodexCommand, runCodex, tomlString, tomlInlineTable } from "./codex.js";
+export { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiAcpUpdate, parseGeminiLine, permissionOutcome } from "./geminiAcp.js";
+export { runGemini } from "./gemini.js";
 export { resolveMcpCliPath, nodeExecutable, mcpEnv, quoteForCmd, spawnSpec, spawnLines, resolveCli } from "./spawn.js";

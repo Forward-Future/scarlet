@@ -68,7 +68,10 @@ pub fn claude_config_dir(env: &HashMap<String, String>, home: &Path) -> Option<P
 /// digit as "-">. A name over 200 characters keeps its first 200 and ends in a hash of the path Scarlet can't
 /// reproduce, so that folder is found by its first 200 characters and by its sessions, which name the cwd.
 pub fn claude_project_dir(real_cwd: &Path, claude_dir: &Path) -> Option<PathBuf> {
-    let name: String = real_cwd.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    // Claude Code is JavaScript: its pattern reads the path in UTF-16 units, so a character past them, such as 🎬, is
+    // two of them and two dashes.
+    let name: String = real_cwd.to_string_lossy().encode_utf16()
+        .map(|unit| match char::from_u32(u32::from(unit)) { Some(c) if c.is_ascii_alphanumeric() => c, _ => '-' }).collect();
     if !name.chars().any(|c| c.is_ascii_alphanumeric()) {
         return None;
     }

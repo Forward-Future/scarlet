@@ -26,13 +26,19 @@ let parkedFrame: number | undefined;
 /** The attached media plays a version with footage removed while the transport shows the version before it. */
 let clock: JoinClock | undefined;
 let raf: number | null = null;
+/** Takes the attached element's listeners off again. */
+let detachFn: (() => void) | null = null;
+/** Where a bounded rendered file starts on its version: zero for anything else. */
+const streamOffset = () => stream?.offset ?? 0;
+/** The attached media's length on the transport's clock. */
+const mediaDuration = (el: HTMLVideoElement) => clock?.duration ?? stream?.duration ?? (Number.isFinite(el.duration) ? el.duration : 0);
 
 /**
  * An edit that isn't a cut, with a little of the video either side. It plays as a cut's listen does: it stops once
  * at its end, and from then on, or once the editor picks a point on the timeline, the video plays until they pause it.
  * Seeks go anywhere.
  */
-let passage: (TimeRange & { fps: number }) | undefined;
+let passage: (TimeRange & { fps: number; skips?: TimeRange[] }) | undefined;
 /** Playback ran to the passage's end and stopped there. The editor didn't pause it. */
 let ranOut = false;
 
@@ -62,6 +68,8 @@ let through = false;
 const withBeyond = (a: Audition) => a.beyond?.length ? [...a.skips, ...a.beyond.map(r => ({ ...r, removed: true }))] : a.skips;
 /** Every passage After steps over: the listen's own skips, and once the editor plays on, the removed footage beyond it. */
 const stepped = (a: Audition) => through ? withBeyond(a) : a.skips;
+/** The frame rate of the listen or passage that's open, or 30 with neither. */
+const frameRate = () => audition?.fps ?? passage?.fps ?? 30;
 /** The clock at the previous reading while playing, to see playback cross a boundary. */
 let lastClock: number | undefined;
 /**
@@ -119,20 +127,32 @@ function letGo() {
   carry = was;
 }
 
+/** The passage or listen stops at `end`, its one stop: from then on it plays until the editor pauses it. */
+function stopAtEnd(end: number) {
+  player.pause();
+  player.seek(end, true);
+  through = true;
+}
+
 function readClock(el: HTMLVideoElement) {
   if (el !== video || el.readyState < 1 || borrower) return;
-  const media = stream?.sourceTime?.() ?? el.currentTime + (stream?.offset ?? 0);
+  const media = stream?.sourceTime?.() ?? el.currentTime + streamOffset();
   const t = clock ? clock.toView(media) : media;
   if (passage && (!el.paused || el.ended) && !el.seeking) {
     const prev = lastClock;
     lastClock = t;
+    // Footage a waiting call takes out plays as Scarlet staged it: stepped over, as the video will run.
+    const skip = passage.skips?.find(s => t >= s.start - 0.5 / passage!.fps && t < s.end - 0.5 / passage!.fps);
+    if (skip) {
+      playbackLog("transport step-over", { t, from: skip.start, to: skip.end, staged: true });
+      player.seek(skip.end, true);
+      return;
+    }
     // Playing across the end stops there. Played on from it, or from a point picked past it, nothing stops it.
     if (!through && prev !== undefined && prev < passage.end && t >= passage.end) {
       playbackLog("transport passage-end", { t, end: passage.end });
-      player.pause();
-      player.seek(passage.end, true);
+      stopAtEnd(passage.end);
       ranOut = true;
-      through = true;
       return;
     }
   }
@@ -172,10 +192,8 @@ function auditionStep(t: number) {
     player.pause();
   } else if (skip || crossed(a.end)) {
     playbackLog("transport listen-end", { t, end: a.end });
-    player.pause();
-    player.seek(a.end, true);
+    stopAtEnd(a.end);
     finished = true;
-    through = true;
   } else return false;
   return true;
 }
@@ -238,7 +256,7 @@ export const player = {
       st.setPlaying(false);
       readClock(el);
     };
-    const onMeta = () => st.setDuration(clock?.duration ?? stream?.duration ?? (Number.isFinite(el.duration) ? el.duration : 0));
+    const onMeta = () => st.setDuration(mediaDuration(el));
     const onRate = () => st.setRate(el.playbackRate);
     const onSeek = () => readClock(el);
     const refreshReadiness = () => {
@@ -248,35 +266,25 @@ export const player = {
     const clearReadiness = () => {
       if (usePlayerStore.getState().playbackReady) usePlayerStore.setState({ playbackReady: false });
     };
-    el.addEventListener("playing", refreshReadiness);
-    el.addEventListener("seeked", refreshReadiness);
-    el.addEventListener("seeking", clearReadiness);
-    el.addEventListener("waiting", clearReadiness);
-    el.addEventListener("emptied", clearReadiness);
-    el.addEventListener("play", onPlay);
-    el.addEventListener("pause", onPause);
-    el.addEventListener("ended", onPause);
-    el.addEventListener("loadedmetadata", onMeta);
-    el.addEventListener("durationchange", onMeta);
-    el.addEventListener("ratechange", onRate);
-    el.addEventListener("seeking", onSeek);
-    el.addEventListener("seeked", onSeek);
-    el.addEventListener("timeupdate", onSeek);
+    const listeners: [keyof HTMLMediaElementEventMap, () => void][] = [
+      ["playing", refreshReadiness],
+      ["seeked", refreshReadiness],
+      ["seeking", clearReadiness],
+      ["waiting", clearReadiness],
+      ["emptied", clearReadiness],
+      ["play", onPlay],
+      ["pause", onPause],
+      ["ended", onPause],
+      ["loadedmetadata", onMeta],
+      ["durationchange", onMeta],
+      ["ratechange", onRate],
+      ["seeking", onSeek],
+      ["seeked", onSeek],
+      ["timeupdate", onSeek],
+    ];
+    for (const [name, listener] of listeners) el.addEventListener(name, listener);
     detachFn = () => {
-      el.removeEventListener("playing", refreshReadiness);
-      el.removeEventListener("seeked", refreshReadiness);
-      el.removeEventListener("seeking", clearReadiness);
-      el.removeEventListener("waiting", clearReadiness);
-      el.removeEventListener("emptied", clearReadiness);
-      el.removeEventListener("play", onPlay);
-      el.removeEventListener("pause", onPause);
-      el.removeEventListener("ended", onPause);
-      el.removeEventListener("loadedmetadata", onMeta);
-      el.removeEventListener("durationchange", onMeta);
-      el.removeEventListener("ratechange", onRate);
-      el.removeEventListener("seeking", onSeek);
-      el.removeEventListener("seeked", onSeek);
-      el.removeEventListener("timeupdate", onSeek);
+      for (const [name, listener] of listeners) el.removeEventListener(name, listener);
     };
     if (stream?.duration || Number.isFinite(el.duration)) onMeta();
     if (handover && !handover.el && Math.abs(usePlayerStore.getState().time - handover.at) < 1e-6) {
@@ -306,14 +314,14 @@ export const player = {
    * A thread selection owns the bounded transport until its view releases it. `again` takes up the passage the
    * editor is already on, after something around it changed: it stays where it is, and plays only if it was playing.
    */
-  previewRange(range: TimeRange, fps: number, stillAt?: number, again = false, picked = false) {
+  previewRange(range: TimeRange, fps: number, stillAt?: number, again = false, picked = false, skips?: TimeRange[]) {
     const resume = again && (carry || isPlaying());
     const ended = again && (ranOut || endedPassage);
     endedPassage = false;
     playbackLog("transport passage", { start: range.start, end: range.end, stillAt, again, resume, picked: picked || undefined, at: usePlayerStore.getState().time, by: calledBy(2) });
     this.pause();
     audition = undefined;
-    const owned = { ...range, fps };
+    const owned = { start: range.start, end: range.end, fps, ...skips?.length && { skips } };
     passage = owned;
     ranOut = false;
     // The same passage set up again keeps what the editor did with it. A new one stops at its end, unless they
@@ -381,18 +389,18 @@ export const player = {
     // before the cut, so the next step goes on back.
     if (clock && !st.scrubGesture && t < st.time) {
       const gone = clock.removed.find(r => target >= r.start && target < r.end);
-      if (gone) target = Math.max(passage?.start ?? 0, gone.start - 1 / (audition?.fps ?? passage?.fps ?? 30));
+      if (gone) target = Math.max(passage?.start ?? 0, gone.start - 1 / frameRate());
     }
     ranOut = false;
     const clamped = Math.max(0, Math.min(max, target));
     const media = clock ? clock.toMedia(clamped) : clamped;
-    const halfFrame = 0.5 / (audition?.fps ?? passage?.fps ?? 30);
+    const halfFrame = 0.5 / frameRate();
     const prepared = parkedFrame !== undefined && Math.abs(media - parkedFrame) < halfFrame && video && video.paused && !video.seeking
-      && video.readyState >= 2 && Math.abs(video.currentTime + (stream?.offset ?? 0) - media) < halfFrame;
+      && video.readyState >= 2 && Math.abs(video.currentTime + streamOffset() - media) < halfFrame;
     parkedFrame = undefined;
     if (!prepared) {
       const handled = stream?.seek(media, previewFrame);
-      if (!handled && video && video.readyState >= 1) video.currentTime = media - (stream?.offset ?? 0);
+      if (!handled && video && video.readyState >= 1) video.currentTime = media - streamOffset();
     }
     playbackLog("transport seek", { to: clamped, media: clock ? media : undefined, asked: t === clamped ? undefined : t, playing: isPlaying(),
       scrub: !!st.scrubGesture || undefined, ready: video?.readyState }, "transport seek");
@@ -465,7 +473,7 @@ export const player = {
         pendingPlay = undefined;
         if (el !== video) return usePlayerStore.getState().setPlaying(false);
         const want = this.elementTime(usePlayerStore.getState().time);
-        if (Math.abs(el.currentTime - want) > 0.5 / (audition?.fps ?? passage?.fps ?? 30))
+        if (Math.abs(el.currentTime - want) > 0.5 / frameRate())
           el.currentTime = Math.max(0, Number.isFinite(el.duration) ? Math.min(want, el.duration) : want);
         void el.play().catch(refused);
       }, { once: true, signal: controller.signal });
@@ -540,35 +548,28 @@ export const player = {
     if (!el || el !== video || clock === joins) return;
     clock = joins;
     playbackLog("transport joins", { el: logId(el), removed: joins?.removed.map(r => [r.start, r.end]), duration: joins?.duration });
-    const st = usePlayerStore.getState();
-    st.setDuration(clock?.duration ?? stream?.duration ?? (Number.isFinite(el.duration) ? el.duration : 0));
+    usePlayerStore.getState().setDuration(mediaDuration(el));
   },
   /** Where the attached media should be for transport time `t`. */
   mediaTime(t: number) {
     return clock ? clock.toMedia(t) : t;
   },
-  elementTime(t: number) { return this.mediaTime(t) - (stream?.offset ?? 0); },
+  elementTime(t: number) { return this.mediaTime(t) - streamOffset(); },
   /** A bounded file can naturally end before another clock sample. Honor the listen's stop
    * before deciding whether a stretched passage needs the rest of the timeline. */
   endOfWindow(el: HTMLVideoElement, end: number) {
     if (el !== video || borrower) return false;
     const view = clock ? clock.toView(end) : end;
     if (passage && !through && view >= passage.end - 0.5 / passage.fps) {
-      this.pause();
-      this.seek(passage.end, true);
+      stopAtEnd(passage.end);
       ranOut = true;
-      through = true;
       return false;
     }
     if (audition && !through && view >= audition.end - 0.5 / audition.fps) {
-      this.pause();
-      this.seek(audition.end, true);
+      stopAtEnd(audition.end);
       finished = true;
-      through = true;
       return false;
     }
     return true;
   },
 };
-
-let detachFn: (() => void) | null = null;
