@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Times you type in the message box are now plain gray text instead of sitting in gray boxes. They still jump the video there when clicked, and light up with an underline on hover.
 - Settings › Advanced is simplified to Transcription language, Preview quality and an on/off Hardware acceleration switch, saved immediately without a Save button; Scarlet handles the rest automatically.
 - On Windows, Install Gemini in Settings › Models now finishes, instead of saying the installation did not finish and Gemini isn't installed.
 - Scarlet can now edit with models running on your own computer through Ollama or LM Studio, or with hosted models through OpenRouter. Set them up under Other providers in Settings › Models: each shows up in the model selector only once it has models ready, and OpenRouter's models stay out of the selector until you turn on the ones you want.
