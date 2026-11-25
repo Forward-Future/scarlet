@@ -45,8 +45,13 @@ const esc = () => act(async () => {
 const heading = () => el.querySelector("h1")?.textContent;
 const saveButton = () => el.querySelector<HTMLButtonElement>('button[type="submit"]')!;
 const transcribeWith = () => el.querySelector<HTMLButtonElement>("#tr-provider")!;
-// Advanced is the tab with a Save: its dropdowns wait for it, as its typed fields do.
+const languageSelect = () => el.querySelector<HTMLButtonElement>("#tr-lang")!;
 const previewHeight = () => el.querySelector<HTMLButtonElement>("#rd-height")!;
+const hardwareAccel = () => el.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Hardware acceleration"]')!;
+const customLocalSettings: ServerSettings = {
+  ...defaults,
+  transcription: { ...defaults.transcription, provider: "whispercpp", localModel: "custom", whisperModelPath: "/models/old.bin", whisperCppPath: "/adapters/old" },
+};
 
 it("saves the telemetry switch from About and links the filler-word model credit", async () => {
   const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
@@ -110,35 +115,73 @@ it("keeps what the editor wrote about how Scarlet talks when the save fails, to 
   expect(el.querySelector(".talking-to-you")?.textContent).not.toContain("The engine is offline.");
 });
 
+it("shows only language, preview quality and hardware acceleration on Advanced and saves each right away", async () => {
+  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } as typeof settings }));
+  await open("/settings#advanced");
+  // No Save button, and internal knobs (note cleanup, handle seconds, concurrency, OpenAI model, encoder list) stay out of view.
+  expect(el.querySelector('button[type="submit"]')).toBeNull();
+  expect(el.textContent).not.toMatch(/Note cleanup|Handle seconds|Concurrency|OpenAI model|videotoolbox|nvenc/);
+  expect(languageSelect().textContent).toBe("English");
+  expect(previewHeight().textContent).toBe("540p (default)");
+  expect(hardwareAccel().getAttribute("aria-checked")).toBe("true");
+
+  // Choosing Auto-detect sends null so the engine clears the saved language.
+  await selectOption(languageSelect(), "Auto-detect");
+  const sent = JSON.parse(JSON.stringify(save.mock.calls[0]![0]));
+  expect(sent).toMatchObject({ transcription: { provider: "openai", language: null } });
+
+  await selectOption(previewHeight(), "720p");
+  expect(save).toHaveBeenLastCalledWith({ render: expect.objectContaining({ previewHeight: 720 }) });
+
+  await act(async () => hardwareAccel().click());
+  expect(save).toHaveBeenLastCalledWith({ render: expect.objectContaining({ hwaccel: "none" }) });
+  expect(hardwareAccel().getAttribute("aria-checked")).toBe("false");
+
+  await act(async () => hardwareAccel().click());
+  expect(save).toHaveBeenLastCalledWith({ render: expect.objectContaining({ hwaccel: "auto" }) });
+  expect(hardwareAccel().getAttribute("aria-checked")).toBe("true");
+});
+
+it("keeps an uncommon saved transcription language selectable in the dropdown", async () => {
+  vi.mocked(api.settings).mockResolvedValue({
+    settings: { ...settings, transcription: { ...settings.transcription, language: "uk" } },
+    transcriptionAvailable: true,
+  });
+  await open("/settings#advanced");
+  expect(languageSelect().textContent).toBe("uk");
+});
+
 it("leaves Settings on Esc when nothing is unsaved", async () => {
   await open("/settings#advanced");
-  expect(saveButton().disabled).toBe(true);
   await esc();
   expect(el.textContent).toBe("Project library");
 });
 
-it("keeps Settings open on Esc while a change is unsaved and moves focus to Save", async () => {
-  await open("/settings#advanced");
-  await selectOption(previewHeight(), "720p");
-  expect(document.activeElement).toBe(previewHeight());
-  await esc();
-  expect(heading()).toBe("Settings");
-  expect(document.activeElement).toBe(saveButton());
-  await esc();
-  expect(heading()).toBe("Settings");
-  expect(document.activeElement).toBe(saveButton());
-});
-
-it("leaves on Esc again once the change is saved", async () => {
+it("keeps Settings open on Esc while custom local model paths are unsaved and moves focus to Save", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: customLocalSettings, transcriptionAvailable: true });
   let finish!: () => void;
   const save = vi.spyOn(api, "updateSettings").mockImplementation(patch => new Promise(resolve => {
-    finish = () => resolve({ settings: { ...settings, ...patch } as typeof settings });
+    finish = () => resolve({ settings: { ...customLocalSettings, ...patch } as typeof customLocalSettings });
   }));
   await open("/settings#advanced");
-  await selectOption(previewHeight(), "720p");
+  const model = el.querySelector<HTMLInputElement>("#tr-modelpath")!;
+  await act(async () => {
+    model.focus();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(model, "/models/new.bin");
+    model.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(saveButton().disabled).toBe(false);
+  // First Esc blurs the text field, second moves focus to Save.
   await esc();
+  expect(document.activeElement).toBe(document.body);
+  await esc();
+  expect(heading()).toBe("Settings");
+  expect(document.activeElement).toBe(saveButton());
+  await esc();
+  expect(heading()).toBe("Settings");
+  expect(document.activeElement).toBe(saveButton());
   await act(async () => saveButton().click());
-  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ render: expect.objectContaining({ previewHeight: 720 }) }));
+  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ transcription: expect.objectContaining({ whisperModelPath: "/models/new.bin" }) }));
   // The change isn't saved until the engine answers.
   await esc();
   expect(heading()).toBe("Settings");
@@ -146,22 +189,6 @@ it("leaves on Esc again once the change is saved", async () => {
   expect(saveButton().disabled).toBe(true);
   await esc();
   expect(el.textContent).toBe("Project library");
-});
-
-it("only blurs a changed text field on the first Esc and moves focus to Save on the next", async () => {
-  await open("/settings#advanced");
-  const language = el.querySelector<HTMLInputElement>("#tr-lang")!;
-  await act(async () => {
-    language.focus();
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(language, "fr");
-    language.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  expect(saveButton().disabled).toBe(false);
-  await esc();
-  expect(document.activeElement).toBe(document.body);
-  await esc();
-  expect(heading()).toBe("Settings");
-  expect(document.activeElement).toBe(saveButton());
 });
 
 it("leaves Esc to an open list, which closes without leaving Settings", async () => {
@@ -226,89 +253,71 @@ it("shows the settings once Retry gets through after a failed load", async () =>
   expect(el.querySelector("#tr-lang")).not.toBeNull();
 });
 
-it("tells the engine to clear Language and the note cleanup Model when their fields are emptied", async () => {
-  expect(settings).toMatchObject({ transcription: { language: "en" }, noteCleanup: { enabled: true, model: "claude-haiku-4-5" } });
-  const save = vi.spyOn(api, "updateSettings").mockImplementation(async () => ({
-    settings: { ...settings, transcription: { provider: "openai", openaiModel: "whisper-1" }, noteCleanup: { enabled: true, provider: "anthropic" } },
-  }));
-  await open("/settings#advanced");
-  const language = el.querySelector<HTMLInputElement>("#tr-lang")!;
-  const model = el.querySelector<HTMLInputElement>("#nc-model")!;
-  expect([language.value, model.value]).toEqual(["en", "claude-haiku-4-5"]);
-  await typeInto(language, "");
-  await typeInto(model, "");
-  await act(async () => saveButton().click());
-  // What goes over the wire: JSON drops an undefined field, and the engine then keeps the value it had.
-  const sent = JSON.parse(JSON.stringify(save.mock.calls[0]![0]));
-  expect(sent).toMatchObject({ transcription: { provider: "openai", language: null }, noteCleanup: { enabled: true, model: null } });
-  expect([language.value, model.value]).toEqual(["", ""]);
-  expect(saveButton().disabled).toBe(true);
-});
-
-it("holds what is typed in a number field until Save, instead of refilling one that was emptied", async () => {
-  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } }));
-  await open("/settings#advanced");
-  const concurrency = el.querySelector<HTMLInputElement>("#rd-conc")!;
-  const handle = el.querySelector<HTMLInputElement>("#rd-handle")!;
-  expect([concurrency.value, handle.value]).toEqual(["2", "1.5"]);
-  // Emptied, the field stays empty for the next digit: it used to put 1 back at once, so typing 4 made 14.
-  await typeInto(concurrency, "");
-  expect(concurrency.value).toBe("");
-  expect(saveButton().disabled).toBe(false);
-  await typeInto(concurrency, "4");
-  expect(concurrency.value).toBe("4");
-  // A field left empty keeps the value it had.
-  await typeInto(handle, "");
-  expect(handle.value).toBe("");
-  await act(async () => saveButton().click());
-  expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ render: expect.objectContaining({ concurrency: 4, handleSeconds: 1.5 }) }));
-  expect([concurrency.value, handle.value]).toEqual(["4", "1.5"]);
-});
-
 const press = (text: string) => act(async () => {
   [...document.querySelectorAll<HTMLElement>("a, button")].find(c => c.textContent?.trim() === text)!.click();
 });
 const asking = () => document.querySelector("dialog[open]")?.textContent ?? "";
 
-it("asks before a tab or the back link drops an unsaved change", async () => {
-  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } as typeof settings }));
+it("asks before a tab or the back link drops unsaved custom local model paths", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: customLocalSettings, transcriptionAvailable: true });
+  const save = vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...customLocalSettings, ...patch } as typeof customLocalSettings }));
   await open("/settings#advanced");
-  expect(previewHeight().textContent).toContain("540p");
-  await selectOption(previewHeight(), "720p");
+  const model = () => el.querySelector<HTMLInputElement>("#tr-modelpath")!;
+  expect(model().value).toBe("/models/old.bin");
+  await typeInto(model(), "/models/new.bin");
   await press("About");
   expect(asking()).toContain("These settings have unsaved changes.");
   expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("Advanced");
   // Stay keeps the change where it was.
   await press("Stay");
   expect(asking()).toBe("");
-  expect(previewHeight().textContent).toContain("720p");
+  expect(model().value).toBe("/models/new.bin");
   // Discard leaves without saving, and the old value is what comes back.
   await press("About");
   await press("Discard changes");
   expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("About");
   expect(save).not.toHaveBeenCalled();
   await press("Advanced");
-  expect(previewHeight().textContent).toContain("540p");
+  expect(model().value).toBe("/models/old.bin");
   // Save and leave saves first.
-  await selectOption(previewHeight(), "720p");
+  await typeInto(model(), "/models/new.bin");
   await press("← Projects");
   expect(asking()).toContain("These settings have unsaved changes.");
   await press("Save and leave");
-  expect(save).toHaveBeenCalledWith(expect.objectContaining({ render: expect.objectContaining({ previewHeight: 720 }) }));
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ transcription: expect.objectContaining({ whisperModelPath: "/models/new.bin" }) }));
   expect(el.textContent).toBe("Project library");
 });
 
-it("holds Restart to update while a change is unsaved, as the skill editor does", async () => {
-  vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...settings, ...patch } as typeof settings }));
+it("holds Restart to update while custom model paths are unsaved, as the skill editor does", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: customLocalSettings, transcriptionAvailable: true });
+  vi.spyOn(api, "updateSettings").mockImplementation(async patch => ({ settings: { ...customLocalSettings, ...patch } as typeof customLocalSettings }));
   // Restart to update asks the page first, and restarts only if nothing cancels.
   const restartAllowed = () => window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
   await open("/settings#advanced");
   expect(restartAllowed()).toBe(true);
-  await typeInto(el.querySelector<HTMLInputElement>("#rd-conc")!, "4");
+  await typeInto(el.querySelector<HTMLInputElement>("#tr-modelpath")!, "/models/new.bin");
   expect(restartAllowed()).toBe(false);
   await act(async () => saveButton().click());
   expect(saveButton().disabled).toBe(true);
   expect(restartAllowed()).toBe(true);
+});
+
+it("waits for an immediate Advanced save before switching tabs and puts the choice back if it fails", async () => {
+  let fail!: () => void;
+  vi.spyOn(api, "updateSettings").mockImplementation(() => new Promise((_resolve, reject) => {
+    fail = () => reject(new Error("Engine unreachable"));
+  }));
+  await open("/settings#advanced");
+  await selectOption(previewHeight(), "720p");
+  await press("About");
+  expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("Advanced");
+  expect(el.textContent).toContain("Saving…");
+  await act(async () => fail());
+  expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("Advanced");
+  expect(el.querySelector('form [role="alert"]')?.textContent).toBe("Engine unreachable");
+  expect(previewHeight().textContent).toBe("540p (default)");
+  await press("About");
+  expect(el.querySelector('[aria-current="true"]')?.textContent).toBe("About");
 });
 
 it("saves a General dropdown as it is chosen, with no Save to press", async () => {
@@ -548,24 +557,13 @@ it("puts a General dropdown back and says why when its choice can't be saved", a
   expect(el.textContent).toBe("Project library");
 });
 
-it("counts a change that was put back as no change: Save goes dim and leaving doesn't ask", async () => {
+it("counts a custom path put back as no change: Save goes dim and leaving doesn't ask", async () => {
+  vi.mocked(api.settings).mockResolvedValue({ settings: customLocalSettings, transcriptionAvailable: true });
   await open("/settings#advanced");
-  const language = el.querySelector<HTMLInputElement>("#tr-lang")!;
-  const concurrency = el.querySelector<HTMLInputElement>("#rd-conc")!;
-  await typeInto(language, "fr");
+  const model = el.querySelector<HTMLInputElement>("#tr-modelpath")!;
+  await typeInto(model, "/models/other.bin");
   expect(saveButton().disabled).toBe(false);
-  await typeInto(language, "en");
-  expect(saveButton().disabled).toBe(true);
-  // A dropdown, a switch and a number field the same.
-  await selectOption(previewHeight(), "720p");
-  await selectOption(previewHeight(), "540p");
-  const cleanup = el.querySelector<HTMLButtonElement>('[aria-label="Enable note cleanup"]')!;
-  await act(async () => cleanup.click());
-  expect(saveButton().disabled).toBe(false);
-  await act(async () => cleanup.click());
-  await typeInto(concurrency, "4");
-  expect(saveButton().disabled).toBe(false);
-  await typeInto(concurrency, "2");
+  await typeInto(model, "/models/old.bin");
   expect(saveButton().disabled).toBe(true);
   await press("About");
   expect(asking()).toBe("");
