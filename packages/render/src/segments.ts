@@ -373,11 +373,21 @@ export async function renderFullCached(
     }
   });
   let sound: string | undefined;
+  const mixProgramAudio = pictureOnly || segments.length > 1;
   // FFmpeg normally runs its video and audio encoders together. Keep one independent
   // sound worker alongside picture, draining both before a cancellation returns.
-  await renderBatch(pictureOnly ? 2 : 1, 2, opts.signal, async (phase, signal) => {
+  // Multi-segment previews also mix one continuous AAC program so per-section AAC
+  // priming and frame padding never collide or drift across joins during playback.
+  await renderBatch(mixProgramAudio ? 2 : 1, 2, opts.signal, async (phase, signal) => {
     if (phase === 0) await encodePictures(signal);
-    else sound = await renderProgramAudio(project, timeline, cacheDir, { ...opts, probes, quality, concurrency: 1, signal });
+    else sound = await renderProgramAudio(project, timeline, cacheDir, {
+      ...opts,
+      exportRange: opts.exportRange ? { start: ranges[0]!.start, end: ranges.at(-1)!.end } : undefined,
+      probes,
+      quality,
+      concurrency: 1,
+      signal,
+    });
   });
 
   await withStagedFile(output, "assembly.mp4", async assembled => {

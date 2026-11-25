@@ -253,17 +253,18 @@ it.each(["queued", "done", "done with changed sources"] as const)("keeps the sav
 });
 
 it.each([
-  ["full", "preview", "-pts1", "unstamped"], ["full", "preview", "-pts1", "stamped"], ["full", "preview", "-pts1", "changed"],
+  ["full", "preview", "-mix4", "unstamped"], ["full", "preview", "-mix4", "stamped"], ["full", "preview", "-mix4", "pts1"], ["full", "preview", "-mix4", "changed"],
+  ["segment", "preview", "-mix4", "stamped"],
   ["full", "delivery", "-mix4", "stamped"], ["export", "preview", "-mix4", "stamped"], ["export", "delivery", "-mix4", "mix3"],
 ] as const)("retires an old %s %s assembly before %s and validates its %s recovery", async (kind, quality, revision, legacy) => {
   const { ctx } = workspace;
   const encode = vi.spyOn(ctx.render, "renderFullCached").mockImplementation(async (_p, _t, _c, file) => { writeFileSync(file, "full"); });
-  const input = { ...section(), kind, quality, range: null };
+  const input = { ...section(), kind, quality, range: kind === "segment" ? { start: 0, end: 8 } : null };
   const initial = ctx.renders.request(input);
   await settle();
   const current = ctx.repos.renders.get(initial.id)!;
   expect(current).toMatchObject({ state: "done", key: expect.stringContaining(revision), previewContentKey: expect.stringContaining(revision) });
-  const oldRevision = legacy === "mix3" ? "-mix3" : "";
+  const oldRevision = legacy === "mix3" ? "-mix3" : legacy === "pts1" ? "-pts1" : "";
   const old = ctx.repos.renders.put({ ...current, key: current.key.replace(revision, oldRevision),
     previewContentKey: legacy === "unstamped" ? undefined : current.previewContentKey!.replace(revision, oldRevision) });
   expect(ctx.renders.isCurrent(old, ctx.repos.projects.get(project.id)!)).toBe(false);
@@ -352,7 +353,7 @@ it("adopts interrupted software exports with their original settings and verifie
   // as the software preview at the identical height, plus its own range and output options.
   const input = { ...base, kind: "export" as const, exportOptions: { height: preview.height! } };
   const legacyKey = ctx.renders.keyFor(project, input, { height: preview.height!, hwaccel: "none" });
-  const sourceFingerprint = preview.previewContentKey!.replace(/-pts1$/, "");
+  const sourceFingerprint = preview.previewContentKey!.replace(new RegExp(`-mix${DELIVERY_AUDIO_REVISION}$`), "");
   const legacyContent = "export-v1-" + sha256(stableStringify([sourceFingerprint, version, null, input.exportOptions])) + `-mix${DELIVERY_AUDIO_REVISION}`;
   const legacy = { ...preview, ...input, id: "rnd_saved", key: legacyKey, previewContentKey: legacyContent,
     state: "running" as const, queuePid: undefined, demandPid: undefined, progress: 0.4 };

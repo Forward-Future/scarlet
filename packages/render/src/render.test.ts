@@ -1020,8 +1020,8 @@ describe("render", () => {
     const run = await renderFullCached(project, timeline, cacheDir, path.join(dir, "run.mp4"), { mediaRoot: dir, height: 180, segmentSeconds: 1 });
     expect(run.segments.length).toBeGreaterThan(2);
     expect(run.rendered).toBe(run.segments.length);
-    // One encode for every section, plus the concat.
-    expect(spawnStats.ffmpeg - before).toBe(2);
+    // One encode for every section, the continuous program audio, and the concat.
+    expect(spawnStats.ffmpeg - before).toBe(3);
     const frames = async (file: string) => Number((await runCapture("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0",
       "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", file])).stdout.toString().trim());
     const samples = async (file: string) =>
@@ -2272,15 +2272,78 @@ it("assembles a cut's preview window from cached playback sections and encodes o
   const frames = Number((await runCapture("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0",
     "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", file])).stdout.toString().trim());
   expect(frames).toBe(11 * 30);
-  // The sound runs the length of the window across the copied and the encoded section: the file says so, and decoding
-  // it gives the whole window and no more than its packets hold. How much of each section's encoder lead-in a decode
-  // drops differs between ffmpeg builds (1,792 samples over on one, 2,432 on another), so the count isn't held to a tolerance.
+  // Continuous program audio keeps the window's sound sample-aligned across copied and newly encoded sections,
+  // with no per-section AAC priming or padding piling up at interior joins.
   const audio = JSON.parse((await runCapture("ffprobe", ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration,nb_frames",
     "-of", "json", file])).stdout.toString()).streams[0] as { duration: string; nb_frames: string };
   expect(Number(audio.duration)).toBeCloseTo(11, 2);
   const sound = await runCapture("ffmpeg", ["-v", "error", "-i", file, "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]);
-  expect(sound.stdout.length / 2).toBeGreaterThanOrEqual(11 * 48000 - 1024);
+  expect(Math.abs(sound.stdout.length / 2 - 11 * 48000)).toBeLessThanOrEqual(1024);
   expect(sound.stdout.length / 2).toBeLessThanOrEqual(Number(audio.nb_frames) * 1024);
+}, 60_000);
+
+it("assembles a multi-cut preview with continuous audio and no seam pops or cumulative drift", async () => {
+  const toneSrc = path.join(dir, "steady-tone-preview.mp4");
+  await runCapture("ffmpeg", [
+    "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+    "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=35",
+    "-f", "lavfi", "-i", "aevalsrc=0.4*sin(2*PI*220*t)+0.3*sin(2*PI*660*t):s=48000:c=stereo:d=35",
+    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "128k", toneSrc,
+  ]);
+  const project = createProject("Multi-cut preview", { width: 320, height: 180, fps: 30, aspect: "custom", sampleRate: 48000, audioChannels: 2 });
+  project.media.push({
+    id: "m1", kind: "video", name: "steady-tone-preview.mp4", path: path.basename(toneSrc),
+    hash: "steady-tone-preview", duration: 35, fps: 30, width: 320, height: 180, hasAudio: true,
+  });
+  // 18 cut clips (> 16 so program audio exercises lossless multi-section mixing, and > 32 s of source
+  // so default planPlaybackSegments produces 8+ sections) separated by 0.2 s skips (exact integer
+  // cycles of both 220 Hz and 660 Hz, so valid cuts stay phase-continuous).
+  const frameCounts = [45, 52, 48, 56, 46, 51, 45, 52, 48, 56, 46, 51, 45, 52, 48, 56, 46, 51];
+  let sourceCursor = 0;
+  let totalDuration = 0;
+  const keepRanges = frameCounts.map(frames => {
+    const duration = frames / 30;
+    const range = { start: sourceCursor, end: sourceCursor + duration };
+    sourceCursor += duration + 0.2;
+    totalDuration += duration;
+    return range;
+  });
+  const timeline = timelineFromKeepRanges(project.id, "m1", keepRanges);
+  const cache = path.join(dir, "multi-cut-preview-cache");
+  const output = path.join(dir, "multi-cut-preview.mp4");
+  const result = await renderFullCached(project, timeline, cache, output, {
+    mediaRoot: dir, quality: "preview", height: 180, hwaccel: "none",
+  });
+  expect(result.segments.length).toBeGreaterThanOrEqual(8);
+
+  // Every audio packet must retain full AAC frame duration (no 1-tick Non-monotonic DTS collisions).
+  const { stdout: pktJson } = await runCapture("ffprobe", [
+    "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time,duration_time", "-of", "json", output,
+  ]);
+  const { packets } = JSON.parse(pktJson.toString()) as { packets: { pts_time: string; duration_time: string }[] };
+  expect(packets.length).toBeGreaterThan(100);
+  for (let i = 0; i < packets.length - 1; i++) {
+    expect(Number(packets[i]!.duration_time)).toBeGreaterThan(0.02);
+    expect(Number(packets[i + 1]!.pts_time)).toBeGreaterThan(Number(packets[i]!.pts_time));
+  }
+
+  // Decoded PCM must match the video duration within a single AAC frame (no +30 ms/segment excess drift)
+  // and stay free of sharp click/pop discontinuities across interior segment seams.
+  const { stdout: pcm } = await runCapture("ffmpeg", [
+    "-v", "error", "-i", output, "-vn", "-ac", "1", "-ar", "48000", "-f", "f32le", "-",
+  ]);
+  const sampleTotal = pcm.byteLength / 4;
+  expect(Math.abs(sampleTotal - Math.round(totalDuration * 48000))).toBeLessThanOrEqual(1024);
+  let maxJump = 0;
+  for (let i = 2; i < sampleTotal - 2; i++) {
+    const s0 = pcm.readFloatLE((i - 2) * 4);
+    const s1 = pcm.readFloatLE((i - 1) * 4);
+    const s2 = pcm.readFloatLE(i * 4);
+    const d2 = Math.abs(s2 - 2 * s1 + s0);
+    if (d2 > maxJump) maxJump = d2;
+  }
+  expect(maxJump).toBeLessThan(0.12);
 }, 60_000);
 
 it("encodes multi-split batches cleanly when an adelay audio clip precedes an earlier track in amix", async () => {
