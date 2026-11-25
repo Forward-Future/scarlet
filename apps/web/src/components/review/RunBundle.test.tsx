@@ -162,15 +162,24 @@ it("lists tokens by project, provider and model in Settings", async () => {
 
   const view = render(<UsageSettings />);
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-  const text = view.host.textContent ?? "";
-  expect(text).toContain("1.3M tokens");
-  expect(text).toContain(". 3 runs since ");
-  expect(text).toContain("Interview");
-  expect(text).toContain("Deleted project");
-  expect(text).toContain("Claude Code");
-  expect(text).toContain("Default model");
-  expect(text).not.toMatch(/agent/i);
-  expect(text).not.toMatch(/\$|cost/i);
+  const text = () => view.host.textContent ?? "";
+  expect(text()).toContain("1.3M tokens");
+  expect(text()).toContain("3 runs since ");
+  expect(text()).toContain("Interview");
+  expect(text()).toContain("Deleted project");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
+
+  const tabButton = (label: string) => [...view.host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(b => b.textContent?.includes(label))!;
+  act(() => tabButton("Providers").click());
+  expect(text()).toContain("Claude Code");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
+
+  act(() => tabButton("Models").click());
+  expect(text()).toContain("Default model");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
 
   // The switch reflects the editor's choice and remembers it.
   const toggle = view.host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Show tokens in the chat"]')!;

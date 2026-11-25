@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Settings › Usage is now organized into cleaner Tokens and Storage cards with a token breakdown bar, 14-day activity chart, tabbed breakdowns by project, provider and model, live plan limits for signed-in subscriptions, and one-click Clear all for cached renders.
 - Cuts and edits now go by their time everywhere instead of a number: rows start with their time, the timeline shows plain dots (filled once kept, amber while they wait), and cards, the message box's tag and Scarlet's replies say "Cut 2:47" or "Edit 0:11", in both the current and the beta layout.
 - Diagnostics in Settings › Advanced is now cleaner, with separate rows for each set-up provider, clearer Open and Logs buttons, and internal paths tucked under Technical details.
 - Times you type in the message box are now plain gray text instead of sitting in gray boxes. They still jump the video there when clicked, and light up with an underline on hover.
