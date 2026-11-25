@@ -66,6 +66,7 @@ import { TimelineWorking } from "../../components/review/TimelineWorking";
 import { Turn } from "./Turn";
 import { useCallListen } from "./useCallListen";
 import { useAppliedCut, type AppliedCutSide, type StagedCall } from "./useAppliedCut";
+import { useCutAdjust } from "./useCutAdjust";
 import { useCallCardShortcuts, useCarryingFootage, useChatAutoFollow, useDraftTimeline, useEditCardShortcuts, useLandingTracker, useOutsideClearMarkedRange, usePassCallNumbers, usePassChoices, useProjectBookmark, useEscapeCloses, useUndoShortcut, useWatchedMomentAutoKeep } from "./workspaceHooks";
 import "../../simple.css";
 
@@ -1118,12 +1119,12 @@ export function LegacySimpleWorkspace() {
   const callFocus = listening ? callView ? callView.focus : heard && callTimeline && focusAround(heard, callDuration ?? 0, conflict ? "Current passage" : `Takes out · ${lengthLabel(heard.end - heard.start)}`) : undefined;
   const editLine = shownEdit && !appliedCut && !shownEdit.beforeCut && !shownEdit.rejected && !reviewRange
     ? threadTimeline.selectedMoment
-      ? editFocus({ ...shownEdit, range: momentRange(threadTimeline.selectedMoment) }, cutDuration ?? 0, `${threadTimeline.selectedMoment.edits.length} edits`)
-      : editFocus(shownEdit, cutDuration ?? 0)
+      ? editFocus({ ...shownEdit, range: momentRange(threadTimeline.selectedMoment) }, cutDuration ?? 0, `${threadTimeline.selectedMoment.edits.length} edits`, firstKey(shownEdit))
+      : editFocus(shownEdit, cutDuration ?? 0, undefined, firstKey(shownEdit))
     : undefined;
-  const lineFocus = listening ? callFocus ? { ...callFocus, ...callUndecided && { undecided: true } } : undefined
+  const lineFocus = listening ? callFocus ? { ...callFocus, ...callUndecided && { undecided: true }, ...(openCall && { key: `call:${openCall.askOrder ?? openCall.index}` }) } : undefined
     : places.length ? suggestionLine
-    : appliedCut ? focusAround(appliedCut, beforeDuration, `Took out · ${lengthLabel(appliedCut.end - appliedCut.start)}`, { undecided: editUndecided, playbackEnd: afterListen?.end })
+    : appliedCut ? focusAround(appliedCut, beforeDuration, `Took out · ${lengthLabel(appliedCut.end - appliedCut.start)}`, { undecided: editUndecided, playbackEnd: afterListen?.end, key: cutKey })
     // Until the earlier version arrives, a line marks the join in the working cut and says how much came out there.
     : shownEdit?.beforeCut ? focusAround({ start: shownAt!, end: shownAt! }, cutDuration ?? 0,
       `Took out · ${lengthLabel(shownEdit.beforeCut.removed.end - shownEdit.beforeCut.removed.start)}`, { undecided: editUndecided })
@@ -1579,6 +1580,15 @@ export function LegacySimpleWorkspace() {
     const step = await undoLast(current.id, project, version => useProjectStore.getState().historyEdit(version, "revert"), takeBackCall);
     // A call taken back is open on its card already.
     if (step?.kind === "call") return;
+    if (step?.kind === "callAdjust") {
+      const prior = useProjectStore.getState().current?.changes.find(c => c.id === step.replacedId);
+      const cut = prior && stagedCuts(prior)[step.index];
+      if (prior && cut) {
+        player.pause();
+        setListening(prev => ({ changeId: prior.id, index: step.index, cut, side: "after", take: (prev?.take ?? 0) + 1, key: `${prior.id}/${step.index}` }));
+      }
+      return;
+    }
     // A Keep, Add or Reject edit moved the card on: taken back, the card goes back to the edit it was about.
     const opened = step?.kind === "keep" ? step : step?.kind === "revision" && step.edit && step.threadId ? { threadId: step.threadId, edit: step.edit } : undefined;
     const thread = opened && threadsNow.current.find(t => t.id === opened.threadId);
@@ -1642,7 +1652,8 @@ export function LegacySimpleWorkspace() {
   const editDid = !reviewingEdit || threadTimeline.selectedMoment || shownMarker ? undefined
     : beforeCut ? cutBefore.timeline && <CutWordsLine key={`what ${editKey(reviewingEdit)}`} timeline={cutBefore.timeline} media={media}
       range={beforeCut.removed} length={lengthLabel(removedLength)} verb="Took out" />
-    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, before: shownChangeBefore, media, fps }));
+    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, before: shownChangeBefore, media, fps })
+      ?? (shownChange?.author.type === "human" && threadTimeline.originalChange !== shownChange ? editDetail(threadTimeline.originalChange, reviewingEdit, { timeline, before: shownChangeBefore, media, fps }) : undefined));
   // The transcript stays folded away. Its icon on the card opens it for this edit only.
   const scriptKey = reviewingEdit && beforeCut ? editKey(reviewingEdit) : undefined;
   const scriptOpen = !!scriptKey && scriptFor === scriptKey;
@@ -2308,6 +2319,24 @@ export function LegacySimpleWorkspace() {
         setRewording(item && rewording?.id !== id ? { id, text: item.text } : undefined);
       }} /> : undefined} />;
 
+  const adjustName = rejectTarget ? cutName(rejectTarget) ?? targetName(rejectTarget) : openCall && pass ? cutName({ changeId: pass.id, cutIndex: openCall.index }) : undefined;
+  const cutAdjust = useCutAdjust({
+    projectId: current.id, head, timeline, media, fps,
+    focusThread, shownChange: threadTimeline.originalChange ?? shownChange, reviewingEdit: editSentBack ? undefined : reviewingEdit,
+    selectedMoment: !!threadTimeline.selectedMoment, hasReviewRange: !!reviewRange, singleEdit: threadTimeline.single, leaving: threadTimeline.leaving,
+    cutKey, appliedCut, beforeTimeline, otherCuts, stagedAround, setCutSide,
+    onEngineLeave: asked => asked ? threadTimeline.leave() : threadTimeline.stay(),
+    onAppliedRejected: version => {
+      if (openEditNow.current !== openEditKey) return;
+      player.pause();
+      setLeavingEdit({ key: openEditKey!, version, dot: shownMarks.find(dot => dot.edit === openEditKey) });
+    },
+    ...(adjustName && { cutName: tagOf(adjustName) }),
+    pass, openCall, listening, setListening, conflict: !!conflict, openCallBack, deciding: !!deciding,
+    heard, callTimeline, callView, passRemovals,
+    onSkipCall: () => { if (openCall) void decideCut(approves(openCall) === "cut" ? "keep" : "cut"); },
+  });
+
   return <EditHoverContext.Provider value={hoveredEdit}>
     <main className="min-h-0 flex flex-1 flex-col">
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
@@ -2375,7 +2404,7 @@ export function LegacySimpleWorkspace() {
                 ? { key: callPlaybackKey(listening.index, callTimeline.version), start: audition.start, side: listening.side,
                   beforeWindow: preparedCall?.before.window, afterWindow: preparedCall?.after.window,
                   beforeFile: preparedCall?.before.file, afterFile: preparedCall?.after.file } : undefined,
-            onGap: hearInBefore, onBand, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, reviewRange, writeRequest, heard: heardPick, quiet: quietOpen }} threadView={playerView}
+            onGap: hearInBefore, onBand, cutAdjust, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, reviewRange, writeRequest, heard: heardPick, quiet: quietOpen }} threadView={playerView}
             workingCache={workingCache} draftVersion={previewVersion} draft={previewTimeline}
             openingJoin={!source && (appliedCut ? joinPending : openingJoin)} cutLoadError={cutLoadError}
             draftFailed={openingJoin ? !!single.error || (!!single.preview && !listenJoined) : pinnedCallVersion ? !!savedBefore.error : !appliedCut && draftFailed}

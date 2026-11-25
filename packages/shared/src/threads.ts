@@ -78,6 +78,7 @@ export function buildThreads(d: Source): Thread[] {
   // from its card, stays in the request that raised the doubt, which lists the edit, and doesn't join the two.
   const raisedIn = new Map<string, Set<string>>();
   const byId = new Map(tasks.map(t => [t.id, t]));
+  const changeById = new Set(d.changes.map(c => c.id));
   for (const c of d.changes) for (const flag of c.flags ?? []) {
     const raiser = byId.get(flag.taskId);
     if (raiser) (raisedIn.get(c.id) ?? raisedIn.set(c.id, new Set()).get(c.id)!).add(raiser.context.threadId ?? raiser.id);
@@ -85,7 +86,11 @@ export function buildThreads(d: Source): Thread[] {
   for (const t of tasks) {
     g.add(key("t", t.id));
     if (t.retryTaskId) g.union(key("t", t.id), key("t", t.retryTaskId));
-    if (t.context.threadId) g.union(key("x", t.context.threadId), key("t", t.id));
+    if (t.context.threadId) {
+      g.union(key("x", t.context.threadId), key("t", t.id));
+      if (byId.has(t.context.threadId)) g.union(key("t", t.context.threadId), key("t", t.id));
+      if (changeById.has(t.context.threadId)) g.union(key("c", t.context.threadId), key("t", t.id));
+    }
     if (t.context.changeId && !(t.context.threadId && raisedIn.get(t.context.changeId)?.has(t.context.threadId)))
       g.union(key("c", t.context.changeId), key("t", t.id));
     for (const c of t.changeIds) g.union(key("t", t.id), key("c", c));
@@ -96,7 +101,11 @@ export function buildThreads(d: Source): Thread[] {
   }
   for (const c of d.changes) {
     g.add(key("c", c.id));
-    if (c.threadId) g.union(key("x", c.threadId), key("c", c.id));
+    if (c.threadId) {
+      g.union(key("x", c.threadId), key("c", c.id));
+      if (byId.has(c.threadId)) g.union(key("t", c.threadId), key("c", c.id));
+      if (changeById.has(c.threadId)) g.union(key("c", c.threadId), key("c", c.id));
+    }
     if (c.taskId) g.union(key("t", c.taskId), key("c", c.id));
     for (const noteId of c.noteIds) {
       const previousChange = feedbackChanges.get(noteId);

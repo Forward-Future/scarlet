@@ -26,11 +26,11 @@ export type UndoStep = {
   edit: EditRef & { single?: boolean };
 } | {
   kind: "revision";
-  /** "Reject" for a Reject edit, which asks Scarlet to put the edit back as a revision does; "Add" for a to-do's Add. */
-  word?: "Reject" | "Add";
+  /** "Reject" for a Reject edit, "Add" for a to-do's Add, "Adjust" for a direct cut-edge drag on the timeline. */
+  word?: "Reject" | "Add" | "Adjust";
   /** The request the revision went out as. */
   taskId?: string;
-  /** The version a rejection made when the engine put the cut back itself, with no request: ⌘Z takes that version out. */
+  /** The version a rejection or direct cut adjustment made with no request: ⌘Z takes that version out. */
   version?: string;
   /** The edit the card went on from (Reject edit moves on as Keep does), opened again once it is taken back. */
   threadId?: string;
@@ -55,6 +55,14 @@ export type UndoStep = {
   index: number;
   /** What the call was decided as before, when this changed a decision already made: taken back, it is that again. */
   was?: "keep" | "cut";
+} | {
+  /** Direct edge drag on a call of a pass that waits on the editor. */
+  kind: "callAdjust";
+  word: "Adjust";
+  /** The replacement pass made by the drag, the prior pass it replaced, and the cut's index. */
+  changeId: string;
+  replacedId: string;
+  index: number;
 });
 
 /** A call's step, as the page that holds the pass takes it back. */
@@ -91,7 +99,7 @@ export function recordUndo(step: NewStep) {
  * be taken back. ⌘Z says so once, and goes on to what came before them.
  */
 export function forgetCalls(projectId: string) {
-  useUndoStore.setState(s => ({ steps: s.steps.filter(step => step.projectId !== projectId || step.kind !== "call") }));
+  useUndoStore.setState(s => ({ steps: s.steps.filter(step => step.projectId !== projectId || (step.kind !== "call" && step.kind !== "callAdjust")) }));
 }
 
 /** The step the next ⌘Z takes back in this project. */
@@ -123,6 +131,15 @@ export async function undoLast(projectId: string, project: { changes: readonly C
     else if (step.kind === "call") {
       if (!uncall) throw new Error("its pass isn’t open here.");
       uncall(step);
+    }
+    else if (step.kind === "callAdjust") {
+      const made = project.changes.find(c => c.id === step.changeId);
+      if (made?.state === "approved") throw new Error("its pass has been applied since.");
+      if (made && (made.state === "ready" || made.state === "revising" || made.state === "failed")) {
+        await api.rejectChange(made.id, "Taken back with Undo.");
+      }
+      const prior = project.changes.find(c => c.id === step.replacedId);
+      if (prior?.state === "rejected") await api.reopenChange(prior.id);
     }
     else if (step.version) await revert(step.version);
     else if (step.taskId) await undoRevision(step.taskId, project, revert);

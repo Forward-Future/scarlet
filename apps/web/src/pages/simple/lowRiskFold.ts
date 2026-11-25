@@ -101,28 +101,32 @@ function fold(host: HTMLElement | null, way: "in" | "out", held: Held | undefine
 /**
  * Low risk edits open into For you's list and close out of it, and nothing else moves: each row grows from nothing in
  * its place, the row the editor was on stays where it was, and unticked the rows close before they leave. `shown` is
- * whether the list still draws them. With motion reduced they are there or gone at once.
+ * whether the list still draws them. Switching away from For you and back (`visible` false -> true) reloads the
+ * existing list immediately without replaying the open animation, and leaving For you stops any close animation at
+ * once. With motion reduced they are there or gone at once.
  */
-export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean, setOn: (on: boolean) => void) {
+export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean, setOn: (on: boolean) => void, visible = true) {
   const [closing, setClosing] = useState(false);
   const held = useRef<Held>(undefined);
-  const was = useRef(on);
+  const was = useRef({ on, visible });
   useLayoutEffect(() => {
-    const opened = on && !was.current;
-    was.current = on;
+    const before = was.current;
+    was.current = { on, visible };
+    // Animate only when low risk edits are opened into an already-visible For you list, never on a tab switch back.
+    const opened = visible && before.visible && on && !before.on;
     if (!opened) return;
     const keep = held.current;
     held.current = undefined;
     return fold(host.current, "in", keep);
-  }, [on]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [on, visible]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
-    if (!closing) return;
+    if (!closing || !visible) return;
     const keep = held.current;
     held.current = undefined;
     return fold(host.current, "out", keep, () => setClosing(false));
-  }, [closing]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Included again from somewhere else while they close (an edit opened from the timeline): they stay.
-  if (on && closing) setClosing(false);
+  }, [closing, visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Included again from somewhere else while they close (an edit opened from the timeline), or switched away: stop closing.
+  if ((on || !visible) && closing) setClosing(false);
   // A row on its way out of For you or Done closes as it fades, so the rows under it don't jump up when it goes. One that
   // stays after all (⌘Z took its Keep back or a revision restarted it while it faded) is its own height again.
   const leaving = useRef(new Map<HTMLElement, Animation>());
@@ -145,10 +149,10 @@ export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean,
   });
   const toggle = () => {
     held.current = hold(host.current);
-    if (on && canMove()) setClosing(true);
+    if (on && visible && canMove()) setClosing(true);
     setOn(!on);
   };
-  return { shown: on || closing, closing, toggle };
+  return { shown: visible && (on || closing), closing: visible && closing, toggle };
 }
 
 /**

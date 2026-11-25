@@ -187,3 +187,131 @@ it("keeps the final partial frame inside the clip and drops the loupe if capture
   expect(released).toHaveBeenCalledOnce();
   expect(container.querySelector(".scrub-loupe")).toBeNull();
 });
+
+it("lets hover-only edge handles drag an open cut's start or end edge, shows live word readout, cancels on Esc, and nudges with arrow keys", async () => {
+  const onCommit = vi.fn();
+  const onBand = vi.fn();
+  await act(async () => root.render(
+    <TimelineScrubber start={0} duration={20} playhead={5} fps={30} frameAt={() => undefined}
+      onSeek={t => seeks.push(t)} onScrubStart={() => released} onBand={onBand}
+      highlight={{ key: "cut-1", view: { start: 0, end: 10 }, band: { start: 2, end: 4 }, bandLabel: "Took out · 2.0 s" }}
+      cutAdjust={{
+        bounds: { minStart: 1, maxStart: 4, minEnd: 2, maxEnd: 6 },
+        tone: "cut",
+        bandPrefix: "Took out",
+        describeEdge: (edge, oldTime, newTime) => ({
+          text: edge === "start" && newTime > oldTime ? "Put back “really”" : "Take out “and”",
+          tone: newTime > oldTime ? "put-back" : "take-out",
+          delta: `${newTime > oldTime ? "+" : "−"}${Math.abs(newTime - oldTime).toFixed(2)} s`,
+        }),
+        onCommit,
+      }} />));
+  await zoomed();
+
+  const startHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="start"]');
+  const endHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="end"]');
+  expect(startHandle).not.toBeNull();
+  expect(endHandle).not.toBeNull();
+  expect(startHandle!.style.left).toBe("20%");
+  expect(endHandle!.style.left).toBe("40%");
+
+  // Clicking the middle of the band still plays Before footage via onBand, without touching cutAdjust.
+  await act(async () => {
+    container.querySelector(".simple-timeline-band")!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, button: 0, isPrimary: true, clientX: 300, bubbles: true }));
+  });
+  expect(onBand).toHaveBeenCalledWith(3);
+  expect(onCommit).not.toHaveBeenCalled();
+
+  // Drag the start handle right from 2.0 s (200 px) to 2.5 s (250 px).
+  await act(async () => {
+    startHandle!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 2, button: 0, isPrimary: true, clientX: 200, bubbles: true }));
+  });
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 2, clientX: 250, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  const readout = container.querySelector(".timeline-cut-readout");
+  expect(readout?.textContent).toContain("Put back “really”");
+  expect(readout?.textContent).toContain("+0.50 s");
+  expect(container.querySelector(".timeline-cut-origin")).not.toBeNull();
+  expect(seeks.at(-1)).toBeCloseTo(2.5, 5);
+
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointerup", { pointerId: 2, clientX: 250, bubbles: true }));
+  });
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(onCommit.mock.calls[0]![0]).toEqual({ start: 2.5, end: 4 });
+  expect(container.querySelector(".timeline-cut-readout")).toBeNull();
+
+  // Pressing Esc during a drag cancels cleanly without committing.
+  await act(async () => {
+    endHandle!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 3, button: 0, isPrimary: true, clientX: 400, bubbles: true }));
+  });
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 3, clientX: 460, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  expect(container.querySelector(".timeline-cut-readout")).not.toBeNull();
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(container.querySelector(".timeline-cut-readout")).toBeNull();
+
+  // Keyboard arrow keys nudge one frame (or 10 frames with Shift).
+  await act(async () => {
+    startHandle!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  });
+  expect(onCommit).toHaveBeenCalledTimes(2);
+  expect(onCommit.mock.calls[1]![0].start).toBeCloseTo(2 + 1 / 30, 5);
+  expect(onCommit.mock.calls[1]![0].end).toBe(4);
+});
+
+it("renders edit-toned edge handles with custom removeLabel when pulling a timed edit closed", async () => {
+  const onCommit = vi.fn();
+  await act(async () => root.render(
+    <TimelineScrubber start={0} duration={20} playhead={1} fps={30} frameAt={() => undefined}
+      onSeek={t => seeks.push(t)} onScrubStart={() => released}
+      highlight={{ key: "edit-1", view: { start: 0, end: 10 }, band: { start: 1, end: 3 }, bandLabel: "Text · 2.0 s", tone: "kept" }}
+      cutAdjust={{
+        bounds: { minStart: 0, maxStart: 3, minEnd: 1, maxEnd: 8 },
+        tone: "edit",
+        bandPrefix: "Text",
+        removeLabel: "Remove",
+        describeEdge: (_edge, oldTime, newTime, next) => ({
+          text: next.end <= next.start ? "Remove text" : newTime > oldTime ? "Ends later" : "Ends earlier",
+          tone: next.end <= next.start ? "take-out" : "neutral",
+          delta: `${newTime > oldTime ? "+" : "−"}${Math.abs(newTime - oldTime).toFixed(2)} s`,
+        }),
+        onCommit,
+      }} />));
+  await zoomed();
+
+  const startHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="start"]');
+  const endHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="end"]');
+  expect(startHandle?.classList.contains("is-edit")).toBe(true);
+  expect(endHandle?.classList.contains("is-edit")).toBe(true);
+  expect(startHandle?.getAttribute("aria-label")).toContain("Adjust start of edit");
+  expect(endHandle?.getAttribute("aria-label")).toContain("Adjust end of edit");
+
+  // Dragging the end edge shorter updates the band label, and pulling it all the way back to start collapses to the cut line with removeLabel.
+  await act(async () => {
+    endHandle!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 7, button: 0, isPrimary: true, clientX: 300, bubbles: true }));
+  });
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 7, clientX: 200, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Text · 1.0 s");
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 7, clientX: 100, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  expect(container.querySelector(".simple-timeline-cut")?.textContent).toBe("Remove");
+  expect(container.querySelector(".timeline-cut-readout")?.textContent).toContain("Remove text");
+
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointerup", { pointerId: 7, clientX: 100, bubbles: true }));
+  });
+  expect(onCommit).toHaveBeenCalledWith({ start: 1, end: 1 });
+});
