@@ -163,9 +163,9 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .composer-timestamp-overlay { position: absolute; inset: 0; overflow: hidden; color: transparent; pointer-events: none; }
 .composer-message:has(.composer-timestamp-overlay) > * { scrollbar-gutter: stable; }
 .composer-message:has(.composer-timestamp-overlay) > span { overflow: hidden; }
-.composer-timestamp { display: inline; padding: 0; border: 0; border-radius: 0; background: var(--color-bg); font: inherit; color: var(--color-muted);
+.composer-timestamp { display: inline; padding: 0; border: 0; border-radius: 0; background: var(--color-bg); font: inherit; color: var(--color-dim);
   pointer-events: auto; cursor: pointer; }
-.composer-timestamp:hover, .composer-timestamp:focus-visible { color: var(--color-fg); }
+.composer-timestamp:hover, .composer-timestamp:focus-visible { color: var(--color-fg); outline: none; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }
 .composer-send { width: 30px; padding: 0; border-radius: 50%; }
 .composer-send svg { transform: rotate(-90deg); }
 @media (max-width: 767px) {

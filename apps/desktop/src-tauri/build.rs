@@ -3,11 +3,13 @@
 //! so `cargo build` / `tauri dev` work before the Node SEA has been produced or
 //! ffmpeg fetched. Zero-byte placeholders are written. The app treats an empty
 //! engine as "missing" and falls back to `SCARLET_ENGINE_CMD` /
-//! `node apps/server/dist/cli.js`; the engine ignores an empty ffmpeg and uses PATH.
+//! `node apps/server/dist/cli.js`; dev builds ignore empty ffmpeg and whisper-cli
+//! placeholders and fall back to a built or installed copy / PATH.
 use std::path::PathBuf;
 
 fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
+    println!("cargo:rustc-env=SCARLET_BUILD_TARGET={target}");
     let ext = if target.contains("windows") { ".exe" } else { "" };
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     // OUT_DIR includes the actual target/profile, including custom Cargo targets.

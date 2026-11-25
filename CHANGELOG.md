@@ -6,6 +6,13 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- In the beta three-column layout, the middle edits column can now be resized from its right edge, every row stays on a single line, and hovering a row shows the full line in a Scarlet tooltip.
+- Settings › Usage is now organized into cleaner Tokens and Storage cards with a token breakdown bar, 14-day activity chart, tabbed breakdowns by project, provider and model, live plan limits for signed-in subscriptions, and one-click Clear all for cached renders.
+- Cuts and edits now go by their time everywhere instead of a number: rows start with their time, the timeline shows plain dots (filled once kept, amber while they wait), and cards, the message box's tag and Scarlet's replies say "Cut 2:47" or "Edit 0:11", in both the current and the beta layout.
+- Diagnostics in Settings › Advanced is now cleaner, with separate rows for each set-up provider, clearer Open and Logs buttons, and internal paths tucked under Technical details.
+- Times you type in the message box are now plain gray text instead of sitting in gray boxes. They still jump the video there when clicked, and light up with an underline on hover.
+- Settings › Advanced is simplified to Transcription language, Preview quality and an on/off Hardware acceleration switch, saved immediately without a Save button; Scarlet handles the rest automatically.
+- On Windows, Install Gemini in Settings › Models now finishes, instead of saying the installation did not finish and Gemini isn't installed.
 - Scarlet can now edit with models running on your own computer through Ollama or LM Studio, or with hosted models through OpenRouter. Set them up under Other providers in Settings › Models: each shows up in the model selector only once it has models ready, and OpenRouter's models stay out of the selector until you turn on the ones you want.
 - After you click the timeline's zoom slider, its − or +, "Scarlet is editing", or Check or Show source on a card, Space plays and pauses and ← → skip again, instead of going to the control you clicked.
 - Pressing "Scarlet is editing" under the timeline now shows and lights the request also when it is folded to its heading, or sitting in the beta edits column.

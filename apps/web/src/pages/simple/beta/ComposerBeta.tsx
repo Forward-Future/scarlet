@@ -25,7 +25,6 @@ import { SkillCommandInput } from "../../../components/agent/SkillCommandInput";
 import { MicButton } from "../../../components/agent/MicButton";
 import { AimTimecode, ComposerAim, type AimItem } from "../../../components/agent/ComposerAim";
 import { AttachedFiles, NO_FILES, sendMarks } from "../../../components/agent/ComposerAttachments";
-import { EditBadge } from "../../../components/review/ThreadEdits";
 
 const timestampLabel = (time: number) => playbackClock(time).replace(/\.000$/, "");
 const lowerFirst = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
@@ -75,8 +74,6 @@ interface ComposerProps {
    * that time in place of the cut's or the edit's; the message is still theirs, and Scarlet is told the frame too.
    */
   pausedAt?: PausedAt;
-  /** Where the cut a call's tag names ("Cut 3") is in the video, shown after a dot ("Cut 3 · 2:47"). */
-  aimTime?: number;
   /** Exact time for a time-based target tag ("Cut at 2:05", "Edit at 0:11"), shown to the millisecond above the box. */
   targetTime?: number;
   /** While the box talks to the cut or edit that's open, its row draws itself here, in place of the tag's words. */
@@ -86,12 +83,12 @@ interface ComposerProps {
   /** Opens the cut Scarlet's question is about, from the question over the box, when that cut isn't open. */
   onOpenAsked?(): void;
   /** The specific cut or edit Scarlet's question is about, named right in the question panel header. */
-  askedSubject?: { number?: number; time?: string; label: string };
+  askedSubject?: { time?: string; label: string };
   /** Specific waiting question task to display/answer when a thread has multiple open questions. */
   askedTask?: Task;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime, aimSlot, chipClock, onOpenAsked, askedSubject, askedTask }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, targetTime, aimSlot, chipClock, onOpenAsked, askedSubject, askedTask }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -192,12 +189,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const revising = replying && (!olderCutProposal || pinnedChange === thread.latest) && !thread.active && (!displayAnchor?.changeId || pinnedChange === thread.latest) &&
     (thread.latest?.state === "ready" || thread.latest?.state === "failed") ? thread.latest : undefined;
   const spot = displayAnchor?.editIndex ?? displayAnchor?.cutIndex;
-  const numberedEdit = displayAnchor?.editNumber ?? (spot !== undefined ? spot + 1 : undefined);
-  const editTitle = numberedEdit ? displayAnchor?.label ?? `Edit ${numberedEdit}` : thread && cutSummary(thread.title);
-  const mode = !thread ? "New thread" : displayAnchor?.changeId && !numberedEdit && !selectedEdit ? "Revising" : "Reply to";
+  // A cut or an edit goes by its time, never a number: "Edit at 0:11".
+  const timedEdit = spot !== undefined && displayAnchor ? `${displayAnchor.editIndex !== undefined ? "Edit" : "Cut"} at ${clock(displayAnchor.time)}` : undefined;
+  const editTitle = timedEdit ? displayAnchor?.label ?? timedEdit : thread && cutSummary(thread.title);
+  const mode = !thread ? "New thread" : displayAnchor?.changeId && !timedEdit && !selectedEdit ? "Revising" : "Reply to";
   const sendLabel = !thread ? "Start new edit" : question ? "Send answer" : displayAnchor?.changeId ? "Send revision" : "Send reply";
   const timestamp = displayAnchor && `${timestampLabel(displayAnchor.time)}${displayAnchor.end === undefined ? "" : `–${timestampLabel(displayAnchor.end)}`}`;
-  const targetName = numberedEdit ? `Edit ${numberedEdit}` : displayAnchor?.changeId ? displayAnchor.label || editTitle || timestamp : timestamp;
+  const targetName = timedEdit ? timedEdit : displayAnchor?.changeId ? displayAnchor.label || editTitle || timestamp : timestamp;
   const sourceName = displayAnchor?.mediaId && media?.find(m => m.id === displayAnchor.mediaId)?.name;
   const targetDetails = [...new Set([targetName, sourceName, displayAnchor?.label].filter(Boolean))].join(" · ");
   const removeTarget = displayAnchor?.changeId ? "Remove revision target" : "Remove timestamp";
@@ -214,7 +212,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     const carried = attachments && { attachments, ...(drawn && { pictureMarks: drawn }) };
     const guides = styleGuideIds?.length ? { styleGuideIds } : undefined;
     if (question) {
-      const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
+      // An answer about an edit says which, by its time and name: "Edit at 0:08 · Sponsor transition — …".
+      const answer = anchor?.editIndex !== undefined ? `${[`Edit at ${clock(anchor.time)}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
         : anchor ? `At ${anchor.markedRange || anchor.end !== undefined ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
       const runWith = effective && runChoiceDiffers(question, effective) ? effective : undefined;
       if (carried) await answerTask(question.id, answer, skillIds, runWith, carried);
@@ -489,11 +488,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       const time = placeTag.replace(/^At /, "");
       return <><span className="composer-aim-verb">At</span> <AimTimecode key={`pt:${placeTag}:${exactClock ?? ""}`} value={time} precise={exactClock} /></>;
     }
-    if (/^(?:Cut|Edit) \d+$/.test(placeTag)) {
-      return aimTime !== undefined
-        ? <><span className="composer-aim-target">{placeTag}</span> <span className="composer-aim-sep" aria-hidden="true">·</span> <AimTimecode key={`call:${placeTag}:${aimTime}`} value={clock(aimTime)} precise={playbackClock(aimTime)} /></>
-        : <span className="composer-aim-target">{placeTag}</span>;
-    }
     const timed = /^(Cut|Edit|\d+ edits) at (.+)$/.exec(placeTag);
     if (timed) {
       const noun = timed[1]!;
@@ -506,7 +500,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const placeName = placeTag
     ? targetIsPoint ? placeTag.replace(/^At /, "") : stopped ? `${placeTag}, stopped at ${stopped}` : placeTag
     : undefined;
-  const rowClockAt = aimTime ?? exactTime ?? displayAnchor?.time;
+  const rowClockAt = exactTime ?? displayAnchor?.time;
   const aimRowTime = rowClockAt !== undefined
     ? <AimTimecode key={`rowtime:${placeTag ?? ""}:${rowClockAt}`} value={clock(rowClockAt)} precise={playbackClock(rowClockAt)} />
     : undefined;
@@ -588,7 +582,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
           <span className="composer-ask-dot" aria-hidden />
           <span className="composer-ask-label">
             {askedSubject ? <>Scarlet asks about <span className="composer-ask-subject">
-              {askedSubject.number !== undefined ? <EditBadge n={askedSubject.number} check /> : askedSubject.time && <span className="composer-ask-time">{askedSubject.time}</span>}
+              {askedSubject.time && <span className="composer-ask-time">{askedSubject.time}</span>}
               <span className="composer-ask-subject-words">{askedSubject.label}</span>
             </span></> : "Scarlet asks"}
             {answerNote && <span className="composer-ask-count"> · {answerNote}</span>}

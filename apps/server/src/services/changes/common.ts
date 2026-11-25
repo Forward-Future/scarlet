@@ -114,13 +114,12 @@ export function authorsAgent(ctx: Ctx, author: Author): { agent: AgentId; model?
 }
 
 /**
- * A staged cut as the engine's tools number it (its index, from 0) and, once it is a call, as the editor knows it
- * ("Cut 4"). A pass told only "cut 4 … is with the editor" asked the editor about "edit 5", while the window called it
- * Cut 4 (2026-11-16).
+ * A staged cut as the engine's tools number it (its index, from 0) and, once it is a call, that it is one. The editor
+ * never sees a number: the window names a call by its time ("Cut at 2:47"), so Scarlet speaks of it by its time too.
+ * A pass told only "cut 4 … is with the editor" asked the editor about "edit 5" (2026-11-16).
  */
 export function editorsCut(change: Change, index: number): string {
-  const n = callNumbers(change, 0, false).get(index);
-  return n ? `cut ${index} (the editor’s “Cut ${n}”)` : `cut ${index}`;
+  return callNumbers(change, 0, false).has(index) ? `cut ${index} (one of the editor’s calls, which they know by its time)` : `cut ${index}`;
 }
 
 export const capitalized = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);

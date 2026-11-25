@@ -51,8 +51,8 @@ export const CutAssessment = z.object({
   proposes: z.literal("keep").optional(),
   /**
    * Set by the engine on a cut Scarlet asks the editor about: the order its pass's asks reached them in, from 1. The
-   * editor's number for the call goes by it, so a later ask, earlier in the video, doesn't renumber the calls they've
-   * seen. It goes with the note onto a later part.
+   * editor never sees it (a call goes by its time), but it keeps the calls' order steady when a later ask lands earlier
+   * in the video. It goes with the note onto a later part.
    */
   askOrder: z.number().int().positive().optional(),
 });

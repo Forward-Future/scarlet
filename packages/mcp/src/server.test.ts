@@ -4379,7 +4379,7 @@ it("lets a request sent from an applied edit cut outside where that edit plays, 
   const session = (id: string, context: object) => connect(id, undefined, Task.parse({ id, projectId: tl.projectId, kind: "edit", agent: "claude", state: "running",
     instruction: "Take out the sentence before this too.", context: { version: tl.version, ...context }, createdBy: { type: "human", name: "Editor" } }));
   // The message box was aimed at an applied cut, so the request says where that cut plays: its join at 10 s and a moment either side.
-  const aimed = await session("aimed-at-edit", { changeId: "prior", editIndex: 0, editNumber: 1, time: 8.5, end: 11.5 });
+  const aimed = await session("aimed-at-edit", { changeId: "prior", editIndex: 0, time: 8.5, end: 11.5 });
   // The same times as a range the editor selected on the timeline.
   const selecting = await session("selected-range", { time: 8.5, end: 11.5 });
   const sentence = { start: 3, end: 8 };

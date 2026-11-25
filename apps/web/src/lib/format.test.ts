@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { absTime, authorLabel, clock, clockRange, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, preciseRange, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
+import { absTime, authorLabel, clock, clockRange, distinctClock, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, preciseRange, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
 
 afterEach(() => vi.useRealTimers());
 
@@ -145,4 +145,10 @@ it("keeps a share between 0 and 100 percent, counts things in the singular or pl
   expect(plural(1, "cut")).toBe("1 cut");
   expect(plural(0, "cut")).toBe("0 cuts");
   expect(plural(2, "reply", "replies")).toBe("2 replies");
+});
+
+it("says a time to the millisecond only when another falls in the same second", () => {
+  expect(distinctClock(167.12, [167.12, 200])).toBe("2:47");
+  expect(distinctClock(167.12, [167.12, 167.8])).toBe("2:47.120");
+  expect(distinctClock(167.8, [167.12, 167.8])).toBe("2:47.800");
 });

@@ -72,13 +72,11 @@ interface ComposerProps {
    * that time in place of the cut's or the edit's; the message is still theirs, and Scarlet is told the frame too.
    */
   pausedAt?: PausedAt;
-  /** Where the cut a call's tag names ("Cut 3") is in the video, shown after a dot ("Cut 3 · 2:47"). */
-  aimTime?: number;
   /** Exact time for a time-based target tag ("Cut at 2:05", "Edit at 0:11"), shown to the millisecond above the box. */
   targetTime?: number;
   selectedEdit?: AgentContext; onClearSelectedEdit?(): void; thread?: Thread; onCreated?(task: Task): void; onSent?(): void; modelPicker?: boolean }
 
-function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, aimTime, targetTime }: ComposerProps & { project: Project }) {
+function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClearSelectedEdit, modelPicker = true, tray, targetTag, targetTagNote, targetIsPoint, onClearTarget, onRestoreTarget, rewording, messageClock, pausedAt, targetTime }: ComposerProps & { project: Project }) {
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
@@ -179,12 +177,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const revising = replying && (!olderCutProposal || pinnedChange === thread.latest) && !thread.active && (!displayAnchor?.changeId || pinnedChange === thread.latest) &&
     (thread.latest?.state === "ready" || thread.latest?.state === "failed") ? thread.latest : undefined;
   const spot = displayAnchor?.editIndex ?? displayAnchor?.cutIndex;
-  const numberedEdit = displayAnchor?.editNumber ?? (spot !== undefined ? spot + 1 : undefined);
-  const editTitle = numberedEdit ? displayAnchor?.label ?? `Edit ${numberedEdit}` : thread && cutSummary(thread.title);
-  const mode = !thread ? "New thread" : displayAnchor?.changeId && !numberedEdit && !selectedEdit ? "Revising" : "Reply to";
+  // A cut or an edit goes by its time, never a number: "Edit at 0:11".
+  const timedEdit = spot !== undefined && displayAnchor ? `${displayAnchor.editIndex !== undefined ? "Edit" : "Cut"} at ${clock(displayAnchor.time)}` : undefined;
+  const editTitle = timedEdit ? displayAnchor?.label ?? timedEdit : thread && cutSummary(thread.title);
+  const mode = !thread ? "New thread" : displayAnchor?.changeId && !timedEdit && !selectedEdit ? "Revising" : "Reply to";
   const sendLabel = !thread ? "Start new edit" : question ? "Send answer" : displayAnchor?.changeId ? "Send revision" : "Send reply";
   const timestamp = displayAnchor && `${timestampLabel(displayAnchor.time)}${displayAnchor.end === undefined ? "" : `–${timestampLabel(displayAnchor.end)}`}`;
-  const targetName = numberedEdit ? `Edit ${numberedEdit}` : displayAnchor?.changeId ? displayAnchor.label || editTitle || timestamp : timestamp;
+  const targetName = timedEdit ? timedEdit : displayAnchor?.changeId ? displayAnchor.label || editTitle || timestamp : timestamp;
   const sourceName = displayAnchor?.mediaId && media?.find(m => m.id === displayAnchor.mediaId)?.name;
   const targetDetails = [...new Set([targetName, sourceName, displayAnchor?.label].filter(Boolean))].join(" · ");
   const removeTarget = displayAnchor?.changeId ? "Remove revision target" : "Remove timestamp";
@@ -201,7 +200,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     const carried = attachments && { attachments, ...(drawn && { pictureMarks: drawn }) };
     const guides = styleGuideIds?.length ? { styleGuideIds } : undefined;
     if (question) {
-      const answer = anchor?.editNumber ? `${[`Edit ${anchor.editNumber}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
+      // An answer about an edit says which, by its time and name: "Edit at 0:08 · Sponsor transition — …".
+      const answer = anchor?.editIndex !== undefined ? `${[`Edit at ${clock(anchor.time)}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
         : anchor ? `At ${anchor.markedRange || anchor.end !== undefined ? clockRange(anchor.time, anchor.end ?? anchor.time) : clock(anchor.time)}${sourceName ? ` in ${sourceName}` : ""} — ${text}` : text;
       const runWith = effective && runChoiceDiffers(question, effective) ? effective : undefined;
       if (carried) await answerTask(question.id, answer, skillIds, runWith, carried);
@@ -436,7 +436,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   };
   // Paused with a cut or an edit open, the header shows the one time the editor is looking at: where they stopped.
   // Its full name on hover still says which cut or edit the message goes to.
-  const stopped = replying && !targetIsPoint && pausedAt && aimTime === undefined ? clock(pausedAt.time) : undefined;
+  const stopped = replying && !targetIsPoint && pausedAt ? clock(pausedAt.time) : undefined;
   const exactTime = targetTime !== undefined ? targetTime
     : displayAnchor && placeTag && (placeTag.endsWith(` at ${clock(displayAnchor.time)}`) || placeTag === `At ${clock(displayAnchor.time)}`)
       ? displayAnchor.time : undefined;
@@ -446,11 +446,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     if (targetIsPoint) {
       const time = placeTag.replace(/^At /, "");
       return <><span className="composer-aim-verb">At</span> <AimTimecode key={`pt:${placeTag}:${exactClock ?? ""}`} value={time} precise={exactClock} /></>;
-    }
-    if (/^(?:Cut|Edit) \d+$/.test(placeTag)) {
-      return aimTime !== undefined
-        ? <><span className="composer-aim-target">{placeTag}</span> <span className="composer-aim-sep" aria-hidden="true">·</span> <AimTimecode key={`call:${placeTag}:${aimTime}`} value={clock(aimTime)} precise={playbackClock(aimTime)} /></>
-        : <span className="composer-aim-target">{placeTag}</span>;
     }
     const timed = /^(Cut|Edit|\d+ edits) at (.+)$/.exec(placeTag);
     if (timed) {

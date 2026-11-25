@@ -246,8 +246,8 @@ describe("an editing prompt", () => {
       timelineEdits: [{ label: "Frame the watch", range: { start: 10, end: 20 } },
         { label: " Frame the Fall Guys game ", range: { start: 181, end: 260 }, summary: "Screen zooms to the game window. ",
           reason: " The score was too small to read as you called it out. ", check: "A Windows dialog sits over the game from 4:17" }] } as unknown as Change;
-    const told = buildSystemPrompt({ ...base, change: { change }, task: task({ changeId: "chg_3", editIndex: 1, editNumber: 13 }) });
-    expect(told).toContain(`- Selected edit index: 1 (edit 13 in the editor's list), "Frame the Fall Guys game"`);
+    const told = buildSystemPrompt({ ...base, change: { change }, task: task({ changeId: "chg_3", editIndex: 1 }) });
+    expect(told).toContain(`- Selected edit index: 1, "Frame the Fall Guys game"`);
     expect(told).toContain(`- What you told the editor this edit did: "Screen zooms to the game window."`);
     expect(told).toContain(`- Why you made this edit: "The score was too small to read as you called it out."`);
     expect(told).toContain(`- What you asked the editor to check on this edit: "A Windows dialog sits over the game from 4:17"`);
