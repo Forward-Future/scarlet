@@ -474,4 +474,75 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       localStorage.removeItem("scarlet.simpleReviewWidth");
     }
   });
+
+  it("shows up to three lines for Scarlet replies in the beta layout while keeping default layout and editor bubbles at two lines", async () => {
+    const db = buildDb(true);
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: db.tasks.filter(t => t.state !== "waiting_for_user"),
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockResolvedValue({ version: project.head!, edits: [] });
+
+    const { readFileSync } = await import("node:fs");
+    const css = [
+      readFileSync(`${import.meta.dirname}/../../simple.css`, "utf8"),
+      readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8"),
+    ].join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
+    const foldsAt = (el: Element) => {
+      let best: { lines: number; weight: number } | undefined;
+      for (const [, selectors, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        const lines = /-webkit-line-clamp:\s*(\d+)/.exec(body!)?.[1];
+        if (!lines) continue;
+        for (const selector of selectors!.split(",").map(part => part.trim())) {
+          let matches = false;
+          try { matches = el.matches(selector); } catch { /* Ignore selectors happy-dom cannot match. */ }
+          const weight = (selector.match(/[.#[:]/g) ?? []).length;
+          if (matches && (!best || weight >= best.weight)) best = { lines: Number(lines), weight };
+        }
+      }
+      return best?.lines;
+    };
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // Both Scarlet reply shapes in the beta chat (.req-say.said and .simple-msg.from-scarlet .said) clamp at 3 lines.
+    const scarletClosing = container.querySelector<HTMLElement>(".simple-msg.from-scarlet .said")!;
+    const scarletReq = container.querySelector<HTMLElement>(".req-say.said:not(.is-yours)")!;
+    expect(scarletClosing).not.toBeNull();
+    expect(scarletReq).not.toBeNull();
+    expect([foldsAt(scarletClosing), foldsAt(scarletReq)]).toEqual([3, 3]);
+
+    // Editor bubbles remain clamped at 2 lines.
+    const userBubble = container.querySelector<HTMLElement>(".unit-msg .unit-bubble > p")!;
+    expect(foldsAt(userBubble)).toBe(2);
+
+    // Turning off the beta layout leaves Scarlet's replies at the legacy 2-line clamp.
+    await act(async () => useUiStore.getState().setNewLayout(false));
+    await act(async () => {});
+    const legacyReply = container.querySelector<HTMLElement>(".simple-msg.from-scarlet .said, .req-say.said:not(.is-yours)")!;
+    expect(foldsAt(legacyReply)).toBe(2);
+  });
 });
