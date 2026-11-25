@@ -131,11 +131,11 @@ it("switches models above the draft and sends the edit with the selected model",
   expect(picker.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   await act(() => picker.click());
   await act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Claude Code"]')!.click());
-  await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Haiku 5.5"]')!.click());
-  expect(picker.textContent).toContain("Haiku 5.5");
+  await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Fable 5.1"]')!.click());
+  expect(picker.textContent).toContain("Fable 5.1");
   await submit();
   expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
-    instruction: "Tighten the opening", agent: "claude", model: "haiku",
+    instruction: "Tighten the opening", agent: "claude", model: "fable",
   }));
 });
 
@@ -369,12 +369,12 @@ it("only ever sends: stopping a running edit is on its card, not in the message 
   const action = () => container.querySelector<HTMLButtonElement>(".composer-send");
   // With nothing typed the box has no button, though an edit is running in this request.
   expect(action()).toBeNull();
-  await act(() => useUiStore.getState().setAgent({ agent: "claude", model: "haiku" }));
+  await act(() => useUiStore.getState().setAgent({ agent: "claude", model: "fable" }));
   await type("Keep the first take");
   expect(action()!.getAttribute("aria-label")).toBe("Send reply");
   await submit();
   expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
-    instruction: "Keep the first take", agent: "claude", model: "haiku", context: expect.objectContaining({ threadId: thread.id }),
+    instruction: "Keep the first take", agent: "claude", model: "fable", context: expect.objectContaining({ threadId: thread.id }),
   }));
   await type("Another idea");
   await type("");
@@ -718,11 +718,11 @@ it("sends a spoken edit to the explicitly attached moment and spoken revisions t
   const picker = container.querySelector<HTMLButtonElement>('.composer-context-row .composer-model [aria-haspopup="dialog"]')!;
   await act(() => picker.click());
   await act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Claude Code"]')!.click());
-  await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Haiku 5.5"]')!.click());
-  expect(picker.textContent).toContain("Haiku 5.5");
+  await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Fable 5.1"]')!.click());
+  expect(picker.textContent).toContain("Fable 5.1");
   await act(async () => { micProps.onStart?.(); micProps.onResult(recording); });
   expect(useProjectStore.getState().revise).toHaveBeenCalledWith(ready.latest!.id,
-    expect.objectContaining({ assignTo: "claude:haiku", text: "Keep the last word", voiceTranscript: "Keep the last word" }));
+    expect.objectContaining({ assignTo: "claude:fable", text: "Keep the last word", voiceTranscript: "Keep the last word" }));
   expect(createVoiceNote).toHaveBeenCalledTimes(1);
 });
 

@@ -7,6 +7,11 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 25, 2026
 
 - In the default layout, For you, Working, Done, and edit lists now stay fixed at the bottom above the message box while new messages appear above them.
+- Exported Final Cut Pro XML files now include standard format names (such as 4K 30p and 1080p 29.97p) so Final Cut Pro imports them cleanly.
+- Voice dictation now ignores silence and quiet room tone so silent recordings no longer turn into phantom phrases like "thank you".
+- Added a Cancel button beside active and queued file transcriptions in Media so you can stop a transcription in progress.
+- Added a visible Cancel button beside the recording timer while dictating, alongside Esc, to discard a recording cleanly.
+- Settings › Models now enables only the recommended frontier models by default (Opus 5.5 and Fable 5.2 for Claude Code, GPT-6.2-Sol and GPT-6.2-Astra for Codex, and Gemini 4 Neon for Gemini), while keeping all other models one toggle away.
 - In the beta layout, removed the stray collapse arrow beside chat bubbles and fixed token usage stats popping up in the top-left corner so they appear right over the message you hover.
 - In the beta layout, Scarlet’s chat replies now show up to three lines without expanding, and Scarlet keeps its written replies to three lines at most.
 - In the beta layout, Working and Done at the bottom of the edits column are now separated by a divider line.

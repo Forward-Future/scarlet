@@ -32,7 +32,7 @@ it("renders each model on one line and places disabled models below active ones"
       }],
     }],
   });
-  useModelPreferences.setState({ hidden: ["claude:opus", "claude:sonnet"], favorites: [] });
+  useModelPreferences.setState({ hidden: ["claude:opus", "claude:sonnet"], shown: ["claude:haiku"], favorites: [] });
 
   const container = document.createElement("div");
   const root = createRoot(container);
@@ -62,6 +62,66 @@ it("renders each model on one line and places disabled models below active ones"
     await act(() => toggle("Opus 5.5").click());
     expect(labels()).toEqual(["Opus 5.5", "Haiku 5.5", "Fable 5.2", "Sonnet 5.5"]);
     expect([...container.querySelectorAll("h4")].map(h => h.textContent)).toEqual(["Models", "Hidden· 2"]);
+  } finally {
+    await act(() => root.unmount());
+    useHostsStore.setState(oldHosts, true);
+    useModelPreferences.setState(oldPrefs, true);
+    vi.unstubAllGlobals();
+  }
+});
+
+it("enables only recommended frontier models by default across Claude Code, Codex, and Gemini", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const oldHosts = useHostsStore.getState();
+  const oldPrefs = useModelPreferences.getState();
+  const host = buildDb().hosts[0]!;
+  useHostsStore.setState({
+    hosts: [{
+      ...host,
+      online: true,
+      agents: [
+        {
+          id: "claude",
+          installed: true,
+          models: ["opus", "fable", "sonnet", "haiku"],
+          modelLabels: { opus: "Opus 5.5", fable: "Fable 5.2", sonnet: "Sonnet 5.5", haiku: "Haiku 5.5" },
+        },
+        {
+          id: "codex",
+          installed: true,
+          models: ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6-luna"],
+          modelLabels: { "gpt-6.2-sol": "GPT-6.2-Sol", "gpt-6.2-astra": "GPT-6.2-Astra", "gpt-6.1-sol": "GPT-6.1-Sol", "gpt-6-luna": "GPT-6-Luna" },
+        },
+        {
+          id: "gemini",
+          installed: true,
+          models: ["gemini-4-neon", "gemini-4-carbon", "gemini-3.8-flash"],
+          modelLabels: { "gemini-4-neon": "Gemini 4 Neon", "gemini-4-carbon": "Gemini 4 Carbon", "gemini-3.8-flash": "Gemini 3.8 Flash" },
+        },
+      ],
+    }],
+  });
+  useModelPreferences.setState({ hidden: [], shown: [], favorites: [] });
+
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const activeLabels = () => [...container.querySelectorAll('li[data-model-state="active"]')].map(li => li.querySelector("span")!.textContent);
+  const hiddenLabels = () => [...container.querySelectorAll('li[data-model-state="hidden"]')].map(li => li.querySelector("span")!.textContent);
+  const switchProvider = (name: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === name)!;
+
+  try {
+    await act(() => root.render(<MemoryRouter><ModelSettings /></MemoryRouter>));
+    expect(activeLabels()).toEqual(["Opus 5.5", "Fable 5.2"]);
+    expect(hiddenLabels()).toEqual(["Sonnet 5.5", "Haiku 5.5"]);
+
+    await act(() => switchProvider("Codex").click());
+    expect(activeLabels()).toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra"]);
+    expect(hiddenLabels()).toEqual(["GPT-6.1-Sol", "GPT-6-Luna"]);
+
+    await act(() => switchProvider("Gemini").click());
+    expect(activeLabels()).toEqual(["Gemini 4 Neon"]);
+    expect(hiddenLabels()).toEqual(["Gemini 4 Carbon", "Gemini 3.8 Flash"]);
   } finally {
     await act(() => root.unmount());
     useHostsStore.setState(oldHosts, true);

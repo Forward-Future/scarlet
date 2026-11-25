@@ -13,7 +13,8 @@ import { actorFor } from "../services/activity.js";
 import { createNote } from "../services/notes.js";
 import { requestAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { notify } from "../services/notify.js";
-import { getTranscriptionProvider, spokenText } from "../transcribe/index.js";
+import { filterDictationText } from "../transcribe/dictation.js";
+import { getTranscriptionProvider } from "../transcribe/index.js";
 import { errorMessage } from "../util.js";
 import { formFile, formString, jsonBody, multipartError, numberParam, requireProjectHeader, requireScoped } from "./util.js";
 
@@ -97,9 +98,10 @@ export function noteRoutes(ctx: Ctx) {
     let unheard = badRequest("transcription_not_configured", NOT_CONFIGURED);
     const provider = getTranscriptionProvider(ctx);
     if (provider) {
+      const wav = join(ctx.paths.tmp, `${newId("voice")}.wav`);
       try {
-        const result = await provider.transcribe({ path: abs, tmpDir: ctx.paths.tmp });
-        voiceTranscript = spokenText(result.segments);
+        const result = await provider.transcribe({ path: abs, tmpDir: ctx.paths.tmp, keepWavAt: wav });
+        voiceTranscript = await filterDictationText({ audioPath: abs, segments: result.segments, tmpDir: ctx.paths.tmp, signal: c.req.raw.signal, wavPath: wav });
         if (voiceTranscript) text = voiceTranscript;
       } catch (e) {
         const msg = errorMessage(e);
@@ -107,6 +109,8 @@ export function noteRoutes(ctx: Ctx) {
         text = `[voice note — transcription failed: ${msg}]`;
         // The provider says what went wrong in a sentence of its own.
         unheard = badRequest("transcription_failed", msg);
+      } finally {
+        await rm(wav, { force: true });
       }
       // A silent recording would send the agent a request with nothing in it.
       if (voiceTranscript === "") {
@@ -141,14 +145,16 @@ export function noteRoutes(ctx: Ctx) {
     const provider = getTranscriptionProvider(ctx);
     if (!provider) throw badRequest("transcription_not_configured", NOT_CONFIGURED);
     const abs = join(ctx.paths.tmp, `${newId("speech")}${ext}`);
+    const wav = join(ctx.paths.tmp, `${newId("speech")}.wav`);
     await writeFile(abs, Buffer.from(await audio.arrayBuffer()));
     try {
-      const result = await provider.transcribe({ path: abs, tmpDir: ctx.paths.tmp });
-      const text = spokenText(result.segments);
+      const result = await provider.transcribe({ path: abs, tmpDir: ctx.paths.tmp, keepWavAt: wav });
+      const text = await filterDictationText({ audioPath: abs, segments: result.segments, tmpDir: ctx.paths.tmp, signal: c.req.raw.signal, wavPath: wav });
       if (!text) throw badRequest("no_speech", NO_SPEECH);
       return c.json({ text });
     } finally {
       await rm(abs, { force: true });
+      await rm(wav, { force: true });
     }
   });
 

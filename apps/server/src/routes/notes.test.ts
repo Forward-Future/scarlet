@@ -290,3 +290,36 @@ it("keeps a reply beside the note, under the name of the agent that gave it", as
   const own = await (await reply({ text: "Leave it there." })).json() as { note: Note };
   expect(own.note.replies?.map(r => [r.author.type, r.text])).toEqual([["agent", "Extended this cut by 0.6 s."], ["human", "Leave it there."]]);
 });
+
+it("treats silent /speech dictation that Whisper hallucinates as \"Thank you.\" as no speech", async () => {
+  app.ctx.env.openaiKey = "unused-fixture";
+  app.ctx.repos.settings.update({ transcription: { provider: "openai" } });
+  vi.spyOn(OpenAIProvider.prototype, "transcribe").mockResolvedValue({
+    segments: [{ id: "s1", start: 0, end: 1, text: "Thank you.", words: [{ text: "Thank", start: 0, end: 0.4 }, { text: "you.", start: 0.5, end: 0.9 }] }],
+  });
+  // Build a real 1-second silent 16 kHz mono WAV.
+  const samples = 16000;
+  const wav = Buffer.alloc(44 + samples * 2);
+  wav.write("RIFF", 0, "ascii");
+  wav.writeUInt32LE(36 + samples * 2, 4);
+  wav.write("WAVEfmt ", 8, "ascii");
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(16000, 24);
+  wav.writeUInt32LE(32000, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36, "ascii");
+  wav.writeUInt32LE(samples * 2, 40);
+
+  const form = new FormData();
+  form.append("audio", new Blob([wav], { type: "audio/wav" }), "silent.wav");
+  const res = await app.app.request("/api/speech", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken(app.ctx)}` },
+    body: form,
+  });
+  expect(res.status).toBe(400);
+  expect(await res.json()).toMatchObject({ error: { code: "no_speech" } });
+});
