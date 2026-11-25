@@ -2282,3 +2282,44 @@ it("assembles a cut's preview window from cached playback sections and encodes o
   expect(sound.stdout.length / 2).toBeGreaterThanOrEqual(11 * 48000 - 1024);
   expect(sound.stdout.length / 2).toBeLessThanOrEqual(Number(audio.nb_frames) * 1024);
 }, 60_000);
+
+it("encodes multi-split batches cleanly when an adelay audio clip precedes an earlier track in amix", async () => {
+  const src44 = path.join(dir, "src44.mp4");
+  await runCapture("ffmpeg", [
+    "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+    "-f", "lavfi", "-i", "color=c=green:s=320x180:r=30:d=6",
+    "-f", "lavfi", "-i", "sine=frequency=520:sample_rate=44100:duration=6",
+    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-shortest", src44,
+  ]);
+  const project = createProject("Multi-split adelay", { width: 320, height: 180, fps: 30000 / 1001, aspect: "custom", sampleRate: 48000, audioChannels: 2 });
+  project.media.push(
+    { id: "m48", kind: "video", name: "src.mp4", path: "src.mp4", duration: 10, fps: 30, width: 320, height: 180, hasAudio: true },
+    { id: "m44", kind: "video", name: "src44.mp4", path: "src44.mp4", duration: 6, fps: 30, width: 320, height: 180, hasAudio: true },
+  );
+  // Put delayed 44.1 kHz clips on track a1 BEFORE track a2's 0-start clip so adelay streams feed amix (including across a later split).
+  const timeline: Timeline = {
+    version: "draft", parent: null, projectId: project.id, name: "Main", background: "#000000", markers: [],
+    tracks: [
+      { id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [makeMediaClip("m48", 0, 6, 0, { volume: 0 })] },
+      { id: "a1", kind: "audio", name: "A1", muted: false, hidden: false, clips: [
+        makeMediaClip("m44", 0, 2.5, 1, { volume: 0.5, audioFadeIn: 0.02, audioFadeOut: 0.02 }),
+        makeMediaClip("m44", 0, 1.8, 4.1, { volume: 0.5, audioFadeIn: 0.02, audioFadeOut: 0.02 }),
+      ] },
+      { id: "a2", kind: "audio", name: "A2", muted: false, hidden: false, clips: [makeMediaClip("m48", 0, 1.05, 0, { volume: 1, audioFadeOut: 0.05 })] },
+    ],
+  };
+  const splits = [
+    { range: { start: 0, end: 2.002 }, output: path.join(dir, "split-adelay-0.mp4") },
+    { range: { start: 2.002, end: 4.004 }, output: path.join(dir, "split-adelay-1.mp4") },
+    { range: { start: 4.004, end: 6.006 }, output: path.join(dir, "split-adelay-2.mp4") },
+  ];
+  await renderRange(project, timeline, { start: 0, end: 6.006 }, splits[0]!.output, {
+    mediaRoot: dir, quality: "preview", height: 180, hwaccel: "none", splits,
+  });
+  for (const s of splits) {
+    const info = await probeMedia(s.output);
+    expect(info.hasAudio).toBe(true);
+    expect(info.duration).toBeCloseTo(2, 1);
+  }
+}, 60_000);

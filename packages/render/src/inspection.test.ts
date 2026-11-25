@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import * as exec from "./exec.js";
 import { resolveFfmpeg, runCapture, spawnStats } from "./exec.js";
-import { UNLABELLED_SHEET, audition, contactSheet, packSheet, pictureActivity, qualityEvents, reviewWindow, sampleTimes } from "./inspection.js";
+import { UNLABELLED_SHEET, audition, contactSheet, packSheet, pictureActivity, qualityEvents, reviewWindow, sampleTimes, screenFrames } from "./inspection.js";
 import { soundPicture } from "./soundPicture.js";
 import { extractFrame } from "./frame.js";
 import { isStoredAsShown, storedAsShown } from "./probe.js";
@@ -301,4 +301,42 @@ it.skipIf(process.platform === "win32")("draws sheets without time labels and sa
     vi.unstubAllEnvs();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+it("streams screenFrames with async callbacks and yields to the event loop during heavy per-frame work", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-screen-yield-"));
+  try {
+    const file = join(dir, "clip.mp4");
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=160x90:r=20:d=1",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1", file]);
+    const indices: number[] = [];
+    let timerFiredBeforeEnd = false;
+    let done = false;
+    const timer = setTimeout(() => { if (!done) timerFiredBeforeEnd = true; }, 5);
+    const count = await screenFrames(file, { start: 0, end: 1 }, { fps: 20, width: 64, height: 36 }, async (index, rgb) => {
+      expect(rgb.length).toBe(64 * 36 * 3);
+      indices.push(index);
+      // Simulate ~3 ms of synchronous CPU work per frame; without yielding across frames, 20 frames would stall 60+ ms.
+      const until = performance.now() + 3;
+      while (performance.now() < until) { /* busy */ }
+    });
+    done = true;
+    clearTimeout(timer);
+    expect(count).toBe(20);
+    expect(indices).toEqual(Array.from({ length: 20 }, (_, i) => i));
+    expect(timerFiredBeforeEnd).toBe(true);
+
+    // Aborting mid-frame waits for the active async onFrame to settle before rejecting, preventing cleanup races.
+    const ac = new AbortController();
+    let inFlightDone = false;
+    let settledBeforeReject = false;
+    await screenFrames(file, { start: 0, end: 1 }, { fps: 20, width: 64, height: 36, signal: ac.signal }, async index => {
+      if (index === 0) {
+        ac.abort();
+        await new Promise(resolve => setTimeout(resolve, 40));
+        inFlightDone = true;
+      }
+    }).catch(() => { settledBeforeReject = inFlightDone; });
+    expect(settledBeforeReject).toBe(true);
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

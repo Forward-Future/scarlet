@@ -45,10 +45,13 @@ interface MotionWindow { seconds: MotionSecond[]; detail: DetailFrame[] }
 /** Each cell of the grid whose grey spans `DETAILED` levels or more, a bit per cell. */
 export function detailCells(rgb: Buffer, width: number, height: number, cols = COLS, rows = ROWS): Uint8Array {
   const lo = new Float32Array(cols * rows).fill(255), hi = new Float32Array(cols * rows);
+  const colOf = new Int32Array(width);
+  for (let x = 0; x < width; x++) colOf[x] = Math.min(cols - 1, Math.floor(x * cols / width));
   for (let y = 0; y < height; y++) {
-    const row = Math.min(rows - 1, Math.floor(y * rows / height));
+    const rowBase = Math.min(rows - 1, Math.floor(y * rows / height)) * cols;
+    const rowPixel = y * width;
     for (let x = 0; x < width; x++) {
-      const p = (y * width + x) * 3, cell = row * cols + Math.min(cols - 1, Math.floor(x * cols / width));
+      const p = (rowPixel + x) * 3, cell = rowBase + colOf[x]!;
       const grey = (rgb[p]! * 3 + rgb[p + 1]! * 6 + rgb[p + 2]!) / 10;
       if (grey < lo[cell]!) lo[cell] = grey;
       if (grey > hi[cell]!) hi[cell] = grey;

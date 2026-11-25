@@ -698,6 +698,27 @@ class UpdateTest(unittest.TestCase):
         self.assertFalse(address.exists())
         self.assertEqual(said, [f"Installed {commit} at {updater.APP}."])
 
+    def test_offer_answers_ready_socket_while_main_thread_is_busy(self):
+        commit, newer = "b" * 40, "c" * 40
+        offer = updater.Offer(commit)
+        self.addCleanup(offer.close)
+        # Main thread never calls poll() while the desktop app checks status multiple times and requests a restart.
+        for _ in range(5):
+            self.assertEqual(exchange(offer.address, "ready"), commit)
+        self.assertEqual(exchange(offer.address, "check " + newer), "ok")
+        self.assertEqual(exchange(offer.address, "restart " + commit), "accepted")
+        # Restart takes priority over an earlier check action and is delivered on the next poll.
+        self.assertEqual(offer.poll(0.01), "restart")
+        self.assertEqual((updater.CACHE / "restart").read_text(), commit)
+
+    def test_offer_handles_corrupt_pending_plist_on_restart_without_exiting_socket_thread(self):
+        commit = "b" * 40
+        offer = updater.Offer(commit)
+        self.addCleanup(offer.close)
+        (updater.PENDING / "Contents/Info.plist").write_bytes(b"not a plist")
+        self.assertEqual(exchange(offer.address, "restart " + commit), "stale")
+        self.assertEqual(exchange(offer.address, "ready"), commit)
+
 
 if __name__ == "__main__":
     unittest.main()

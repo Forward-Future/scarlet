@@ -2,7 +2,7 @@
  * Resolving word-addressed, pause-addressed, repeat-addressed, and seconds-addressed
  * dialogue cuts to timeline ranges on a version.
  */
-import { normalizeTranscriptToken, type DialogueCutKind, type RepeatOccurrence } from "@scarlet/shared";
+import { JOIN_WORD_SECONDS, normalizeTranscriptToken, type DialogueCutKind, type RepeatOccurrence } from "@scarlet/shared";
 import { clipDuration, sourceToTimeline, timelineDuration, timelineToSource, type MediaClip, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
@@ -359,9 +359,37 @@ async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afterWord: 
     if (!sources.readKeptWords) return undefined;
     const project = await sources.project();
     const asset = project.media.find(m => m.id === ref.mediaId);
+    const stream = dialogueAudioStream(clip!) ?? (asset && dialogueAudioStream(asset)) ?? 0;
     const from = Math.max(clip!.sourceIn, before.start - HEARD_CONTEXT), to = Math.min(clip!.sourceOut, after.end + HEARD_CONTEXT);
-    const reading = await sources.readKeptWords(ref.mediaId, dialogueAudioStream(clip!) ?? (asset && dialogueAudioStream(asset)) ?? 0, from, to)
-      .catch(() => undefined);
+    let reading: TranscriptWord[] | undefined;
+    if (to - from <= JOIN_WORD_SECONDS) {
+      reading = await sources.readKeptWords(ref.mediaId, stream, from, to).catch(() => undefined);
+    } else {
+      // Split pauses longer than JOIN_WORD_SECONDS into overlapping windows of at most JOIN_WORD_SECONDS each,
+      // skipping silent middle stretches and capping total reads so huge B-roll/music gaps stay fast.
+      const pad = HEARD_CONTEXT;
+      const core = JOIN_WORD_SECONDS - 2 * pad;
+      const MAX_PAUSE_READ_CHUNKS = 8;
+      const active: TimeRange[] = [before, after, ...(held?.runs ?? []), ...(around?.runs ?? [])];
+      const chunks: Array<{ cs: number; ce: number }> = [];
+      for (let cs = from; cs < to - 1e-6; cs += core) {
+        const ce = Math.min(to, cs + core);
+        if (active.some(r => r.end >= cs - pad && r.start <= ce + pad)) chunks.push({ cs, ce });
+      }
+      const merged: TranscriptWord[] = [];
+      let succeeded = 0;
+      for (const { cs, ce } of chunks.slice(0, MAX_PAUSE_READ_CHUNKS)) {
+        const wFrom = Math.max(from, cs - pad), wTo = Math.min(to, ce + pad);
+        const part = await sources.readKeptWords(ref.mediaId, stream, wFrom, wTo).catch(() => undefined);
+        if (!part) continue;
+        succeeded++;
+        for (const w of part) {
+          const mid = (w.start + w.end) / 2;
+          if ((cs === from || mid >= cs) && (ce === to || mid < ce)) merged.push(w);
+        }
+      }
+      reading = succeeded ? merged.sort((a, b) => a.start - b.start) : undefined;
+    }
     if (!reading) return undefined;
     const text = reading.map(w => w.text.trim()).filter(Boolean).join(" ");
     // Both readings in source seconds, as heardOnlyVerbatim compares them. The transcript's side reaches as far as it
