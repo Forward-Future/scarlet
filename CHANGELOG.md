@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 24, 2026
 
 - Switching between For you, Working and Done now keeps the request's heading and tabs steady instead of jumping up and down, and smoothly folds back to the active tab's height once you click elsewhere, finish the request, or start a new one.
+- In the beta three-column layout, the Working banner now stays visible above the Done banner at the bottom of the edits column even when no edits are working.
 - An empty library now has a "Try a sample project" button that opens a short sample clip with a finished edit pass ready to play, review, and compare Before and After.
 - Dialogue cuts now place cleanly in rooms with steady background noise, like a fan, air conditioning or traffic hum, without cutting into soft word endings.
 - Settings › About (and the startup error screen) now have a Report a problem button that saves a log zip and opens a pre-filled bug report you can drag it into. It reminds you that reports are public and the logs show file and folder names.

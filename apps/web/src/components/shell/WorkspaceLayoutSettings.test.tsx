@@ -127,8 +127,10 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-low-done")?.textContent).toBe("Keep all");
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
-    // Empty Working and Done sections stay hidden, chat doesn't repeat "For you N", and every row leads with its time, never a number.
-    expect(container.querySelector(".review-rail-foot")).toBeNull();
+    // Working and Done banners stay visible at the foot even when empty (Working above Done), chat doesn't repeat "For you N", and every row leads with its time, never a number.
+    const footSections = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];
+    expect(footSections.map(b => b.textContent)).toEqual(["Working0", "Done0"]);
+    expect(footSections.every(b => b.disabled && b.classList.contains("is-none") && b.getAttribute("aria-expanded") === "false")).toBe(true);
     expect(container.querySelector("#simple-chat .simple-need-link")).toBeNull();
     expect(container.querySelector(".review-rail-list .edit-badge")).toBeNull();
     expect(container.querySelector(".review-rail-list .edit-row-time")?.textContent).toMatch(/^\d+:\d\d$/);
@@ -286,6 +288,67 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")]
       .find(b => b.textContent?.includes("Done"))!;
     expect(doneHead.textContent).toContain("1");
+  });
+
+  it("keeps the Working banner above the Done banner even when no edits are working", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const change = db.changes.find(c => c.id === "chg_approved_2") ?? db.changes[0]!;
+    const ownerThreadId = buildThreads({ changes: db.changes, tasks: db.tasks, notes: db.notes })
+      .find(t => t.changes.some(c => c.id === change.id))!.id;
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: db.tasks.filter(t => t.state !== "waiting_for_user"),
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === ownerThreadId ? [
+        { changeId: change.id, spot: 0, label: "Cut the false start", range: { start: 0, end: 2 }, previous: [], check: "Check the join." },
+        { changeId: change.id, spot: 1, label: "Quiet music bed", range: { start: 2, end: 10 }, previous: [] },
+      ] : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // Keep the flagged edit so Done has 1 edit while Working stays at 0.
+    const row = container.querySelector<HTMLButtonElement>(".review-rail-list button.simple-edit")!;
+    await act(async () => row.click());
+    await act(async () => {});
+    const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")]
+      .find(b => b.textContent?.trim() === "Keep")!;
+    await act(async () => keepBtn.click());
+    await act(async () => {});
+
+    const sections = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];
+    expect(sections.map(b => b.textContent)).toEqual(["Working0", "Done1"]);
+    expect(sections[0]!.disabled).toBe(true);
+    expect(sections[0]!.classList.contains("is-none")).toBe(true);
+    expect(sections[0]!.getAttribute("aria-expanded")).toBe("false");
+    expect(sections[1]!.disabled).toBe(false);
+    expect(sections[1]!.classList.contains("is-none")).toBe(false);
   });
 
   it("lets the middle edits column resize from its right edge, keeps rows single-line, and shows a full-line UI tooltip on hover", async () => {
