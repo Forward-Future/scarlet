@@ -5,7 +5,7 @@ import { appLog } from "../../lib/appLog";
 import { api, errorMessage, UNEXPLAINED } from "../../lib/client";
 import { editKindWord } from "../../lib/editKind";
 import type { Moment } from "../../lib/editMoments";
-import { parseTimestamp } from "../../lib/format";
+import { distinctClock, parseTimestamp } from "../../lib/format";
 import { ignorePageShortcut, isAltClearRangeKey, isComposing, isEditableTarget } from "../../lib/hotkeys";
 import { editKey, keepEdits } from "../../lib/keptEdits";
 import { needNumbers } from "../../lib/needNumbers";
@@ -211,9 +211,11 @@ export function usePassCallNumbers(
     const editKeyOf = (e: (typeof edits)[number]) => `edit/${editKey(e.previous[0] ?? e)}`;
     const numbers = needNumbers(projectId, passThread.id, passRoot?.resumeRootId ?? passRoot?.id ?? pass.id, [...callKeys, ...edits.map(editKeyOf)]);
     allCalls.forEach((call, i) => callNo.set(call.index, numbers.get(callKeys[i]!.key)!));
+    const times = [...allCalls.map(a => a.start), ...edits.map(at)];
     for (const e of edits) {
       const n = numbers.get(editKeyOf(e))!;
-      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} ${n}`;
+      // It goes by its time, as its row does: "Cut at 0:11", or "Edit at 0:11" for one that took no footage out.
+      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} at ${distinctClock(at(e), times)}`;
       for (const ref of [e, ...e.previous]) passEditNo.set(editKey(ref), { n, name });
     }
     return { callNo, passEditNo };

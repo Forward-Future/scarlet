@@ -4,8 +4,8 @@ import type { Task } from "./tasks.js";
 import { PENDING_STATES } from "./taskQueue.js";
 
 /**
- * The number of each call of a dialogue pass, by its cut's index: the order the calls reached the editor in, as the
- * window shows it ("Cut 2"). Anything else that names a call by its number uses this too, so the two can't disagree.
+ * The order each call of a dialogue pass reached the editor in, by its cut's index. The window never shows it: a call
+ * goes by its time there ("Cut at 2:47"). It tells which staged cuts are calls, and keeps their order steady.
  * Scarlet's asks go in the order it made them, as the engine numbers them (`askOrder`). The cuts it never checked
  * follow in timeline order once its run is over (`over`). A later ask about a cut earlier in the video, or the cuts
  * a pass hands over when it ends, never renumber the calls the editor has seen. A pass whose asks aren't numbered, as one saved before the engine

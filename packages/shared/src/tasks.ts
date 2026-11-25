@@ -111,7 +111,7 @@ export const Task = z.object({
       changeId: Id.optional(),
       cutIndex: z.number().int().nonnegative().optional(),
       editIndex: z.number().int().nonnegative().optional(),
-      /** The selected edit's number in the editor's list, which is how they and Scarlet's replies refer to it. */
+      /** No longer set: the editor's lists go by time, not number. Kept so requests saved before still read. */
       editNumber: z.number().int().positive().optional(),
       /**
        * The other edits in the moment the editor's words are about, when they were looking at a moment of the list and

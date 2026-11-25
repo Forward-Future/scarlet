@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { callNumbers, taskNeedsTranscripts, type SpeakerProgress, type Task, type TaskEvent } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { useProjectStore } from "../../stores/project";
+import { stagedCuts } from "../../lib/threads";
 import { useUiStore } from "../../stores/ui";
 import { blurOnPointerClick } from "../../lib/hotkeys";
 import { runProgress } from "../../lib/runProgress";
@@ -61,8 +62,8 @@ interface RunBundleProps {
   /** The history of the attempt Scarlet opened the request in, once the request was picked up again under this one. */
   opening?: readonly TaskEvent[];
   changes: readonly Change[];
-  /** The number a call of the waiting pass goes by in the window, when the window has numbered it. */
-  callNumber?(changeId: string, cutIndex: number): number | undefined;
+  /** Where a call of the waiting pass is in the video, as the window says it. */
+  callTime?(changeId: string, cutIndex: number): number | undefined;
   finalChange?: Change;
   /** Scarlet's words for the editor: a reply, a question, or why it stopped. */
   say?: ReactNode;
@@ -119,7 +120,7 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events: all, opening, changes, callNumber, say, result, onStop, actions, under }: RunBundleProps) {
+function WorkingRun({ task, events: all, opening, changes, callTime, say, result, onStop, actions, under }: RunBundleProps) {
   // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
   // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
   const events = useMemo(() => sinceRerun(task, all), [task, all]);
@@ -130,12 +131,13 @@ function WorkingRun({ task, events: all, opening, changes, callNumber, say, resu
   const progress = useMemo(() => runProgress(events), [events]);
   const voices = useProjectStore(s => s.current?.speakerProgress);
   const voice = progress.read && !progress.read.seconds ? progress.recordings?.map(id => voices?.[id]).find(Boolean) : undefined;
-  // A call goes by the number the window shows for it, which it keeps; one the window hasn't numbered, by its place among the asks.
-  const numberOf = useRef(callNumber);
-  numberOf.current = callNumber;
+  // A call goes by its time, as the window shows it; one the window hasn't placed, by where the pass staged it.
+  const timeOf = useRef(callTime);
+  timeOf.current = callTime;
   const doing = useMemo(() => runNow(events, aim?.note, (changeId, index) => {
     const pass = changes.find(c => c.id === changeId);
-    return numberOf.current?.(String(changeId), Number(index)) ?? (pass && callNumbers(pass, 0, false).get(index));
+    return timeOf.current?.(String(changeId), Number(index))
+      ?? (pass && callNumbers(pass, 0, false).has(index) ? stagedCuts(pass)[index]?.start : undefined);
   }), [events, aim, changes]);
   // While the run waits on its recordings' transcripts, the line says how far along they are: the one figure there.
   const tasks = useProjectStore(s => s.current?.tasks);
