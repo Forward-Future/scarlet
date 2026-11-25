@@ -531,8 +531,11 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         const isAskingCurrent = !!askingRowKey && askingRowKey === row.key;
         const lead = <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}{(row.needs || row.asks) && <span>, needs you</span>}</span>;
         const aimLead = <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}</span>;
+        const tipText = moment && row.title ? row.title : row.label;
+        const tipDetail = !moment && row.title && row.title !== row.label ? row.title : undefined;
         return <li key={row.key} className={linger.of(entry.key)?.leaving ? "is-leaving" : undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
-          data-log-control="open-pass-item" data-log-label={moment ? "Moment" : "Pass item"} disabled={!row.open} title={row.title || row.label} onClick={letGo(() => row.open?.())}
+          data-log-control="open-pass-item" data-log-label={moment ? "Moment" : "Pass item"} disabled={!row.open}
+          title={rail ? undefined : (row.title || row.label)} data-row-tip={rail ? tipText : undefined} data-row-detail={rail ? tipDetail : undefined} onClick={letGo(() => row.open?.())}
           aria-label={more ? `${clockLabel(row.displayAt)} ${row.label}, ${more.replace("+ ", "and ")}` : row.rejected ? `${clockLabel(row.displayAt)} ${row.label}, rejected` : undefined}
           onPointerEnter={() => actions.lightMark(row.mark, row.hover)} onPointerLeave={() => actions.lightMark()}>
           {lead}
@@ -555,7 +558,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         {under(entry).map(nest => nest.node)}
         {open && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
           {members.map(m => <li key={m.key}><button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
-            data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open} title={m.title || m.label} onClick={letGo(() => m.open?.())}
+            data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open}
+            title={rail ? undefined : (m.title || m.label)} data-row-tip={rail ? m.label : undefined} data-row-detail={rail && m.title && m.title !== m.label ? m.title : undefined} onClick={letGo(() => m.open?.())}
             onPointerEnter={() => actions.lightMark(m.mark, m.hover)} onPointerLeave={() => actions.lightMark()}>
             <span className="simple-pass-label">{m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-pass-words">{m.label}</span>
               {m.version > 0 && <EditVersion n={m.version} hover={spent.get(m.key)} />}</span>
@@ -757,6 +761,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       leaving={only && (edit => !!held(edit)?.leaving)}
       nextQueuedId={actions.nextQueuedId}
       hideGenericKind={!!rail}
+      inRail={!!rail}
       askingKey={askingRowKey}
       onPlay={ref => actions.openEdit(thread, ref)}
       onHover={ref => actions.lightMark(undefined, ref && { threadId: thread.id, editKey: editKey(ref) })}
