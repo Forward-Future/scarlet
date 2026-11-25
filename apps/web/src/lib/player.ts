@@ -257,7 +257,10 @@ export const player = {
       readClock(el);
     };
     const onMeta = () => st.setDuration(mediaDuration(el));
-    const onRate = () => st.setRate(el.playbackRate);
+    const onRate = () => {
+      const current = usePlayerStore.getState();
+      if (el.playbackRate !== current.rate) current.setRate(el.playbackRate);
+    };
     const onSeek = () => readClock(el);
     const refreshReadiness = () => {
       const playbackReady = !el.paused && !el.ended && !el.seeking && el.readyState >= 3;
@@ -488,8 +491,9 @@ export const player = {
     }
     void el.play().catch(refused);
   },
-  pause() {
-    if (isPlaying()) playbackLog("transport pause", { at: usePlayerStore.getState().time, by: calledBy() });
+  pause(resetRate = false) {
+    const was = isPlaying();
+    if (was) playbackLog("transport pause", { at: usePlayerStore.getState().time, by: calledBy() });
     carry = false;
     // A passage or listen let go between one element and the next pauses nothing that's up. It keeps the handover,
     // and takes it as its own `carry`.
@@ -499,6 +503,15 @@ export const player = {
     video?.pause();
     // Whatever stops the video stops what is on screen: a clip playing over the monitor too.
     borrower?.pause();
+    if (resetRate && was) this.resetRateOnPause();
+  },
+  /** Reset playback to 1× when the editor pauses, leaving the shortcut's chosen speed intact for the next speed-up. */
+  resetRateOnPause() {
+    if (!usePlayerStore.getState().resetRateForPause()) return;
+    if (video) {
+      video.defaultPlaybackRate = 1;
+      video.playbackRate = 1;
+    }
   },
   /**
    * Hand the playhead to a clip that plays over the monitor. The attached media pauses, and its clock isn't read
@@ -518,7 +531,7 @@ export const player = {
     if (!video) return;
     if (!pendingPlay && (video.paused || video.ended)) this.play();
     else {
-      this.pause();
+      this.pause(true);
       // The clock is published a few times a second while playing: read the frame it stopped on before telling
       // anyone, so a pause heard here has the time the picture shows.
       if (video) readClock(video);

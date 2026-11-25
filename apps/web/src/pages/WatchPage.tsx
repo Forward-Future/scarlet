@@ -538,7 +538,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       e.preventDefault();
       // Held down, N is one press too: it has already picked the moment and asked for the cursor.
       if (e.repeat) return;
-      player.pause();
+      player.pause(true);
       if (playable && duration > 0) selectTime(usePlayerStore.getState().time, "n");
       useUiStore.getState().focusComposer();
     }

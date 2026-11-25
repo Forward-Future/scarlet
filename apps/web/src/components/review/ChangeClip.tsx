@@ -3,6 +3,7 @@ import type { Render } from "@scarlet/shared";
 import { planPlaybackSegments, type Change, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { api, errorMessage, IS_MOCK } from "../../lib/client";
 import { openCutStream, playbackLoader } from "../../lib/cutStream";
+import { player } from "../../lib/player";
 import { logPlayRefusal, playbackLog } from "../../lib/playbackLog";
 import { ignorePageShortcut } from "../../lib/hotkeys";
 import { pct } from "../../lib/format";
@@ -192,7 +193,10 @@ export function ChangeClip({ change, active = true, loading, clock: pageClock, p
     if (el.paused) {
       if (cursor.current >= lastFrame) seek(rangeStart);
       play(el);
-    } else el.pause();
+    } else {
+      el.pause();
+      player.resetRateOnPause();
+    }
   }
   function position() {
     const el = video.current;

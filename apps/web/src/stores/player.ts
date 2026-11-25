@@ -32,9 +32,11 @@ interface PlayerState {
   setPlaying(p: boolean): void;
   setRate(r: number): void;
   setSpeedUpRate(r: SpeedUpRate): void;
+  /** Drops a non-1× playback rate back to 1× on pause without changing `speedUpRate`. */
+  resetRateForPause(): boolean;
 }
 
-export const usePlayerStore = create<PlayerState>((set) => ({
+export const usePlayerStore = create<PlayerState>((set, get) => ({
   time: 0,
   seeks: 0,
   duration: 0,
@@ -52,5 +54,10 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       else localStorage.setItem(SPEED_UP_RATE_KEY, String(speedUpRate));
     } catch { /* Keep the choice for this session. */ }
     set({ speedUpRate });
+  },
+  resetRateForPause: () => {
+    if (get().rate === 1) return false;
+    set({ rate: 1 });
+    return true;
   },
 }));
