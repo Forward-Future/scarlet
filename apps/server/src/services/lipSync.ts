@@ -11,6 +11,7 @@ import { curvePeak, fileInDirectory, heardAudio, heardAudioKey, lipSyncStretch, 
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { atomicWriteFile, rememberLast } from "../util.js";
+import { logId } from "../logText.js";
 import { faceSamples, type FaceSample } from "./faces.js";
 import { r3, readingIdentity, type VideoMedia } from "./pictureReading.js";
 import { pictureDecoder, pictureLane } from "./pictureWork.js";
@@ -139,7 +140,8 @@ export async function lipSync(ctx: Ctx, media: VideoMedia, range: { from?: numbe
     const next = (saving.get(path) ?? Promise.resolve()).catch(() => {})
       .then(() => atomicWriteFile(path, JSON.stringify(kept), `${path}.${randomUUID()}.tmp`));
     saving.set(path, next);
-    void next.catch(() => {}).finally(() => { if (saving.get(path) === next) saving.delete(path); });
+    void next.catch(error => ctx.log(`[media] lip-sync-save-failed id=${logId(media.id)} project=${logId(media.projectId)} ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => { if (saving.get(path) === next) saving.delete(path); });
     return next;
   };
 

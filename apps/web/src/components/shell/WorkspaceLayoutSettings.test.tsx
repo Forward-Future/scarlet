@@ -287,4 +287,110 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       .find(b => b.textContent?.includes("Done"))!;
     expect(doneHead.textContent).toContain("1");
   });
+
+  it("lets the middle edits column resize from its right edge, keeps rows single-line, and shows a full-line UI tooltip on hover", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const longLabel = 'Left a To do where you said "Alex, can you throw that on screen right here?"';
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: db.tasks.filter(t => t.state !== "waiting_for_user"),
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockResolvedValue({
+      version: project.head!,
+      edits: [
+        { changeId: db.changes[0]!.id, spot: 0, label: longLabel, range: { start: 0, end: 2 }, previous: [], check: "Needs graphic from Alex." },
+        { changeId: db.changes[0]!.id, spot: 1, label: "Quiet music bed", range: { start: 2, end: 10 }, previous: [] },
+      ],
+    });
+    const prevInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+    const measured = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.id === "simple-chat" || this.id === "simple-review-rail") {
+        return { width: parseFloat(this.style.width) || 0, height: 800, top: 0, left: 0, right: parseFloat(this.style.width) || 0, bottom: 800 } as DOMRect;
+      }
+      return { width: 240, height: 28, top: 140, left: 480, right: 720, bottom: 168 } as DOMRect;
+    });
+    try {
+      await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+      await act(async () => {});
+
+      // Right-edge resize separator on the middle edits column resizes and persists its width.
+      const rail = container.querySelector<HTMLElement>("#simple-review-rail")!;
+      const divider = rail.querySelector<HTMLElement>(':scope > [role="separator"]')!;
+      expect(divider).not.toBeNull();
+      expect(divider.getAttribute("aria-label")).toBe("Resize edits");
+      expect(divider.getAttribute("aria-controls")).toBe("simple-review-rail");
+      const startWidth = parseFloat(rail.style.width);
+      divider.setPointerCapture = () => {};
+      await act(async () => {
+        divider.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0, isPrimary: true, clientX: 700 }));
+      });
+      await act(async () => {
+        divider.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, button: 0, isPrimary: true, clientX: 840 }));
+      });
+      await act(async () => {
+        divider.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1, button: 0, isPrimary: true, clientX: 840 }));
+      });
+      expect(parseFloat(rail.style.width)).toBe(startWidth + 140);
+      expect(localStorage.getItem("scarlet.simpleReviewWidth")).toBe(String(startWidth + 140));
+
+      // Rows in the edits rail use Scarlet's own hover tooltip with the full line instead of a browser title tooltip.
+      const row = rail.querySelector<HTMLButtonElement>(".review-rail-list button.simple-edit")!;
+      expect(row.getAttribute("title")).toBeNull();
+      expect(row.dataset.rowTip).toBe(longLabel);
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          row.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+          vi.advanceTimersByTime(220);
+        });
+        const tip = rail.querySelector<HTMLElement>('[role="tooltip"].review-rail-tip')!;
+        expect(tip).not.toBeNull();
+        expect(tip.textContent).toContain(longLabel);
+        expect(tip.textContent).toContain("Needs graphic from Alex.");
+        expect(row.getAttribute("aria-describedby")).toBe(tip.id);
+
+        // Moving to a low-risk row updates the tooltip immediately (warm hover) and shows its full line too.
+        const lowRow = rail.querySelector<HTMLButtonElement>(".review-low-body button.simple-edit")!;
+        await act(async () => {
+          lowRow.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+        });
+        expect(rail.querySelector<HTMLElement>('[role="tooltip"].review-rail-tip')?.textContent).toBe("Quiet music bed");
+
+        // Leaving the rail dismisses the tooltip cleanly.
+        await act(async () => {
+          rail.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, pointerType: "mouse" }));
+        });
+        expect(rail.querySelector('[role="tooltip"].review-rail-tip')).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    } finally {
+      measured.mockRestore();
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: prevInnerWidth });
+      localStorage.removeItem("scarlet.simpleReviewWidth");
+    }
+  });
 });

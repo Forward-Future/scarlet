@@ -12,6 +12,7 @@ import type {
   ServerSettings,
   Skill,
   SkillVersion,
+  StyleGuideRecord,
   Task,
   TaskAttachment,
   TaskEvent,
@@ -49,6 +50,7 @@ export interface MockDb {
   taskEvents: Record<string, TaskEvent[]>;
   hosts: AgentHost[];
   skills: Skill[];
+  styleGuides: StyleGuideRecord[];
   /** Files dropped on the message box, by project. */
   attachments: Record<string, TaskAttachment[]>;
   /** Rules Scarlet picked up from requests, waiting for the editor. */
@@ -705,6 +707,7 @@ export function buildDb(chatLayouts = false): MockDb {
     talkingToYou: "",
     listening: "auto",
     taskModels: DEFAULT_TASK_MODELS,
+    styleGuidesBeta: false,
   };
 
   return {
@@ -725,6 +728,7 @@ export function buildDb(chatLayouts = false): MockDb {
     taskEvents,
     hosts,
     skills,
+    styleGuides: [],
     attachments: {},
     learnings,
     skillVersions,

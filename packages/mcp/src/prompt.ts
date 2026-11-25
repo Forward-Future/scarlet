@@ -4,7 +4,7 @@
  * provides context (timestamps, clip ids, notes, the change being revised)
  * and includes the applicable skills verbatim.
  */
-import { CHECK_IN_SHARE, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type Task } from "@scarlet/shared";
+import { CHECK_IN_SHARE, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type StyleGuideRecord, type Task } from "@scarlet/shared";
 import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
 import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
@@ -71,6 +71,14 @@ export interface PromptContext {
   skills: Skill[];
   /** The skill a skill_edit task revises. Such a task edits no video, so its prompt is about the skill alone. */
   editSkill?: Skill;
+  /** The style guide a style_guide_edit task designs or updates. Edits no video. */
+  editStyleGuide?: {
+    guide: StyleGuideRecord;
+    assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
+    attachedIds?: string[];
+    hasPreview: boolean;
+    earlier?: Array<{ asked: string; replied?: string }>;
+  };
   /** What a learning_check task reads. Such a task edits no video, so its prompt is about the request alone. */
   learningCheck?: LearningCheckContext;
   /** What an area_check task looks at. Such a task edits no video, so its prompt is about one frame. */
@@ -91,6 +99,15 @@ export interface PromptContext {
   attachments?: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
   /** The project's style guide: pasted text in full, or the file it is in. */
   styleGuide?: { name: string; text?: string; path?: string; mime?: string };
+  /** Library-wide style guides active for this request (via @name mention or the library Default). */
+  libraryStyleGuides?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    instructions: string;
+    reason: "mentioned" | "default";
+    assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
+  }>;
   /** The kinds of work the editor gave other models in Task models, signed in now: the request hands them off (`hand_off`). */
   taskModels?: Array<{ name: string; description?: string; by: { agent: string; model?: string; label?: string } }>;
   /** What a hand_off task does for the request that handed it the work: the editor's kind of work, and what they asked. */
@@ -111,6 +128,69 @@ function styleGuideSection(guide: NonNullable<PromptContext["styleGuide"]>): str
   if (guide.path) lines.push(`It is in the ${fileKind(guide.mime, guide.path)} at ${guide.path}.`);
   if (guide.text?.trim()) lines.push(guide.path ? `What they wrote with it:\n\n${guide.text.trim()}` : guide.text.trim());
   return lines.join("\n\n");
+}
+
+/** Library-wide style guides active for this request (explicit @name mention or library Default). */
+function libraryStyleGuidesSection(guides: NonNullable<PromptContext["libraryStyleGuides"]>): string {
+  const blocks = guides.map(g => {
+    const why = g.reason === "mentioned"
+      ? `Explicitly chosen for this request (@${g.name}).`
+      : `The editor's default style guide (@${g.name}), which applies automatically unless another @style is named.`;
+    const lines = [`## @${g.name}`, why];
+    if (g.description.trim()) lines.push(`Summary: ${g.description.trim()}`);
+    if (g.instructions.trim()) lines.push("", g.instructions.trim());
+    if (g.assets.length) {
+      lines.push(
+        "",
+        "### Style guide files",
+        "Link fonts and images directly by their absolute path in `graphic_render` (Scarlet copies them into the graphic). Inspect images, PDFs or text with `attachment_read(styleGuideId, assetId)`.",
+        ...g.assets.map(a => `- "${a.name}" (${fileKind(a.mime, a.name)}, ${fileSize(a.size)}), styleGuideId="${g.id}", assetId="${a.id}", at ${a.path}`),
+      );
+    }
+    return lines.join("\n");
+  });
+  return `# Style guides\n\nFollow these visual style rules whenever you create or revise motion graphics, titles, callouts, or overlays.\n\n${blocks.join("\n\n---\n\n")}`;
+}
+
+/** Prompt for designing or updating a library style guide in chat (with attached files and live 16:9 preview). */
+function buildStyleGuideEditPrompt(ctx: PromptContext, edit: NonNullable<PromptContext["editStyleGuide"]>): string {
+  const { guide, assets, attachedIds, hasPreview, earlier } = edit;
+  const attachedSet = new Set(attachedIds ?? []);
+  const newFiles = assets.filter(a => attachedSet.has(a.id));
+  const existingFiles = assets.filter(a => !attachedSet.has(a.id));
+  const formatAsset = (a: (typeof assets)[number]) =>
+    `- "${a.name}" (${fileKind(a.mime, a.name)}, ${fileSize(a.size)}), styleGuideId="${guide.id}", assetId="${a.id}", at ${a.path}`;
+
+  const sections: string[] = [
+    `# You are designing a reusable style guide in Scarlet
+
+The editor is building a visual style guide named \`@${guide.name}\` for their motion graphics (chapter titles, lower thirds, stat callouts, end cards). They see only this chat and the live 16:9 visual preview beside it — never raw rules text — so the preview is how they judge your work.
+
+## How to work
+
+- When the editor attached files to their message, inspect images, SVGs, PDFs or text files with \`attachment_read(styleGuideId="${guide.id}", assetId="...")\`. Use the editor's words to know which files are brand assets to embed (logos, fonts) vs visual references to match (screenshots, inspiration).
+- Link attached fonts in \`@font-face\` and attached logos/images in \`<img>\` using their exact absolute disk \`path\` listed below.
+- ${hasPreview ? "This style guide already has a preview. Call `style_guide_preview_get` first so you preserve what the editor already likes and change only what they asked for." : "This style guide has no preview yet."}
+- Save a concise 1-line \`description\` (plain words summarizing the look, e.g. "Warm ivory, terracotta accents, geometric sans") and thorough \`instructions\` with \`style_guide_update\`. Include exact hex colors, typography + font file paths, layout rhythm, spacing, contrast rules, motion feel, and how each brand asset should be used so future motion graphics match consistently.
+- Always call \`style_guide_preview_render\` to render a crisp 1920×1080 (16:9) visual style sheet showing the look in action (for example: a Chapter Title, a Stat Callout, and a Lower Third arranged cleanly on a solid dark or brand-appropriate canvas so every element is immediately legible at thumbnail and full size). If \`missingFonts\` is returned, switch to an installed font from \`installedFonts\` or ask the editor with \`task_question\` if they requested a custom font.
+- \`task_question\` pauses and asks the editor when a key creative decision truly needs their input.
+
+End with one or two short, plain sentences telling the editor what you created or updated — no jargon, no tool names, no hex dumps unless they asked.`,
+    [
+      `# Style guide: @${guide.name}`,
+      `Description: ${guide.description.trim() || "(none yet)"}`,
+      `Current rules:\n${guide.instructions.trim() || "(none yet)"}`,
+      ...(newFiles.length ? ["Files attached to this message:\n" + newFiles.map(formatAsset).join("\n")] : []),
+      ...(existingFiles.length ? ["Earlier files on this style guide:\n" + existingFiles.map(formatAsset).join("\n")] : []),
+    ].join("\n\n"),
+  ];
+
+  if (earlier?.length) {
+    const turns = earlier.map((e, i) => `${i + 1}. Editor: "${e.asked}"${e.replied ? `\n   You replied: ${e.replied}` : ""}`);
+    sections.push(`# Earlier in this style guide chat\n\n${turns.join("\n")}`);
+  }
+  sections.push(...earlierAnswers(ctx.qa));
+  return sections.join("\n\n");
 }
 
 /** The editor's own words on how Scarlet writes to them, from "Talking to you" in Settings. */
@@ -340,6 +420,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     ].join("\n\n");
   }
   if (ctx.editSkill) return buildSkillEditPrompt(ctx, ctx.editSkill);
+  if (ctx.editStyleGuide) return buildStyleGuideEditPrompt(ctx, ctx.editStyleGuide);
   if (ctx.learningCheck) return buildLearningCheckPrompt(ctx.learningCheck);
   if (ctx.areaCheck) return buildAreaCheckPrompt(ctx.areaCheck, ctx.capabilities?.toolPrefix ?? "");
   if (ctx.listenCheck) return buildListenCheckPrompt(ctx.listenCheck, ctx.capabilities ?? agentCapabilities(ctx.task?.agent, undefined, ctx.task?.model));
@@ -477,6 +558,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 
   parts.push(...earlierInChat(ctx.earlier));
 
+  if (ctx.libraryStyleGuides?.length) parts.push(libraryStyleGuidesSection(ctx.libraryStyleGuides));
   if (ctx.styleGuide) parts.push(styleGuideSection(ctx.styleGuide));
   if (ctx.talkingToYou?.trim()) parts.push(talkingToYouSection(ctx.talkingToYou));
 

@@ -6,7 +6,7 @@ import { normalizeTranscriptToken } from "@scarlet/shared";
 import { round3 } from "./analysis.js";
 import {
   DEFAULT_PACE,
-  DIP_DBFS,
+  levelBars,
   PAUSE_BEAT,
   besideWord,
   breathBetween,
@@ -178,7 +178,7 @@ export function wordCutRange(words: Word[], from: number, to: number, pageAt: (t
       // The room right after the kept word, then a breath up to the next room tone before the removed word's sound: the
       // default is the skill's, this room; kept (`breath`), the start goes to the middle of the room after the breath,
       // as it does in any stretch at room tone (2026-11-21).
-      const next = side === "start" && page && bounds && low.room && low.db <= DIP_DBFS ? roomToneAfter(page, low.room.end, bounds.end) : undefined;
+      const next = side === "start" && page && bounds && low.room && low.db <= levelBars(page.levels).dip ? roomToneAfter(page, low.room.end, bounds.end) : undefined;
       const found = next && breathBetween(page!, kept, low.room!, next);
       const at = found && breath === "keep" ? (next.start + next.end) / 2 : low.at;
       room[side] = found && breath === "keep" ? next : low.room;

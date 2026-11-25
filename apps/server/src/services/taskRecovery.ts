@@ -174,6 +174,7 @@ function settleTask(ctx: Ctx, task: Task, unstarted: boolean, lastSeen?: string 
   const observed = [task.startedAt, lastSeen, lastEvent?.at].filter((at): at is string => !!at && at <= finishedAt).sort().at(-1);
   const { workedMs } = recordWorkThrough(task, lastSeen === undefined ? finishedAt : observed ?? finishedAt);
   if (task.resultSkillId) return finish({ state: "done", changeIds, workedMs, summary: "The skill was saved before the interruption." });
+  if (task.resultStyleGuideId) return finish({ state: "done", changeIds, workedMs, summary: "The style guide was updated before the interruption." });
   if (lastEvent?.type === "question") return saveTask(ctx, { ...recordWorkThrough(task, lastEvent.at),
     changeIds, state: "waiting_for_user", question: lastEvent.text, questionChoices: lastEvent.choices ? questionChoicesOf({ choices: JSON.parse(lastEvent.choices) }) : undefined, hostId: null });
   // Preserve the answer and task workspace of requests stranded by the old host protocol.

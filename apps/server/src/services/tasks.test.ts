@@ -314,13 +314,15 @@ it("logs a run starting, asking and being answered, without what was asked or an
   // The first thing a claimed run reports is that it started. What it reports after that is no change of state.
   await event({ type: "log", text: "Reading the transcript" });
   await event({ type: "log", text: "Looking at 0:12" });
-  expect(said()).toEqual([`[task] ${task.id} claimed → running`]);
+  const step = (t: { id: string; projectId: string }, from: string, to: string, host = true) =>
+    expect.stringMatching(new RegExp(`^\\[task\\] state id=${t.id} kind=edit project=${t.projectId} from=${from} to=${to}${host ? " host=host_\\w+" : ""}$`));
+  expect(said()).toEqual([step(task, "claimed", "running")]);
   const { startedAt } = app.ctx.repos.tasks.get(task.id)!;
   await api("POST", `/tasks/${task.id}/question`, { startedAt, text: "Keep the cold open about the merger?" });
   await api("POST", `/tasks/${task.id}/answer`, { text: "Yes, but lose the name of the buyer" });
   expect(said().slice(1)).toEqual([
-    `[task] ${task.id} running → waiting_for_user: asked the editor a question`,
-    `[task] ${task.id} waiting_for_user → queued: the editor answered`,
+    step(task, "running", "waiting_for_user"),
+    step(task, "waiting_for_user", "queued", false),
   ]);
   expect(said().join("\n")).not.toMatch(/merger|buyer|transcript/);
 
@@ -328,7 +330,15 @@ it("logs a run starting, asking and being answered, without what was asked or an
   const eager = await claimed();
   lines.length = 0;
   await api("POST", `/tasks/${eager.id}/question`, { startedAt: eager.startedAt, text: "Which take?" });
-  expect(said()).toEqual([`[task] ${eager.id} claimed → waiting_for_user: asked the editor a question`]);
+  expect(said()).toEqual([step(eager, "claimed", "waiting_for_user")]);
+
+  // A request added says so once, by its ids, kind and state.
+  lines.length = 0;
+  const added = await claimed();
+  expect(said().filter(line => line.includes(`id=${added.id}`) && !line.includes("from=claimed"))).toEqual([
+    `[task] created id=${added.id} kind=edit project=${added.projectId} thread=${added.context.threadId} state=queued`,
+    expect.stringMatching(new RegExp(`^\\[task\\] state id=${added.id} kind=edit project=${added.projectId} from=queued to=claimed host=host_\\w+$`)),
+  ]);
 });
 
 it("persists active time across questions and queue waits", async () => {

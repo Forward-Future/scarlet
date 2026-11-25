@@ -7,6 +7,10 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 24, 2026
 
 - Switching between For you, Working and Done now keeps the request's heading and tabs steady instead of jumping up and down, and smoothly folds back to the active tab's height once you click elsewhere, finish the request, or start a new one.
+- An empty library now has a "Try a sample project" button that opens a short sample clip with a finished edit pass ready to play, review, and compare Before and After.
+- Dialogue cuts now place cleanly in rooms with steady background noise, like a fan, air conditioning or traffic hum, without cutting into soft word endings.
+- Settings › About (and the startup error screen) now have a Report a problem button that saves a log zip and opens a pre-filled bug report you can drag it into. It reminds you that reports are public and the logs show file and folder names.
+- In the beta three-column layout, the middle edits column can now be resized from its right edge, every row stays on a single line, and hovering a row shows the full line in a Scarlet tooltip.
 - Settings › Usage is now organized into cleaner Tokens and Storage cards with a token breakdown bar, 14-day activity chart, tabbed breakdowns by project, provider and model, live plan limits for signed-in subscriptions, and one-click Clear all for cached renders.
 - Cuts and edits now go by their time everywhere instead of a number: rows start with their time, the timeline shows plain dots (filled once kept, amber while they wait), and cards, the message box's tag and Scarlet's replies say "Cut 2:47" or "Edit 0:11", in both the current and the beta layout.
 - Diagnostics in Settings › Advanced is now cleaner, with separate rows for each set-up provider, clearer Open and Logs buttons, and internal paths tucked under Technical details.
@@ -58,6 +62,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Changing a project's settings while its video is being edited no longer leaves the old cut on screen when the new timeline takes a moment to load: Scarlet loads it again by itself.
 - An edit set to carry on once its transcripts are ready that can't start again now stops waiting after a few tries, so you can carry on yourself, instead of waiting forever.
 - A Scarlet agent whose agent.json was edited by hand to a time limit or task count that isn't a positive number now uses the usual limits, instead of taking no requests or stopping each run as soon as it starts.
+- When the chat's model hands work to the model you chose for it in Task models, that model now hears what you asked in your own words, not only the chat model's brief.
+- When the model you chose for a kind of work, such as Cutting, isn't sure about an edit, the edit now waits for you to check it, as when the chat's model flags one.
 
 ## November 23, 2026
 

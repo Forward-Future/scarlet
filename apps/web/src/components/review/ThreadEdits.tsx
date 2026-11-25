@@ -160,7 +160,7 @@ export function RejectedMark() {
  * its time. `label` names such a list, and `leaving` picks the rows that are on their way out of it: decided or sent back a
  * moment ago, they fade before they go.
  */
-export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low, hideGenericKind, askingKey }: {
+export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low, hideGenericKind, inRail, askingKey }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
   /** Edits the editor rejected, which are out of the video: each keeps a row where it was, with a × and "Rejected". */
   rejected?: ListedEdit[];
@@ -174,6 +174,8 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   low?(edit: ListedEdit): boolean;
   /** Omit the generic fallback word "Edit" at the right of a row, keeping meaningful words like "−1.0 s", "B-roll", "Kept". */
   hideGenericKind?: boolean;
+  /** Drawn inside the beta edits column: use Scarlet's hover tooltip instead of the system title tooltip. */
+  inRail?: boolean;
   /** The row key of the edit whose question is currently shown over the message box, so it lights up. */
   askingKey?: string;
 }) {
@@ -231,6 +233,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
     const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e, showing));
     return <li key={editKey(e)} className={leaving?.(e) ? "is-leaving" : undefined}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
       data-log-control="open-edit" data-log-label="Rejected edit" aria-label={`${e.label}, rejected`}
+      title={inRail ? undefined : e.label} data-row-tip={inRail ? e.label : undefined}
       onClick={event => { blurOnPointerClick(event); onPlay(e); }}>
       <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
       <span className="simple-edit-title"><span className="simple-edit-words">{e.label}</span></span>
@@ -268,14 +271,17 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const isAskingCurrent = !!askingKey && askingKey === editKey(edit);
       // Every row leads with its time, amber while it asks for a look, as a pass's row does: once kept it asks no more.
       const lead = <span className={asks || (check && !isKept) ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
+      const checkTitle = revised || edit.reason ? undefined : edit.check;
       return <Fragment key={editKey(edit)}><li className={leaving?.(edit) ? "is-leaving" : undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
         className={["simple-edit", on && "is-on", asks && "is-asking", isAskingCurrent && "is-asking-current", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
         onPointerEnter={() => onHover?.(edit)} onPointerLeave={() => onHover?.()}
         // Why an edit asks for a look is on its card, in Scarlet's sentence. Its row keeps to the amber time and says
-        // the reason on hover, as a pass's row does.
-        title={revised || edit.reason ? undefined : edit.check}
+        // the reason on hover, as a pass's row does. In the edits column Scarlet's own hover tooltip shows the full line.
+        title={inRail ? undefined : checkTitle}
+        data-row-tip={inRail ? title : undefined}
+        data-row-detail={inRail && checkTitle && checkTitle !== title ? checkTitle : undefined}
         aria-label={`${rowTime}: ${title}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
         {lead}
         <span className="simple-edit-title">{decided && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>

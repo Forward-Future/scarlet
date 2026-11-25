@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeGapSound, gapSound, quietPhrases, quietRms, roomRms, speakingLevel, type GapLevels } from "./gap-sound.js";
+import { describeGapSound, gapSound, quietBuckets, quietPeak, quietPhrases, quietRms, roomRms, speakingLevel, type GapLevels } from "./gap-sound.js";
 
 /** Ten seconds at 50 levels a second: speech at .1, room tone at .001, and whatever `at` says in between. */
 function levels(at: (t: number) => number | undefined): GapLevels {
@@ -68,6 +68,43 @@ describe("a voice over a noisy room", () => {
     const hushed = { ...studio, rms: studio.rms.map(v => v === .001 ? .0002 : v) };
     expect(quietRms(hushed.rms, .02)).toBeCloseTo(.002, 6);
     expect(gapSound(levels(t => t >= 3.1 && t < 3.5 ? .026 : undefined), { start: 2.9, end: 4.6 })!.runs).toEqual([{ start: 3.1, end: 3.5 }]);
+  });
+
+  it("finds quiet pauses in noisy rooms whose floor sits above -40 dBFS, without calling continuous speech quiet", () => {
+    // HVAC / street noise at -34 dBFS (RMS ~0.02, peaks ~0.07) under normal speech at -16 dBFS (RMS 0.16, peaks 0.45).
+    const hvacRms = Array.from({ length: 500 }, (_, i) => {
+      const t = (i + .5) / 50;
+      return t < 2.9 || t >= 4.6 ? .16 : .02 * (1 + .2 * Math.sin(i * 1.9));
+    });
+    const hvacPeaks = hvacRms.map(v => v * 3.2);
+    const q = quietRms(hvacRms, .02);
+    expect(q).toBeGreaterThan(.025);
+    expect(q).toBeLessThan(.06);
+    expect(quietPeak(q)).toBeGreaterThan(.08);
+    const voice = [{ start: 0, end: 2.9 }, { start: 4.6, end: 9 }];
+    const still = quietBuckets(hvacRms, hvacPeaks, 0, .02, voice, q);
+    // Pause buckets (3.0..4.5 s) read as quiet; spoken buckets (0..2.9 s) stay sound.
+    expect(still.slice(155, 220).every(Boolean)).toBe(true);
+    expect(still.slice(10, 140).some(Boolean)).toBe(false);
+
+    // Continuous speech with no pauses (flat 0.10 RMS) must never lift quiet above QUIET_RMS.
+    const nonstop = Array.from({ length: 500 }, (_, i) => .10 * (1 + .1 * Math.sin(i)));
+    expect(quietRms(nonstop, .02)).toBeCloseTo(.01, 6);
+  });
+
+  it("gives a steady hiss less headroom than a room whose noise swings, so soft word ends over the hiss stay sound", () => {
+    // The same speech over -34 dBFS of noise: a hiss that barely moves, and rumble that swings ~6 dB like brown noise.
+    const room = (swing: (i: number) => number) => Array.from({ length: 500 }, (_, i) => {
+      const t = (i + .5) / 50;
+      return t < 2.9 || t >= 4.6 ? .16 : .02 * swing(i);
+    });
+    const hiss = room(() => 1), rumble = room(i => 10 ** ((3 * Math.sin(i * 1.3) + 3) / 20) / 1.41);
+    // Hiss: 3 dB over its level. Rumble: the full 6 dB over its quietest.
+    expect(20 * Math.log10(quietRms(hiss, .02) / roomRms(hiss, .02))).toBeCloseTo(3, 1);
+    expect(20 * Math.log10(quietRms(rumble, .02) / roomRms(rumble, .02))).toBeCloseTo(6, 1);
+    // A soft word end 4 dB over the hiss is sound, not quiet a cut could end in.
+    const softEnd = .02 * 10 ** (4 / 20);
+    expect(softEnd).toBeGreaterThan(quietRms(hiss, .02));
   });
 });
 

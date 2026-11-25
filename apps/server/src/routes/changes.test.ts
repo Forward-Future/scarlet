@@ -71,6 +71,32 @@ it("logs committed call choices and schedule changes without repeating saved dec
     .toEqual([409, "The video changed while this cut was open. Open it again."]);
 });
 
+it("lists a hand-off's doubt about an applied edit under the request it works for", async () => {
+  const { ctx } = workspace;
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "Interview", kind: "video", path: "camera.mov" }, "ready");
+  const base = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 120 }]), { parent: null });
+  ctx.repos.projects.update(project.id, { head: base.version });
+  const by = { type: "human", name: "Editor" } as const;
+  const startedAt = new Date().toISOString();
+  const request = createTask(ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Tighten the pauses", createdBy: by });
+  ctx.repos.tasks.put({ ...request, state: "running", startedAt });
+  const cutting = createTask(ctx, { projectId: project.id, kind: "hand_off", agent: "gemini", model: "gemini-3-pro", instruction: "Cut the long pauses",
+    context: { threadId: request.context.threadId, checksTaskId: request.id, handOff: { typeId: "cutting", name: "Cutting", brief: "Cut the long pauses" } }, createdBy: by });
+  ctx.repos.tasks.put({ ...cutting, state: "running", startedAt });
+  const asCutting = { [TASK_HEADER]: cutting.id, [ATTEMPT_HEADER]: startedAt };
+  const saved = await api("POST", `/projects/${project.id}/changes`, { intent: "requested", description: "Cut the pause", skipRender: true,
+    ops: [{ op: "rippleDelete", start: 10, end: 12 }] }, asCutting);
+  expect(saved.status, await saved.clone().text()).toBe(201);
+  const { change } = await saved.json() as { change: Change };
+  expect(change).toMatchObject({ state: "approved", taskId: request.id, handedOff: { taskId: cutting.id } });
+  const flagged = await api("POST", `/projects/${project.id}/edit-flags`, { check: "Listen to the join", changeId: change.id, spot: 0 }, asCutting);
+  expect(flagged.status, await flagged.clone().text()).toBe(201);
+  // The request's thread is where the editor looks, so its list of edits carries the doubt.
+  const listed = await api("GET", `/projects/${project.id}/threads/${request.context.threadId ?? request.id}/edits`);
+  const { edits } = await listed.json() as { edits: Array<{ changeId: string; check?: string }> };
+  expect(edits).toEqual([expect.objectContaining({ changeId: change.id, check: "Listen to the join" })]);
+});
+
 it("refuses to apply an edit that was rejected in words the editor reads, not the engine's states", async () => {
   const { change } = await (await api("POST", `/projects/${project.id}/changes`, { description: "Add label", ops: marker })).json();
   expect((await api("POST", `/changes/${change.id}/reject`, {})).status).toBe(200);

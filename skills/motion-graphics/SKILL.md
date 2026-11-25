@@ -10,7 +10,7 @@ A graphic is there to be read, then to get out of the way. Make each one legible
 
 ## The look
 
-- When the project has a style guide, follow it as written: its fonts, colors, sizes, placement and motion. Where it is silent, keep to the spirit of what it does say rather than adding a style of your own.
+- When a style guide is provided (the editor's default style, an `@style` mentioned in chat or a skill, or the project's guide), follow it as written: its fonts, colors, sizes, placement, motion, and attached brand assets. Where it is silent, keep to the spirit of what it does say rather than adding a style of your own.
 - With no guide, take the look from what the editor has already approved in this project, so every graphic in a video reads as one family. A first graphic with nothing to go on stays plain: one clean sans-serif, white or near-black, one accent at most.
 
 ## Legibility on the actual picture

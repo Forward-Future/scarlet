@@ -62,7 +62,7 @@ import { SimpleHeader } from "../SimpleHeader";
 import { TRANSCRIPT_RAIL_MIN, TranscriptRail } from "../TranscriptRail";
 import { savedRewording, saveRewording } from "../rewordingStorage";
 import { savedCollapsed, savedOpenLists, saveCollapsed, saveOpenLists } from "../openListsStorage";
-import { ReviewRail } from "../ReviewRail";
+import { REVIEW_RAIL_MIN, ReviewRail } from "../ReviewRail";
 import { RailStore, ReviewRailContext } from "../railStore";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError, WorkingEditCard } from "../ReviewCards";
 import { TimelineWorking } from "../../../components/review/TimelineWorking";
@@ -2356,14 +2356,15 @@ export function SimpleWorkspaceBeta() {
     // paused while requests wait their turn, does the tray hold Resume.
     />;
 
+  const reviewVisible = rail.total("you") + rail.total("optional") + rail.total("working") + rail.total("done") > 0;
   return <ReviewRailContext.Provider value={rail}><AimHostContext.Provider value={aimHost}><EditHoverContext.Provider value={hoveredEdit}>
     <main className="min-h-0 flex flex-1 flex-col" data-new-layout="">
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
         onPaths={paths => { void uploads.startPaths(paths); setPanel("media"); }}
         onFiles={files => { uploads.start(files); setPanel("media"); }}>
         <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}
-          // Leave room for the edits column beside the chat, and for an open Transcript at its narrowest.
-          beside="simple-review-rail" reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}>
+          // Leave room for the edits column and an open Transcript at their narrowest, so resizing either never crowds the player.
+          reserve={(reviewVisible ? REVIEW_RAIL_MIN : 0) + (transcript ? TRANSCRIPT_RAIL_MIN : 0)}>
           <SimpleHeader projectName={current.project.name} importing={importing} importFailed={importFailed}
             threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} menuSays={menuSays} toLearn={toLearn}
             transcript={transcript} setTranscript={setTranscript} setPanel={setPanel} openLearnings={() => { setLearnFocus(undefined); setPanel("learnings"); }}
@@ -2404,7 +2405,7 @@ export function SimpleWorkspaceBeta() {
             {composer}
           </div>
         </ChatRail>
-        <ReviewRail store={rail} threads={railThreads}
+        <ReviewRail store={rail} threads={railThreads} compact={compact} reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}
           open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
           selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined} onDoneLow={keepLowRisk} />
         <div className="workspace-stage simple-stage">
