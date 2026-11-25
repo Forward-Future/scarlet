@@ -66,7 +66,7 @@ beforeEach(() => {
     current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined),
   });
   localStorage.removeItem("scarlet.exportStarShown");
-  useUiStore.setState({ exportStarNotice: "unseen" });
+  useUiStore.setState({ exportNotice: null, exportStarNotice: "unseen" });
   useExports.setState({ jobs: {} });
   vi.spyOn(desktop, "keepVideoExport").mockResolvedValue();
   vi.spyOn(api, "releaseRender").mockResolvedValue();
@@ -1355,6 +1355,129 @@ it("offers a folder for another app under For Resolve, Final Cut or Premiere, sa
   expect(save).toHaveBeenCalledExactlyOnceWith(7, [{ path: "Interview.fcpxml", text: "<fcpxml/>" }]);
   expect(container.textContent).toContain("Interview");
   expect(buttonByText("Show in folder")).toBeTruthy();
+});
+
+it("closes Export automatically when a folder, video, or caption export finishes, shows a single completion notice, and keeps the last file on reopen", async () => {
+  const choose = vi.spyOn(desktop, "chooseVideoExport");
+  const handoff = vi.spyOn(api, "handoff").mockResolvedValue({ files: [{ path: "Interview.fcpxml", text: "<fcpxml/>" }], mediaBytes: 0 });
+  const saveFolder = vi.spyOn(desktop, "finishFolderExport").mockResolvedValue("/Users/me/Exports/Interview");
+  const saveFile = vi.spyOn(desktop, "finishVideoExport");
+  const reveal = vi.spyOn(desktop, "revealPath").mockResolvedValue();
+  const render: Render = { ...data.renders[0]!, id: "final", version: data.project.head!, kind: "full", quality: "delivery", range: null, state: "done" };
+  vi.spyOn(api, "requestRender").mockResolvedValue({ render });
+  vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
+
+  let open = true;
+  const onClose = vi.fn(() => { open = false; });
+  const draw = () => show(<>{open && <ExportSheet hasCut onClose={onClose} />}<ExportStarNotice /></>);
+
+  // 1. Resolve / Final Cut / Premiere folder export closes the dialog and shows the completion notice.
+  choose.mockResolvedValueOnce({ ticket: 7, path: "/Users/me/Exports/Interview" });
+  await draw();
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
+  await click(exportButton()!);
+  expect(handoff).toHaveBeenCalledTimes(1);
+  expect(saveFolder).toHaveBeenCalledTimes(1);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await draw();
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  const notices = () => container.querySelectorAll('aside[aria-label="Export complete"]');
+  expect(notices()).toHaveLength(1);
+  expect(notices()[0]!.textContent).toContain("Exported for Resolve, Final Cut or Premiere");
+  expect(notices()[0]!.textContent).toContain("Interview");
+  expect(button("Star on GitHub")).toBeUndefined();
+  await click(buttonByText("Show in folder")!);
+  expect(reveal).toHaveBeenCalledWith("/Users/me/Exports/Interview");
+  await click(labeled("Dismiss export notice"));
+  expect(notices()).toHaveLength(0);
+
+  // Re-opening Export later keeps it open and still shows the last exported folder (and Earlier edit after changes).
+  open = true;
+  onClose.mockClear();
+  await draw();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.querySelector("dialog[open]")?.textContent).toContain("Interview");
+  expect(buttonByText("Show in folder")).toBeTruthy();
+
+  // 2. MP4 export closes the dialog and combines completion + Star on GitHub into a single notice strip.
+  choose.mockResolvedValueOnce({ ticket: 8, path: "/Users/me/Movies/Interview.mp4" });
+  saveFile.mockResolvedValueOnce("/Users/me/Movies/Interview.mp4");
+  await click(exportButton()!);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await draw();
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  expect(notices()).toHaveLength(1);
+  expect(notices()[0]!.textContent).toContain("Video exported");
+  expect(notices()[0]!.textContent).toContain("Interview.mp4");
+  expect(buttonByText("Show in folder")).toBeTruthy();
+  expect(button("Star on GitHub")).toBeDefined();
+  reveal.mockRejectedValueOnce(new Error("Folder moved"));
+  await click(buttonByText("Show in folder")!);
+  expect(notices()[0]!.textContent).toContain("Folder moved");
+  await click(labeled("Dismiss GitHub invitation"));
+  expect(notices()).toHaveLength(0);
+
+  // 3. Caption export closes the dialog and shows the captions completion notice.
+  open = true;
+  onClose.mockClear();
+  await draw();
+  choose.mockResolvedValueOnce({ ticket: 9, path: "/Users/me/Captions/Interview.srt" });
+  saveFile.mockResolvedValueOnce("/Users/me/Captions/Interview.srt");
+  await selectOption(container.querySelector<HTMLButtonElement>("#export-format")!, /Captions \(\.srt\)/);
+  await click(exportButton()!);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await draw();
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  expect(notices()).toHaveLength(1);
+  expect(notices()[0]!.textContent).toContain("Captions exported");
+  expect(notices()[0]!.textContent).toContain("Interview.srt");
+  expect(buttonByText("Show in folder")).toBeTruthy();
+  expect(button("Star on GitHub")).toBeUndefined();
+});
+
+it("keeps Export open when an export fails, the save dialog is cancelled, or a running export is cancelled", async () => {
+  const choose = vi.spyOn(desktop, "chooseVideoExport");
+  const discard = vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
+  const render: Render = { ...data.renders[0]!, id: "stay-open", version: data.project.head!, kind: "full", quality: "delivery", range: null, state: "done" };
+  const request = vi.spyOn(api, "requestRender").mockResolvedValue({ render });
+  const save = vi.spyOn(desktop, "finishVideoExport");
+  const onClose = vi.fn();
+
+  await show(<><ExportSheet hasCut onClose={onClose} /><ExportStarNotice /></>);
+  // Cancelling the Save dialog keeps the sheet open and shows no completion notice.
+  choose.mockResolvedValueOnce(null);
+  await click(exportButton()!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.querySelector('aside[aria-label="Export complete"]')).toBeNull();
+
+  // Failure keeps the sheet open so the editor sees the error and Retry.
+  choose.mockResolvedValueOnce({ ticket: 10, path: "/chosen/cut.mp4" });
+  save.mockRejectedValueOnce(new Error("Disk full"));
+  await click(exportButton()!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Disk full");
+  expect(button("Retry")).toBeDefined();
+  expect(container.querySelector('aside[aria-label="Export complete"]')).toBeNull();
+
+  // Even when a prior completed export exists on reopen, cancelling the Save dialog or cancelling a render stays open.
+  useExports.setState({ jobs: { [PRJ]: { phase: "done", path: "/chosen/prior.mp4", context: fullRenderContext(data.project) } } });
+  await show(null);
+  onClose.mockClear();
+  await show(<><ExportSheet hasCut onClose={onClose} /><ExportStarNotice /></>);
+  expect(onClose).not.toHaveBeenCalled();
+
+  choose.mockResolvedValueOnce(null);
+  await click(exportButton()!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("prior.mp4");
+
+  choose.mockResolvedValueOnce({ ticket: 11, path: "/chosen/next.mp4" });
+  request.mockResolvedValueOnce({ render: { ...render, state: "running", progress: 0.25 } });
+  await click(exportButton()!);
+  await click(button("Cancel export")!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("prior.mp4");
+  expect(discard).toHaveBeenCalled();
 });
 
 it("goes back from the folder for Resolve, Final Cut or Premiere to the video's settings", async () => {

@@ -69,7 +69,7 @@ beforeEach(() => {
   localStorage.clear();
   usePlayerStore.setState({ time: 0, duration: 0, playing: false, rate: 1 });
   // Each test starts with an empty message box, nothing saved for any request and no dialog left open over the keys.
-  useUiStore.setState({ agentDraft: "", agentContext: null, savedDrafts: {}, draftOwner: null, notePopover: null, speaking: false });
+  useUiStore.setState({ agentDraft: "", agentContext: null, savedDrafts: {}, draftOwner: null, notePopover: null, speaking: false, exportNotice: null });
   useExports.setState({ jobs: {} });
   container = document.createElement("div");
   document.body.append(container);
