@@ -137,22 +137,23 @@ export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean,
     if (on && canMove()) setClosing(true);
     setOn(!on);
   };
-  return { shown: on || closing, toggle };
+  return { shown: on || closing, closing, toggle };
 }
 
 /**
  * The low risk line goes once there is no such edit left, as once the last of them is kept. It closes rather than vanishing, so the
  * rows under it glide up: `count` is what the line still says while it closes, and `leaving` that it is on its way out.
+ * Switching away from For you (`shown = false`) hides the line immediately without animating.
  */
-export function useLowRiskLine(host: RefObject<HTMLElement | null>, count: number) {
+export function useLowRiskLine(host: RefObject<HTMLElement | null>, count: number, shown = true) {
   const [left, setLeft] = useState<number>();
-  const was = useRef(count);
+  const was = useRef({ count, shown });
   useLayoutEffect(() => {
     const before = was.current;
-    was.current = count;
-    if (count > 0) setLeft(undefined);
-    else if (before > 0 && canMove()) setLeft(before);
-  }, [count]);
+    was.current = { count, shown };
+    if (!shown || count > 0) setLeft(undefined);
+    else if (before.shown && before.count > 0 && canMove()) setLeft(before.count);
+  }, [count, shown]);
   useLayoutEffect(() => {
     const line = left === undefined ? null : host.current?.querySelector<HTMLElement>(".simple-low-risk");
     if (!line) return;
@@ -163,5 +164,5 @@ export function useLowRiskLine(host: RefObject<HTMLElement | null>, count: numbe
     void closing.finished.then(() => setLeft(undefined), () => {});
     return () => closing.cancel();
   }, [left]); // eslint-disable-line react-hooks/exhaustive-deps
-  return count > 0 ? { count, leaving: false } : left !== undefined ? { count: left, leaving: true } : undefined;
+  return !shown ? undefined : count > 0 ? { count, leaving: false } : left !== undefined ? { count: left, leaving: true } : undefined;
 }

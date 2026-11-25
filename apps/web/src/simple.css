@@ -223,7 +223,7 @@
 
 /* One badge column for the whole list, so a kept edit's wider badge moves every title together. Each item passes the
    list's columns on to its row, which is the row of a pass's list with the edit's number where that one has a time. */
-.simple-edits { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; column-gap: 8px; margin-top: 2px; }
+.simple-edits { display: grid; grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; align-content: start; column-gap: 8px; margin-top: 2px; }
 /* Above the message box the list scrolls by itself. Positioned, it holds the absolute screen-reader names of the
    requests under its rows ("You") in its own scroll area: otherwise they sit where their rows would be with the list
    unscrolled, far below it, and the whole box scrolls into blank space past its end, taking the heading with it. */
@@ -431,7 +431,7 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-tab-tally { color: var(--color-muted); font-variant-numeric: tabular-nums; }
 /* Over For you's rows, one quiet line for the edits Scarlet didn't flag: a small switch and their count, which
    includes them in For you's list. */
-.simple-low-risk { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 0 0 4px; color: var(--color-muted); font-size: 12.5px; }
+.simple-low-risk { display: flex; flex: none; align-items: center; gap: 8px; min-height: 28px; margin: 0 0 4px; color: var(--color-muted); font-size: 12.5px; }
 .simple-low-risk-toggle { display: inline-flex; align-items: center; gap: 9px; min-width: 0; padding: 4px 0; border: 0; background: none;
   color: inherit; font: inherit; text-align: left; cursor: pointer; transition: color .18s ease; }
 .simple-low-risk-toggle:is(:hover, :focus-visible, [aria-checked="true"]) { color: var(--color-fg); }
@@ -450,7 +450,9 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 @media (prefers-reduced-motion: reduce) {
   .simple-low-risk-toggle, .simple-low-risk-switch, .simple-low-risk-switch::after { transition: none; }
 }
-.simple-review-empty { margin: 0; padding: 8px 0; color: var(--color-muted); font-size: 12.5px; }
+.simple-review-empty { box-sizing: border-box; margin: 0; padding: 8px 0; color: var(--color-muted); font-size: 12.5px; }
+/* Match the tallest tab's height below For you / Working / Done so switching tabs keeps the heading and tabs still. */
+.simple-pass[data-review-pad] > :is(.simple-pass-list, .simple-edits, .simple-review-empty) { min-height: var(--review-body-height); }
 /* A row the editor has just decided or sent back fades before it leaves For you. */
 .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { opacity: 0; transition: opacity .3s ease; }
 @media (prefers-reduced-motion: reduce) {
@@ -746,9 +748,10 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* It gives way before the message box does: a tall draft or an open queue shrinks it and it scrolls inside. */
 .simple-pin { flex: 0 1 auto; min-height: 0; max-height: 62vh; overflow-y: auto; padding: 0 18px; border-top: 1px solid var(--color-line); }
 /* Give the rows the space left below the request's heading and summary, including while a revision runs in a row. */
-.simple-pin:has(.simple-pass-list, .simple-edits),
-.simple-pin :is(.unit, .req, .simple-pass):has(.simple-pass-list, .simple-edits) { display: flex; flex-direction: column; min-height: 0; }
+.simple-pin:has(.simple-pass-list, .simple-edits, .simple-review-empty),
+.simple-pin :is(.unit, .req, .simple-pass):has(.simple-pass-list, .simple-edits, .simple-review-empty) { display: flex; flex-direction: column; min-height: 0; }
 .simple-pin :is(.simple-pass-list, .simple-edits) { max-height: none; overflow-y: auto; }
+.simple-pin .simple-pass[data-review-pad] > :is(.simple-pass-list, .simple-edits, .simple-review-empty) { min-height: 0; flex: 0 1 var(--review-body-height); }
 /* Folded there, the block is its heading alone. The layout above makes a block with a list a column so the list can
    scroll, and would keep it showing: the fold comes after it and outranks it. */
 .simple-pin .unit.is-collapsed > :not(.unit-msg) { display: none; }
