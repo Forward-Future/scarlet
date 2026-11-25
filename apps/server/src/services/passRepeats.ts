@@ -135,13 +135,13 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
     saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining, unavailable, noFindings, returns: last?.returns ?? 0,
       ...(last?.totalReturns !== undefined && { totalReturns: last.totalReturns }), ...(last?.queuedAt && { queuedAt: last.queuedAt }) } });
     return { version: tl.version, ...(named !== tl.version && { readInsteadOf: named }), heard: check.repeats.length, staged: staged.length, remaining,
-      // One offset pages the repeats and the divided sentences together: a pass asked for the next pages of both at once.
+      // One offset pages the repeats, divided sentences and picture findings together.
       repeats: repeats.slice(request.offset, request.offset + 25),
-      ...(request.offset + 25 < Math.max(repeats.length, fragments.length) && { nextOffset: request.offset + 25 }),
+      ...(request.offset + 25 < Math.max(repeats.length, fragments.length, pictures.length) && { nextOffset: request.offset + 25 }),
       ...(silences.length && { silences: silences.slice(0, 25) }),
       ...(shortPieces.length && { shortPieces: shortPieces.slice(0, 25) }),
       ...(fragments.length && { fragments: fragments.slice(request.offset, request.offset + 25) }),
-      ...(pictures.length && { pictures: pictures.slice(0, 25) }),
+      ...(pictures.length && request.offset < pictures.length && { pictures: pictures.slice(request.offset, request.offset + 25) }),
       ...(check.unavailable.length && { unavailable: check.unavailable }),
       ...(check.joins.length && { joins }), ...(unheardJoins.length && { unheardJoins }) };
   }, "immediate")();

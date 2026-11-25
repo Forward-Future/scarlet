@@ -15,7 +15,8 @@
  * beside its stretches. A silent recording shown over the main picture is reported too, where the edit turns it on or
  * moves its edges.
  */
-import { clipEnd, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { SMALL_TEXT_PERCENT } from "@scarlet/shared";
+import { clipEnd, sourceToTimeline, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
 import { pct1, round2 } from "./analysis.js";
 import { CORNERS, boxArea, boxInCorner, boxMeet, clipFramingKey, coverOnText, frameShown, pictureBox, type Box, type Corner } from "./framing.js";
 import { CUT_SHOWN, cutShareOf, sourceOnScreen, type RecordingCut } from "./brief-pictures.js";
@@ -31,8 +32,8 @@ export interface FramedStretch {
   clips: number;
   /** Where the frame stands still: the area of the source picture that fills the video, in percent; empty where the picture doesn't fill the video, as a recording of another shape shown whole doesn't. */
   holds: Array<FrameHold>;
-  /** Where it moves from one frame to the next. `onCut` when the move starts on a cut in the picture. `zoom` is how much larger the picture gets, in percent (less than 0 when it gets smaller), and `shift` how far the frame's centre goes, in percent of the frame it leaves. */
-  moves: Array<{ from: number; to: number; fromFrame: number[]; toFrame: number[]; onCut?: true; zoom?: number; shift?: number }>;
+  /** Where it moves from one frame to the next. `onCut` when the move starts on a cut in the picture. `screenChanged` when a gliding move runs across a change to a new screen, page or demo (`screenChangeAt` names that timeline second). `zoom` is how much larger the picture gets, in percent (less than 0 when it gets smaller), and `shift` how far the frame's centre goes, in percent of the frame it leaves. */
+  moves: Array<{ from: number; to: number; fromFrame: number[]; toFrame: number[]; onCut?: true; screenChanged?: true; screenChangeAt?: number; zoom?: number; shift?: number }>;
   /** Readings aloud (screen_reading) in the stretch whose lines the frame leaves out or a picture over it covers. */
   readsHidden?: Array<{ from: number; to: number; said: string; box: number[]; outsideFrame?: number; underCover?: number }>;
   /** Areas where the picture keeps changing (screen_motion) in the stretch that the frame leaves out or a picture over it covers. */
@@ -55,6 +56,14 @@ export interface FrameHold {
   coverHidesMore?: number;
   /** With something hidden: the percent of the picture over it that sits on such things in each corner, at its size and margins, at most while it holds. */
   detailInCorners?: Partial<Record<Corner, number>>;
+  /** Lines of the recording's text cut through by an edge of this frame (mid-word at the sides or sliced across top/bottom). */
+  clippedText?: { sides: Array<"left" | "right" | "top" | "bottom">; lines: string[]; more?: number };
+  /** Text in this frame whose usual line height is below the readability threshold, in percent and pixels of the video height. */
+  smallText?: { heightPct: number; heightPx: number; videoHeight: number; lines: number; sample: string[]; readHeightPct?: number; readSaid?: string };
+  /** Sub-stretches of this hold where the framed picture shows almost nothing (blank canvas or loading placeholder). */
+  blank?: Array<{ from: number; to: number; detailPct: number; showing?: string[] }>;
+  /** Video player timestamp controls (such as "0:02 / 0:14") still visible inside the framed picture. */
+  playerControls?: string[];
 }
 
 /** Time of the video beside a framed stretch, with its recording off picture, while the recording shows what the frame did at that edge. */
@@ -120,13 +129,87 @@ const area = boxArea;
 /** A silent picture above the main one that covers at least this share of the video is shown in its place, as a screen recording over the camera is; a camera inset isn't. */
 const STANDS_IN = 0.5;
 const meet = boxMeet;
+/** Text that names a waiting/loading placeholder when little else is on screen. */
+const LOADING_TEXT = /\b(loading|please wait|initializing|connecting|buffering|starting|preparing)\b/i;
+/** Embedded video player timestamp controls ("0:02 / 0:14", "0:54 / 0:54") visible inside a framed screen. */
+const PLAYER_CLOCK = /^\s*\d{1,2}:\d{2}\s*\/\s*\d{1,2}:\d{2}\s*$/;
+
+/** Share of cells in `box` (source fractions) whose detail bit differs between two 64×36 detail grids. */
+function detailDiffShare(a: Uint8Array, b: Uint8Array, box: readonly number[]): number {
+  const c0 = Math.max(0, Math.floor(box[0]! * DETAIL_COLS)), c1 = Math.min(DETAIL_COLS, Math.ceil(box[2]! * DETAIL_COLS));
+  const r0 = Math.max(0, Math.floor(box[1]! * DETAIL_ROWS)), r1 = Math.min(DETAIL_ROWS, Math.ceil(box[3]! * DETAIL_ROWS));
+  let all = 0, diff = 0;
+  for (let r = r0; r < r1; r++) for (let c = c0; c < c1; c++) {
+    all++;
+    const i = r * DETAIL_COLS + c;
+    if (((a[i >> 3]! >> (i & 7)) & 1) !== ((b[i >> 3]! >> (i & 7)) & 1)) diff++;
+  }
+  return all ? diff / all : 0;
+}
+
+/**
+ * Whether a gliding move (`to > from + 0.05`) runs across a moment where the screen itself changes to something new:
+ * a recording cut inside a clip during/right before the move, or a clip jump cut in the run across which the recording
+ * cut or changed its page/detail. Straight cuts (`over === 0`) are not moves and return undefined.
+ */
+export function moveCrossesScreenChange(
+  run: readonly MediaClip[],
+  from: number,
+  to: number,
+  fromBox: Box,
+  toBox: Box,
+  evidence?: { cuts?: readonly RecordingCut[]; lines?: readonly ScreenLine[]; detail?: ReadonlyArray<{ at: number; cells: Uint8Array }> },
+): { at: number } | undefined {
+  if (to - from <= 0.05) return undefined;
+  const cuts = evidence?.cuts ?? [];
+  const cutHits = (rc: RecordingCut) => Math.max(cutShareOf(rc, fromBox), cutShareOf(rc, toBox)) >= CUT_SHOWN;
+  // 1. Recording cut inside a continuous clip during or right before the glide.
+  for (const clip of run) {
+    for (const rc of cuts) {
+      if (rc.at <= clip.sourceIn + 1e-3 || rc.at >= clip.sourceOut - 1e-3) continue;
+      const at = sourceToTimeline(clip, rc.at);
+      if (at >= from - 0.25 && at <= to + 0.05 && cutHits(rc)) return { at: r2(at) };
+    }
+  }
+  // 2. Clip source jump right before or during the glide across which the screen changed.
+  for (let i = 1; i < run.length; i++) {
+    const prev = run[i - 1]!, curr = run[i]!;
+    if (Math.abs(curr.timelineIn - clipEnd(prev)) > 0.06) continue;
+    if (curr.timelineIn < from - 0.35 || curr.timelineIn > to + 0.05) continue;
+    if (Math.abs(curr.sourceIn - prev.sourceOut) <= 0.2) continue;
+    const lo = Math.min(prev.sourceOut, curr.sourceIn), hi = Math.max(prev.sourceOut, curr.sourceIn);
+    if (cuts.some(rc => rc.at >= lo - 0.1 && rc.at <= hi + 0.1 && cutHits(rc))) return { at: r2(curr.timelineIn) };
+    if (evidence?.lines?.length) {
+      const textsAt = (src: number, box: Box) => new Set(evidence.lines!
+        .filter(l => l.start <= src && src <= l.end && area(meet(l.box, box)) > 0 && l.text.trim().length >= 3)
+        .map(l => l.text.trim().toLowerCase()));
+      const a = textsAt(prev.sourceOut, fromBox), b = textsAt(curr.sourceIn, toBox);
+      if (a.size >= 3 && b.size >= 3) {
+        const shared = [...a].filter(t => b.has(t)).length;
+        if (shared / Math.min(a.size, b.size) < 0.35) return { at: r2(curr.timelineIn) };
+      }
+    }
+    if (evidence?.detail?.length) {
+      const c1 = evidence.detail.findLast(d => d.at <= prev.sourceOut + 0.5)?.cells;
+      const c2 = evidence.detail.findLast(d => d.at <= curr.sourceIn + 0.5)?.cells;
+      if (c1 && c2 && detailDiffShare(c1, c2, toBox) >= 0.25) return { at: r2(curr.timelineIn) };
+    }
+  }
+  return undefined;
+}
+
+const median = (values: number[]) => {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b), mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+};
 
 /**
  * The stretches `after` frames that `before` framed otherwise: clips of a recording on one track, in a row, that the edit
  * added or whose transform or keyframes it changed, with the stretch they make together.
  */
 export function framingReport(before: Timeline | null, after: Timeline, media: readonly MediaAsset[], canvas: Size,
-  readings: readonly ScreenReading[] = [], motion: readonly MotionSpan[] = [], beside?: BesideEvidence): FramedStretch[] {
+  readings: readonly ScreenReading[] = [], motion: readonly MotionSpan[] = [], beside?: BesideEvidence, smallTextUnder = SMALL_TEXT_PERCENT): FramedStretch[] {
   const was = new Map(before?.tracks.flatMap(t => t.clips.map(c => [c.id, c] as const)) ?? []);
   const assets = new Map(media.map(m => [m.id, m]));
   const size = (id: string): Size => ({ width: assets.get(id)?.width || canvas.width, height: assets.get(id)?.height || canvas.height });
@@ -166,9 +249,26 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
       if (made && ([...made.holds.map(h => h.frame), ...made.moves.map(m => m.toFrame)].some(f => f.length) || run.some(c => standsIn(c, index)))) out.push(made);
       run = [];
     };
+    const clipCoveredWhole = (clip: MediaClip) => {
+      const a = clip.timelineIn, b = clipEnd(clip);
+      return layers.some(l => l.index > index && l.clip.timelineIn <= a + 0.05 && clipEnd(l.clip) >= b - 0.05 &&
+        area(meet(pictureBox(l.clip, Math.max(0, (a + b) / 2 - l.clip.timelineIn), size(l.clip.mediaId), canvas), [0, 0, 1, 1])) >= 0.9);
+    };
+    const clipHasCover = (clip: MediaClip) => {
+      const a = clip.timelineIn, b = clipEnd(clip);
+      return layers.some(l => l.index > index && l.clip.timelineIn < b - 0.05 && clipEnd(l.clip) > a + 0.05 &&
+        area(meet(pictureBox(l.clip, Math.max(0, (a + b) / 2 - l.clip.timelineIn), size(l.clip.mediaId), canvas), [0, 0, 1, 1])) < 0.9);
+    };
     for (const clip of clips) {
       const prev = run.at(-1);
-      const shown = !!clip.transform || !!clip.keyframes?.length || standsIn(clip, index);
+      // On a whole-timeline closing check (`before === null`), include unframed screen recordings on the main track
+      // too unless a full-screen layer hides the clip, so forgotten unframed stretches are still checked. On the first
+      // discovery pass (`beside === undefined`, before `framedOn` fetches screen perception), a silent main-track clip
+      // or one with an inset over it stands in so its recording is fetched.
+      const unframedScreen = before === null && !clipCoveredWhole(clip) &&
+        (beside ? ((beside.lines.get(clip.mediaId)?.length ?? 0) > 0 || (beside.detail?.get(clip.mediaId)?.length ?? 0) > 0)
+          : (!heard.has(clip.mediaId) || clipHasCover(clip)));
+      const shown = !!clip.transform || !!clip.keyframes?.length || standsIn(clip, index) || unframedScreen;
       if (prev && (!shown || prev.mediaId !== clip.mediaId || clip.timelineIn - clipEnd(prev) > 0.05)) flush();
       if (shown) run.push(clip);
     }
@@ -192,6 +292,16 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
     const same = (a: Box | null, b: Box | null) => a === b || (!!a && !!b && a.every((n, i) => Math.abs(n - b[i]!) < STILL));
     const frameAt = (n: number) => samples[n]!.frame ? pct(samples[n]!.frame!) : [];
     const crosses = (n: number) => cuts.some(c => samples[n - 1]!.t < c - 1e-6 && samples[n]!.t >= c - 1e-6);
+    // An instantaneous `ease: "hold"` keyframe step inside a clip (`over: 0` from timeline_framing) is a straight cut, not a 0.1 s glide.
+    const holdJump = (fromT: number, toT: number) => run.some(c => {
+      const kfs = c.keyframes;
+      if (!kfs?.length) return false;
+      for (let i = 1; i < kfs.length; i++) {
+        const t = c.timelineIn + kfs[i]!.time;
+        if (t > fromT - 1e-6 && t <= toT + 1e-6 && kfs[i - 1]!.ease === "hold") return true;
+      }
+      return false;
+    });
     const holds: FramedStretch["holds"] = [], moves: FramedStretch["moves"] = [];
     if (samples.length === 1) holds.push({ from: r2(from), to: r2(to), frame: frameAt(0) });
     // Between each sample and the next the frame stays or changes; a run of either is a hold or a move.
@@ -202,8 +312,11 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
       const first = samples[a - 1]!, last = samples[b]!;
       if (still) holds.push({ from: r2(first.t), to: r2(b === samples.length - 1 ? to : last.t), frame: frameAt(a - 1) });
       else {
-        // A change between two samples across a cut is a cut to another frame, not a move.
-        const jump = b === a && crosses(a);
+        // A change where every sample step is a clip cut or an instantaneous hold-keyframe step is a cut to another frame, not a move.
+        let jump = true;
+        for (let k = a; k <= b; k++) {
+          if (!crosses(k) && !holdJump(samples[k - 1]!.t, samples[k]!.t)) { jump = false; break; }
+        }
         moves.push({ from: r2(first.t), to: r2(jump ? first.t : last.t), fromFrame: frameAt(a - 1), toFrame: frameAt(b),
           ...(!jump && cuts.some(c => Math.abs(c - first.t) <= STEP + 1e-6) && { onCut: true as const }) });
       }
@@ -220,29 +333,96 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
     }
     for (const move of moves) Object.assign(move, moveSize(move.fromFrame, move.toFrame));
 
+    /** Whether a full-screen opaque clip on a higher track completely hides this stretch at moment `t`. */
+    const opaqueAbove = (t: number) => layers.some(l => l.index > trackIndex && l.clip.timelineIn <= t && t < clipEnd(l.clip) &&
+      area(meet(pictureBox(l.clip, t - l.clip.timelineIn, size(l.clip.mediaId), canvas), [0, 0, 1, 1])) >= 0.9);
     /** The pictures over the stretch at a moment, such as a camera inset, on the video: one that fills it is shown in its place, not over it. */
     const coversAt = (t: number) => layers.filter(l => l.index > trackIndex && l.clip.timelineIn <= t && t < clipEnd(l.clip))
       .map(l => pictureBox(l.clip, t - l.clip.timelineIn, size(l.clip.mediaId), canvas))
       .map(b => meet(b, [0, 0, 1, 1])).filter(b => area(b) > 0 && area(b) < 0.9);
-    // The recording's text and detail a cover sits on while the frame holds, and where else the cover could go.
+    // The recording's text, cuts and detail over the stretch.
     const lines = beside?.lines.get(run[0]!.mediaId) ?? [];
+    const recCuts = beside?.cuts?.get(run[0]!.mediaId) ?? [];
     const details = (beside?.detail?.get(run[0]!.mediaId) ?? []).map(d => ({ at: d.at, cells: new Uint8Array(Buffer.from(d.cells, "base64")) }));
-    if (lines.length || details.length) for (const hold of holds) {
+    if (beside) for (const move of moves) {
+      if (move.to - move.from <= 0.05 || move.fromFrame.length !== 4 || move.toFrame.length !== 4) continue;
+      if (opaqueAbove((move.from + move.to) / 2)) continue;
+      const hit = moveCrossesScreenChange(run, move.from, move.to, move.fromFrame.map(n => n / 100) as Box, move.toFrame.map(n => n / 100) as Box,
+        { cuts: recCuts, lines, detail: details });
+      if (hit) { move.screenChanged = true; move.screenChangeAt = hit.at; }
+    }
+    if (lines.length || details.length || readings.length) for (const hold of holds) {
       if (!hold.frame.length) continue;
       const under = new Map<string, ScreenLine>();
       let clear: Set<Corner> | undefined;
       const inCorners = new Map<Corner, number>();
       const hides = new Map<string, { box: number[]; hidden: number; cells: number }>();
+      const lrClipped = new Map<string, { side: "left" | "right"; text: string }>();
+      const tbClipped = new Map<string, { side: "top" | "bottom"; text: string; hits: number }>();
+      const sized = new Map<string, { heightPct: number; text: string }>();
+      const playerClocks = new Set<string>();
+      const blanks: Array<{ from: number; to: number; maxDetail: number; texts: Set<string> }> = [];
+      let openBlank: { from: number; to: number; maxDetail: number; texts: Set<string> } | undefined;
+      let visibleSamples = 0;
       let next = -Infinity;
       for (const s of samples) {
-        if (s.t < hold.from - 1e-6 || s.t > hold.to + 1e-6 || s.t < next || !s.frame) continue;
+        if (s.t < hold.from - 1e-6 || (hold.to > hold.from ? s.t >= hold.to - 1e-6 : s.t > hold.to + 1e-6) || s.t < next || !s.frame) continue;
         next = s.t + TEXT_STEP;
+        if (opaqueAbove(s.t)) { openBlank = undefined; continue; }
+        visibleSamples++;
+        const [fl, ft, fr, fb] = s.frame, fw = fr - fl, fh = fb - ft;
         const covers = coversAt(s.t);
+        const cells = details.findLast(d => d.at <= s.source + 0.5)?.cells;
+        const activeLines = lines.length ? lines.filter(l => l.start <= s.source && s.source <= l.end) : [];
+        // Blank / loading screen check (applies with or without a camera inset).
+        if (cells) {
+          const ds = detailShare(cells, s.frame);
+          const vis = activeLines.filter(l => area(meet(l.box, s.frame!)) > 0 && l.text.trim().length >= 2);
+          const isBlank = (ds < 0.015 && vis.length <= 1) || (ds < 0.05 && vis.length >= 1 && vis.length <= 3 && vis.every(l => LOADING_TEXT.test(l.text)));
+          if (isBlank) {
+            const segEnd = Math.min(hold.to, s.t + TEXT_STEP);
+            if (!openBlank) { openBlank = { from: s.t, to: segEnd, maxDetail: ds, texts: new Set() }; blanks.push(openBlank); }
+            else { openBlank.to = segEnd; openBlank.maxDetail = Math.max(openBlank.maxDetail, ds); }
+            for (const l of vis) openBlank.texts.add(l.text.trim().slice(0, 60));
+          } else openBlank = undefined;
+        }
+        // Text sliced by frame edges, visible player controls, & rendered text height (applies with or without a camera inset).
+        if (activeLines.length && fw > 0 && fh > 0) {
+          for (const l of activeLines) {
+            const txt = l.text.trim();
+            if (txt.length < 3) continue;
+            const b = l.box, bw = b[2] - b[0], bh = b[3] - b[1];
+            if (bw <= 0 || bh <= 0) continue;
+            if (PLAYER_CLOCK.test(txt) && area(meet(b, s.frame)) / (bw * bh) >= 0.4 && (!covers.length || !coverOnText(s.frame, covers, [l]))) {
+              playerClocks.add(txt);
+            }
+            const vIn = Math.max(0, Math.min(b[3], fb) - Math.max(b[1], ft)) / bh;
+            const hIn = Math.max(0, Math.min(b[2], fr) - Math.max(b[0], fl)) / bw;
+            if (vIn >= 0.4) {
+              if (fl > 0.005 && b[0] < fl - 0.003 && b[2] > fl + 0.003 && hIn >= 0.05 && hIn <= 0.95)
+                lrClipped.set(`L:${txt.slice(0, 40)}`, { side: "left", text: txt });
+              if (fr < 0.995 && b[0] < fr - 0.003 && b[2] > fr + 0.003 && hIn >= 0.05 && hIn <= 0.95)
+                lrClipped.set(`R:${txt.slice(0, 40)}`, { side: "right", text: txt });
+            }
+            if (hIn >= 0.4) {
+              if (ft > 0.005 && b[1] < ft - 0.002 && b[3] > ft + 0.002 && vIn >= 0.1 && vIn <= 0.85) {
+                const k = `T:${txt.slice(0, 40)}`, prev = tbClipped.get(k);
+                tbClipped.set(k, { side: "top", text: txt, hits: (prev?.hits ?? 0) + 1 });
+              }
+              if (fb < 0.995 && b[1] < fb - 0.002 && b[3] > fb + 0.002 && vIn >= 0.1 && vIn <= 0.85) {
+                const k = `B:${txt.slice(0, 40)}`, prev = tbClipped.get(k);
+                tbClipped.set(k, { side: "bottom", text: txt, hits: (prev?.hits ?? 0) + 1 });
+              }
+            }
+            const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+            if (txt.length >= 4 && cx >= fl && cx <= fr && cy >= ft && cy <= fb && (!covers.length || !coverOnText(s.frame, covers, [l]))) {
+              sized.set(`${txt.slice(0, 30)}@${Math.round(b[0] * 100)},${Math.round(b[1] * 100)}`, { heightPct: bh / fh * 100, text: txt });
+            }
+          }
+        }
         if (!covers.length) continue;
         // Detail: the picture in force at this source second, under each cover as placed, and in each corner.
-        const cells = details.findLast(d => d.at <= s.source + 0.5)?.cells;
         if (cells) {
-          const [fl, ft, fr, fb] = s.frame, fw = fr - fl, fh = fb - ft;
           const share = (boxes: readonly Box[]) => {
             const onSource = boxes.map(c => [fl + c[0] * fw, ft + c[1] * fh, fl + c[2] * fw, ft + c[3] * fh]);
             const weights = onSource.map(b => area(b as Box));
@@ -253,21 +433,65 @@ export function framingReport(before: Timeline | null, after: Timeline, media: r
           // Each thing in the frame, and how much of it is under a cover: a cell counts by its middle.
           const onSource = covers.map(c => [fl + c[0] * fw, ft + c[1] * fh, fl + c[2] * fw, ft + c[3] * fh]);
           for (const thing of detailAreas(cells, s.frame)) {
-            const under = thing.cells.filter(i => {
+            const underCells = thing.cells.filter(i => {
               const x = (i % DETAIL_COLS + 0.5) / DETAIL_COLS, y = (Math.floor(i / DETAIL_COLS) + 0.5) / DETAIL_ROWS;
               return onSource.some(b => x >= b[0]! && x <= b[2]! && y >= b[1]! && y <= b[3]!);
             }).length;
-            if (!under) continue;
-            const key = thing.box.join(), hidden = under / thing.cells.length, was = hides.get(key);
-            if (!was || hidden > was.hidden) hides.set(key, { box: pct(thing.box), hidden, cells: under });
+            if (!underCells) continue;
+            const key = thing.box.join(), hidden = underCells / thing.cells.length, was = hides.get(key);
+            if (!was || hidden > was.hidden) hides.set(key, { box: pct(thing.box), hidden, cells: underCells });
           }
         }
-        const shown = lines.filter(l => l.start <= s.source && s.source <= l.end && area(meet(l.box, s.frame!)) > 0);
+        const shown = activeLines.filter(l => area(meet(l.box, s.frame!)) > 0);
         const sitsOn = shown.filter(l => coverOnText(s.frame!, covers, [l]));
         if (!sitsOn.length) continue;
         for (const l of sitsOn) under.set(`${l.text}@${l.box.map(n => n.toFixed(2))}`, l);
         const here = CORNERS.filter(corner => !coverOnText(s.frame!, covers.map(c => boxInCorner(c, corner)), shown));
         clear = new Set(clear ? [...clear].filter(c => here.includes(c)) : here);
+      }
+      if (!visibleSamples) continue;
+      if (playerClocks.size) hold.playerControls = [...playerClocks].slice(0, 3);
+      const realBlanks = blanks.filter(b => b.to - b.from >= 0.8);
+      if (realBlanks.length) {
+        hold.blank = realBlanks.map(b => ({ from: r2(b.from), to: r2(b.to), detailPct: Math.round(b.maxDetail * 1000) / 10,
+          ...(b.texts.size && { showing: [...b.texts].slice(0, 3) }) }));
+      }
+      const minTbHits = hold.to - hold.from >= 2 ? 2 : 1;
+      const clipped = [...lrClipped.values(), ...[...tbClipped.values()].filter(v => v.hits >= minTbHits)];
+      if (clipped.length) {
+        const sides = (["left", "right", "top", "bottom"] as const).filter(side => clipped.some(c => c.side === side));
+        const clippedTexts = [...new Set(clipped.map(c => c.text.slice(0, 60)))];
+        hold.clippedText = { sides, lines: clippedTexts.slice(0, 5), ...(clippedTexts.length > 5 && { more: clippedTexts.length - 5 }) };
+      }
+      // Small text: either text read aloud on this hold or substantial text on screen below smallTextUnder% of video height.
+      const fh = (hold.frame[3]! - hold.frame[1]!) / 100;
+      const fBox = hold.frame.map(n => n / 100) as Box;
+      let readHeightPct: number | undefined;
+      let readSaid: string | undefined;
+      if (fh > 0) {
+        for (const r of readings) {
+          if (r.mediaId !== run[0]!.mediaId || r.to <= hold.from || r.from >= hold.to) continue;
+          const rHeights = r.lines
+            .filter(l => { const cx = (l.box[0] + l.box[2]) / 2, cy = (l.box[1] + l.box[3]) / 2; return cx >= fBox[0] && cx <= fBox[2] && cy >= fBox[1] && cy <= fBox[3]; })
+            .map(l => (l.box[3] - l.box[1]) / fh * 100);
+          if (!rHeights.length) continue;
+          const med = Math.round(median(rHeights) * 10) / 10;
+          if (med < smallTextUnder && (readHeightPct === undefined || med < readHeightPct)) {
+            readHeightPct = med;
+            readSaid = r.said.length > 80 ? `${r.said.slice(0, 77)}…` : r.said;
+          }
+        }
+      }
+      const allSized = [...sized.values()];
+      const longCount = allSized.filter(x => x.text.length >= 15).length;
+      const usualPct = allSized.length ? Math.round(median(allSized.map(x => x.heightPct)) * 10) / 10 : undefined;
+      if (readHeightPct !== undefined || (usualPct !== undefined && hold.to - hold.from >= 2 && (allSized.length >= 10 || longCount >= 5) && usualPct < smallTextUnder)) {
+        const shownPct = readHeightPct !== undefined && (usualPct === undefined || readHeightPct < usualPct) ? readHeightPct : (usualPct ?? readHeightPct!);
+        const sample = [...new Set([...allSized].sort((a, b) => b.text.length - a.text.length).map(x => x.text.slice(0, 50)))].slice(0, 3);
+        hold.smallText = {
+          heightPct: shownPct, heightPx: Math.round(shownPct / 100 * canvas.height), videoHeight: canvas.height,
+          lines: allSized.length, sample, ...(readHeightPct !== undefined && { readHeightPct, readSaid }),
+        };
       }
       if (hides.size) {
         const things = [...hides.values()].sort((a, b) => b.cells - a.cells);
@@ -496,4 +720,4 @@ export function moveSize(from: number[], to: number[]): { zoom?: number; shift?:
   return { zoom: Math.round((fw / tw - 1) * 1000) / 10, shift: Math.round(Math.max(dx, dy) * 1000) / 10 };
 }
 
-export const FRAMING_REPORT_NEXT = "hiddenUnderCover names the holds, in timeline seconds, where a picture over the recording hides something on it, and readOffPicture the passages, in timeline seconds, where the speaker reads aloud text the recording shows while it is off picture (each stretch's shownAfter and shownBefore reads). framed lists each stretch this edit framed, put on picture over another, moved the edges of or moved a picture over (a camera inset): where the frame holds and where it moves, as the area of the source picture that fills the video ([left, top, right, bottom] in percent, empty where the picture doesn't fill it), with each hold's underCover, the lines of the recording's text (screen_text) in the frame that a picture over it sits on, and cornersClearOfText, the corners where that picture would sit on none, coverHides, the things in the recording the frame shows (text, lines, pictures: anything that isn't flat background) that the picture over it hides, with each one's box and the percent of it hidden, and detailInCorners, how much of that picture would sit on such things in each corner, in percent (timeline_framing places a frame clear of it, or moves it); readsHidden, the passages the speaker reads aloud there (screen_reading) whose lines the frame leaves out (outsideFrame) or a picture over it covers (underCover), in percent of those lines; actionHidden, the areas where the picture keeps changing (screen_motion) that it leaves out or covers, in percent of each area; and shownAfter and shownBefore, the video just after the stretch ends or just before it starts, with the recording off picture, while the recording still shows what the frame showed at that edge, up to a cut in the recording: lines of its text still there (showing, longest first), or nothing in the frame changed (unchanged), and stillEverywhere when nothing anywhere in the recording's picture changes, the pointer included, as a page left still or a capture that stopped leaves it, with the words heard over it (said), the passages of its text read aloud word for word (reads) and how far the speaker's eyes look down meanwhile (eyesDown: 0 level or up, 1 fully down; at a laptop below the camera they read about 0.5 or more, at the lens about 0.1), with where to see their face midway (look: the recording, its source second and the area in percent, for media_frame). A move marked onCut starts on a cut in the picture; each move's zoom says how much larger the picture gets, in percent (negative when it gets smaller), and shift how far the frame's centre goes, in percent of the frame it leaves. frame_contact_sheet on the new version shows any of it as it plays.";
+export const FRAMING_REPORT_NEXT = "hiddenUnderCover names the holds, in timeline seconds, where a picture over the recording hides something on it, and readOffPicture the passages, in timeline seconds, where the speaker reads aloud text the recording shows while it is off picture (each stretch's shownAfter and shownBefore reads). framed lists each stretch this edit framed, put on picture over another, moved the edges of or moved a picture over (a camera inset): where the frame holds and where it moves, as the area of the source picture that fills the video ([left, top, right, bottom] in percent, empty where the picture doesn't fill it), with each hold's underCover, the lines of the recording's text (screen_text) in the frame that a picture over it sits on, and cornersClearOfText, the corners where that picture would sit on none, coverHides, the things in the recording the frame shows (text, lines, pictures: anything that isn't flat background) that the picture over it hides, with each one's box and the percent of it hidden, and detailInCorners, how much of that picture would sit on such things in each corner, in percent (timeline_framing places a frame clear of it, or moves it), clippedText where a frame edge slices through lines of text, smallText where the text's usual height is small at the video's size (in percent and pixels of the video height), and blank where the framed picture shows almost nothing (such as a loading screen); readsHidden, the passages the speaker reads aloud there (screen_reading) whose lines the frame leaves out (outsideFrame) or a picture over it covers (underCover), in percent of those lines; actionHidden, the areas where the picture keeps changing (screen_motion) that it leaves out or covers, in percent of each area; and shownAfter and shownBefore, the video just after the stretch ends or just before it starts, with the recording off picture, while the recording still shows what the frame showed at that edge, up to a cut in the recording: lines of its text still there (showing, longest first), or nothing in the frame changed (unchanged), and stillEverywhere when nothing anywhere in the recording's picture changes, the pointer included, as a page left still or a capture that stopped leaves it, with the words heard over it (said), the passages of its text read aloud word for word (reads) and how far the speaker's eyes look down meanwhile (eyesDown: 0 level or up, 1 fully down; at a laptop below the camera they read about 0.5 or more, at the lens about 0.1), with where to see their face midway (look: the recording, its source second and the area in percent, for media_frame). A move marked onCut starts on a cut in the picture, and one marked screenChanged glides across a switch to a new screen, page or demo (`screenChangeAt`, where a straight cut with over: 0 fits); each move's zoom says how much larger the picture gets, in percent (negative when it gets smaller), and shift how far the frame's centre goes, in percent of the frame it leaves. frame_contact_sheet on the new version shows any of it as it plays.";

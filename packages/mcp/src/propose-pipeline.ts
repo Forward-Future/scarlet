@@ -172,9 +172,9 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
    * What an edit's framing shows, stretch by stretch, with the passages read aloud there that it leaves out or covers.
    * Text not read yet doesn't hold the save up: the report says how far it has got.
    */
-  async function framedOn(before: Timeline | null, made: Timeline) {
+  async function framedOn(before: Timeline | null, made: Timeline, smallTextUnder?: number) {
     const { project } = await getProject();
-    const framed = framingReport(before, made, project.media, project.settings);
+    const framed = framingReport(before, made, project.media, project.settings, [], [], undefined, smallTextUnder);
     if (!framed.length) return { framed, covered: [], readOff: [] as Array<readonly [number, number]>, unread: [] as string[], words: [] };
     const range = { start: Math.min(...framed.map(f => f.from)), end: Math.max(...framed.map(f => f.to)) };
     const besideReach = besideReachOf(made, framed);
@@ -186,7 +186,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
         .catch(error => { noteUnmeasured("what the screen shows beside the framed stretches", error); return undefined; }) : undefined,
     ]);
     const evidence = !!found?.readings.length || !!moving?.spans.length || !!beside;
-    const report = evidence ? framingReport(before, made, project.media, project.settings, found?.readings, moving?.spans, beside?.evidence) : framed;
+    const report = evidence ? framingReport(before, made, project.media, project.settings, found?.readings, moving?.spans, beside?.evidence, smallTextUnder) : framed;
     // The holds where a picture over the recording, such as a camera inset, hides its text or anything else on it, in timeline seconds.
     const covered = report.flatMap(f => f.holds.filter(h => h.underCover || h.coverHides).map(h => [h.from, h.to]));
     // The passages read aloud off a recording beside a stretch while it is off picture, once each: the time between two

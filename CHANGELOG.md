@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Screen framing now cuts straight when the screen switches to a new page or demo, keeps video player controls out when playing a video, and checks for sliding zooms across screen changes, edge-clipped text, content under the camera inset, tiny text, visible player controls, and blank or loading screens before a pass finishes.
 - A request's token count in the chat now includes the tokens of work it handed to another model.
 - Work handed to a model that can't hear can now have a model that hears listen for it, when one is signed in.
 - Finishing an export now closes the Export window automatically and shows a quiet confirmation strip at the bottom with Show in folder.

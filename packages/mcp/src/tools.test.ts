@@ -291,6 +291,31 @@ describe("timeline_framing", () => {
     } finally { await c.close(); }
   });
 
+  it("flags a glide that crosses a screen change in picture-cuts", async () => {
+    const others = mock.state.extra!;
+    mock.state.extra = (req, res) => {
+      if (req.method === "GET" && req.path === "/projects/prj_test/media/scr/picture-cuts") {
+        // A screen change inside the 9.5..10.5 s move (source time 12.1 s on clip s1 at timeline 10.1 s).
+        return reply(res, { from: 0, to: 120, readSeconds: 120, done: true, cuts: [{ at: 12.1, cells: Buffer.alloc(288, 0xff).toString("base64") }] });
+      }
+      return others(req, res);
+    };
+    const c = await connect();
+    try {
+      await ok(c, "timeline_get");
+      const preview = JSON.parse(textOf(await ok(c, "timeline_framing", { mediaId: "scr", framings, preview: true })).split("\n")[0]!);
+      expect(preview.movesAcrossScreenChange).toEqual([1]);
+      expect(preview.framings[1]).toMatchObject({ screenChanged: true, screenChangeAt: 10.1 });
+      // Switching that framing to a straight cut (over: 0) clears the flag.
+      const cut = JSON.parse(textOf(await ok(c, "timeline_framing", {
+        mediaId: "scr", preview: true,
+        framings: [framings[0], { ...framings[1], at: 10.1, over: 0 }],
+      })).split("\n")[0]!);
+      expect(cut.movesAcrossScreenChange).toBeUndefined();
+      expect(cut.framings[1].screenChanged).toBeUndefined();
+    } finally { await c.close(); }
+  });
+
   it("saves a stretch as one edit in the agent's words, and a second framing of it as that edit revised", async () => {
     let saves = 0;
     const others = mock.state.extra!;
