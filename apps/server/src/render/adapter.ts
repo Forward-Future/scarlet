@@ -83,6 +83,8 @@ export interface RenderAdapter {
   extractFrame(path: string, t: number, opts: { width: number; signal?: AbortSignal; indexedMp4?: boolean; decoder?: "cuda"; fps?: number;
     /** The file's HDR transfer: the frame is tone-mapped to SDR. The fallback adapter leaves it as decoded. */
     hdr?: "hlg" | "pq";
+    /** True when the asset is known to be a still image regardless of filename extension. */
+    still?: boolean;
     /** Only this area of the picture, as fractions of it, and labelled percent lines over it. */
     area?: [number, number, number, number]; grid?: { width: number; height: number } }): Promise<Buffer>;
   makeProxy(input: string, output: string, opts: { height?: number; audioTrack?: MediaAsset["audioTrack"]; checkpointDir?: string; range?: TimeRange; hwaccel?: RenderOptions["hwaccel"]; signal?: AbortSignal; onProgress?: (p: number) => void; onFallback?: (stage: "decode" | "encode") => void }): Promise<void>;

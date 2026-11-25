@@ -256,7 +256,12 @@ export function dialogueDetector(ctx: Ctx) {
       // The page's minute, its speech detection and any emissions its alignment lacks all come from one decode of
       // the recording, shared with the pages before and after it.
       const recording = await recordingWav(ctx, file, signal, pageAudio(media, stream));
+      const hasWindowSamples = (samples: number, start: number, end: number) =>
+        samples === 0 || (Math.round(start * SAMPLE_RATE) < samples && Math.round(end * SAMPLE_RATE) > Math.round(start * SAMPLE_RATE));
       try {
+        if (!hasWindowSamples(recording.samples, from, to)) {
+          return keptSide ? { acoustic: [], segments: [] } : { segments: [], acoustic: [], speechActivity: [] };
+        }
         await recording.writeWindow(wav, from, to);
         if (keptSide) {
           const speech = await inWhisperLane(() => transcribeWindow(wav));
@@ -316,9 +321,9 @@ export function dialogueDetector(ctx: Ctx) {
               // The other voice's minute comes from one decode of its track, shared with the pages before and after it,
               // as the page's own does: cut from the source, each page of a long recording took ffmpeg most of a second.
               const other = await recordingWav(ctx, file, signal, { audioTrack: roles.other - 1 });
-              try { await other.writeWindow(wav, from, to); } finally { other.release(); }
-              const isolated = await inWhisperLane(() => transcribeWindow(wav));
-              const words = isolated.segments.flatMap(s => s.words);
+              const otherHasAudio = hasWindowSamples(other.samples, from, to);
+              try { if (otherHasAudio) await other.writeWindow(wav, from, to); } finally { other.release(); }
+              const words = otherHasAudio ? (await inWhisperLane(() => transcribeWindow(wav))).segments.flatMap(s => s.words) : [];
               result.otherVoiceTurns = turns.map(turn => ({ ...turn, text: words.filter(w => {
                 const mid = from + (w.start + w.end) / 2;
                 return mid >= turn.start - .12 && mid < turn.end + .12;

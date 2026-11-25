@@ -703,3 +703,25 @@ it("reads a pass's pages from the track the editor chose, and keeps them under i
   ctx.repos.projects.putMedia(project.id, tracks, "ready");
   expect(await saved()).toEqual([]);
 });
+
+it("returns empty detections without invoking transcription when the window starts past the decoded audio end", async () => {
+  const { request } = await cloudScanFixture();
+  // Write a real 1-second 16 kHz mono WAV (16,000 samples) while media.duration is 180 s.
+  vi.spyOn(ffmpeg, "extractWav").mockImplementationOnce(async (_file, target) => {
+    const pcmBytes = SAMPLE_RATE * 2;
+    const wav = Buffer.alloc(44 + pcmBytes);
+    wav.write("RIFF", 0); wav.writeUInt32LE(36 + pcmBytes, 4); wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(SAMPLE_RATE, 24); wav.writeUInt32LE(SAMPLE_RATE * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write("data", 36); wav.writeUInt32LE(pcmBytes, 40);
+    await writeFile(target, wav);
+  });
+  const upload = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected upload"));
+  const kept = await request("detections", 2, undefined, { to: 4, keptSide: {} });
+  expect(kept.status).toBe(200);
+  expect(await kept.json()).toEqual({ acoustic: [], segments: [] });
+  const page = await request("detections", 2, undefined, { to: 62 } as never);
+  expect(page.status).toBe(200);
+  expect(await page.json()).toMatchObject({ acoustic: [], segments: [], speechActivity: [] });
+  expect(upload).not.toHaveBeenCalled();
+});

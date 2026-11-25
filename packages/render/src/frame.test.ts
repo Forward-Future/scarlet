@@ -85,12 +85,19 @@ it("gives the first frame for a time before the video's first frame", async () =
 it("gives a still picture's one frame at any time a clip of it is on the timeline", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-frame-"));
   try {
-    const file = join(dir, "logo.png");
-    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", "-update", "1", file]);
+    const png = join(dir, "logo.png");
+    const jpg = join(dir, "photo.jpg");
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", "-update", "1", png]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=64x64", "-frames:v", "1", "-update", "1", jpg]);
     // A still held for five seconds is asked for at its own times, past the two seconds a frame is looked back for.
     for (const t of [0, 1, 2.5, 4.9]) {
-      const [r, , b] = (await pixels(await extractFrame(file, t, { width: 32 }), 32)).at(16, 16);
+      const [r, , b] = (await pixels(await extractFrame(png, t, { width: 32 }), 32)).at(16, 16);
       expect([t, r! - b! > 100]).toEqual([t, true]);
+    }
+    // JPEG stills must decode cleanly without `-ss 0` (which yields 0 frames under FFmpeg 9's image2 demuxer).
+    for (const t of [0, 2.5]) {
+      const [r, , b] = (await pixels(await extractFrame(jpg, t, { width: 32 }), 32)).at(16, 16);
+      expect([t, b! - r! > 100]).toEqual([t, true]);
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
