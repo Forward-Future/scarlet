@@ -34,6 +34,35 @@ pub async fn host_refresh_quota(state: State<'_, AppState>, force: Option<bool>)
     Ok(state.host.refresh_quota(force.unwrap_or(false)).await)
 }
 
+/// Ollama, LM Studio and OpenRouter as Settings › Models shows them. Whether there is an OpenRouter key, never the key.
+#[tauri::command]
+pub async fn provider_settings(state: State<'_, AppState>) -> Result<crate::host::providers::SettingsView, String> {
+    let home = state.paths.home.clone();
+    // The editor's environment may wait on their login shell.
+    let env = tokio::task::spawn_blocking(move || crate::util::child_env(&home)).await.map_err(|e| e.to_string())?;
+    Ok(crate::host::providers::view(&state.paths.provider_settings(), &env))
+}
+
+/// Save one provider's settings: `{ provider, url?, apiKey?, disabled? }`, where a field left out stays as it was and
+/// null or empty text clears it. Then look for the assistants again, as Refresh models does, and return the host.
+/// The arguments are read whole, since whether a field is there at all matters.
+#[tauri::command]
+pub async fn save_provider_settings(state: State<'_, AppState>, request: tauri::ipc::Request<'_>) -> Result<HostStatus, String> {
+    use crate::host::providers::{SettingsPatch, SAVING};
+    let tauri::ipc::InvokeBody::Json(args) = request.body() else {
+        return Err("expected the settings as JSON".into());
+    };
+    let patch = SettingsPatch::from_args(args)?;
+    {
+        let _saving = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+        let mut settings = state.paths.provider_settings();
+        patch.apply(&mut settings);
+        state.paths.save_provider_settings(&settings).map_err(|e| format!("Could not save the settings: {e:#}"))?;
+    }
+    log::info!("{} settings saved", crate::host::providers::label(&patch.provider));
+    Ok(state.host.refresh_agents().await)
+}
+
 #[tauri::command]
 pub async fn agent_install(state: State<'_, AppState>, agent: String) -> Result<crate::host::install::InstallResult, String> {
     let result = crate::host::install::install(&agent, &state.paths.home).await?;
@@ -41,6 +70,24 @@ pub async fn agent_install(state: State<'_, AppState>, agent: String) -> Result<
         state.host.refresh_agents().await;
     }
     Ok(result)
+}
+
+/// Update an installed agent CLI ("claude", "codex" or "gemini") the way it was installed, then detect it again.
+/// Returns the version it is at afterwards.
+#[tauri::command]
+pub async fn agent_update(state: State<'_, AppState>, agent: String) -> Result<Option<String>, String> {
+    if state.host.is_running(&agent).await {
+        return Err("Scarlet is editing with it right now. Update it once that edit is done.".into());
+    }
+    let version_of = |status: &HostStatus| status.agents.iter().find(|a| a.id == agent).and_then(|a| a.version.clone());
+    let before = version_of(&state.host.status().await);
+    crate::host::update::update(&agent, &state.paths.home).await?;
+    let after = version_of(&state.host.refresh_agents().await);
+    if after == before {
+        crate::host::update::note_unchanged(&agent, after.as_deref());
+    }
+    state.host.check_updates().await;
+    Ok(after)
 }
 
 #[tauri::command]

@@ -1,5 +1,6 @@
 import type { LocalTranscriptionModel, ServerSettings } from "@scarlet/shared";
 import type { TranscriptSegment } from "@scarlet/timeline";
+import type { HeardAudio } from "@scarlet/render";
 import { win32 } from "node:path";
 import type { Ctx } from "../context.js";
 import { FfmpegError } from "../render/ffmpeg.js";
@@ -14,6 +15,8 @@ export interface TranscribeInput {
   beforeUpload?: () => void;
   /** Any media file ffmpeg can read. */
   path: string;
+  /** The track of `path` to hear, or every track mixed. Absent, its first audio stream. */
+  audio?: HeardAudio;
   /** Caller-owned, pre-extracted mono WAV of at most one minute for dialogue analysis. */
   dialogueWindow?: { prompt?: string };
   duration?: number;

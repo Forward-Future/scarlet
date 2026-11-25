@@ -11,6 +11,7 @@ import { usePictureWait } from "../components/player/usePictureWait";
 import { TimelineScrubber } from "../components/review/TimelineScrubber";
 import { TimelineWaveform } from "../components/review/TimelineWaveform";
 import { FramingPreview } from "../components/review/FramingPreview";
+import { ReviewActions } from "../components/review/ReviewActions";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { api } from "../lib/client";
 import { buildDb, mc, PRJ } from "../lib/mock/fixtures";
@@ -518,13 +519,14 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } }));
   const seek = vi.fn(), opened: number[] = [];
-  const edit = (time: number, n: number) => ({ time, n, title: `Edit ${n} of 6 · ${time}s`, summary: `Summary ${n}`, open: () => { opened.push(n); } });
-  // 100 s across 1000 px. Edits 1 to 4 sit a second apart, so their circles would touch. Edit 5 has room.
+  const edit = (time: number, n: number) => ({ time, title: `Edit at ${time}s`, summary: `Summary ${n}`, open: () => { opened.push(n); } });
+  // 100 s across 1000 px. Edits 1 to 4 sit a second apart, so their dots would touch. Edit 5 has room.
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={seek}
     marks={[edit(10, 1), edit(11, 2), edit(12, 3), edit(13, 4), edit(60, 5)]} />);
   const markers = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
-  expect(markers().map(m => m.textContent)).toEqual(["1–4", "5"]);
-  expect(markers().every(m => m.classList.contains("is-numbered") && m.dataset.state === undefined)).toBe(true);
+  // Neither says a number or a time: one is a pill, the other a dot.
+  expect(markers().map(m => [m.textContent, m.classList.contains("is-pill")])).toEqual([["", true], ["", false]]);
+  expect(markers().every(m => m.classList.contains("is-dot") && m.dataset.state === undefined)).toBe(true);
   const strip = () => container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   const point = (type: string, clientX: number) => act(() => strip().dispatchEvent(new PointerEvent(type, { pointerId: 1, isPrimary: true, button: 0, clientX, bubbles: true })));
@@ -532,11 +534,11 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   await point("pointermove", 115);
   expect(strip().classList.contains("is-aimed")).toBe(true);
   expect(container.querySelector(".simple-timeline-need, .simple-timeline-tip")).toBeNull();
-  // A press zooms to its run, where each edit has its own number, and opens nothing.
+  // A press zooms to its run, where each edit has its own dot, and opens nothing.
   await point("pointerdown", 115);
   expect(opened).toEqual([]);
   expect(seek).not.toHaveBeenCalled();
-  expect(markers().map(m => m.textContent)).toEqual(["1", "2", "3", "4"]);
+  expect(markers().map(m => m.classList.contains("is-pill"))).toEqual([false, false, false, false]);
   // Back on the whole video, a press on a dot opens its edit; beside a marker a press scrubs as before.
   await fitBySlider();
   vi.spyOn(strip(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
@@ -549,41 +551,41 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   expect(opened).toEqual([5]);
 });
 
-it("zooms a pill when another group's circle is under the pointer too", async () => {
+it("zooms a pill when another group's dot is under the pointer too", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } }));
   const openOther = vi.fn(), openCall = vi.fn(), seek = vi.fn();
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={seek} marks={[
-    { time: 11.1, n: 13, title: "Edit 13", open: openOther },
-    { time: 10.25, n: 12, title: "Cut 12", group: "call", open: openCall },
-    { time: 11.75, n: 14, title: "Cut 14", group: "call", open: openCall },
+    { time: 11.1, title: "Edit at 0:11", open: openOther },
+    { time: 10.5, title: "Cut at 0:10", group: "call", open: openCall },
+    { time: 11.5, title: "Cut at 0:11", group: "call", open: openCall },
   ]} />);
   const pill = container.querySelector<HTMLElement>(".simple-timeline-mark.is-pill")!;
-  expect([pill.textContent, pill.style.left]).toEqual(["12+", "11%"]);
+  expect([pill.textContent, pill.style.left]).toEqual(["", "11%"]);
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   await act(() => strip.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, clientX: 111, bubbles: true })));
   expect(openOther).not.toHaveBeenCalled();
   expect(openCall).not.toHaveBeenCalled();
   expect(seek).not.toHaveBeenCalled();
-  expect([...container.querySelectorAll(".simple-timeline-mark")].map(mark => mark.textContent)).toEqual(["12", "13", "14"]);
+  expect([...container.querySelectorAll(".simple-timeline-mark")].map(mark => mark.classList.contains("is-pill"))).toEqual([false, false, false]);
 });
 
 it("names what waits on the editor in one amber line under the frame", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
-  const dot = (time: number, n: number, waits = false) => ({ time, n, title: `Cut ${n} of 6`, open: () => {},
-    ...waits && { state: "check" as const, need: `Cut ${n}` } });
+  const dot = (time: number, waits = false) => ({ time, title: `Cut at ${time}`, open: () => {},
+    ...waits && { state: "check" as const, need: `Cut at 0:${time}` } });
   // 100 s across 1000 px: cuts 1 to 3 share a pill, and the second of them waits on the editor.
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={() => {}}
-    marks={[dot(10, 1), dot(11, 2, true), dot(12, 3), dot(60, 4)]} />);
+    marks={[dot(10), dot(11, true), dot(12), dot(60)]} />);
   const pill = container.querySelector<HTMLElement>(".simple-timeline-mark")!;
-  expect([pill.textContent, pill.dataset.state]).toEqual(["1–3", "check"]);
+  expect([pill.textContent, pill.dataset.state]).toEqual(["", "check"]);
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   const point = (clientX: number) => act(() => strip.dispatchEvent(new PointerEvent("pointermove", { pointerId: 1, isPrimary: true, button: 0, clientX, bubbles: true })));
   await point(108);
-  expect(container.querySelector(".simple-timeline-need")?.textContent).toBe("Cut 2 needs you");
+  expect(container.querySelector(".simple-timeline-need")?.textContent).toBe("Cut at 0:11 needs you");
   // A marker with nothing waiting writes nothing under the frame.
   await point(600);
   expect(container.querySelector(".simple-timeline-need")).toBeNull();
@@ -1099,6 +1101,29 @@ it("keeps a playing source on its file while preparing the newly selected previe
   } finally { vi.useRealTimers(); }
 });
 
+it("keeps plain L and Shift+L for playback speed with a to-do card open: the card has no Later", async () => {
+  const noop = () => {};
+  const add = vi.fn(), revise = vi.fn();
+  usePlayerStore.setState({ rate: 1 });
+  const pressKey = (key: string, init: KeyboardEventInit = {}) =>
+    act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })); });
+
+  // CutPreview mounts BEFORE ReviewActions (just like SimpleWorkspace) with playable media.
+  await show(<MemoryRouter>
+    <CutPreview simple={{ marks: [] }} workingCache={{ cache: { state: "ready", url: "/before.mp4" }, startCache: noop }}
+      active hasCut spot={0} autoPlaySource={false} onRetryDraft={noop} onMedia={noop} />
+    <ReviewActions lead={<button type="button" data-key="A" onClick={add}>Add</button>} revise={revise} />
+  </MemoryRouter>);
+
+  await pressKey("l");
+  const faster = usePlayerStore.getState().rate;
+  expect(faster).toBeGreaterThan(1);
+  expect(revise).not.toHaveBeenCalled();
+  await pressKey("L", { shiftKey: true });
+  expect(usePlayerStore.getState().rate).toBeLessThan(faster);
+  await show(null);
+});
+
 it("shows an export again after a reload or restart, saves it to the destination chosen before, and releases it", async () => {
   const owner = "5b0f0c52-6d0f-4f0e-9a52-3f1f7a1f0c11";
   const kept: Render = { ...data.renders[0]!, id: "kept-export", version: data.project.head!, kind: "export", quality: "preview", range: { start: 0, end: 4 },
@@ -1252,7 +1277,7 @@ it("labels a saved file from an earlier edit and still exports the current video
   expect(reveal).toHaveBeenCalledWith("/chosen/cut.mp4");
   expect(button("Close")).toBeUndefined();
   expect(button("Cancel")).toBeDefined();
-  expect(button("Advanced export")).toBeDefined();
+  expect(button("For Resolve, Final Cut or Premiere…")).toBeDefined();
   expect(container.querySelector('[role="alert"]')?.textContent ?? "").toBe("");
   // Cancelling the chooser leaves the last successful file available.
   choose.mockResolvedValueOnce(null);
@@ -1303,19 +1328,21 @@ it("asks for the file's name once, in the system's Save dialog, which opens on t
   expect(container.textContent).toContain("Disk full");
   expect(exportButton()!.textContent).toBe("Retry");
   expect(exportButton()!.disabled).toBe(false);
-  // Advanced export saves a folder, named for the project, for finishing the edit in another app.
-  await click(buttonByText("Advanced export")!);
+  // For Resolve, Final Cut or Premiere saves a folder, named for the project, for finishing the edit in another app.
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
   await click(exportButton()!);
   expect(choose).toHaveBeenLastCalledWith(data.project.name);
 });
 
-it("offers a folder for another app under Advanced export, saying what it holds and what doesn't carry over", async () => {
+it("offers a folder for another app under For Resolve, Final Cut or Premiere, saying what it holds and what doesn't carry over", async () => {
   const choose = vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 7, path: "/Users/me/Exports/Interview" });
   const handoff = vi.spyOn(api, "handoff").mockResolvedValue({ files: [{ path: "Interview.fcpxml", text: "<fcpxml/>" }], mediaBytes: 0 });
   const save = vi.spyOn(desktop, "finishFolderExport").mockResolvedValue("/Users/me/Exports/Interview");
   vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
   await show(<ExportSheet hasCut onClose={() => {}} />);
-  await click(buttonByText("Advanced export")!);
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
+  // The sheet is named for the apps it is for.
+  expect(container.textContent).toContain("Export for Resolve, Final Cut or Premiere");
   // The video's own settings go; the folder's contents come instead.
   expect(container.querySelector("#export-range")).toBeNull();
   expect(container.querySelector("details")).toBeNull();
@@ -1330,12 +1357,12 @@ it("offers a folder for another app under Advanced export, saying what it holds 
   expect(buttonByText("Show in folder")).toBeTruthy();
 });
 
-it("goes back from Advanced export to the video's settings", async () => {
+it("goes back from the folder for Resolve, Final Cut or Premiere to the video's settings", async () => {
   await show(<ExportSheet hasCut onClose={() => {}} />);
-  await click(buttonByText("Advanced export")!);
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
   await click(buttonByText("Back")!);
   expect(container.querySelector("#export-range")).not.toBeNull();
-  expect(buttonByText("Advanced export")).toBeTruthy();
+  expect(buttonByText("For Resolve, Final Cut or Premiere…")).toBeTruthy();
 });
 
 it("exports captions as a sidecar, keeps the range, and does not start a video render", async () => {
@@ -1466,6 +1493,33 @@ it("says an export is waiting to start or finishing, with no percent that would 
   state = { ...state, progress: 0.97 };
   await reads("Finishing…");
   expect(bar().hasAttribute("value")).toBe(false);
+  await click(button("Cancel export")!);
+});
+
+it("shows the part of an export an earlier one already encoded as reused, not as progress made", async () => {
+  vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 9, path: "/chosen/cut.mp4" });
+  vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
+  let state: Render = { ...data.renders[0]!, id: "head-start", version: data.project.head!, kind: "full", quality: "delivery", range: null,
+    state: "running", progress: 0.44, reused: { seconds: 198, progress: 0.44 } };
+  vi.spyOn(api, "requestRender").mockImplementation(async () => ({ render: state }));
+  vi.spyOn(api, "render").mockImplementation(async () => ({ render: state }));
+  await show(<ExportSheet hasCut onClose={() => {}} />);
+  await click(exportButton()!);
+  const striped = () => container.querySelector<HTMLElement>(".activity-progress-reused");
+  const key = () => container.querySelector("[data-testid='export-reused']")?.textContent;
+  await act(async () => { await vi.waitFor(() => expect(key()).toBe("Reused from an earlier export · 3:18Exporting now"), { timeout: 2500 }); });
+  expect(container.textContent).toContain("Exporting · 44%");
+  expect(striped()!.style.width).toBe("44%");
+  expect(striped()!.getAttribute("aria-hidden")).toBe("true");
+  // New work fills on past the reused part, which keeps its width.
+  state = { ...state, progress: 0.6 };
+  await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Exporting · 60%"), { timeout: 2500 }); });
+  expect(striped()!.style.width).toBe("44%");
+  // Once the percent stops, so does the split.
+  state = { ...state, progress: 0.97 };
+  await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Finishing…"), { timeout: 2500 }); });
+  expect(striped()).toBeNull();
+  expect(key()).toBeUndefined();
   await click(button("Cancel export")!);
 });
 

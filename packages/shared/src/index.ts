@@ -1,6 +1,7 @@
 export * from "./api.js";
 export * from "./agents.js";
 export * from "./tasks.js";
+export * from "./taskModels.js";
 export * from "./changes.js";
 export * from "./learnings.js";
 export * from "./usage.js";
@@ -57,9 +58,12 @@ export {
   changeEdits,
   changeRemovals,
   isRejectRequest,
+  LEFT_OUT,
   matchesEdit,
   namedTimelineEdits,
   REJECT_MESSAGE,
+  ADD_MESSAGE,
+  isAddRequest,
   REVISED_CHECK,
   threadEditList,
   type EditRef,

@@ -759,14 +759,22 @@ describe("render", () => {
     const { project, timeline } = fixture();
     project.media[0]!.hash = await hashFile(src);
     timeline.tracks = [{ ...timeline.tracks[0]!, clips: [makeMediaClip("m1", 0, 2, 0), makeMediaClip("m1", 5, 8, 2, { effects: [{ type: "lut", params: { file: "look.cube" }, enabled: true }] })] }];
-    const render = () => renderFullCached(project, timeline, path.join(mediaRoot, "cache"), path.join(mediaRoot, "out.mp4"), { mediaRoot, height: 90, segmentSeconds: 2 });
+    const onReused = vi.fn();
+    const render = () => renderFullCached(project, timeline, path.join(mediaRoot, "cache"), path.join(mediaRoot, "out.mp4"), { mediaRoot, height: 90, segmentSeconds: 2, onReused });
     const first = await render();
     expect(first.segments.map(segment => segment.range)).toEqual([{ start: 0, end: 2 }, { start: 2, end: 5 }]);
     expect([first.rendered, first.reused]).toEqual([2, 0]);
+    // Nothing was encoded before, so nothing is reported as reused.
+    expect(onReused).not.toHaveBeenCalled();
     expect([(await render()).rendered, (await render()).reused]).toEqual([0, 2]);
     await fs.writeFile(path.join(mediaRoot, "look.cube"), cube(0.5) + "# graded again\n");
+    onReused.mockClear();
     const regraded = await render();
     expect([regraded.rendered, regraded.reused]).toEqual([1, 1]);
+    // The first 2 s of 5 came from the cache: that is the head start, on the progress scale that stops at 97%.
+    expect(onReused).toHaveBeenCalledTimes(1);
+    expect(onReused.mock.calls[0]![0].seconds).toBeCloseTo(2);
+    expect(onReused.mock.calls[0]![0].progress).toBeCloseTo(2 / 5 * 0.97);
     expect(regraded.segments.map(segment => segment.key === first.segments.find(s => s.range.start === segment.range.start)!.key)).toEqual([true, false]);
   });
 
@@ -1165,6 +1173,19 @@ describe("render", () => {
         expect([first, centres(await pictures(stills, edit(track([colour])), { start: 0, end: 1 }))])
           .toEqual([first, ".".repeat(first) + "r".repeat(20) + ".".repeat(10 - first)]);
       }
+    });
+
+    it("holds an AVIF or HEIC photo, which FFmpeg opens as a movie rather than as an image", async (ctx) => {
+      // A phone's photos are HEIC; AVIF is the same container. The image reader's loop option is unknown to it.
+      const encoders = await ffmpeg.ffmpegEncoders();
+      const av1 = ["libsvtav1", "libaom-av1", "librav1e"].find(name => encoders.has(name));
+      if (!av1) return ctx.skip();
+      await runCapture("ffmpeg", [...common, "-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", "-c:v", av1, "-pix_fmt", "yuv420p", path.join(dir, "red.avif")]);
+      const kind = detectMediaKind(await probeMedia(path.join(dir, "red.avif")));
+      expect(kind).toBe("image");
+      stills.media = [{ id: "still", kind, name: "red.avif", path: "red.avif", hasAlpha: false }];
+      const timeline = edit(track([makeMediaClip("still", 0, 20 / 30, 1 / 30)]));
+      expect(centres(await pictures(stills, timeline, { start: 0, end: 1 }, false))).toBe("." + "r".repeat(20) + ".".repeat(9));
     });
 
     it("draws a caption on its own frames only, so two in a row never share one", async () => {

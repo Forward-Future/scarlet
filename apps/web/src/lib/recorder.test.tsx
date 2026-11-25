@@ -304,3 +304,63 @@ it("names the V key only on the mic that follows it", async () => {
   expect([...el.querySelectorAll("button")].map(b => b.title)).toEqual(["Talk to Scarlet (hold V)", "Record a voice note"]);
   await act(async () => host.unmount());
 });
+
+it("names the red button for what a press does, and throws the recording away on Esc, which does nothing else", async () => {
+  const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+  const el = document.createElement("div");
+  document.body.append(el);
+  const host = createRoot(el);
+  await act(async () => host.render(<MicButton onResult={result} label="Talk to Scarlet" />));
+  const button = () => el.querySelector<HTMLButtonElement>("button")!;
+  // What the page listens for Esc with, one put up before anything else hears a key and one after: a card that closes,
+  // a tag or a marked range that clears, a queued request's words put back.
+  const early = vi.fn(), late = vi.fn();
+  window.addEventListener("keydown", early, true);
+  document.addEventListener("keydown", late);
+  const esc = async () => {
+    const pressed = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => { button().dispatchEvent(pressed); });
+    return pressed;
+  };
+  await act(async () => { button().click(); });
+  await act(async () => { grant(stream); });
+  expect([button().title, button().getAttribute("aria-label"), button().getAttribute("aria-pressed")]).toEqual(["Send (Esc to discard)", "Send (Esc to discard)", "true"]);
+  // Esc: the recording stops and nothing of it is handed over. The press goes no further.
+  now.mockReturnValue(3000);
+  const pressed = await esc();
+  expect(result).not.toHaveBeenCalled();
+  expect(stopTrack).toHaveBeenCalled();
+  expect([button().title, button().getAttribute("aria-pressed")]).toEqual(["Talk to Scarlet", "false"]);
+  expect([pressed.defaultPrevented, early.mock.calls.length, late.mock.calls.length]).toEqual([true, 0, 0]);
+  // With nothing recording, Esc is the page's as ever.
+  expect((await esc()).defaultPrevented).toBe(false);
+  expect([early.mock.calls.length, late.mock.calls.length]).toEqual([1, 1]);
+  // A press on the red button still sends what was said.
+  await act(async () => { button().click(); });
+  await act(async () => { grant(stream); });
+  now.mockReturnValue(5000);
+  await act(async () => { button().click(); });
+  expect(result).toHaveBeenCalledOnce();
+  expect(result.mock.calls[0]![0]).toMatchObject({ seconds: 2 });
+  window.removeEventListener("keydown", early, true);
+  document.removeEventListener("keydown", late);
+  await act(async () => host.unmount());
+  el.remove();
+});
+
+it("sends nothing when V is let go after Esc threw the held recording away, and records the next hold as ever", async () => {
+  const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+  await key("keydown");
+  await act(async () => { grant(stream); });
+  expect(startRecording).toHaveBeenCalledOnce();
+  now.mockReturnValue(3000);
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+  expect(stopTrack).toHaveBeenCalledOnce();
+  await key("keyup");
+  expect(result).not.toHaveBeenCalled();
+  await key("keydown");
+  await act(async () => { grant(stream); });
+  now.mockReturnValue(5000);
+  await key("keyup");
+  expect(result).toHaveBeenCalledOnce();
+});

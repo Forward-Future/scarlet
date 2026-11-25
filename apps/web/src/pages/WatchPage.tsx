@@ -110,10 +110,14 @@ interface PreviewProps {
     /** In the timeline's bottom row: why the last ⌘Z couldn't take its step back. */
     foot?: ReactNode;
     gaps?: TimelineGap[]; skippedRanges?: TimeRange[]; onGap?(gap: TimelineGap, time: number): void;
+    /** Footage After steps over while an edit that isn't a cut plays: the cuts of calls still waiting, as staged. */
+    passageSkips?: TimeRange[];
     /** A click inside the shaded passage, when the playing side steps over it. */
     onBand?(time: number): void;
     /** Timeline navigation offers the point to the composer. N attaches it explicitly. */
-    onPick?(point: AgentContext, how: "seek" | "n" | "pause"): void;
+    onPick?(point: AgentContext, how: "seek" | "n" | "pause" | "add"): void;
+    /** Shift + click inserts a time and Shift + drag marks a stretch anywhere on the timeline (beta layout). */
+    shiftTimes?: boolean;
     /** A stretch marked on the timeline's ruler for the message being written, or none once it is taken off there. */
     onRange?(range: MarkedRange | undefined, byKey?: boolean): void;
     /** The chosen edit is about to play on another version: don't start its passage on this one meanwhile. */
@@ -358,7 +362,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   useLayoutEffect(() => { setSelectedTime(undefined); }, [cacheVersion, source?.id]);
   const selectedFrameUrl = useMemo(() => selectedTime === undefined ? undefined
     : cutFrameUrl(current.project, displayedTimeline, selectedTime, true, true), [current.project, displayedTimeline, selectedTime]);
-  const selectTime = (time: number, how: "seek" | "n" | "pause" = "seek") => {
+  const selectTime = (time: number, how: "seek" | "n" | "pause" | "add" = "seek") => {
     const at = Math.min(time, lastFrame);
     if (!source) setSelectedTime(at);
     // The point is on the timeline the player is on, which is the one before while the edit's new timeline is read.
@@ -452,6 +456,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   // (a panel closing, a new working edit, the video's length arriving) leaves the playhead where it is, and paused if
   // the editor paused it.
   const played = useRef<{ chosen: string; reached?: typeof reached }>(undefined);
+  const skipsKey = simple.passageSkips?.map(r => `${r.start}-${r.end}`).join(",");
   useLayoutEffect(() => {
     // Before plays a clip of its own. Back on After, the passage plays from its top.
     if (!passage || playingBefore) played.current = undefined;
@@ -468,14 +473,16 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     if (simple.heard) simple.heard.current = chosen;
     if (reached) {
       // The editor picked this point, so it plays on from there until they pause it.
-      const release = player.previewRange(passage, fps, reached.at, again, true);
+      const release = simple.passageSkips ? player.previewRange(passage, fps, reached.at, again, true, simple.passageSkips)
+        : player.previewRange(passage, fps, reached.at, again, true);
       // A drag holds the video paused until it ends, and its release carries on as it was. The store still says
       // "playing" for the moment after the press paused it, so the stretch must not start it under the held pointer.
       if (!again && reached.playing && !usePlayerStore.getState().scrubGesture) player.play();
       return release;
     }
-    return player.previewRange(passage, fps, undefined, again);
-  }, [threadView?.request, passage?.start, passage?.end, framing?.beforeVersion, playingBefore, selectedEdit?.at, active, playable, fps, selection, duration, reached]);
+    return simple.passageSkips ? player.previewRange(passage, fps, undefined, again, false, simple.passageSkips)
+      : player.previewRange(passage, fps, undefined, again);
+  }, [threadView?.request, passage?.start, passage?.end, framing?.beforeVersion, playingBefore, selectedEdit?.at, active, playable, fps, selection, duration, reached, skipsKey]);
 
   // Decode the selected edit's paused frame, including effects and overlays.
   const editedVersion = draft?.version ?? head;
@@ -643,7 +650,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             disabled={!!cutLoadError || !!draftFailed || !!playingBefore || !!framing || !(source || cut || change || draftVersion)}
             transitionKey={transitionKey}
             resolveLeadIn={resolveLeadIn}
-            canWatchBefore={reviewCut?.side === "after"}
+            canWatchBefore={reviewCut?.side === "after" && !openingJoin}
           />
           {simple.label && <div className="simple-on-video" role="status">{simple.label}</div>}
           {!playingBefore && !framing && <PictureMarks projectId={current.id} version={source ? undefined : rangeVersion} mediaId={source?.id} fps={fps} />}
@@ -682,6 +689,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           <PlayerTimeline activeShortcuts={active} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: laneTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? laneTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
+            onAddTime={simple.shiftTimes && simple.onPick ? time => { seekFull(time); selectTime(time, "add"); } : undefined}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}
             typedTimes={simple.typedTimes} marks={simple.marks} fit={simple.fit} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
             highlight={simple.focus ?? (selectedEdit ? editFocus(selectedEdit, duration) : undefined)} />

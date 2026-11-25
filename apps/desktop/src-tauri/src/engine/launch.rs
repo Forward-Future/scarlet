@@ -136,6 +136,106 @@ pub(super) fn set_chrome_env(env: &mut HashMap<String, String>, chrome: Option<&
     }
 }
 
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    if !meta.is_file() || meta.len() == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn has_bundled_whisper(bin_dir: &Path) -> bool {
+    let name = if cfg!(windows) { "whisper-cli.exe" } else { "whisper-cli" };
+    let candidates = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        vec![bin_dir.join("whisper-cpu").join(name), bin_dir.join(name)]
+    } else {
+        vec![bin_dir.join(name)]
+    };
+    candidates.iter().any(|path| path.metadata().is_ok_and(|m| m.is_file() && m.len() > 0))
+}
+
+/// If `repo` is a linked git worktree, return the main checkout's working tree root.
+fn worktree_main_root(repo: &Path) -> Option<PathBuf> {
+    let dot_git = repo.join(".git");
+    if !dot_git.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let gitdir_raw = text.lines().find_map(|line| line.trim().strip_prefix("gitdir:"))?.trim();
+    if gitdir_raw.is_empty() {
+        return None;
+    }
+    let gitdir = {
+        let p = PathBuf::from(gitdir_raw);
+        if p.is_absolute() { p } else { repo.join(p) }
+    };
+    let commondir_raw = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    let commondir_raw = commondir_raw.trim();
+    if commondir_raw.is_empty() {
+        return None;
+    }
+    let common = {
+        let p = PathBuf::from(commondir_raw);
+        let joined = if p.is_absolute() { p } else { gitdir.join(p) };
+        std::fs::canonicalize(&joined).unwrap_or(joined)
+    };
+    if common.file_name().and_then(|n| n.to_str()) != Some(".git") {
+        return None;
+    }
+    common.parent().map(Path::to_path_buf)
+}
+
+fn dev_whisper_cli_in(repo: &Path, target: &str, app_dirs: &[PathBuf]) -> Option<PathBuf> {
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    let mut candidates = Vec::new();
+    if let Some(main_root) = worktree_main_root(repo) {
+        if !target.is_empty() {
+            candidates.push(main_root.join("apps/desktop/src-tauri/binaries").join(format!("whisper-cli-{target}{ext}")));
+        }
+    }
+    for apps in app_dirs {
+        candidates.push(apps.join("Scarlet.app/Contents/MacOS/whisper-cli"));
+    }
+    candidates.into_iter().find(|path| is_executable_file(path))
+}
+
+/// A built or installed `whisper-cli` for development worktrees where `build.rs` wrote a zero-byte placeholder.
+/// Checks the main git checkout's `binaries/` folder first, then an installed macOS Scarlet app bundle.
+pub(super) fn dev_whisper_cli(repo: &Path, target: &str, home: &Path) -> Option<PathBuf> {
+    let app_dirs: Vec<PathBuf> = if cfg!(target_os = "macos") {
+        vec![home.join("Applications"), PathBuf::from("/Applications")]
+    } else {
+        let _ = home;
+        Vec::new()
+    };
+    dev_whisper_cli_in(repo, target, &app_dirs)
+}
+
+/// Points a non-sidecar engine at a fallback `whisper-cli` when `SCARLET_BIN_DIR` has only a zero-byte placeholder.
+/// Respects an explicit `SCARLET_WHISPER_CLI` set by the developer; without either, the engine checks PATH.
+pub(super) fn set_dev_whisper_env(env: &mut HashMap<String, String>, fallback: impl FnOnce() -> Option<PathBuf>) {
+    const KEY: &str = "SCARLET_WHISPER_CLI";
+    if env.iter().any(|(key, value)| key.eq_ignore_ascii_case(KEY) && !value.trim().is_empty()) {
+        return;
+    }
+    env_remove_ci(env, &[KEY]);
+    if let Some(bin_dir) = env.iter().find_map(|(k, v)| k.eq_ignore_ascii_case("SCARLET_BIN_DIR").then_some(v)) {
+        if !bin_dir.trim().is_empty() && has_bundled_whisper(Path::new(bin_dir)) {
+            return;
+        }
+    }
+    if let Some(cli) = fallback() {
+        env.insert(KEY.into(), cli.to_string_lossy().trim_start_matches(r"\\?\").to_string());
+    }
+}
+
 /// Newest modification time of any file under `dirs` (None if none exist).
 pub(super) fn newest_mtime(dirs: &[PathBuf]) -> Option<SystemTime> {
     fn walk(dir: &Path, best: &mut Option<SystemTime>) {
@@ -304,5 +404,77 @@ mod tests {
         assert_eq!(engine_line_level("    at main (file:///app/dist/cli.js:96:5)", true), Warn);
         // The tag is the engine's own, at the start of a line. A line that only holds the word is log output.
         assert_eq!(engine_line_level("[transcribe] whisper-cli wrote: [error] no model", false), Info);
+    }
+
+    #[test]
+    fn dev_whisper_fallback_reuses_main_worktree_or_installed_app_when_placeholder_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = if cfg!(windows) { ".exe" } else { "" };
+        let name = format!("whisper-cli{ext}");
+        let make_exec = |path: &Path, bytes: &[u8]| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        };
+
+        // Main checkout with a worktree linked to it.
+        let main = dir.path().join("main");
+        let worktree = dir.path().join("wt");
+        let wt_git = main.join(".git/worktrees/wt");
+        std::fs::create_dir_all(&wt_git).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(wt_git.join("commondir"), "../..\n").unwrap();
+        std::fs::write(worktree.join(".git"), format!("gitdir: {}\n", wt_git.display())).unwrap();
+
+        let target = "aarch64-apple-darwin";
+        let main_bin = main.join("apps/desktop/src-tauri/binaries").join(format!("whisper-cli-{target}{ext}"));
+        let apps = dir.path().join("Applications");
+        let app_bin = apps.join("Scarlet.app/Contents/MacOS/whisper-cli");
+
+        // Neither binary exists yet.
+        assert_eq!(dev_whisper_cli_in(&worktree, target, std::slice::from_ref(&apps)), None);
+
+        // An empty placeholder in the main checkout is ignored and falls through to the installed app bundle.
+        make_exec(&main_bin, b"");
+        make_exec(&app_bin, b"installed");
+        assert_eq!(dev_whisper_cli_in(&worktree, target, std::slice::from_ref(&apps)).as_deref(), Some(app_bin.as_path()));
+
+        // A real executable in the main checkout wins over the installed app bundle.
+        make_exec(&main_bin, b"built");
+        assert_eq!(
+            dev_whisper_cli_in(&worktree, target, std::slice::from_ref(&apps)).map(|p| std::fs::canonicalize(p).unwrap()),
+            Some(std::fs::canonicalize(&main_bin).unwrap())
+        );
+
+        // A regular checkout (where .git is a directory) skips worktree lookup and still checks app_dirs.
+        assert_eq!(dev_whisper_cli_in(&main, target, std::slice::from_ref(&apps)).as_deref(), Some(app_bin.as_path()));
+
+        // set_dev_whisper_env applies fallback when SCARLET_BIN_DIR holds only a zero-byte placeholder,
+        // skips it once a real bundled whisper-cli is present, and always preserves an explicit override.
+        let bin_dir = dir.path().join("target-debug");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join(&name), b"").unwrap();
+        let mut env = HashMap::from([("SCARLET_BIN_DIR".to_string(), bin_dir.to_string_lossy().into_owned())]);
+        set_dev_whisper_env(&mut env, || Some(main_bin.clone()));
+        assert_eq!(env.get("SCARLET_WHISPER_CLI").map(String::as_str), Some(main_bin.to_string_lossy().as_ref()));
+
+        // Real whisper-cli in SCARLET_BIN_DIR: fallback closure is not even needed.
+        std::fs::write(bin_dir.join(&name), b"real").unwrap();
+        let mut env = HashMap::from([("SCARLET_BIN_DIR".to_string(), bin_dir.to_string_lossy().into_owned())]);
+        set_dev_whisper_env(&mut env, || panic!("fallback should not run when bundled whisper-cli exists"));
+        assert!(!env.contains_key("SCARLET_WHISPER_CLI"));
+
+        // Explicit SCARLET_WHISPER_CLI wins; empty whitespace is cleared and replaced by fallback.
+        let mut env = HashMap::from([("SCARLET_WHISPER_CLI".to_string(), "/custom/whisper-cli".to_string())]);
+        set_dev_whisper_env(&mut env, || Some(main_bin.clone()));
+        assert_eq!(env["SCARLET_WHISPER_CLI"], "/custom/whisper-cli");
+
+        let mut env = HashMap::from([("SCARLET_WHISPER_CLI".to_string(), "   ".to_string())]);
+        set_dev_whisper_env(&mut env, || Some(main_bin.clone()));
+        assert_eq!(env["SCARLET_WHISPER_CLI"], main_bin.to_string_lossy());
     }
 }

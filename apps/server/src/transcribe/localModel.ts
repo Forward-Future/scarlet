@@ -1,10 +1,13 @@
 import { hashFile } from "@scarlet/render";
 import type { LocalModelStatus } from "@scarlet/shared";
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream, readFileSync, statSync, type WriteStream } from "node:fs";
+import { accessSync, constants, createWriteStream, readFileSync, statSync, type WriteStream } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { isSea } from "node:sea";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { humanDuration } from "../logText.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 
@@ -58,6 +61,43 @@ export function bundledWhisperCli(env: NodeJS.ProcessEnv, avx2 = canRunWhisperAv
   }
 }
 
+function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  if (process.platform !== "win32") return env[name];
+  const lower = name.toLowerCase();
+  const key = Object.keys(env).find(k => k.toLowerCase() === lower);
+  return key ? env[key] : undefined;
+}
+
+function usableExecutable(file: string): boolean {
+  try {
+    const info = statSync(file);
+    if (!info.isFile() || info.size === 0) return false;
+    if (process.platform !== "win32") accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fallback `whisper-cli` for development checkouts and fresh worktrees where `build.rs` wrote a zero-byte placeholder.
+ * Packaged SEA builds never fall back here: they must use the `whisper-cli` bundled beside the engine.
+ */
+export function devWhisperCli(env: NodeJS.ProcessEnv, sea = isSea()): string | undefined {
+  if (sea) return;
+  const explicit = envValue(env, "SCARLET_WHISPER_CLI")?.trim();
+  if (explicit && usableExecutable(explicit)) return explicit;
+  const pathValue = envValue(env, "PATH");
+  if (!pathValue) return;
+  const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  for (const raw of pathValue.split(delimiter)) {
+    const dir = raw.replace(/^"|"$/g, "").trim();
+    if (!dir) continue;
+    const file = join(dir, name);
+    if (usableExecutable(file)) return file;
+  }
+}
+
 /**
  * The GPU build of whisper-cli. Windows bundles a Vulkan build beside the CPU one, which runs on any recent NVIDIA,
  * AMD or Intel GPU. It needs the driver's Vulkan loader, so the CPU build stays as the fallback. macOS's single build
@@ -81,6 +121,8 @@ export class LocalWhisperModel {
   private transfer?: LocalModelStatus;
   private failed = false;
   private verifiedStamp?: string;
+  /** A saved file of the right size whose checksum was wrong. Settings asks every few seconds, and hashing ~574 MB each time is too much. */
+  private damagedStamp?: string;
 
   /** `log`: where a download's start and its end go. The engine's log is its console. */
   constructor(private readonly directory: string, private readonly model: PinnedModel = bundledWhisperModel,
@@ -113,10 +155,12 @@ export class LocalWhisperModel {
     if (existing?.isFile() && existing.size === this.model.size) {
       const stamp = `${existing.ino}/${existing.ctimeMs}/${existing.mtimeMs}`;
       if (stamp === this.verifiedStamp) return "ready";
+      if (stamp === this.damagedStamp) return "invalid";
       if (await hashFile(file, undefined, signal) === this.model.sha256) {
         this.verifiedStamp = stamp;
         return "ready";
       }
+      this.damagedStamp = stamp;
     }
     return existing ? "invalid" : "missing";
   }
@@ -131,15 +175,21 @@ export class LocalWhisperModel {
     const started = Date.now();
     const megabytes = Math.max(1, Math.round(this.model.size / 1e6));
     this.log(`[model] ${this.model.name}: ${cached === "invalid" ? "the saved copy is damaged, " : ""}downloading ${megabytes} MB`);
-    await mkdir(this.directory, { recursive: true });
     const partial = `${file}.${randomUUID()}.part`;
     let saving: WriteStream | undefined;
     try {
+      await mkdir(this.directory, { recursive: true });
+      signal.throwIfAborted();
       const response = await fetch(this.model.url, { signal });
+      if (signal.aborted) {
+        await response.body?.cancel().catch(() => {});
+        signal.throwIfAborted();
+      }
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
       const hash = createHash("sha256");
       const expected = this.model.size;
-      await pipeline(response.body, async function* (chunks) {
+      // Wrap the Web stream so pipeline's abort signal cancels a stalled body instead of hanging on reader.read().
+      await pipeline(Readable.fromWeb(response.body as WebReadableStream<Uint8Array>), async function* (chunks) {
         for await (const chunk of chunks) {
           const bytes = chunk as Uint8Array;
           progress.received += bytes.byteLength;

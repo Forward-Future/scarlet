@@ -19,7 +19,13 @@ export function ListeningSettings({ onSignIn }: { onSignIn?: () => void } = {}) 
   const models = hearingModels(agents);
   const picked = value !== "auto" && value !== "off" ? value : undefined;
   const missing = picked && !models.some(l => listenerKey(l) === picked);
-  const pickedName = picked && (missing ? picked.split(":").slice(1).join(":") : nameOf(models.find(l => listenerKey(l) === picked)!));
+  // A model that isn't signed in now goes by the name it was saved under; one saved with no name of its own goes by its maker's.
+  const savedName = (key: string) => {
+    const [agent = "", ...rest] = key.split(":");
+    const model = rest.join(":");
+    return model && model !== "default" ? model : AGENT_LABEL[agent as AgentId] ?? agent;
+  };
+  const pickedName = picked && (missing ? savedName(picked) : nameOf(models.find(l => listenerKey(l) === picked)!));
   const options = [
     { value: "auto", label: "Automatic" },
     ...models.map(l => ({ value: listenerKey(l) as string, label: nameOf(l) })),

@@ -1,7 +1,7 @@
 import "./cutSummaries.testkit.js";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -121,6 +121,53 @@ describe("MCP file tools", () => {
     }
   });
 
+  it("reads a video on the web, then saves the part asked for in the artifact directory with where it came from", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
+    const mp4 = Buffer.from("....ftypisom part of the video");
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from("frame")]);
+    const video = { url: "https://www.youtube.com/watch?v=agents", title: "Agents at work", channel: "The Ledger", duration: 90, license: "Creative Commons Attribution license (reuse allowed)" };
+    const extra = mock.state.extra;
+    mock.state.extra = async (rec, res) => {
+      if (!rec.path.includes("/web-videos")) return extra ? extra(rec, res) : false;
+      if (rec.method === "GET") {
+        res.writeHead(200, { "content-type": "application/octet-stream" });
+        res.end(mp4);
+      } else {
+        const asked = rec.body as { from?: number; to?: number };
+        res.writeHead(asked.from === undefined ? 200 : 201, { "content-type": "application/json" });
+        res.end(JSON.stringify(asked.from === undefined
+          ? { video, captions: { language: "en", automatic: true, text: "1.2 Here is the agent\n5 running a task", next: 640 } }
+          : { video, part: { id: "part 1", from: asked.from, to: asked.to, duration: 6.5, width: 1920, height: 1080, size: mp4.length, poster: jpeg.toString("base64") } }));
+      }
+      return true;
+    };
+    const run = Task.parse({ id: "tsk_edit_v", projectId: "prj_test", kind: "edit", agent: "claude", state: "running", instruction: "Show the demo from that video",
+      createdBy: { type: "human", name: "Editor" } });
+    const c = await connect(run.id, dir, run);
+    try {
+      const about = await c.callTool({ name: "web_video", arguments: { url: video.url } }) as CallToolResult;
+      expect(about.isError).toBeFalsy();
+      const texts = (about.content as Array<{ type: string; text: string }>).map(part => part.text);
+      expect(JSON.parse(texts[0]!)).toEqual({ ...video, captions: { language: "en", automatic: true, captionsNext: 640 } });
+      expect(texts[1]).toBe("1.2 Here is the agent\n5 running a task");
+
+      const part = await c.callTool({ name: "web_video", arguments: { url: video.url, from: 31, to: 37.5 } }) as CallToolResult;
+      expect(part.isError).toBeFalsy();
+      const said = JSON.parse(textOf(part));
+      expect(said.path).toMatch(/video-youtube\.com-\d+\.mp4$/);
+      expect(said).toEqual({ path: said.path, picture: said.path.replace(/\.mp4$/, ".jpg"), from: 31, to: 37.5, duration: 6.5, width: 1920, height: 1080,
+        title: "Agents at work", channel: "The Ledger", license: video.license,
+        source: { url: video.url, capture: said.path.replace(/\.mp4$/, ".jpg"), clip: { start: 31, end: 37.5 } } });
+      expect([await readFile(said.path), await readFile(said.picture)]).toEqual([mp4, jpeg]);
+      const sent = mock.requests.filter(r => r.path.includes("/web-videos")).map(r => [r.method, r.path.split("/web-videos")[1], r.body]);
+      expect(sent).toEqual([["POST", "", { url: video.url }], ["POST", "", { url: video.url, from: 31, to: 37.5 }], ["GET", "/part%201", undefined]]);
+    } finally {
+      mock.state.extra = extra;
+      await c.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("records where B-roll from the web came from, with the page as captured from the artifact directory", async () => {
     const dir = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
     const run = Task.parse({ id: "tsk_edit_b", projectId: "prj_test", kind: "edit", agent: "claude", state: "running", instruction: "Show the article",
@@ -198,6 +245,29 @@ describe("MCP file tools", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("removes the temporary folder it made for files when the session closes, and never a folder it was given", async () => {
+    const c = await connect(undefined, undefined, undefined, undefined, "codex");
+    const exported = await c.callTool({ name: "export_otio", arguments: { version: "v1" } }) as CallToolResult;
+    expect(exported.isError).toBeFalsy();
+    const path = JSON.parse(textOf(exported).split("\n\n").at(-1)!).path as string;
+    const made = dirname(dirname(path));
+    expect(made.startsWith(await realpath(tmpdir()))).toBe(true);
+    expect(await readFile(path, "utf8")).toContain("v1");
+    await c.close();
+    await vi.waitFor(async () => expect(await stat(made).then(() => true, () => false)).toBe(false));
+    // A folder the harness gave is its own: closing leaves it and what was saved there.
+    const given = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
+    try {
+      const kept = await connect(undefined, given, undefined, undefined, "codex");
+      expect((await kept.callTool({ name: "export_otio", arguments: { version: "v1" } }) as CallToolResult).isError).toBeFalsy();
+      await kept.close();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(await readFile(join(given, "exports", "v1.otio"), "utf8")).toContain("v1");
+    } finally {
+      await rm(given, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("tool errors", () => {
@@ -226,14 +296,14 @@ describe("tools/list", () => {
       try {
         const tools = await reachableTools(c);
         const names = tools.map(t => t.name);
-        expect([names.includes("web_capture"), names.includes("asset_add"), names.includes("timeline_propose"), names.includes("broll_make")], agent).toEqual([true, true, true, false]);
+        expect([names.includes("web_capture"), names.includes("web_video"), names.includes("asset_add"), names.includes("timeline_propose"), names.includes("broll_make")], agent).toEqual([true, true, true, true, false]);
         expect(Object.keys(tools.find(t => t.name === "asset_add")!.inputSchema.properties ?? {}), agent).toEqual(["path", "kind", "provenance", "source"]);
       } finally { await c.close(); }
     }
     const check = await connect("tsk_check", undefined, Task.parse({ ...edit, id: "tsk_check", kind: "learning_check", context: { checksTaskId: edit.id } }));
     try {
       const names = (await check.listTools()).tools.map(t => t.name);
-      expect([names.includes("web_capture"), names.includes("asset_add")]).toEqual([false, false]);
+      expect([names.includes("web_capture"), names.includes("web_video"), names.includes("asset_add")]).toEqual([false, false, false]);
     } finally { await check.close(); }
   });
   it("registers every Scarlet tool with a description", async () => {
@@ -241,8 +311,9 @@ describe("tools/list", () => {
     const names = tools.map((t) => t.name).sort();
     // Claude's harness does not deliver audio, so nothing offers WAV. This session has no task, so it isn't launched with
     // file tools: nothing imports from the artifact directory or captures a page. Only the check that reads a request
-    // offers a rule, and only a request with a model that can hear signed in has it listen.
-    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "listen", "learning_suggest", "asset_add", "web_capture"].includes(n)).sort());
+    // offers a rule, only a request with a model that can hear signed in has it listen, and only one with work the editor
+    // gave another model hands it off.
+    expect(names).toEqual([...SCARLET_TOOL_NAMES].filter(n => !["source_audio", "listen", "hand_off", "learning_suggest", "asset_add", "web_capture", "web_video"].includes(n)).sort());
     for (const t of tools) expect(Object.keys(t.inputSchema.properties ?? {})).not.toContain("includeAudio");
     expect(JSON.stringify(tools)).not.toMatch(/\bWAV\b|can (hear|play)|accepts audio|consume audio/);
     for (const t of tools) expect(t.description?.length ?? 0).toBeGreaterThan(20);
@@ -264,6 +335,31 @@ describe("project_get", () => {
     expect(body.media[0]).toMatchObject({ id: "m1", kind: "video", name: "talk.mp4", hasTranscript: true });
     expect(t).not.toContain("\n");
     expect(mock.requests.find(q => q.path === "/projects/prj_test")?.query.get("view")).toBe("workspace");
+  });
+
+  it("gives the editor's note on a file and marks a file added after the request, saying it isn't part of it", async () => {
+    const original = mock.state.project.media;
+    mock.state.project.media = [
+      { ...original[0]!, addedAt: "2026-11-23T20:00:00.000Z" },
+      { id: "sponsor", kind: "video", name: "Integration.mp4", path: "sponsor.mp4", duration: 94, addedAt: "2026-11-23T21:00:00.000Z",
+        editorNote: "Finished sponsor read. Insert it whole after the intro." } as never,
+    ];
+    const task = Task.parse({ id: "talk-pass", projectId: "prj_test", kind: "edit", agent: "claude", state: "running", instruction: "/matt-talking-head",
+      context: {}, createdBy: { type: "human", name: "Editor" }, createdAt: "2026-11-23T20:19:38.414Z" });
+    const editor = await connect(task.id, undefined, task);
+    try {
+      const body = JSON.parse(textOf(await editor.callTool({ name: "project_get", arguments: {} }) as CallToolResult).split("\n\n").at(-1)!);
+      expect(body.media[0]).not.toHaveProperty("addedAfterThisRequest");
+      expect(body.media[0]).not.toHaveProperty("editorNote");
+      expect(body.media[1]).toMatchObject({ editorNote: "Finished sponsor read. Insert it whole after the intro.", addedAfterThisRequest: true });
+      expect(body.addedLater).toMatch(/aren't part of it unless the editor's words name them/);
+      // A project whose files were all there when the request was sent reads as it did.
+      mock.state.project.media = [{ ...original[0]!, addedAt: "2026-11-23T20:00:00.000Z" }];
+      expect(JSON.parse(textOf(await editor.callTool({ name: "project_get", arguments: {} }) as CallToolResult).split("\n\n").at(-1)!)).not.toHaveProperty("addedLater");
+    } finally {
+      mock.state.project.media = original;
+      await editor.close();
+    }
   });
 });
 
@@ -459,6 +555,29 @@ describe("timeline_first_cut indexed keeps", () => {
     } finally { await editor.close(); }
   });
 
+  it("starts a heard camera's keep where the screen recording begins when the camera started first", async () => {
+    // The camera started 1.5 s before the screen recording; it is heard, and word indices are its own.
+    const words = [{ text: "Hello", start: 2.0, end: 2.4 }, { text: "there.", start: 2.6, end: 3.0 }];
+    const cam: Transcript = { id: "tc", mediaId: "cam", segments: [{ id: "sc", start: 2, end: 3, text: "Hello there.", words }] };
+    mock.state.transcripts = { cam };
+    mock.state.project.media.push({ id: "cam", kind: "video", name: "camera.mp4", path: "camera.mp4", duration: 4, fps: 30, width: 1920, height: 1080, hasAudio: true, transcriptId: "tc" });
+    mock.state.waveform = (id, from, to, points) => spokenWaveform(id, from, to, points, words);
+    const editor = await connectEditor();
+    try {
+      const result = await editor.callTool({ name: "timeline_first_cut", arguments: {
+        intent: "requested", mediaId: "m1", description: "Sync the camera with the screen.", reason: "Both recordings play together.",
+        keep: [{ fromWord: 0, toWord: 1 }], layer: { mediaId: "cam", offset: -1.5, sound: true, framing: { scale: .25, x: .35, y: .35 } },
+      } }) as CallToolResult;
+      expect(result.isError, textOf(result)).toBeFalsy();
+      const posts = mock.requests.filter(r => r.method === "POST" && r.path === "/projects/prj_test/changes");
+      expect(posts, textOf(result)).toHaveLength(1);
+      const [v1, v2] = ProposeChangeRequest.parse(posts[0]!.body).timeline!.tracks;
+      expect(v1!.clips).toMatchObject([{ mediaId: "m1", sourceIn: 0, timelineIn: 0 }]);
+      expect(v2!.clips).toMatchObject([{ mediaId: "cam", sourceIn: 1.5, timelineIn: 0, volume: 1 }]);
+      expect(textOf(result)).toContain("Kept to m1's footage: keep[0] starts where m1 begins, leaving out 1.5 s of cam before it.");
+    } finally { await editor.close(); }
+  });
+
   it("leaves a cut unapplied when an indexed join cannot land in measured silence", async () => {
     const editor = await connectEditor();
     try {
@@ -469,6 +588,8 @@ describe("timeline_first_cut indexed keeps", () => {
         keep: [{ fromWord: 0, toWord: 3, start: 0.1 }, { fromWord: 5, toWord: 9, end: 5.5 }],
       } }) as CallToolResult;
       expect(textOf(result)).toMatch(/join|quiet|review|silence|edge/i);
+      expect(textOf(result)).toContain("dialogue_apply_cuts");
+      expect(textOf(result)).toMatch(/source_audio or listen/);
       expect(mock.requests.some(r => r.path.endsWith("/m1/waveform"))).toBe(true);
       expect(mock.requests.some(r => r.method === "POST" && r.path === "/projects/prj_test/changes")).toBe(false);
     } finally { await editor.close(); }
@@ -1743,6 +1864,11 @@ describe("task events", () => {
       ["log", textOf(long)],
       ["question", "Keep the intro?"],
     ]);
+    // A question with a few clear answers hands them over too, for the editor to pick with one press.
+    await client.callTool({ name: "task_question", arguments: { text: "Keep the cold open?", choices: ["Keep it", "Cut it"] } });
+    expect(mock.state.events.at(-1)).toMatchObject({ type: "question", text: "Keep the cold open?", data: { choices: ["Keep it", "Cut it"] } });
+    const one = await client.callTool({ name: "task_question", arguments: { text: "Keep it?", choices: ["Yes"] } }) as CallToolResult;
+    expect(one.isError).toBe(true);
   });
   it("reads a save that asks for revision as a refusal, and a save as none", async () => {
     expect(toolRefusal({ content: [{ type: "text", text: JSON.stringify({ needsRevision: true, disputedEdges: [{ start: 1, end: 2 }], next: "Nothing was saved. Check the edge." }) }] }))
@@ -4253,7 +4379,7 @@ it("lets a request sent from an applied edit cut outside where that edit plays, 
   const session = (id: string, context: object) => connect(id, undefined, Task.parse({ id, projectId: tl.projectId, kind: "edit", agent: "claude", state: "running",
     instruction: "Take out the sentence before this too.", context: { version: tl.version, ...context }, createdBy: { type: "human", name: "Editor" } }));
   // The message box was aimed at an applied cut, so the request says where that cut plays: its join at 10 s and a moment either side.
-  const aimed = await session("aimed-at-edit", { changeId: "prior", editIndex: 0, editNumber: 1, time: 8.5, end: 11.5 });
+  const aimed = await session("aimed-at-edit", { changeId: "prior", editIndex: 0, time: 8.5, end: 11.5 });
   // The same times as a range the editor selected on the timeline.
   const selecting = await session("selected-range", { time: 8.5, end: 11.5 });
   const sentence = { start: 3, end: 8 };
@@ -4821,6 +4947,8 @@ it("refuses a ripple through a sounding word in the general edit tool and points
     expect(through.isError).toBe(true);
     expect(textOf(through)).toContain("falls inside “back”");
     expect(textOf(through)).toContain("dialogue_apply_cuts");
+    // It says where the recording is quiet either side, in timeline seconds, so the next try can land there.
+    expect(textOf(through)).toMatch(/“back”, which is sounding there \(the recording is quiet at \d+\.\d\d s(?: and at \d+\.\d\d s)?\) \[dBFS in 20 ms steps: /);
     // The same removal from the quiet after the word goes ahead.
     expect((await propose(2.0, 3.4)).isError).toBeFalsy();
     // 4.54 s is quiet before “the” (4.55–4.7 s), but the removal starts on the next whole frame, 4.5667 s, inside it.

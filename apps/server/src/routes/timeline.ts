@@ -13,6 +13,7 @@ import { jsonBody, optionalNumberParam, requireProject, requireProjectHeader } f
 import { actorFor, logActivity } from "../services/activity.js";
 import { applyChoicesWhenDone } from "../services/changes.js";
 import { buildHandoff } from "../services/handoff.js";
+import { recordExportFinished } from "../telemetry/events.js";
 
 export function timelineRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -76,7 +77,7 @@ export function timelineRoutes(ctx: Ctx) {
   r.post("/projects/:id/rejected-edits", async c => {
     const range = z.object({ start: z.number().nonnegative(), end: z.number().nonnegative() }).refine(r => r.end >= r.start);
     const body = await jsonBody(c, z.object({ expectedHead: z.string(), branch: z.string(), threadId: z.string(),
-      edits: z.array(z.object({ changeId: z.string(), spot: z.number().int().nonnegative(), label: z.string().trim().min(1), range, revised: z.boolean().optional(),
+      edits: z.array(z.object({ changeId: z.string(), spot: z.number().int().nonnegative(), label: z.string().trim().min(1), range, revised: z.boolean().optional(), marker: z.boolean().optional(),
         at: z.number().nonnegative().optional(), before: z.object({ version: z.string(), removed: range.refine(r => r.end > r.start) }).optional() })).min(1).max(32) }));
     const rejected = rejectEdits(ctx, c.var.user, c.req.param("id"), body.threadId, body.edits, body.expectedHead, body.branch);
     // The last Reject of what the request left the editor has its decisions read for a rule.
@@ -101,6 +102,7 @@ export function timelineRoutes(ctx: Ctx) {
     const project = requireProject(ctx, c.req.param("id"));
     const timeline = resolveTimeline(ctx, project, c.req.param("v"));
     const otio = toOtio(project, timeline, { mediaRoot: ctx.paths.media(project.id) });
+    recordExportFinished(ctx, "otio");
     logActivity(ctx, {
       projectId: project.id,
       actor: actorFor(c.var.user),
@@ -135,6 +137,7 @@ export function timelineRoutes(ctx: Ctx) {
         if (!(err instanceof CaptionExportError)) throw err;
         throw new HttpError(captionExportHttpStatus(err.code), err.code, err.message);
       }
+      recordExportFinished(ctx, format);
       logActivity(ctx, {
         projectId: project.id,
         actor: actorFor(c.var.user),
@@ -158,6 +161,7 @@ export function timelineRoutes(ctx: Ctx) {
     const project = requireProject(ctx, c.req.param("id"));
     const timeline = resolveTimeline(ctx, project, c.req.param("v"));
     const result = await buildHandoff(ctx, project, timeline, body.folder, c.req.raw.signal);
+    recordExportFinished(ctx, "handoff");
     logActivity(ctx, {
       projectId: project.id,
       actor: actorFor(c.var.user),

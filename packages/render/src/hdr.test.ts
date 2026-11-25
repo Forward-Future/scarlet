@@ -28,6 +28,13 @@ describe("pictureColorOf", () => {
       .toEqual({ log: "Apple Log", primaries: "bt2020", bitDepth: 10 });
     expect(pictureColorOf({ pix_fmt: "yuv420p", tags: { handler_name: "Core Media Video" } }, { comment: "the camera's log of the day" })).toBeUndefined();
   });
+
+  it("reads Panasonic's V-Log from its metadata, and not from a video titled as a vlog", () => {
+    expect(pictureColorOf({ pix_fmt: "yuv420p10le" }, { "com.panasonic.Semi-Pro.metadata.xml": "<CaptureGamma>V-Log</CaptureGamma>" }))
+      .toEqual({ log: "V-Log", bitDepth: 10 });
+    expect(pictureColorOf({ color_transfer: "bt709", color_primaries: "bt709", pix_fmt: "yuv420p" }, { title: "Tokyo Vlog", comment: "daily vlog" }))
+      .toBeUndefined();
+  });
 });
 
 describe("toneMapChain", () => {

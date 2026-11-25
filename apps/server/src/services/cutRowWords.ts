@@ -1,5 +1,5 @@
 import { cutKindOfRow, type MediaClip, type Timeline, type TranscriptWord } from "@scarlet/timeline";
-import { flattenWords, type ThreadEdit } from "@scarlet/shared";
+import { flattenWords, LEFT_OUT, type ThreadEdit } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 
 /** How far either side of a cut its row looks for the words it names it by, in seconds of the version before it. */
@@ -10,7 +10,7 @@ const QUOTED = 5;
 /** Rows already named, by edit and version: a cut's footage and its version never change, so neither does its name. */
 const named = new Map<string, string>();
 const NAMED_KEEP = 20_000;
-/** Each transcript's words, read once: a transcript is replaced, never rewritten, when it changes. */
+/** Each transcript's words, read once for each revision of it. */
 const transcriptWords = new Map<string, TranscriptWord[]>();
 const TRANSCRIPTS_KEEP = 64;
 
@@ -45,31 +45,43 @@ function wordsAround(timeline: Timeline, words: (mediaId: string) => TranscriptW
 }
 
 /**
+ * How a row saved without words of its own is named: by its cut's kind, or as footage a video built from the pieces to
+ * keep left out, which Scarlet named nothing for. A first cut's 104 rows all read "Cut" (2026-11-23).
+ */
+const rowKind = (label: string) => label === LEFT_OUT ? "left out" as const : cutKindOfRow(label);
+
+/**
  * A cut saved without a summary reads by its kind in the list ("Shortened a pause"), so a pass's rows all read the same.
  * Each is named by the words beside it instead, as the transcript has them: "Shortened the pause after “okay”",
  * "Cut a false start: “so the model”". This only names what the cut took out and where; it decides nothing.
  */
 export function nameCutRowsByWords(ctx: Ctx, projectId: string, edits: ThreadEdit[], read: (version: string) => Timeline | undefined): ThreadEdit[] {
-  if (!edits.some(e => !e.summary && e.beforeCut && cutKindOfRow(e.label))) return edits;
+  if (!edits.some(e => !e.summary && e.beforeCut && rowKind(e.label))) return edits;
   const media = new Map(ctx.repos.projects.listMedia(projectId).map(m => [m.id, m.transcriptId]));
+  // A transcript is rewritten in place while its words are placed (each turn of alignment, a spelling fixed meanwhile),
+  // so it is read, and its rows named, by its revision as well as its id.
+  const ids = [...new Set([...media.values()].filter((id): id is string => !!id))];
+  const revisions = new Map((ctx.db.prepare("SELECT transcript_id AS id, revision FROM transcript_revisions WHERE transcript_id IN (SELECT value FROM json_each(?))")
+    .all(JSON.stringify(ids)) as { id: string; revision: string }[]).map(r => [r.id, r.revision]));
+  const revisionOf = (id: string) => `${id}@${revisions.get(id) ?? ""}`;
   const words = (mediaId: string) => {
     const id = media.get(mediaId);
     if (!id) return undefined;
-    let list = transcriptWords.get(id);
+    let list = transcriptWords.get(revisionOf(id));
     if (!list) {
       const transcript = ctx.repos.transcripts.get(id);
       if (!transcript) return undefined;
       list = flattenWords(transcript);
       if (transcriptWords.size >= TRANSCRIPTS_KEEP) transcriptWords.delete(transcriptWords.keys().next().value!);
-      transcriptWords.set(id, list);
+      transcriptWords.set(revisionOf(id), list);
     }
     return list;
   };
   // A transcript read again (a realignment) is a new one, and names the cuts afresh.
-  const transcripts = [...media.values()].join(",");
+  const transcripts = [...media.values()].map(id => id && revisionOf(id)).join(",");
   const versions = new Map<string, Timeline | undefined>();
   return edits.map(edit => {
-    const kind = !edit.summary && edit.beforeCut ? cutKindOfRow(edit.label) : undefined;
+    const kind = !edit.summary && edit.beforeCut ? rowKind(edit.label) : undefined;
     if (!kind || !edit.beforeCut) return edit;
     const { version, removed } = edit.beforeCut;
     const key = JSON.stringify([projectId, transcripts, edit.changeId, edit.spot, version, removed.start, removed.end, kind]);
@@ -83,6 +95,9 @@ export function nameCutRowsByWords(ctx: Ctx, projectId: string, edits: ThreadEdi
       const lead = before.slice(-2), next = after.slice(0, 2);
       if (kind === "pause") {
         label = lead.length ? `Shortened the pause after ${quote(lead)}` : next.length ? `Shortened the pause before ${quote(next)}` : edit.label;
+      } else if (kind === "left out") {
+        label = inside.length ? `Cut ${quote(inside.slice(0, QUOTED), inside.length > QUOTED)}`
+          : lead.length ? `Cut after ${quote(lead)}` : next.length ? `Cut before ${quote(next)}` : edit.label;
       } else {
         const what = kind === "retake" ? "a false start" : kind === "filler" ? "a filler word" : "a note to the crew";
         label = inside.length ? `Cut ${what}: ${quote(inside.slice(0, QUOTED), inside.length > QUOTED)}`

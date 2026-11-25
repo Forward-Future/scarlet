@@ -20,6 +20,7 @@ pub mod install;
 pub mod login;
 pub mod manager;
 mod process_guard;
+pub mod providers;
 pub mod runner;
 pub mod runner_claude;
 pub mod runner_codex;
@@ -29,6 +30,7 @@ mod task_runner;
 #[cfg(test)]
 mod tests;
 pub mod types;
+pub mod update;
 pub mod usage;
 mod workspace;
 
@@ -47,11 +49,10 @@ use tokio::sync::{Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Paths;
-use crate::util::child_env;
 use api::Api;
 use catalog::CATALOG_RETRY_WAITS;
 use task_runner::log_completion;
-use types::{AgentAvailability, CompleteTaskRequest, Task, CLI_AGENTS};
+use types::{AgentAvailability, CompleteTaskRequest, Task, CLI_AGENTS, EXTRA_PROVIDERS};
 use workspace::{prune_task_dirs, TASKS_DIR};
 
 /// How often the host sends a heartbeat to the engine.
@@ -136,9 +137,10 @@ impl RunningTask {
     }
 }
 
-/// A short check beside a request that saves nothing to the video (`isSideCheck` in packages/shared/src/tasks.ts).
+/// A run beside a request that the request waits on: a short check, or a hand-off whose edits join the request
+/// (`isSideCheck` in packages/shared/src/tasks.ts).
 fn is_side_check(kind: &str) -> bool {
-    matches!(kind, "learning_check" | "area_check" | "listen_check")
+    matches!(kind, "learning_check" | "area_check" | "listen_check" | "hand_off")
 }
 
 /// Side checks run at once per runtime beside `max_parallel` requests (`sideCheckSlots` in packages/shared/src/tasks.ts).
@@ -415,7 +417,14 @@ impl HostRuntime {
         let agents = self.agents.read().await;
         let mut idle = Vec::new();
         let mut saturated = false;
-        for agent in agents.iter().filter(|a| a.installed && a.logged_in != Some(false) && CLI_AGENTS.contains(&a.id.as_str())) {
+        let runnable = |a: &AgentAvailability| {
+            CLI_AGENTS.contains(&a.id.as_str())
+                || (EXTRA_PROVIDERS.contains(&a.id.as_str()) && a.models.as_ref().is_some_and(|m| !m.is_empty()))
+        };
+        for agent in agents.iter().filter(|a| a.installed && a.logged_in != Some(false) && runnable(a)) {
+            // A server on this computer shares its one GPU: one request at a time, and beside it one side check, so a
+            // request never waits behind itself for its checks.
+            let limit = if providers::is_local(&agent.id) { 1 } else { limit };
             if running.get(&agent.id).copied().unwrap_or(0) < limit {
                 idle.push(agent.id.clone());
             } else {
@@ -520,9 +529,10 @@ impl HostRuntime {
             spawn::stop_orphans(&pids);
             prune_task_dirs(&tasks_root, std::time::SystemTime::now(), claude_dir.as_deref());
         });
-        let env = child_env(&self.paths.home);
+        let env = self.agent_env();
         let _ = tokio::join!(self.detect_agents(&env), cleanup);
         self.emit_status();
+        tauri::async_runtime::spawn(self.clone().update_check_loop());
         // Register (retry until it works or we are stopped).
         let mut delay = 2u64;
         loop {

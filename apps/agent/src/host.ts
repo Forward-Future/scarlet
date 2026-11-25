@@ -10,15 +10,17 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import WebSocket from "ws";
 import type { AgentAvailability, AgentId, AgentUsage, CreateTaskRequest, SubscriptionQuota, Task } from "@scarlet/shared";
-import { isSideCheck, ScarletClient, sideCheckSlots, TaskState } from "@scarlet/shared";
+import { harnessOf, isExtraProvider, isSideCheck, ScarletClient, TaskState } from "@scarlet/shared";
 import { privateDirectory } from "./private-files.js";
 import type { AgentConfig } from "./config.js";
 import { CLI_AGENTS, cliBinary, detect as detectAgents, findOnPath, runnerEnv } from "./detect.js";
 import type { CliAgent } from "./modelCatalog.js";
+import { parallelLimits } from "./providers.js";
 import { isQuotaEligible, probeSubscriptionQuota } from "./quota.js";
 import { killStoppedNow, stopOrphans } from "./processTree.js";
 import { runAgent as defaultRunAgent } from "./runners/index.js";
 import { codexHomeDir } from "./runners/codex.js";
+import { geminiDir } from "./runners/geminiAcp.js";
 import { addUsage } from "./runners/usage.js";
 import { errMsg, mcpEnv, nodeExecutable, resolveMcpCliPath } from "./runners/spawn.js";
 import { DEFAULT_STALL_MS, type McpSpec, type RunAgentFn, type RunAgentResult, type RunnerEvent, type Workspace } from "./runners/types.js";
@@ -28,6 +30,11 @@ import { createEventForwarder, createLiveUsageReporter } from "./taskReports.js"
 import { workspaceTools } from "./workspaceTools.js";
 
 const QUOTA_TTL_MS = 60_000;
+
+/** A positive number from agent.json, else undefined for its default: the file is edited by hand and may hold anything. */
+function positive(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
 
 export interface HostOptions {
   client: ScarletClient;
@@ -157,7 +164,10 @@ export class AgentHost {
       this.stopOrphans(),
     ]);
     this.agents = agents;
+    // Stopped while it was detecting or registering: nothing is started behind the stop.
+    if (this.stopped) return;
     await this.register();
+    if (this.stopped) return;
     void this.refreshQuotas();
     this.heartbeatTimer = setInterval(() => void this.heartbeat(), this.heartbeatMs);
     if (this.opts.ws !== false) this.connectWs();
@@ -253,7 +263,7 @@ export class AgentHost {
   // -- registration & heartbeat ---------------------------------------------
 
   private detectAgents(): Promise<AgentAvailability[]> {
-    return this.opts.detect ? this.opts.detect() : detectAgents({ models: this.config.models, log: this.log });
+    return this.opts.detect ? this.opts.detect() : detectAgents({ models: this.config.models, providers: this.config.providers, log: this.log });
   }
 
   private async register(): Promise<void> {
@@ -459,12 +469,11 @@ export class AgentHost {
   // -- claim loop -----------------------------------------------------------
 
   private async claimLoop(): Promise<void> {
-    const limit = Math.min(8, Math.max(1, this.config.maxParallel ?? 4));
-    const checkLimit = sideCheckSlots(limit);
+    const limit = Math.min(8, Math.max(1, Math.floor(positive(this.config.maxParallel) ?? 4)));
     while (!this.stopped) {
-      const available = this.agents.filter(a => a.installed && a.loggedIn !== false && (CLI_AGENTS as string[]).includes(a.id));
-      const idle = available.filter(a => (this.busy.get(a.id) ?? 0) < limit).map(a => a.id);
-      const checkIdle = available.filter(a => (this.checking.get(a.id) ?? 0) < checkLimit).map(a => a.id);
+      const available = claimableAgents(this.agents);
+      const idle = available.filter(a => (this.busy.get(a.id) ?? 0) < parallelLimits(a.id, limit).tasks).map(a => a.id);
+      const checkIdle = available.filter(a => (this.checking.get(a.id) ?? 0) < parallelLimits(a.id, limit).checks).map(a => a.id);
       // A long poll cannot gain another runtime when one of our workers finishes.
       const wait = idle.length === available.length && checkIdle.length === available.length ? this.opts.claimWaitSeconds ?? 25 : 0;
       if (!idle.length && !checkIdle.length) {
@@ -529,14 +538,18 @@ export class AgentHost {
       this.log(`task ${task.id}: left its folder to another attempt at the same run`);
       return;
     }
-    // Resolve before the folder can go: Claude Code names its project folder after the real path.
-    const real = task.agent === "claude" ? await realpath(cwd).catch(() => undefined) : undefined;
+    // Resolve before the folder can go: Claude Code names its project folder after the real path. An extra provider's
+    // runs are Claude Code's too.
+    const real = harnessOf(task.agent) === "claude" ? await realpath(cwd).catch(() => undefined) : undefined;
     await removeControlFiles(cwd).catch((err) => this.log(`could not clean task folder: ${errMsg(err)}`));
     if (real && landed && !interrupted) {
       await removeClaudeSessions(real, claudeConfigDir(this.env)).catch((err) => this.log(`could not remove Claude sessions: ${errMsg(err)}`));
     }
     if (task.agent === "codex" && landed && !interrupted) {
       await rm(codexHomeDir(cwd), { recursive: true, force: true }).catch((err) => this.log(`could not remove the Codex home: ${errMsg(err)}`));
+    }
+    if (task.agent === "gemini" && landed && !interrupted) {
+      await rm(geminiDir(cwd), { recursive: true, force: true }).catch((err) => this.log(`could not remove the Gemini folder: ${errMsg(err)}`));
     }
   }
 
@@ -582,7 +595,7 @@ export class AgentHost {
     if (signal.aborted) return complete("cancelled", undefined, "cancelled");
     const runner = this.opts.runner ?? defaultRunAgent;
     const timeoutMs = this.runTimeoutMs;
-    const stallMs = this.opts.stallMs ?? (this.config.stallMinutes ?? DEFAULT_STALL_MS / 60_000) * 60_000;
+    const stallMs = this.opts.stallMs ?? (positive(this.config.stallMinutes) ?? DEFAULT_STALL_MS / 60_000) * 60_000;
     const liveUsage = createLiveUsageReporter(this.client, task, signal, this.log);
     let questionSeen: string | undefined;
     // A runner that returns says whether its run ended on a question. Only one that threw leaves the question it saw.
@@ -605,6 +618,7 @@ export class AgentHost {
       timeoutMs,
       stallMs,
       env: runnerEnv(task.agent, this.agents, this.env),
+      providers: this.config.providers,
       onUsage: snapshot => liveUsage.update(snapshot, priorUsage),
       onQuota: quota => this.applyLiveQuota(task.agent, quota),
       onCodexFallback: reason => this.log(`[host] codex-fallback ${identity} reason=${reason}`),
@@ -713,7 +727,8 @@ export class AgentHost {
 
   /** The optional cap on one run: the host's option, or else the config's minutes. None by default. */
   private get runTimeoutMs(): number | undefined {
-    return this.opts.timeoutMs ?? (this.config.timeoutMinutes ? this.config.timeoutMinutes * 60_000 : undefined);
+    const minutes = positive(this.config.timeoutMinutes);
+    return this.opts.timeoutMs ?? (minutes ? minutes * 60_000 : undefined);
   }
 
   /** Prepare the task folder, fetch the engine's prompt and build the MCP spec. `fresh` skips resuming the CLI session. */
@@ -765,6 +780,16 @@ export class AgentHost {
 function withQuota(agent: AgentAvailability, quota: SubscriptionQuota): AgentAvailability {
   const plan = quota.plan ?? agent.plan;
   return { ...agent, ...(plan && !agent.plan ? { plan } : {}), quota: { ...quota, ...(plan ? { plan } : {}) } };
+}
+
+/**
+ * The runtimes this host claims tasks for: a CLI that is installed and not signed out, and an extra provider that is
+ * up and, for OpenRouter, takes its key.
+ */
+export function claimableAgents(agents: AgentAvailability[]): AgentAvailability[] {
+  return agents.filter(a => a.installed && (isExtraProvider(a.id)
+    ? a.loggedIn === true && (a.models?.length ?? 0) > 0
+    : a.loggedIn !== false && (CLI_AGENTS as string[]).includes(a.id)));
 }
 
 /** Whether the engine says this attempt's CLI session carries on in a later attempt. Read with care, as an older engine leaves it out. */

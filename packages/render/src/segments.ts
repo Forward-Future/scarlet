@@ -88,6 +88,11 @@ export async function assembleSegments(files: string[], output: string, opts: As
 
 export interface CachedRenderOptions extends RenderOptions {
   onCachedRanges?: (ranges: TimeRange[]) => void;
+  /**
+   * Called once, before encoding, when some sections were already encoded: their length in seconds and the progress
+   * they account for (on the onProgress scale), so a head start can be shown as reused rather than as fast work.
+   */
+  onReused?: (reused: { seconds: number; progress: number }) => void;
   exportRange?: TimeRange;
   omitCaptions?: boolean;
   segmentSeconds?: number;
@@ -325,6 +330,7 @@ export async function renderFullCached(
     progress[i] = fraction;
     opts.onProgress(Math.min(0.97, completed / total * 0.97));
   };
+  if (completed > 0) opts.onReused?.({ seconds: completed, progress: completed / total * 0.97 });
   opts.onProgress?.(completed / total * 0.97);
 
   const todo = segments.map((s, i) => [s, i] as const).filter(([s]) => !s.cached);

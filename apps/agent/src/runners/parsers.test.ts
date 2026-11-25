@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
 import { buildCodexCommand, tomlInlineTable, tomlString } from "./codex.js";
 import { newCodexState, parseCodexLine } from "./codexParse.js";
-import { acpMcpServer, buildGeminiCommand, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
+import { acpMcpServer, buildGeminiCommand, geminiDir, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
 import { quoteForCmd, spawnLines, spawnSpec } from "./spawn.js";
 import { briefInput, isQuestionTool, prettyToolName, workspaceEnv, type RunnerEvent } from "./types.js";
 import { holdQuestion, settleQuestion, type QuestionCallState } from "./questionCalls.js";
@@ -469,6 +469,9 @@ describe("gemini ACP parser", () => {
     expect(permissionOutcome({ options: [] }, false)).toEqual({ outcome: "cancelled" });
 
     expect(buildGeminiCommand("agy")).toEqual({ file: "agy", args: ["acp", "--sandbox", "--disable-telemetry"] });
+    // The run's own Gemini folder keeps the user's personal GEMINI.md and plugin rules out.
+    expect(geminiDir("/w/tasks-v2/tsk_1/")).toBe("/w/tasks-v2/tsk_1.gemini");
+    expect(buildGeminiCommand("agy", "/w/tasks-v2/tsk_1.gemini").args).toEqual(["acp", "--sandbox", "--disable-telemetry", "--gemini-dir", "/w/tasks-v2/tsk_1.gemini"]);
     expect(acpMcpServer(mcp)).toEqual({
       name: "scarlet",
       command: mcp.command,
@@ -478,6 +481,22 @@ describe("gemini ACP parser", () => {
         { name: "SCARLET_TOKEN", value: 'a"b' },
       ],
     });
+  });
+
+  it("reads a relative path from the task folder, so one that climbs out of it is refused", () => {
+    const roots = ["/w", "/Applications/Google Chrome.app"];
+    const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, roots);
+    // Three folders up from a task folder is Scarlet's own, where its token is kept.
+    expect(allow({ name: "read_file", rawInput: { path: "../../../agent.json" } })).toBe(false);
+    expect(allow({ name: "read_file", rawInput: { file_path: "artifacts/../../secret" } })).toBe(false);
+    expect(allow({ name: "read_file", locations: [{ path: "../secret" }] })).toBe(false);
+    // Inside the task folder, a relative path is fine, as are words that only look like one.
+    expect(allow({ name: "write_file", rawInput: { file_path: "artifacts/page.html", content: "<a href=\"../index.html\">back</a>" } })).toBe(true);
+    expect(allow({ name: "read_file", rawInput: { path: "artifacts/../notes.md" } })).toBe(true);
+    expect(allow({ name: "read_file", locations: [{ path: "artifacts/page.html" }] })).toBe(true);
+    expect(allow({ name: "run_shell_command", rawInput: { command: "cd .. && ls" } })).toBe(true);
+    // With no folder to read it from, a relative path is refused.
+    expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: "notes.md" }] } }, [""])).toBe(false);
   });
 
   it("normalizes unnormalized workspace roots and ignores empty roots", () => {

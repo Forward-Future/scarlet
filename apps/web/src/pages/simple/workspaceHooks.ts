@@ -1,21 +1,23 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { isPublishedCall, type Change, type Timeline } from "@scarlet/timeline";
-import type { Task, ThreadEdit } from "@scarlet/shared";
+import { ScarletApiError, type Task, type ThreadEdit } from "@scarlet/shared";
 import { appLog } from "../../lib/appLog";
-import { api, errorMessage } from "../../lib/client";
+import { api, errorMessage, UNEXPLAINED } from "../../lib/client";
 import { editKindWord } from "../../lib/editKind";
 import type { Moment } from "../../lib/editMoments";
-import { parseTimestamp } from "../../lib/format";
-import { ignorePageShortcut, isEditableTarget } from "../../lib/hotkeys";
+import { distinctClock, parseTimestamp } from "../../lib/format";
+import { ignorePageShortcut, isAltClearRangeKey, isComposing, isEditableTarget } from "../../lib/hotkeys";
 import { editKey, keepEdits } from "../../lib/keptEdits";
 import { needNumbers } from "../../lib/needNumbers";
 import { savedChoices, type Call, type CutChoice } from "../../lib/passCalls";
 import type { Footage } from "../../lib/carriedCuts";
 import { readTimeline } from "../../lib/timelineCache";
+import { isClippedInScrollAncestors } from "../../lib/uiHooks";
 import { lastStep, useUndoStore } from "../../lib/undo";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
 import type { Thread } from "../../lib/threads";
+import { marksTakeEscape } from "../../components/player/PictureMarks";
 import { inFullScreen, KEPT_TIMELINES, LANDING_SETTLES, LANDING_SHOWS, stepOf, type Panel } from "./types";
 
 /**
@@ -110,6 +112,18 @@ export function useDraftTimeline(projectId: string, draftVersion?: string) {
 }
 
 /**
+ * A call's Keep or Reject edit that wasn't saved: why, when the engine said, and what to do about it. The call is back
+ * with the editor, undecided, so making the decision again is what saves it. A pass that has moved on since (the
+ * engine's conflict) says only that: pressing again wouldn't save it.
+ */
+export function callNotSaved(error: unknown) {
+  const reason = errorMessage(error).trim();
+  const why = !reason || reason === UNEXPLAINED ? "." : `: ${/[.!?]$/.test(reason) ? reason : `${reason}.`}`;
+  const movedOn = error instanceof ScarletApiError && error.status === 409;
+  return `Couldn’t save this call${why}${movedOn ? "" : " Press Keep or Reject edit again."}`;
+}
+
+/**
  * Optimistic cut-choice persistence for dialogue passes, keeping each save ordered and surfacing failures only while
  * their calls remain unsaved.
  */
@@ -152,7 +166,7 @@ export function usePassChoices(setDecideError: Dispatch<SetStateAction<string>>)
       // A later save that has landed carried every call this one did: nothing was lost, and nothing is said.
       if ((saves.current.landed[change.id] ?? 0) > order) return;
       saves.current.unsent[change.id] = new Set(Object.keys(calls).map(Number));
-      saves.current.failed = errorMessage(e);
+      saves.current.failed = callNotSaved(e);
       setDecideError(saves.current.failed);
     } finally {
       // Drop only this optimistic copy. A save sent since carries its own calls and may still land.
@@ -197,9 +211,11 @@ export function usePassCallNumbers(
     const editKeyOf = (e: (typeof edits)[number]) => `edit/${editKey(e.previous[0] ?? e)}`;
     const numbers = needNumbers(projectId, passThread.id, passRoot?.resumeRootId ?? passRoot?.id ?? pass.id, [...callKeys, ...edits.map(editKeyOf)]);
     allCalls.forEach((call, i) => callNo.set(call.index, numbers.get(callKeys[i]!.key)!));
+    const times = [...allCalls.map(a => a.start), ...edits.map(at)];
     for (const e of edits) {
       const n = numbers.get(editKeyOf(e))!;
-      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} ${n}`;
+      // It goes by its time, as its row does: "Cut at 0:11", or "Edit at 0:11" for one that took no footage out.
+      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} at ${distinctClock(at(e), times)}`;
       for (const ref of [e, ...e.previous]) passEditNo.set(editKey(ref), { n, name });
     }
     return { callNo, passEditNo };
@@ -253,7 +269,9 @@ export function useWatchedMomentAutoKeep(
       else if (now.seeks !== was.seeks || now.time < was.time - 0.05 || now.time - was.time > 1.5) from = now.time;
       else from ??= was.time;
       const start = from;
-      const seen = watchKeep.current.watchedMoments.filter(m => !done.has(m.key) && start <= m.start + 0.05 && now.time >= m.end - 0.05);
+      // Play has to begin clearly before a moment to count: a card closed without a decision leaves the playhead on its
+      // cut's join, and playing on from there isn't watching the cut. Only the very start of the video has nothing before it.
+      const seen = watchKeep.current.watchedMoments.filter(m => !done.has(m.key) && (start <= m.start - 0.2 || start <= 0.05) && now.time >= m.end - 0.05);
       if (!seen.length) return;
       for (const m of seen) done.add(m.key);
       appLog("review", "watched", { moments: seen.length, at: now.time });
@@ -266,18 +284,31 @@ export function useWatchedMomentAutoKeep(
 export function useUndoShortcut(workspaceActive: boolean, projectId: string, undoRef: RefObject<{ undo(): Promise<void> }>) {
   useEffect(() => {
     if (!workspaceActive) return;
+    // A message box the editor has just emptied still has those words to bring back, so its own ⌘Z goes first. A box a
+    // send emptied, one built again for another aim, or one its own ⌘Z ran back to empty has none.
+    const emptiedByHand = new WeakSet<EventTarget>();
+    const onInput = (e: Event) => {
+      const field = e.target;
+      if (!(field instanceof HTMLTextAreaElement) || !field.closest(".composer-box")) return;
+      if (!field.value && (e as InputEvent).inputType !== "historyUndo") emptiedByHand.add(field);
+      else emptiedByHand.delete(field);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "z" || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.defaultPrevented) return;
       // Words being written keep their own ⌘Z. The message box, once empty, leaves it here when it had no tag to put back.
-      const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value;
+      const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value && !emptiedByHand.has(e.target);
       if (isEditableTarget(e.target) && !box) return;
       if (document.querySelector('dialog[open], [role="dialog"], [role="menu"]')) return;
       if (!lastStep(useUndoStore.getState().steps, projectId)) return;
       e.preventDefault();
       if (!e.repeat) void undoRef.current.undo();
     };
+    window.addEventListener("input", onInput, true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("input", onInput, true);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [workspaceActive, projectId, undoRef]);
 }
 
@@ -295,8 +326,9 @@ export function useEditCardShortcuts(active: boolean, stepEdit: (delta: number) 
         e.preventDefault();
         if (!e.repeat) editKeys.current.stepEdit(step);
       } else if (e.key === "Escape") {
-        // Full screen takes the first Esc: it leaves full screen, and the edit stays open.
-        if (inFullScreen()) return;
+        // Full screen takes the first Esc: it leaves full screen, and the edit stays open. So does the marking of a
+        // frame, which ends on it.
+        if (inFullScreen() || marksTakeEscape(e)) return;
         e.preventDefault();
         editKeys.current.closeEdit();
       }
@@ -324,7 +356,7 @@ export function useCallCardShortcuts(reviewKeysOn: boolean, hasPass: boolean, st
       if (hasPass && !keys.suggestion && step && keys.calls) {
         e.preventDefault();
         if (!e.repeat) keys.stepCut(step);
-      } else if (e.key === "Escape" && (keys.listening || keys.suggestion) && !inFullScreen()) {
+      } else if (e.key === "Escape" && (keys.listening || keys.suggestion) && !inFullScreen() && !marksTakeEscape(e)) {
         e.preventDefault();
         // Esc is the card's Close: neither closes a suggestion while it is being applied.
         if (keys.listening) keys.stopListening(); else if (!keys.applying) keys.closeReview();
@@ -335,8 +367,8 @@ export function useCallCardShortcuts(reviewKeysOn: boolean, hasPass: boolean, st
   }, [reviewKeysOn, hasPass]);
 }
 
-/** Esc closes the Transcript column when no edit/call/suggestion card owns Esc. */
-export function useTranscriptEscape(enabled: boolean, onClose: () => void) {
+/** Esc closes what is behind every card: the Transcript column, then the picked request. An edit, call or suggestion card takes Esc first. */
+export function useEscapeCloses(enabled: boolean, onClose: () => void) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   useEffect(() => {
@@ -351,30 +383,49 @@ export function useTranscriptEscape(enabled: boolean, onClose: () => void) {
   }, [enabled]);
 }
 
-/** Clears a timeline marked range on a short click outside the composer, timeline, and loupe. */
+/** Clears a timeline marked range on Esc, Delete/Backspace, or Option/Alt+X (ahead of anything else Esc would close),
+ *  or on a short click outside the composer and the stage (the player, its card and the timeline), so the editor can
+ *  play the range, pause and adjust it without losing it. */
 export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () => void) {
   const clearRef = useRef(onClear);
   clearRef.current = onClear;
   useEffect(() => {
     if (!hasMarkedRange) return;
     let down: { x: number; y: number; id: number; away: boolean } | undefined;
-    const away = (target: EventTarget | null) => target instanceof Element && !target.closest(".composer-dock, .timeline-panel, .timeline-range-loupe");
+    const away = (target: EventTarget | null) => target instanceof Element && !target.closest(".composer-dock, .simple-stage, .timeline-range-loupe, .timeline-range-menu");
     const press = (e: PointerEvent) => { down = e.isPrimary && e.button === 0 ? { x: e.clientX, y: e.clientY, id: e.pointerId, away: away(e.target) } : undefined; };
     const release = (e: PointerEvent) => {
       const was = down;
       down = undefined;
       if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) clearRef.current();
     };
+    const key = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isEditableTarget(e.target) || isComposing(e)) return;
+      // An open dialog, menu, popover, full screen, or frame marking takes its own keys first.
+      if (document.querySelector('dialog[open], [role="dialog"], [role="menu"], [data-escape-owner], [data-shortcut-overlay]')) return;
+      const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
+      const escape = plain && e.key === "Escape";
+      const erase = plain && !e.shiftKey && (e.key === "Delete" || e.key === "Backspace");
+      const clearInOut = isAltClearRangeKey(e);
+      if (!escape && !erase && !clearInOut) return;
+      if ((escape && inFullScreen()) || marksTakeEscape(e)) return;
+      e.preventDefault();
+      clearRef.current();
+    };
     document.addEventListener("pointerdown", press, true);
     document.addEventListener("pointerup", release, true);
+    window.addEventListener("keydown", key, true);
     return () => {
       document.removeEventListener("pointerdown", press, true);
       document.removeEventListener("pointerup", release, true);
+      window.removeEventListener("keydown", key, true);
     };
   }, [hasMarkedRange]);
 }
 
-/** Keeps the chat scrolled to the newest message while `follow` is true, including across container resizes. */
+const SELECTED_REVISION_ROW = '.simple-pass-list [aria-current="true"], .simple-edits [aria-current="true"], button.req-summary[aria-current="true"]';
+
+/** Keeps the chat scrolled to the newest message while `follow` is true, unless a revision row in the chat is selected. */
 export function useChatAutoFollow(
   chat: RefObject<HTMLDivElement | null>,
   follow: RefObject<boolean>,
@@ -382,16 +433,30 @@ export function useChatAutoFollow(
   lastActivity: string | undefined,
   taskCount: number,
 ) {
+  const prevCounts = useRef({ threadCount, taskCount });
   useLayoutEffect(() => {
+    const grew = threadCount > prevCounts.current.threadCount || taskCount > prevCounts.current.taskCount;
+    prevCounts.current = { threadCount, taskCount };
     const pane = chat.current;
-    if (pane && follow.current) pane.scrollTop = pane.scrollHeight;
+    if (!pane || !follow.current) return;
+    // Keeping or deciding an edit bumps `updatedAt` via the engine; never yank the chat away from the selected row
+    // unless a brand-new message or task arrived.
+    if (!grew && pane.querySelector(SELECTED_REVISION_ROW)) return;
+    pane.scrollTop = pane.scrollHeight;
   }, [chat, follow, threadCount, lastActivity, taskCount]);
-  // The spot above the message box grows and shrinks with what it holds, and the chat's room with it. The latest
-  // message stays in view through that too.
+  // The spot above the message box grows and shrinks with what it holds, and the chat's room with it. While a
+  // revision row in the chat is selected, keep that row in view; otherwise keep the latest message in view.
   useEffect(() => {
     const pane = chat.current;
     if (!pane || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => { if (follow.current) pane.scrollTop = pane.scrollHeight; });
+    const observer = new ResizeObserver(() => {
+      const selected = pane.querySelector(SELECTED_REVISION_ROW);
+      if (selected) {
+        if (isClippedInScrollAncestors(selected)) selected.scrollIntoView?.({ block: "nearest" });
+        return;
+      }
+      if (follow.current) pane.scrollTop = pane.scrollHeight;
+    });
     observer.observe(pane);
     return () => observer.disconnect();
   }, [chat, follow]);

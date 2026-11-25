@@ -2,6 +2,7 @@
 //! for Gemini via Antigravity CLI (`agy acp`).
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 use serde_json::{json, Value};
 
@@ -115,10 +116,10 @@ pub const SCARLET_TOOLS: &[&str] = &[
     "screen_text", "screen_reading", "screen_motion",
     "faces", "lip_sync",
     "change_get", "change_list", "edit_flag", "notes_list", "note_reply", "note_resolve", "render_request", "render_status",
-    "task_log", "task_question", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit",
-    "web_capture", "graphic_render", "graphic_get", "style_guide_save", "attachment_read",
+    "task_log", "task_question", "hand_off", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit",
+    "web_capture", "web_video", "graphic_render", "graphic_get", "style_guide_save", "attachment_read",
     "media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area",
-    "change_review_cut", "source_audio",
+    "change_review_cut", "source_audio", "listen",
     "captions_generate",
     "asset_add", "export_otio",
     "tool_help", "tool_call",
@@ -167,16 +168,20 @@ pub fn is_scarlet_mcp_permission(params: &Value) -> bool {
     names.into_iter().any(names_scarlet_tool)
 }
 
-/// Every path a permission request names: its locations, and any absolute path among its input's values.
+/// Every path a permission request names: its locations, and any absolute path among its input's values, or any that
+/// climbs out of the folder it is read from (`../`).
 fn named_paths(params: &Value) -> Vec<String> {
     fn absolute(v: &str) -> bool {
         let v = v.trim();
-        v.starts_with('/') || v.starts_with("~/") || (v.len() > 2 && v.as_bytes()[1] == b':' && (v.as_bytes()[2] == b'\\' || v.as_bytes()[2] == b'/'))
+        v.starts_with('/') || v.starts_with("~/") || drive(v)
+    }
+    fn climbs(v: &str) -> bool {
+        v.trim().split(['/', '\\']).any(|part| part == "..")
     }
     fn visit(value: &Value, depth: usize, out: &mut Vec<String>) {
         if depth > 4 { return; }
         match value {
-            Value::String(v) if absolute(v) && v.len() < 4096 => out.push(v.trim().to_string()),
+            Value::String(v) if (absolute(v) || climbs(v)) && v.len() < 4096 => out.push(v.trim().to_string()),
             Value::Array(items) => items.iter().for_each(|v| visit(v, depth + 1, out)),
             Value::Object(map) => map.values().for_each(|v| visit(v, depth + 1, out)),
             _ => {}
@@ -202,17 +207,30 @@ fn resolved(path: &str) -> String {
     format!("{prefix}/{}", parts.join("/"))
 }
 
+/// A Windows path from a drive's root: `C:\` or `C:/`.
+fn drive(v: &str) -> bool {
+    let b = v.as_bytes();
+    b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+}
+
 /// Whether a request's agent may use one of agy's own tools: yes unless it names a path outside the folders it works in
 /// (its task folder, and those its programs live in). agy's sandbox restricts its terminal; its file tools reach as far
-/// as the user's files do, the library that holds Scarlet's token among them.
+/// as the user's files do, the library that holds Scarlet's token among them. A relative path is read from the task
+/// folder, the first of them, as agy reads it.
 pub fn workspace_permission(params: &Value, roots: &[String]) -> bool {
     if is_scarlet_mcp_permission(params) {
         return true;
     }
+    let task_folder = roots.iter().find(|r| !r.trim().is_empty()).cloned();
     let roots: Vec<String> = roots.iter().map(|r| resolved(r)).collect();
     named_paths(params).iter().all(|path| {
         if path.starts_with('~') { return false; }
-        let p = resolved(path);
+        let relative = !path.starts_with(['/', '\\']) && !drive(path);
+        let p = match (relative, &task_folder) {
+            (false, _) => resolved(path),
+            (true, Some(folder)) => resolved(&format!("{folder}/{path}")),
+            (true, None) => return false,
+        };
         roots.iter().any(|root| p == *root || p.starts_with(&format!("{}/", root.trim_end_matches('/'))))
     })
 }
@@ -465,10 +483,19 @@ pub fn acp_mcp_server(mcp: &McpSpec) -> Value {
 /// agy reads Scarlet's prompt from the session's own system prompt, not a `GEMINI.md`: it cuts a rule file off at
 /// 24,000 bytes, and a pass's prompt with the editor's skill runs past that (28.5 KB on 2026-11-19, losing the skill's
 /// pace, demo and punch-in sections).
-pub fn build_gemini_command(bin: &str) -> RunnerCommand {
+///
+/// `--gemini-dir` gives agy the run's own folder for its settings, rules, plugins and sessions (`gemini_dir`), so the
+/// editor's personal `~/.gemini/GEMINI.md` and plugin rules, written for their own chats with Gemini, don't reach
+/// Scarlet's runs, as they don't for Claude Code (`--restricted`) or Codex (its own `CODEX_HOME`). The sign-in stays:
+/// agy keeps it in the system keychain.
+pub fn build_gemini_command(bin: &str, gemini_dir: Option<&Path>) -> RunnerCommand {
+    let mut args: Vec<String> = vec!["acp".into(), "--sandbox".into(), "--disable-telemetry".into()];
+    if let Some(dir) = gemini_dir {
+        args.extend(["--gemini-dir".into(), dir.to_string_lossy().into_owned()]);
+    }
     RunnerCommand {
         file: bin.to_string(),
-        args: vec!["acp".into(), "--sandbox".into(), "--disable-telemetry".into()],
+        args,
         stdin: None,
         files: BTreeMap::new(),
     }

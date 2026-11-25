@@ -1,9 +1,9 @@
 //! Gemini via Antigravity CLI (`agy acp`), speaking Agent Client Protocol (JSON-RPC 2.0) over stdio.
 //! Runs with `--sandbox` and an explicit `session/request_permission` handler: a request's agent may use agy's own
 //! shell, file and web tools inside its task folder as well as Scarlet's, and a side check only Scarlet's. Supports model selection,
-//! thinking level (`thought_level`) and token usage reporting. The runner can open a session again
-//! (`session/resume`), but the engine never asks it to: Gemini isn't among the agents it resumes, so an
-//! answer or an interruption starts a fresh run with the earlier questions and answers, or the recap.
+//! thinking level (`thought_level`) and token usage reporting. After an answer, a quit or a pause the engine
+//! asks it to open the run's session again (`session/resume`); a session agy can't open fails the attempt as
+//! `resume_failed`, and the run starts afresh with the recap.
 
 mod acp_parse;
 mod transcript;
@@ -16,6 +16,7 @@ pub use acp_parse::{
 };
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -115,6 +116,8 @@ struct AcpSession {
     has_api_key: bool,
     cwd: String,
     env: HashMap<String, String>,
+    /// The run's own folder for agy's settings and sessions (`gemini_dir`), when it could be made.
+    gemini_dir: Option<PathBuf>,
     mcp_server: Value,
     model_override: Option<String>,
     effort_override: Option<String>,
@@ -376,6 +379,15 @@ impl AcpSession {
                 self.stop_session();
                 return true;
             }
+            // Nobody asked for an effort: the run goes on with agy's own rather than failing over Scarlet's default.
+            if self.step == Step::SetEffort && self.effort_override.is_none() {
+                (self.on_event)(RunnerEvent::new(
+                    "log",
+                    format!("Gemini could not apply default effort ({detail}); continuing with agy's default."),
+                ));
+                self.send_prompt();
+                return false;
+            }
             self.fail_session(format!("Gemini {} failed: {detail}", self.step.label()));
             return true;
         }
@@ -406,7 +418,7 @@ impl AcpSession {
                     return true;
                 };
                 self.st.session_id = Some(session_id.clone());
-                self.transcript.open(&self.env, &session_id, self.resume_session.is_some());
+                self.transcript.open(&self.env, self.gemini_dir.as_deref(), &session_id, self.resume_session.is_some());
                 self.config_options = parse_config_options(result);
                 let legacy_models = result.get("models").filter(|v| v.is_object());
                 self.has_legacy_models = legacy_models.is_some();
@@ -513,12 +525,31 @@ impl AcpSession {
     }
 }
 
+/// The run's own folder for agy's settings, rules and sessions (`--gemini-dir`), beside its task folder: outside the
+/// folder the agent may write to, and the same for every attempt at the task, so a resumed session is still there. The
+/// host removes it with the run's other leftovers once the task lands, and the task folders' prune takes one left behind.
+pub fn gemini_dir(run_dir: &Path) -> PathBuf {
+    let name = run_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    run_dir.with_file_name(format!("{name}.gemini"))
+}
+
 pub async fn run_gemini(opts: RunOptions) -> RunResult {
     let bin = match opts.resolve_bin("agy") {
         Ok(b) => b,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
-    let cmd = build_gemini_command(&bin);
+    let gemini_dir = gemini_dir(&opts.cwd);
+    let gemini_dir = match crate::config::private_directory(&gemini_dir) {
+        Ok(()) => Some(gemini_dir),
+        Err(e) => {
+            (opts.on_event)(RunnerEvent::new(
+                "log",
+                format!("Gemini runs with the user's own settings: its own folder couldn't be made ({e})."),
+            ));
+            None
+        }
+    };
+    let cmd = build_gemini_command(&bin, gemini_dir.as_deref());
 
     let (input, lines) = mpsc::unbounded_channel();
     let has_api_key = has_api_key("gemini", &opts.env);
@@ -533,6 +564,7 @@ pub async fn run_gemini(opts: RunOptions) -> RunResult {
         has_api_key,
         cwd: opts.cwd.to_string_lossy().into_owned(),
         env: opts.env.clone(),
+        gemini_dir,
         mcp_server: acp_mcp_server(&opts.mcp),
         model_override: opts.model.clone(),
         effort_override: opts.effort.clone(),
@@ -601,7 +633,7 @@ pub async fn run_gemini(opts: RunOptions) -> RunResult {
     poll_handle.abort();
     let outcome = match spawn_res {
         Ok(o) => o,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
 
     let (st, resume_failed) = {

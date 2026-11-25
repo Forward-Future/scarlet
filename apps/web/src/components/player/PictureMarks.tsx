@@ -74,7 +74,7 @@ const TOOLS: { tool: PictureMarkKind; label: string; key: string; description: s
 
 const UNDO_KEY = typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh") ? "⌘Z" : "Ctrl+Z";
 const ACTIONS: Record<"undo" | "clear", MarkToolTip> = {
-  undo: { id: "undo", label: "Undo", key: UNDO_KEY, description: "Remove the last mark from this frame." },
+  undo: { id: "undo", label: "Undo", key: UNDO_KEY, description: "Take back the last mark, or put a moved mark back." },
   clear: { id: "clear", label: "Clear marks", description: "Remove all marks from this frame." },
 };
 
@@ -103,8 +103,13 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
   const surface = useRef<HTMLDivElement>(null);
 
   // Playing on, leaving marking, or another video under the player ends any active stroke or drag. The marks stay with the message.
+  // Only playback that starts ends the marking: M pressed while the video plays pauses it, and the player hears that
+  // it stopped a moment after the marking began.
+  const wasPlaying = useRef(playing);
   useEffect(() => {
-    if (marking && (playing || !sameVideo)) usePictureMarksStore.getState().stop();
+    const playedOn = playing && !wasPlaying.current;
+    wasPlaying.current = playing;
+    if (marking && (playedOn || !sameVideo)) usePictureMarksStore.getState().stop();
     if (!marking || playing || !sameVideo) {
       drawing.current = undefined;
       setLive(undefined);
@@ -136,6 +141,8 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
     const key = (e: KeyboardEvent) => {
       if (isInEditableElement(e.target) || e.isComposing) return;
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+      // A menu or a popover open over the picture closes on its own Esc first, and the marking stays.
+      if (e.key === "Escape" && plain && !dragging.current && document.querySelector('[role="menu"], [data-escape-owner], dialog[open], [role="dialog"]')) return;
       if (e.key === "Escape" && plain) {
         if (dragging.current) {
           dragging.current = undefined;
@@ -326,11 +333,22 @@ export function PictureMarkTools({ projectId, enabled, onStart }: { projectId: s
   </div>;
 }
 
+/**
+ * Whether this Esc is the marking's: it ends the marking, or puts back a mark being dragged, and nothing behind the
+ * picture closes on the same press. An edit's card and a marked stretch listen for Esc ahead of the marking, so they ask.
+ */
+export function marksTakeEscape(e: KeyboardEvent) {
+  if (isInEditableElement(e.target) || e.isComposing) return false;
+  return usePictureMarksStore.getState().marking !== null || !!document.querySelector(".picture-marks[data-dragging]");
+}
+
 /** Mark the frame under the playhead, or go back to the frame already marked. M, or a tool over the picture. */
 export function toggleMarking(projectId: string, at: Omit<MarkedFrame, "marks">) {
   const store = usePictureMarksStore.getState();
   if (store.marking === projectId) return store.stop();
+  // A video that was playing has run on past the frame by the time it stops: it goes back to the frame marked.
+  const wasPlaying = usePlayerStore.getState().playing;
   player.pause();
   const frame = store.start(projectId, at);
-  if (Math.abs(frame.time - at.time) > 1e-6) player.seek(frame.time, true);
+  if (wasPlaying || Math.abs(frame.time - at.time) > 1e-6) player.seek(frame.time, true);
 }

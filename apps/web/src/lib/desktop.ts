@@ -42,6 +42,19 @@ export interface HostStatus {
 
 export type DesktopPlatform = "macos" | "windows" | "linux";
 
+export interface ProviderSettingsView {
+  ollama: { url: string | null; disabled: boolean };
+  lmstudio: { url: string | null; disabled: boolean };
+  openrouter: { hasKey: boolean; keyFromEnv: boolean; disabled: boolean };
+}
+
+export interface ProviderSettingsChange {
+  provider: "ollama" | "lmstudio" | "openrouter";
+  url?: string | null;
+  apiKey?: string | null;
+  disabled?: boolean | null;
+}
+
 export type UpdateSource = "local" | "release";
 
 export interface AgentPick {
@@ -162,7 +175,13 @@ export const desktop = {
   hostStatus: () => invoke<HostStatus>("host_status"),
   hostRefreshAgents: () => invoke<HostStatus>("host_refresh_agents"),
   hostRefreshQuota: (force = false) => invoke<HostStatus>("host_refresh_quota", { force }),
+  /** How Ollama, LM Studio and OpenRouter are set up on this computer. The OpenRouter key itself never comes back. */
+  providerSettings: () => invoke<ProviderSettingsView>("provider_settings"),
+  /** Save one provider's address, key or switch (left out: unchanged; null or "": cleared), then look for models again. */
+  saveProviderSettings: (change: ProviderSettingsChange) => invoke<HostStatus>("save_provider_settings", { ...change }),
   agentInstall: (agent: "claude" | "codex" | "gemini") => invoke<"installed" | "needsNode">("agent_install", { agent }),
+  /** Update the installed CLI the way it was installed. Resolves to the version it is at afterwards. */
+  agentUpdate: (agent: "claude" | "codex" | "gemini") => invoke<string | null>("agent_update", { agent }),
   ffmpegStatus: () => invoke<FfmpegStatus>("ffmpeg_status"),
   ffmpegInstall: () => invoke<FfmpegStatus>("ffmpeg_install"),
   agentLoginStart: (agent: string) => invoke<AgentLoginStatus>("agent_login_start", { agent }),

@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { BUNDLED_WHISPER_CPP, LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, supportsWhisperAvx2 } from "./localModel.js";
+const hashing = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@scarlet/render", async actual => {
+  const render = await actual<typeof import("@scarlet/render")>();
+  return { ...render, hashFile: (...args: Parameters<typeof render.hashFile>) => { hashing.count++; return render.hashFile(...args); } };
+});
+import { BUNDLED_WHISPER_CPP, LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, devWhisperCli, supportsWhisperAvx2 } from "./localModel.js";
 
 const bytes = Buffer.from("test model");
 const model = { name: "test.bin", url: "https://example.invalid/test.bin", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -73,6 +78,29 @@ it("finds the bundled whisper-cli beside the engine only when its program is rea
   if (process.platform !== "win32") expect(bundledWhisperGpu({ SCARLET_BIN_DIR: dir })).toBeUndefined();
 });
 
+it("falls back in dev to SCARLET_WHISPER_CLI or a usable whisper-cli on PATH, never in packaged SEA builds", async () => {
+  const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  const emptyDir = join(dir, "empty"), nonExecDir = join(dir, "nonexec"), realDir = join(dir, "real");
+  for (const d of [emptyDir, nonExecDir, realDir]) await mkdir(d, { recursive: true });
+  const empty = join(emptyDir, name), nonExec = join(nonExecDir, name), onPath = join(realDir, name);
+  const explicit = join(dir, `explicit-${name}`);
+  await writeFile(empty, "", { mode: 0o755 });
+  await writeFile(nonExec, "program", { mode: 0o644 });
+  if (process.platform !== "win32") await chmod(nonExec, 0o644);
+  await writeFile(onPath, "program", { mode: 0o755 });
+  await writeFile(explicit, "explicit", { mode: 0o755 });
+
+  const pathList = [emptyDir, ...(process.platform === "win32" ? [] : [nonExecDir]), realDir].join(delimiter);
+  expect(devWhisperCli({}, false)).toBeUndefined();
+  expect(devWhisperCli({ PATH: pathList }, false)).toBe(onPath);
+  expect(devWhisperCli({ SCARLET_WHISPER_CLI: explicit, PATH: pathList }, false)).toBe(explicit);
+  // An empty or missing SCARLET_WHISPER_CLI falls through to PATH.
+  expect(devWhisperCli({ SCARLET_WHISPER_CLI: empty, PATH: pathList }, false)).toBe(onPath);
+  expect(devWhisperCli({ SCARLET_WHISPER_CLI: join(dir, "missing"), PATH: pathList }, false)).toBe(onPath);
+  // Packaged SEA builds never fall back outside the bundle.
+  expect(devWhisperCli({ SCARLET_WHISPER_CLI: explicit, PATH: pathList }, true)).toBeUndefined();
+});
+
 it("selects Linux's optimized Whisper only on CPUs that can run it", async () => {
   const flags = ["sse4_2", "avx", "f16c", "fma", "avx2", "bmi2"];
   const core = (n: number, flags: string[]) => `processor\t: ${n}\nflags\t: fpu ${flags.join(" ")}`;
@@ -121,6 +149,22 @@ it("rejects corrupt downloads, cleans up partial files and repairs a damaged cac
   ]);
 });
 
+it("checks a damaged saved model once, not on every look at Settings, until the file changes", async () => {
+  const file = join(dir, model.name);
+  await writeFile(file, Buffer.alloc(bytes.length));
+  const cache = new LocalWhisperModel(dir, model, log);
+  hashing.count = 0;
+  expect(await cache.status()).toEqual({ state: "invalid" });
+  expect(await cache.status()).toEqual({ state: "invalid" });
+  expect(await cache.status()).toEqual({ state: "invalid" });
+  expect(hashing.count).toBe(1);
+  // A file put back in its place is read again.
+  await rm(file);
+  await writeFile(file, bytes);
+  expect(await cache.status()).toEqual({ state: "ready" });
+  expect(hashing.count).toBe(2);
+});
+
 it("logs why a download failed: the server's status, a file of the wrong size, or what the network said", async () => {
   vi.stubGlobal("fetch", vi.fn()
     .mockResolvedValueOnce(new Response("Service Unavailable", { status: 503 }))
@@ -157,8 +201,43 @@ it("logs a download stopped when its last request is cancelled, and does not cal
   await vi.waitFor(async () => expect(await cache.status()).toMatchObject({ state: "downloading" }));
   stop.abort(new Error("cancelled"));
   await expect(job).rejects.toThrow("cancelled");
-  await vi.waitFor(() => expect(said).toEqual(["[model] test.bin: downloading 1 MB", "[model] test.bin: download stopped after <time>"]));
-  expect(await cache.status()).toEqual({ state: "missing" });
+  await vi.waitFor(async () => expect(await cache.status()).toEqual({ state: "missing" }));
+  expect(said).toEqual(["[model] test.bin: downloading 1 MB", "[model] test.bin: download stopped after <time>"]);
+  expect(await readdir(dir)).toEqual([]);
+});
+
+it("logs a download stopped without calling fetch when cancelled before the network request starts", async () => {
+  const fetchModel = vi.fn(async (_url: string, init: RequestInit) => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { init.signal!.addEventListener("abort", () => controller.error(init.signal!.reason)); },
+  })));
+  vi.stubGlobal("fetch", fetchModel);
+  const stop = new AbortController();
+  const cache = new LocalWhisperModel(dir, model, line => {
+    log(line);
+    if (line.includes("downloading")) stop.abort(new Error("cancelled"));
+  });
+  await expect(cache.get(stop.signal)).rejects.toThrow("cancelled");
+  await vi.waitFor(async () => expect(await cache.status()).toEqual({ state: "missing" }));
+  expect(said).toEqual(["[model] test.bin: downloading 1 MB", "[model] test.bin: download stopped after <time>"]);
+  expect(fetchModel).not.toHaveBeenCalled();
+  expect(await readdir(dir)).toEqual([]);
+});
+
+it("cancels the response stream and stops cleanly even if the stream ignores the abort signal", async () => {
+  let streamCancelled = false;
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(bytes.subarray(0, 1)); },
+    cancel() { streamCancelled = true; },
+  }))));
+  const cache = new LocalWhisperModel(dir, model, log);
+  const stop = new AbortController();
+  const job = cache.get(stop.signal);
+  await vi.waitFor(async () => expect(await cache.status()).toEqual({ state: "downloading", received: 1, total: bytes.length }));
+  stop.abort(new Error("cancelled"));
+  await expect(job).rejects.toThrow("cancelled");
+  await vi.waitFor(async () => expect(await cache.status()).toEqual({ state: "missing" }));
+  expect(said).toEqual(["[model] test.bin: downloading 1 MB", "[model] test.bin: download stopped after <time>"]);
+  expect(streamCancelled).toBe(true);
   expect(await readdir(dir)).toEqual([]);
 });
 

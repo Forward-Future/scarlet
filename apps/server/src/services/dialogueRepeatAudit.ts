@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { fileInDirectory } from "@scarlet/render";
+import { fileInDirectory, heardAudio } from "@scarlet/render";
 import { carriesAudio, clipEnd, mergeRanges, sourceToTimeline, timelineToSource, type MediaClip, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import { adjacentRepeatCandidates, closesSentence, cutAnchorOn, findRestarts, flattenWords, joinFragment, joinsPlacedByCuts, normalizeTranscriptToken, sameJoin,
   SHORT_PIECE_SECONDS, SILENCE_LEFT_SECONDS, versionJoins, type JoinEdges, type JoinFragment, type JoinHearing, type SaidWord, type ShortPiece, type SilenceLeft,
@@ -372,12 +372,12 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
         const unheard = `Its speech (${lang}) can't be read letter by letter, so these joins weren't heard.`;
         for (const part of selected) sides.push({ ...side(part), heard: [], said: [], unheard });
       } else {
-        const path = await emissionStore(ctx, project.id, file);
+        const path = await emissionStore(ctx, project.id, file, heardAudio(media));
         store = await EmissionFile.open(path);
         const ranges = mergeRanges(selected.map(p => p.source));
         if (!store || ranges.some(r => store!.missing(...store!.frameRange(r.start, r.end)).length)) {
           await store?.close(); store = null;
-          const wav = async () => (recording ??= await recordingWav(ctx, file, signal)).wav;
+          const wav = async () => (recording ??= await recordingWav(ctx, file, signal, heardAudio(media))).wav;
           await measureRecordingWords(ctx, mediaId, { file: path, wav }, ranges, signal);
           store = await EmissionFile.open(path);
         }

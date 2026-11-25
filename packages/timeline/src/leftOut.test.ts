@@ -45,6 +45,37 @@ describe("leftOutJoins", () => {
     }
   });
 
+  it("reads the end of the recording a whole first cut didn't use, given the recordings' lengths", () => {
+    // Matt's talking head was cut from 28 minutes to 15 from the pieces to keep, and the 1:56 after his last line was
+    // never on a timeline (2026-11-23). A version built in parts has more to come, so only a first cut is read so.
+    const built = screenAndCamera([[10, 20], [25, 40]]);
+    const lengths = new Map([["screen", 100], ["camera", 102]]);
+    const found = leftOutJoins(empty, built, 30, lengths)!;
+    expect(found.joins).toEqual([
+      { at: 0, removed: { start: 0, end: 10 } },
+      { at: 10, removed: { start: 20, end: 25 } },
+      { at: 25, removed: { start: 40, end: 100 } },
+    ]);
+    // The version that plays it all runs to the end of the recording, each track still in sync with itself.
+    expect(timelineDuration(found.original)).toBeCloseTo(100);
+    for (const track of found.original.tracks) for (const clip of track.clips as MediaClip[]) expect(clip.sourceIn - clip.timelineIn).toBeCloseTo(clip.mediaId === "camera" ? 2 : 0);
+    expect(leftOutJoins(empty, built)!.joins).toHaveLength(2);
+    expect(leftOutJoins(built, screenAndCamera([[10, 20], [25, 40], [60, 70]]), 30, lengths)!.joins).toEqual([{ at: 25, removed: { start: 25, end: 45 } }]);
+  });
+
+  it("takes a join whose sound is a millisecond off its picture for the join it already was", () => {
+    // Picture sync moved the picture of Matt's talking head and gave its sound a track of its own, the pieces a
+    // millisecond or two apart or overlapping. Where they no longer met, the picture's join read as footage newly left
+    // out: 5 cuts and 44 s that save never made (2026-11-23).
+    const cut = timelineFromKeepRanges("p", "take", [{ start: 10, end: 20 }, { start: 25, end: 40 }, { start: 50, end: 60 }]);
+    const synced: Timeline = { ...cut, tracks: [
+      { ...cut.tracks[0]!, clips: (cut.tracks[0]!.clips as MediaClip[]).map(c => ({ ...c, sourceIn: c.sourceIn + 0.16, sourceOut: c.sourceOut + 0.16, volume: 0 })) },
+      cut.tracks[1]!,
+      { ...cut.tracks[1]!, id: "v1_dialogue", clips: (cut.tracks[0]!.clips as MediaClip[]).map((c, i) => ({ ...c, id: `${c.id}_audio`, timelineIn: c.timelineIn + [0, 0.0015, -0.0012][i]! })) },
+    ] };
+    expect(leftOutJoins(cut, synced)).toBeNull();
+  });
+
   it("leaves a join an earlier version already had to that version", () => {
     const first = screenAndCamera([[10, 20], [25, 40]]);
     const next = screenAndCamera([[10, 20], [25, 40], [60, 70]]);
@@ -77,9 +108,30 @@ describe("leftOutJoins", () => {
     expect(title.map(c => [c.timelineIn, c.sourceIn, c.sourceOut])).toEqual([[4, 0, 10], [14, 6, 12]]);
   });
 
+  it("leaves out only the footage a first cut built in a new order never plays", () => {
+    // Matt's first cut put the intro he recorded again at 18:55 in front of the talk it was for, and the 18:55 before it
+    // was shown as one cut although all but a couple of minutes of it played straight after (2026-11-23).
+    const built = timelineFromKeepRanges("p", "m", [{ start: 50, end: 60 }, { start: 10, end: 20 }, { start: 30, end: 45 }, { start: 70, end: 80 }]);
+    const lengths = new Map([["m", 100]]);
+    const found = leftOutJoins(empty, built, 30, lengths)!;
+    // 20..30 before the first piece, the start of the recording before the step back to 10, 20..30 is played, 45..50
+    // before the moved piece is never played, and the end of the recording.
+    expect(found.joins).toEqual([
+      { at: 0, removed: { start: 0, end: 5 } },
+      { at: 10, removed: { start: 15, end: 25 } },
+      { at: 20, removed: { start: 35, end: 45 } },
+      { at: 35, removed: { start: 60, end: 70 } },
+      { at: 45, removed: { start: 80, end: 100 } },
+    ]);
+    // Every second left out is footage the cut never plays, each shown once.
+    const removed = found.joins.reduce((sum, j) => sum + j.removed.end - j.removed.start, 0);
+    expect(removed).toBeCloseTo(100 - 45);
+    expect(timelineDuration(found.original)).toBeCloseTo(100);
+    const clips = found.original.tracks[0]!.clips as MediaClip[];
+    expect(clips.map(c => [c.timelineIn, c.sourceIn, c.sourceOut])).toEqual([[0, 45, 60], [15, 0, 30], [45, 30, 45], [60, 60, 100]]);
+  });
+
   it("finds nothing left out where footage was rearranged, repeated or cut differently on each track", () => {
-    expect(leftOutJoins(empty, timelineFromKeepRanges("p", "m", [{ start: 50, end: 60 }, { start: 10, end: 20 }]))!.joins)
-      .toEqual([{ at: 0, removed: { start: 0, end: 50 } }]);
     const whole = timelineFromKeepRanges("p", "m", [{ start: 0, end: 100 }]);
     expect(leftOutJoins(whole, timelineFromKeepRanges("p", "m", [{ start: 0, end: 60 }, { start: 30, end: 100 }]))).toBeNull();
     const uneven = screenAndCamera([[0, 10], [14, 20]]);

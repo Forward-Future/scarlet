@@ -22,7 +22,7 @@ async function tempDir(): Promise<string> {
 describe("detect", () => {
   it("returns one entry per agent using the real PATH", async () => {
     const agents = await detect();
-    expect(agents.map((a) => a.id)).toEqual(["claude", "codex", "gemini"]);
+    expect(agents.map((a) => a.id)).toEqual(["claude", "codex", "gemini", "ollama", "lmstudio", "openrouter"]);
     const claude = agents[0]!;
     // CI machines may not have Claude Code; check the details only where it is.
     if (claude.installed) {
@@ -200,6 +200,7 @@ describe("sign-in detection without a status command to trust", () => {
 });
 
 describe("detect: model lists", () => {
+  const offline = (async () => { throw new TypeError("fetch failed"); }) as typeof fetch;
   const find = async (name: string) => name;
   const exec: ExecFn = async (file, args) => {
     if (args[0] === "--version") return { code: 0, stdout: "1.0.0", stderr: "" };
@@ -212,7 +213,7 @@ describe("detect: model lists", () => {
   it("asks only signed-in CLIs, with the key variables dropped for a subscription", async () => {
     const asked: Array<[string, string, string[]]> = [];
     const agents = await detect({
-      find, exec, home: await tempDir(), env: { ANTHROPIC_API_KEY: "sk-ant", GEMINI_API_KEY: "g", PATH: "/bin" },
+      find, exec, fetch: offline, home: await tempDir(), env: { ANTHROPIC_API_KEY: "sk-ant", GEMINI_API_KEY: "g", PATH: "/bin" },
       catalog: async (agent, path, env) => {
         asked.push([agent, path, Object.keys(env).sort()]);
         return { models: [`${agent}-1`], model: `${agent}-1` };
@@ -220,7 +221,9 @@ describe("detect: model lists", () => {
       models: { gemini: "gemini-flash" },
     });
     expect(asked).toEqual([["claude", "claude", ["GEMINI_API_KEY", "PATH"]], ["gemini", "agy", ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "PATH"]]]);
-    expect(agents.map((a) => [a.id, a.models, a.model])).toEqual([["claude", ["claude-1"], "claude-1"], ["codex", undefined, undefined], ["gemini", ["gemini-1"], "gemini-flash"]]);
+    expect(agents.slice(0, 3).map((a) => [a.id, a.models, a.model])).toEqual([["claude", ["claude-1"], "claude-1"], ["codex", undefined, undefined], ["gemini", ["gemini-1"], "gemini-flash"]]);
+    // No provider server here: each is listed, not installed, and never asked for a CLI model list.
+    expect(agents.slice(3)).toEqual([{ id: "ollama", installed: false }, { id: "lmstudio", installed: false }, { id: "openrouter", installed: false }]);
   });
 
   it("drops Gemini API keys when Gemini is signed in via Google subscription", async () => {

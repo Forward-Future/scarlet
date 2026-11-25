@@ -3,7 +3,7 @@ import { focusAround, type ProgressFocus } from "../components/player/SimpleProg
 import { lengthLabel } from "./format";
 
 const WORDS: Partial<Record<EditKind, string>> = {
-  cut: "Cut", restore: "Added", audio: "Audio", dip: "Music dip", voice: "Voice cleanup", zoom: "Zoom", reframe: "Reframe", text: "Text", broll: "B-roll", overlay: "Overlay", graphic: "Graphic", speed: "Speed", transition: "Transition", split: "Split edit",
+  cut: "Cut", restore: "Put back", insert: "Insert", audio: "Audio", dip: "Music dip", voice: "Voice cleanup", zoom: "Zoom", reframe: "Reframe", text: "Text", broll: "B-roll", overlay: "Overlay", graphic: "Graphic", speed: "Speed", transition: "Transition", split: "Split edit",
 };
 
 /** One word for what an edit did, the same in the list, on the timeline and on the card. None for an assembly or a mix. */
@@ -27,8 +27,11 @@ export function editNote(edit: Pick<ThreadEdit, "label" | "check" | "summary" | 
   const todo = edit.marker ? edit.todo ?? (edit.check !== REVISED_CHECK ? edit.check : undefined) : undefined;
   if (todo) {
     const why = edit.reason || edit.summary;
-    if (!why) return todo;
-    return said(why, todo) ? why : `${todo.replace(/[.!?]*$/, ".")} ${why.replace(/[.!?]*$/, ".")}`;
+    const asks = !why || said(todo, why) ? todo : said(why, todo) ? why : `${endSentence(todo)} ${endSentence(why)}`;
+    // What Scarlet raised about the marker since, such as the clip it found for the spot, is the latest word on it and
+    // reads first: the marker's own words would otherwise be all its card says.
+    const raised = edit.recheck && edit.check && edit.check !== REVISED_CHECK && !said(asks, edit.check) ? edit.check : undefined;
+    return raised ? `${endSentence(raised)} ${endSentence(asks)}` : asks;
   }
   // A located review starts with what the editor should look for in the passage. The card says where that passage is
   // now, so times the words gave in an older clock are left out.
@@ -67,6 +70,6 @@ export function editFocus(edit: ThreadEdit, duration: number, name?: string): Pr
     edit.marker ? { tone: "kept" } : undefined);
   const restored = edit.kind === "restore";
   // A moment is named as its card is ("2 edits"), and an assembly or a mix as its row is ("Edit"): a band is never blank.
-  return focusAround(edit.range, duration, restored ? `Added · ${lengthLabel(edit.range.end - edit.range.start)}` : name ?? editRowWord(edit),
+  return focusAround(edit.range, duration, restored ? `Put back · ${lengthLabel(edit.range.end - edit.range.start)}` : name ?? editRowWord(edit),
     { tone: restored ? "added" : "kept" });
 }

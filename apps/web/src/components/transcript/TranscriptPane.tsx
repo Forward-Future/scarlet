@@ -1,7 +1,7 @@
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TranscriptionStatus } from "../media/TranscriptionAction";
 import { clock, clockRange } from "../../lib/format";
-import { mediaPlaying } from "../../lib/hotkeys";
+import { isComposing, mediaPlaying } from "../../lib/hotkeys";
 import { player } from "../../lib/player";
 import type { MediaAsset, Timeline } from "@scarlet/timeline";
 import { cutWords, mapWords, sourceWords, selectionRange, indexWordTimes, type MappedWord } from "../../lib/transcriptMap";
@@ -132,7 +132,8 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
       near = next ? sentence(index) : [];
       for (const node of near) node.setAttribute("data-near", "");
       if (!next || Date.now() - userScrolledAt.current < 2500) return;
-      if (playing) next.scrollIntoView({ block: "center", behavior: "smooth" });
+      const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (playing) next.scrollIntoView({ block: "center", behavior: still ? "auto" : "smooth" });
       else if (listRef.current) {
         // Moved by a pick on the timeline or a skip: brought into view if it went out of it.
         const box = listRef.current.getBoundingClientRect(), word = next.getBoundingClientRect();
@@ -246,6 +247,13 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
             onKeyDown={e => {
               if (e.key === "Enter") { e.preventDefault(); goToHit(e.shiftKey ? -1 : 1); }
               else if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); setQuery(""); }
+              // With nothing to clear, Esc isn't the field's to keep. The field lets go and hands the page an Esc as one
+              // pressed outside it, so one Esc closes the Transcript, as its × says, after an edit's card that is open.
+              else if (e.key === "Escape" && !isComposing(e) && !(e.metaKey || e.ctrlKey || e.altKey || e.shiftKey)) {
+                e.stopPropagation();
+                e.currentTarget.blur();
+                window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+              }
             }} />
           {query.trim() && (
             <span className="transcript-search-count" data-empty={hits.length ? undefined : ""} title="Enter for the next, Shift + Enter for the one before">

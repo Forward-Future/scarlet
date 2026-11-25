@@ -101,14 +101,19 @@ it("starts a listen only while its request works, and stops it with the request"
 
 it("follows the editor's listening setting: one model they picked, or none when off, with no other swapped in", async () => {
   const claude = request("claude");
-  hostWith([{ id: "claude", installed: true }, { id: "gemini", installed: true, models: ["gemini-4-neon"] },
+  hostWith([{ id: "claude", installed: true }, { id: "gemini", installed: true, models: ["gemini-4-neon", "claude-opus-5-5"] },
     { id: "codex", installed: true, models: ["gpt-6.2-sol", "gpt-6-astra-audio"] }]);
   expect(listenerFor(ctx, claude)).toEqual({ agent: "gemini" });
+  // A third-party model run through agy cannot hear WAV files itself, so Gemini listens for it too.
+  expect(listenerFor(ctx, request("gemini", "claude-opus-5-5"))).toEqual({ agent: "gemini" });
+  expect(listenerFor(ctx, request("gemini", "gemini-4-neon"))).toBeUndefined();
   ctx.repos.settings.update({ listening: "codex:gpt-6-astra-audio" });
   expect(listenerFor(ctx, claude)).toEqual({ agent: "codex", model: "gpt-6-astra-audio" });
   ctx.repos.settings.update({ listening: "gemini:gemini-4-neon" });
   expect(listenerFor(ctx, claude)).toEqual({ agent: "gemini", model: "gemini-4-neon" });
-  // A model that can't hear, or one not signed in, is never used.
+  // A model that can't hear (including a third-party model on agy), or one not signed in, is never used.
+  ctx.repos.settings.update({ listening: "gemini:claude-opus-5-5" });
+  expect(listenerFor(ctx, claude)).toBeUndefined();
   ctx.repos.settings.update({ listening: "codex:gpt-6.2-sol" });
   expect(listenerFor(ctx, claude)).toBeUndefined();
   ctx.repos.settings.update({ listening: "off" });

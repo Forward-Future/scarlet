@@ -23,6 +23,7 @@ import {
 import { cutReading, joinPlays, NOTE_QUOTE_REACH, quotesAwayFromCut, timelineWordsNear } from "./dialogue-plan.js";
 import { inspectDialogueSuggestion, MAX_WHOLE_PICTURE_SHEETS, type DialogueInspection } from "./dialogue-review.js";
 import { assessedCuts, type StagedReview, type StagedReviewState } from "./staged-review.js";
+import { deliverWav, listening } from "./inspection-tools.js";
 import { createAudioOption, crossfadeFrames, cutRow } from "./mcp-schema.js";
 import type { MediaSession } from "./media-session.js";
 import type { RevisionTracker, SessionErrorHelpers } from "./media-state.js";
@@ -50,6 +51,7 @@ export interface DialogueReviewToolsDeps {
   rendersDone(ids: string[]): Promise<boolean>;
   inspect(request: () => Promise<InspectionResult>, onReady?: (windows: InspectionWindow[]) => void, batchSignal?: AbortSignal): Promise<ToolResult>;
   postEvent(ev: Omit<TaskEvent, "taskId">): Promise<{ posted: boolean; error?: string }>;
+  writeArtifact?: (path: string, data: Uint8Array) => Promise<string>;
   getPerception(): PerceptionApi;
 }
 
@@ -57,16 +59,17 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
   const {
     tool, client, projectId, taskId, task, author, caps,
     session, errors, revision, stagedState, localPausesMode,
-    rendersDone, inspect, postEvent, getPerception,
+    rendersDone, inspect, postEvent, writeArtifact, getPerception,
   } = deps;
   const {
     getProject, peekTimeline, moveBase, transcriptWords, joinPages,
     measureTimeline, outgoingPausePages, planSources,
   } = session;
   const { without, unavailableOnce } = errors;
-  const hearing = caps.audio;
+  const listen = listening(caps, !!writeArtifact);
+  const defaultAudio = listen?.by === "file";
   const reviewPictures = caps.images;
-  const audioOption = createAudioOption(hearing);
+  const audioOption = createAudioOption(!!listen, defaultAudio);
 
   /** Inspections that read every view of a cut, including a measured join (or a cut with no join). */
   const inspections = new Set<string>();
@@ -93,8 +96,14 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
     if (edit && (!edit.previewVersion || change.cutChoices?.some(c => c.index === index && c.choice === "keep"))) return { content: json({ index, version: edit.version, range: edit.range,
       choice: "keep", alreadyRemoved: edit.range.start === edit.range.end }).content, receipt: { complete: false, picture: [] }, wholeSheets: 0 };
     const playback = edit?.previewVersion ? { original: await peekTimeline(edit.version), range: edit.range, previewVersion: edit.previewVersion } : undefined;
+    const deliverAudio = listen && audio
+      ? (wav: string, { mediaId, from, to }: { mediaId: string; from: number; to: number }) =>
+        deliverWav(listen, wav, `listen/orig-${mediaId}-${from.toFixed(2)}-${to.toFixed(2)}.wav`,
+          { kind: "original", mediaId, from, to, seconds: +(to - from).toFixed(2) },
+          "Open this WAV file with your own file viewer to hear the original passage.", writeArtifact)
+      : undefined;
     const result = await inspectDialogueSuggestion(client, change, review, media, index,
-      { audio, images: reviewPictures, wholePicture, sheet: request => readySheet(request, priority), unavailable: unavailableOnce, playback });
+      { audio, images: reviewPictures, wholePicture, sheet: request => readySheet(request, priority), unavailable: unavailableOnce, playback, deliverAudio });
     const cut = review.cuts[index]!;
     const original = playback?.original ?? review.original;
     const range = playback?.range ?? cut.removed;
@@ -121,7 +130,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
     result.receipt.noJoin = noJoin;
     const removed = cut.removed;
     const repaired = !playback && change.cutReasons?.some(r => r.originalRange && r.start >= removed.start - .00001 && r.start < removed.end);
-    if (repaired) {
+    if (repaired || (!playback && audio)) {
       let compared = false;
       if (audio || caps.images) {
         const comparison = await inspect(() => client.reviewCut(projectId, { changeId: change.id, index, edge: "start", handles: 1.5,
@@ -132,7 +141,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
           });
         result.content.push(...comparison.content);
       }
-      if (!compared) {
+      if (repaired && !compared) {
         result.receipt.complete = false;
         result.content.push({ type: "text", text: "A comparison preview for the narrowed join is unavailable (it is still preparing or frame tools are off). Inspecting this index again retries it." });
       }
@@ -140,7 +149,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
     return result;
   }
 
-  const reviews = new ReviewInspections(computeInspection);
+  const reviews = new ReviewInspections(computeInspection, { defaultAudio });
   /**
    * How many suggested cuts of a review have a recommendation, so the editor can see how far the checking has come.
    * `looked` also counts the cuts the agent has inspected but not saved yet: recommendations are often saved in one
@@ -172,12 +181,15 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
   tool("dialogue_review_inspect",
     "Inspect a staged dialogue cut in its original passage and preview. For each cut returns its first-pass reason, and held: what Scarlet measured when it held the cut, what its join plays and what keeping it plays. It also returns the words around it as [start, end, text, speaker or isolated input], original microphone levels (dBFS), voice activity, and timeline_join_audit's reading of the join or why the cut has none. The surviving speech is checked for a doubled word across the join or at the start or end of its kept take. partialWordRepeat identifies a cut-off word beside a whole occurrence in the saved audio, including faded handles. One call returns up to four consecutive cuts (count). Scarlet prepares the next ones while you read." +
     (reviewPictures ? " Includes synchronized screen and camera sheets and before/after frames for narrowed cuts. A longer removal shows an overview and windows for closer inspection. wholePicture returns activity sheets across all of them." : "") +
+    (listen ? (listen.by === "file"
+      ? " Writes WAV files of the original passage and the rendered Before/After join to your task folder. Open the After WAV with your file viewer and hear how the cut plays before you decide: levels can't tell how a same-word join or a tight cut sounds."
+      : " Pass includeAudio: true to attach WAV audio of the original passage and the rendered join (especially for a same-word join or tight cut where levels alone can't tell).") : "") +
     " nearbyWords gives the words at both edges in TIMELINE seconds on the inspected original. Use those times in dialogue_revise_cut to move a splice, or save a recommendation for the current range with dialogue_review_save. If later edits conflict with the cut being revised, inspecting it returns its current passage and words for dialogue_revise_cut.",
     { changeId: z.string(), index: z.number().int().nonnegative(),
       // A larger count is not refused: a pass asked for all 14 of its cuts and lost a turn to the limit (2026-11-15).
       count: z.number().int().min(1).max(500).default(1).describe(`Inspect this many consecutive suggestions, starting at index. One call returns ${INSPECT_AT_ONCE} at most and names the index to continue from.`),
       ...(reviewPictures && { wholePicture: z.boolean().default(false).describe("For one longer removal: activity sheets across its whole removed picture in one result.") }),
-      ...audioOption("Attach WAV of the original passage and of the join") },
+      ...audioOption(listen?.by === "file" ? "Write WAV files of the original passage and rendered join to your task folder to open with your file viewer and hear" : "Attach WAV of the original passage and of the join") },
     async ({ changeId, index, count, wholePicture: requestedPicture, includeAudio }) => {
       const wholePicture = reviewPictures && requestedPicture === true;
       if (revision.cutConflict && revision.conflictAt(changeId, index)) {
@@ -198,7 +210,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
       }
       if (!review?.cuts.length) throw new Error(`Change ${changeId} has no individual cuts to inspect; it replaces the whole timeline.`);
       if (index >= review.cuts.length) throw new Error(`Change ${changeId} has ${review.cuts.length} cuts (index 0–${review.cuts.length - 1}).`);
-      const audio = hearing && includeAudio === true;
+      const audio = !!listen && (includeAudio ?? defaultAudio);
       const end = wholePicture ? index + 1 : Math.min(review.cuts.length, index + Math.min(count, INSPECT_AT_ONCE));
       reviews.ahead(change, end, review.cuts.length);
       const indexes = Array.from({ length: end - index }, (_, k) => index + k);

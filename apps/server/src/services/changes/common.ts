@@ -2,6 +2,7 @@ import { callNumbers, requestText, type AgentId, type Task, type User } from "@s
 import { historyLineage, type Author, type Change, type Project, type Timeline } from "@scarlet/timeline";
 import type { Ctx } from "../../context.js";
 import { now } from "../../db.js";
+import { handedOffBy } from "../handOffScope.js";
 import { parseAssignTo } from "../tasks.js";
 import { resolveTimeline } from "../timeline.js";
 
@@ -27,6 +28,11 @@ export function authorFor(user: User, override?: Partial<Author>): Author {
 }
 
 export function saveChange(ctx: Ctx, change: Change): Change {
+  // A change a hand-off creates for its request says which model made it (Task models).
+  const by = handedOffBy.getStore();
+  if (by && !change.handedOff && change.taskId === by.requestId && !ctx.repos.changes.get(change.id)) {
+    change = { ...change, handedOff: { taskId: by.taskId, name: by.name, agent: by.agent, ...(by.model && { model: by.model }) } };
+  }
   const saved = ctx.repos.changes.put({ ...change, updatedAt: now() });
   ctx.bus.publish({ type: "change.updated", projectId: saved.projectId, change: saved });
   // A dialogue pass's staged cuts hold the project's other requests until the editor has decided them. A host waiting
@@ -108,13 +114,12 @@ export function authorsAgent(ctx: Ctx, author: Author): { agent: AgentId; model?
 }
 
 /**
- * A staged cut as the engine's tools number it (its index, from 0) and, once it is a call, as the editor knows it
- * ("Cut 4"). A pass told only "cut 4 … is with the editor" asked the editor about "edit 5", while the window called it
- * Cut 4 (2026-11-16).
+ * A staged cut as the engine's tools number it (its index, from 0) and, once it is a call, that it is one. The editor
+ * never sees a number: the window names a call by its time ("Cut at 2:47"), so Scarlet speaks of it by its time too.
+ * A pass told only "cut 4 … is with the editor" asked the editor about "edit 5" (2026-11-16).
  */
 export function editorsCut(change: Change, index: number): string {
-  const n = callNumbers(change, 0, false).get(index);
-  return n ? `cut ${index} (the editor’s “Cut ${n}”)` : `cut ${index}`;
+  return callNumbers(change, 0, false).has(index) ? `cut ${index} (one of the editor’s calls, which they know by its time)` : `cut ${index}`;
 }
 
 export const capitalized = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);

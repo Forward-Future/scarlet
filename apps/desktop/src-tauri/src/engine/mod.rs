@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::Paths;
 use crate::util::{engine_env, hide_console, lossy_lines};
-use launch::{bundled_chrome, engine_line_level, newest_mtime, set_chrome_env};
+use launch::{bundled_chrome, dev_whisper_cli, engine_line_level, newest_mtime, set_chrome_env, set_dev_whisper_env};
 
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -400,6 +400,8 @@ impl EngineManager {
                     env.entry("SCARLET_BIN_DIR".into()).or_insert_with(|| dir.to_string_lossy().into_owned());
                 }
             }
+            // Fresh dev worktrees carry a zero-byte whisper-cli placeholder; reuse the main checkout's or installed app's.
+            set_dev_whisper_env(&mut env, || dev_whisper_cli(&dev_repo_root(), env!("SCARLET_BUILD_TARGET"), &self.paths.home));
         }
         if launch.kind == "dev" {
             let skills = dev_repo_root().join("skills");
@@ -409,6 +411,12 @@ impl EngineManager {
         }
         set_chrome_env(&mut env, bundled_chrome(self.paths.resource_dir.as_deref(), tauri::is_dev()).as_deref());
         env.insert("SCARLET_DATA".into(), self.paths.data_dir.to_string_lossy().to_string());
+        // Only the public packages are built for a release feed. The engine reports usage under the `release` channel
+        // only with it, so source, local-main and review builds count as `dev` (docs/telemetry.md).
+        match option_env!("SCARLET_RELEASE_CHANNEL").filter(|channel| !channel.is_empty()) {
+            Some(channel) => { env.insert("SCARLET_RELEASE_CHANNEL".into(), channel.into()); }
+            None => { env.remove("SCARLET_RELEASE_CHANNEL"); }
+        }
         env
     }
 

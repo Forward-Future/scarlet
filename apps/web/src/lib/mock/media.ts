@@ -1,5 +1,5 @@
 import { ScarletApiError, type Task } from "@scarlet/shared";
-import { emptyTimeline, newId, timelineDuration, type MediaAsset } from "@scarlet/timeline";
+import { emptyTimeline, newId, timelineDuration, type AudioTrackSelection, type MediaAsset } from "@scarlet/timeline";
 import { SAMPLE_TRANSCRIPTION_MODEL } from "./fixtures";
 import type { MockStore } from "./store";
 import { notFound, now, sleep } from "./util";
@@ -48,6 +48,37 @@ export function removeMedia(store: MockStore, projectId: string, mediaId: string
   store.log(projectId, "media.removed", `${store.currentUser().name} removed “${media.name}”, which couldn't be read`, { mediaId });
   store.emit({ type: "media.removed", projectId, mediaId });
   return {};
+}
+
+/** Choose which audio track of a multi-track recording Scarlet reads. */
+export function setMediaNote(store: MockStore, mediaId: string, note: string) {
+  for (const [projectId, list] of Object.entries(store.db.media)) {
+    const current = list.find(m => m.id === mediaId);
+    if (!current) continue;
+    const { editorNote: _old, ...rest } = current;
+    const text = note.trim();
+    const updated: MediaAsset = { ...rest, ...(text && { editorNote: text }) };
+    replaceMedia(store, projectId, updated);
+    store.emit({ type: "media.updated", projectId, media: updated });
+    return { media: updated };
+  }
+  throw notFound("Media");
+}
+
+export function setMediaAudioTrack(store: MockStore, mediaId: string, audioTrack: AudioTrackSelection) {
+  for (const [projectId, list] of Object.entries(store.db.media)) {
+    const current = list.find(m => m.id === mediaId);
+    if (!current) continue;
+    const count = current.audioStreams?.length ?? 1;
+    if (typeof audioTrack === "number" && audioTrack >= count) {
+      throw new ScarletApiError(400, "bad_audio_track", `This file only has ${count} audio ${count === 1 ? "track" : "tracks"}.`);
+    }
+    const updated: MediaAsset = { ...current, audioTrack: audioTrack === 0 ? undefined : audioTrack };
+    replaceMedia(store, projectId, updated);
+    store.emit({ type: "media.updated", projectId, media: updated });
+    return { media: updated };
+  }
+  throw notFound("Media");
 }
 
 export function transcribe(store: MockStore, mediaId: string, provider?: string) {

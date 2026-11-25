@@ -9,6 +9,7 @@ import { approveChange, changeDiff, flagEdit, keepEdits, keptEdits, unkeepEdits,
 import { jsonBody, requireProjectHeader, requireScoped, TIMELINE_JSON_BYTES } from "./util.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
 import { startDecisionCheck } from "../services/learnings.js";
+import { requestOf, saveAsRequest } from "../services/taskModels.js";
 
 export function changeRoutes(ctx: Ctx) {
   const r = new Hono<AppEnv>();
@@ -27,8 +28,10 @@ export function changeRoutes(ctx: Ctx) {
   r.post("/projects/:id/changes", async (c) => {
     const body = await jsonBody(c, ProposeChangeRequest, TIMELINE_JSON_BYTES);
     const attempt = requestAttempt(c.req.raw), projectId = c.req.param("id");
-    body.taskId ??= attempt?.taskId;
-    const result = proposeChange(ctx, c.var.user, projectId, body, () => requireProjectEditAttempt(ctx, attempt, projectId, body.taskId));
+    const saver = body.taskId ?? attempt?.taskId;
+    // A hand-off's save is its request's (Task models): the request owns the change, and the change says who made it.
+    const result = saveAsRequest(ctx, saver, owner => proposeChange(ctx, c.var.user, projectId, { ...body, taskId: owner },
+      () => requireProjectEditAttempt(ctx, attempt, projectId, saver)));
     if (c.req.query("summary") === "true") {
       const viewed = appliedReviewChange(result.change);
       const { id, state, description, reason, fromVersion, toVersion, ranges, timelineEdits } = viewed;
@@ -79,9 +82,10 @@ export function changeRoutes(ctx: Ctx) {
   r.post("/projects/:id/dialogue-cuts", async c => {
     const body = await jsonBody(c, DialogueCutsRequest);
     const attempt = requestAttempt(c.req.raw), projectId = c.req.param("id");
-    body.taskId ??= attempt?.taskId;
-    const { changes, carriedForward, editorDecided, heldForReview, alreadyRemoved, joinCrossfades, stagedForEditor, onFrames, droppedFromReview, heldCutsStay } = submitDialogueCuts(ctx, c.var.user, projectId, body,
-      { checkAttempt: () => requireProjectEditAttempt(ctx, attempt, projectId, body.taskId) });
+    const saver = body.taskId ?? attempt?.taskId;
+    const { changes, carriedForward, editorDecided, heldForReview, alreadyRemoved, joinCrossfades, stagedForEditor, onFrames, droppedFromReview, heldCutsStay, settledApplied } =
+      saveAsRequest(ctx, saver, owner => submitDialogueCuts(ctx, c.var.user, projectId, { ...body, taskId: owner },
+        { checkAttempt: () => requireProjectEditAttempt(ctx, attempt, projectId, saver) }));
     return c.json({ changes: changes.map(change => {
       const { id, state, fromVersion, toVersion, description, intent } = change;
       return { id, state, fromVersion, toVersion, description, intent, timelineEdits: namedTimelineEdits(change) };
@@ -95,6 +99,8 @@ export function changeRoutes(ctx: Ctx) {
       ...(stagedForEditor && { stagedForEditor }), ...(onFrames && { onFrames }), ...(droppedFromReview && { droppedFromReview }),
       // Cuts left out because they would have swapped a held staged cut for other edges Scarlet couldn't place either.
       ...(heldCutsStay && { heldCutsStay }),
+      // Staged cuts Scarlet checked and settled as cuts, never asked about, that went into the video with this save.
+      ...(settledApplied && { settledApplied }),
       // The version to build on next: where the confident cuts left the edit.
       head: ctx.repos.projects.header(c.req.param("id"))?.head }, 201);
   });
@@ -133,7 +139,7 @@ export function changeRoutes(ctx: Ctx) {
     return c.json(ctx.db.transaction(() => {
       const change = requireChange(c.req.param("changeId"), c.req.param("projectId"));
       const task = requireProjectEditAttempt(ctx, requestAttempt(c.req.raw), change.projectId);
-      return saveCutAssessments(ctx, change, task, body);
+      return saveCutAssessments(ctx, change, task && requestOf(ctx, task), body);
     }, "immediate")());
   });
 
@@ -147,8 +153,9 @@ export function changeRoutes(ctx: Ctx) {
     const body = await jsonBody(c, StagedCutRevision);
     const index = z.coerce.number().int().nonnegative().parse(c.req.param("index"));
     const attempt = requestAttempt(c.req.raw), change = requireChange(c.req.param("changeId"), c.req.param("projectId"));
-    body.taskId ??= attempt?.taskId;
-    return c.json(reviseStagedCut(ctx, c.var.user, change, index, body, () => requireProjectEditAttempt(ctx, attempt, change.projectId, body.taskId)), 201);
+    const saver = body.taskId ?? attempt?.taskId;
+    return c.json(saveAsRequest(ctx, saver, owner => reviseStagedCut(ctx, c.var.user, change, index, { ...body, taskId: owner },
+      () => requireProjectEditAttempt(ctx, attempt, change.projectId, saver))), 201);
   });
 
   r.post("/changes/:changeId/approve", async (c) => {

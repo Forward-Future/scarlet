@@ -70,7 +70,7 @@ body {
   }
 }
 
-:where(input:not([type]), input[type="text"], input[type="search"], input[type="number"], textarea, select) {
+:where(input:not([type]), input[type="text"], input[type="password"], input[type="search"], input[type="number"], textarea, select) {
   border-bottom: 2px solid transparent;
 
   &:focus-visible {

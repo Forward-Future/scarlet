@@ -8,11 +8,13 @@
  * `geminiTranscript.ts` reads live token counts from agy's transcript.
  */
 import { hasApiKey } from "../detect.js";
+import { privateDirectory } from "../private-files.js";
 import { briefInput, DEFAULT_STALL_MS, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { acpConfigHasValue, DEFAULT_GEMINI_EFFORT, findAcpEffortOption, findAcpModelOption, isAcpAuthError, type AcpConfigOption } from "./acp.js";
 import {
   acpMcpServer,
   buildGeminiCommand,
+  geminiDir,
   extractToolName,
   flushStreams,
   isScarletMcpPermission,
@@ -58,7 +60,12 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   // Scarlet's own variables stay out of agy, so its terminal never holds the token.
   const env = workspaceEnv(opts.env ?? process.env, opts.workspace);
   const bin = await resolveCli("agy", opts.bin, env);
-  const cmd = buildGeminiCommand(bin);
+  const ownDir = geminiDir(opts.cwd);
+  const madeOwnDir = await privateDirectory(ownDir).then(() => true, (err: unknown) => {
+    opts.onEvent({ type: "log", text: `Gemini runs with the user's own settings: its own folder couldn't be made (${err instanceof Error ? err.message : String(err)}).` });
+    return false;
+  });
+  const cmd = buildGeminiCommand(bin, madeOwnDir ? ownDir : undefined);
 
   const st = newGeminiState();
   let requestId = 1;
@@ -227,6 +234,12 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
       stopSession();
       return;
     }
+    // Nobody asked for an effort: the run goes on with agy's own rather than failing over Scarlet's default.
+    if (step === "set_effort" && !opts.effort) {
+      opts.onEvent({ type: "log", text: `Gemini could not apply default effort (${detail}); continuing with agy's default.` });
+      sendPrompt();
+      return;
+    }
     failSession(`Gemini ${step} failed: ${detail}`);
   };
 
@@ -236,7 +249,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
       failSession("Gemini session returned no sessionId");
       return;
     }
-    transcript.open(env, st.sessionId, resuming);
+    transcript.open(env, madeOwnDir ? ownDir : undefined, st.sessionId, resuming);
     configOptions = parseConfigOptions(result);
     const legacyModels = asRecord(result.models);
     const modelOpt = findAcpModelOption(configOptions);

@@ -4,10 +4,10 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { MultipartParseError, parseMultipartRequest } from "@remix-run/multipart-parser/future";
-import { fileInDirectoryAsync, hasIndexedAvc } from "@scarlet/render";
+import { fileInDirectoryAsync, hasIndexedAvc, heardAudio, heardAudioKey } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
-import { DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance, WebSource } from "@scarlet/timeline";
+import { AudioTrackSelection, DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance, WebSource } from "@scarlet/timeline";
 import { flattenWords } from "@scarlet/shared";
 import { retakeGroups } from "@scarlet/mcp/media-profile";
 import type { AppEnv } from "../auth.js";
@@ -21,6 +21,7 @@ import { getTranscriptionProvider, importTranscriptionPolicy } from "../transcri
 import { AnalysisCache } from "../services/analysisCache.js";
 import { transcriptReader } from "../services/transcriptReader.js";
 import { otherInputReader } from "../services/otherInput.js";
+import { afterAudioTrackChange } from "../services/audioTrackChange.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
 import { framePriority, pictureDecoder, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
@@ -103,6 +104,57 @@ export function mediaRoutes(ctx: Ctx) {
       return saved;
     }, "immediate")();
     return c.json({ media });
+  });
+
+  // The editor's note on a file: what it is and how to use it. An empty note takes it off.
+  r.put("/media/:mediaId/note", async c => {
+    const { note } = await jsonBody(c, z.object({ note: z.string().max(2000) }));
+    const text = note.trim();
+    const media = ctx.db.transaction(() => {
+      const current = requireMedia(ctx, c.req.param("mediaId"));
+      const { status, error, projectId, editorNote: _old, ...rest } = current;
+      const saved = ctx.repos.projects.putMedia(projectId, { ...rest, ...(text && { editorNote: text }) }, status, error);
+      ctx.bus.publish({ type: "media.updated", projectId, media: saved });
+      return saved;
+    }, "immediate")();
+    return c.json({ media });
+  });
+
+  r.put("/media/:mediaId/audio-track", async c => {
+    const source = requireMedia(ctx, c.req.param("mediaId"));
+    requireAudio(source);
+    const attempt = requestAttempt(c.req.raw);
+    requireProjectLocalPauseTarget(ctx, attempt, source.projectId);
+    const { audioTrack } = await jsonBody(c, z.object({ audioTrack: AudioTrackSelection }));
+    let streams = source.audioStreams;
+    if (!streams) {
+      const file = await fileInDirectoryAsync(ctx.paths.media(source.projectId), source.path);
+      if (file) {
+        const signal = AbortSignal.any([ctx.projectSignal(source.projectId), c.req.raw.signal]);
+        const probed = await ctx.track(ctx.render.probeMedia(file, signal), source.projectId).catch(() => undefined);
+        if (probed?.audioStreams && probed.audioStreams.length > 1) streams = probed.audioStreams;
+      }
+    }
+    const count = streams?.length ?? 1;
+    if (typeof audioTrack === "number" && audioTrack >= count) {
+      throw badRequest("bad_audio_track", `This file only has ${count} audio ${count === 1 ? "track" : "tracks"}.`);
+    }
+    const normalized = audioTrack === 0 ? undefined : audioTrack;
+    const media = ctx.db.transaction(() => {
+      requireProjectLocalPauseTarget(ctx, attempt, source.projectId);
+      const current = requireMedia(ctx, source.id);
+      const { status, error, projectId: _p, ...rest } = current;
+      const saved = ctx.repos.projects.putMedia(current.projectId, {
+        ...rest,
+        ...(streams && streams.length > 1 ? { audioStreams: streams } : {}),
+        audioTrack: normalized,
+      }, status, error);
+      ctx.bus.publish({ type: "media.updated", projectId: current.projectId, media: saved });
+      return { before: current, saved };
+    }, "immediate")();
+    // What was made from the old track is made again from the new one: its transcript and its previews.
+    await ctx.track(afterAudioTrackChange(ctx, media.before, { ...media.saved, projectId: media.before.projectId }), source.projectId);
+    return c.json({ media: ctx.repos.projects.getMedia(media.saved.id) ?? media.saved });
   });
 
   r.post("/projects/:id/media", async (c) => {
@@ -320,13 +372,28 @@ export function mediaRoutes(ctx: Ctx) {
     return serveFile(c.req.raw, file, { contentType: `image/${/\.png$/.test(file) ? "png" : /\.webp$/.test(file) ? "webp" : "jpeg"}` });
   });
 
-  r.get("/media/:mediaId/proxy", (c) => {
+  r.get("/media/:mediaId/proxy", async (c) => {
     const media = requireMedia(ctx, c.req.param("mediaId"));
     const proxy = join(ctx.paths.proxies(media.projectId), `${media.id}.mp4`);
     // ffmpeg creates its output before the MP4 is playable.
-    return !media.previewMode && isPlayableMedia(media) && existsSync(proxy)
-      ? serveFile(c.req.raw, proxy)
-      : serveOriginal(c.req.raw, join(ctx.paths.media(media.projectId), media.path));
+    if (!media.previewMode && isPlayableMedia(media) && existsSync(proxy)) return serveFile(c.req.raw, proxy);
+    // A recording with several audio tracks would play whichever track the player picks. Video plays its playback cache
+    // (or parts made on demand); sound-only plays a single-track AAC preview made of the chosen track.
+    if (media.kind === "video" && (media.audioStreams?.length ?? 0) > 1) {
+      const cached = await sourcePreviews.fullFile(ctx, media);
+      if (cached) return serveFile(c.req.raw, cached);
+      throw notFound("preview of the chosen audio track");
+    }
+    if (media.kind === "audio" && (media.audioStreams?.length ?? 0) > 1) {
+      try {
+        const preview = await sourcePreviews.audioPreview(ctx, media, c.req.raw.signal);
+        return serveFile(c.req.raw, preview, { contentType: "audio/mp4" });
+      } catch (error) {
+        if (c.req.raw.signal.aborted) return new Response(null, { status: 499 });
+        throw error;
+      }
+    }
+    return serveOriginal(c.req.raw, join(ctx.paths.media(media.projectId), media.path));
   });
 
   r.on(["GET", "POST"], "/media/:mediaId/playback-cache", async c => {
@@ -353,7 +420,7 @@ export function mediaRoutes(ctx: Ctx) {
     // The timeline's drawing never asks for voice activity. A read that does is a tool's, such as a running edit's
     // inspection of a cut, so a waveform it lacks is prepared for it while the project's media work is paused too.
     const cache = c.req.query("cachedOnly") === "1"
-      ? await readWaveformCache(ctx, media.projectId, media.id, media.status === "failed" ? undefined : media.path)
+      ? await readWaveformCache(ctx, media.projectId, media.id, media.status === "failed" ? undefined : media.path, media.audioTrack)
       : await getWaveform(ctx, media, c.req.query("speechActivity") === "1");
     if (!cache) throw notFound("waveform (media has no audio or is still ingesting)");
     const from = numberParam(c.req.query("from"), "from", 0);
@@ -370,9 +437,10 @@ export function mediaRoutes(ctx: Ctx) {
       const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
       if (!file) throw notFound("source file");
       const info = await stat(file);
-      const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to]);
+      const audio = heardAudio(media);
+      const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to, heardAudioKey(audio)]);
       // Up to a minute, read because someone asked: a running edit checks its joins with it while caching is paused too.
-      const spans = await speech.get(key, () => ctx.track(recordingSpeechActivity(ctx, file, from, to, ctx.projectSignal(media.projectId)), media.projectId));
+      const spans = await speech.get(key, () => ctx.track(recordingSpeechActivity(ctx, file, from, to, ctx.projectSignal(media.projectId), audio), media.projectId));
       return c.json({ mediaId: media.id, from, to, ...wf, speechActivity: spans });
     }
     if (c.req.query("format") === "peaks-f64le") {
@@ -444,7 +512,9 @@ export function mediaRoutes(ctx: Ctx) {
   r.on("GET", ["/media/:mediaId/frame", "/projects/:projectId/media/:mediaId/frame"], async (c) => {
     const media = requireMedia(ctx, c.req.param("mediaId"), c.req.param("projectId"));
     if (media.kind === "audio") throw badRequest("no_video", "audio media has no frames");
-    const t = numberParam(c.req.query("t"), "t", 0);
+    // A time past the end shows the last frame, as one before the start shows the first, rather than finding none.
+    const requested = numberParam(c.req.query("t"), "t", 0);
+    const t = media.duration && media.duration > 0 ? Math.min(requested, media.duration) : requested;
     const w = Math.min(3840, Math.max(16, numberParam(c.req.query("w"), "w", 640)));
     const file = join(ctx.paths.media(media.projectId), media.path);
     // A recording moved or deleted outside Scarlet is asked for with every scrub.

@@ -299,20 +299,21 @@ it("manages a project from either library layout", async () => {
     expect(container.querySelector(".library-count")).toBeNull();
     // Idle project has no media work running, so Pause is omitted.
     await actions();
-    expect(textButton("Pause")).toBeUndefined();
-    expect(textButton("Resume")).toBeUndefined();
+    expect(textButton("Pause media processing")).toBeUndefined();
+    expect(textButton("Resume media processing")).toBeUndefined();
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
     // Once media processing is active, Pause appears and switches to Resume while paused.
     await act(async () => useProjectStore.setState({ list: [{ ...summary, activity: [{ kind: "caching", fraction: 0.4 }] }] }));
     await actions();
-    expect(textButton("Pause")?.title).toBe("Pause media processing");
-    await tap(textButton("Pause"));
+    // The row says what it pauses, in its own words and not only on hover.
+    expect(textButton("Pause")).toBeUndefined();
+    await tap(textButton("Pause media processing"));
     expect(update).toHaveBeenLastCalledWith(PRJ, { mediaPaused: true });
     expect(useProjectStore.getState().list[0]?.mediaPaused).toBe(true);
     await tap(container.querySelector('[aria-label="Grid view"]'));
     await actions();
-    expect(textButton("Resume")?.title).toBe("Resume media processing");
-    await tap(textButton("Resume"));
+    expect(textButton("Resume")).toBeUndefined();
+    await tap(textButton("Resume media processing"));
     expect(update).toHaveBeenLastCalledWith(PRJ, { mediaPaused: false });
     await actions(); await tap(textButton("Archive"));
     expect(update).toHaveBeenLastCalledWith(PRJ, { archived: true });

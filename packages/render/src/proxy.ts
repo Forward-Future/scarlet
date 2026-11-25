@@ -5,7 +5,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { DEFAULT_PREVIEW_HEIGHT } from "@scarlet/timeline";
+import { DEFAULT_PREVIEW_HEIGHT, type AudioTrackSelection } from "@scarlet/timeline";
+import { audioMapArgs } from "./audioTrack.js";
 import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
 import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
@@ -22,6 +23,8 @@ export interface ProxyOptions {
   range?: { start: number; end: number };
   /** Target height in pixels (never upscaled); default 540. */
   height?: number;
+  /** Zero-based audio stream index or `"all"` to mix all streams. Defaults to `0`. */
+  audioTrack?: AudioTrackSelection;
   /** Hardware acceleration policy. Default "none" (libx264). */
   hwaccel?: HwAccel;
   onProgress?: (fraction: number) => void;
@@ -180,7 +183,10 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
         "file " + name, "inpoint 0", "duration " + ((parts[i + 1]?.start ?? pictureDuration) - start).toFixed(9),
       ]);
       await writeFile(manifest, list.join("\n") + "\n");
-      const audio = probe.hasAudio ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", "-map", "1:a:0", ...PROXY_AUDIO] : ["-map", "0:v:0", "-an"];
+      const heard = { audioTrack: opts.audioTrack, audioStreamCount: probe.audioStreams?.length };
+      const audio = probe.hasAudio
+        ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", ...audioMapArgs(heard, { input: 1, channelLayout: "stereo", label: "pa" }), ...PROXY_AUDIO]
+        : ["-map", "0:v:0", "-an"];
       await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
         "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
         onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
@@ -195,7 +201,7 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   if (video) args.push("-map", "0:v:0", ...video.output);
   else args.push("-vn");
   if (probe.hasAudio) {
-    args.push("-map", "0:a:0", ...PROXY_AUDIO);
+    args.push(...audioMapArgs({ audioTrack: opts.audioTrack, audioStreamCount: probe.audioStreams?.length }, { channelLayout: "stereo", label: "pa" }), ...PROXY_AUDIO);
   } else {
     args.push("-an");
   }

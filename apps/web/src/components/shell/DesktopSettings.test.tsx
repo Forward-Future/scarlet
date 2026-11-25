@@ -42,6 +42,71 @@ it("counts restarts and running tasks in words, not with (s)", async () => {
   }
 });
 
+it("lists set-up providers cleanly, groups unavailable ones, and tucks technical paths into a disclosure", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  const engine: EngineStatus = {
+    url: "http://127.0.0.1:61817",
+    userId: null,
+    state: "ready",
+    error: null,
+    dataDir: "/Users/editor/Library/Application Support/scarlet",
+    workDir: "/work",
+    logDir: "/Users/editor/Library/Logs/scarlet",
+    engine: "/Applications/Scarlet.app/Contents/MacOS/scarlet-engine",
+    engineKind: "sidecar",
+    pid: 86910,
+    restarts: 0,
+    version: "0.1.566",
+  };
+  const host: HostStatus = {
+    hostId: "host_0ge1php06je4",
+    name: "Studio.local (desktop)",
+    connected: true,
+    configured: true,
+    serverUrl: null,
+    error: null,
+    running: [],
+    mcpCommand: "/Applications/Scarlet.app/Contents/MacOS/scarlet-engine mcp",
+    agents: [
+      { id: "claude", installed: true, loggedIn: true, auth: "subscription", plan: "max", version: "2.1.331" },
+      { id: "ollama", installed: true, loggedIn: true, models: ["qwen3:30b", "llama3"] },
+      { id: "lmstudio", installed: false },
+      { id: "openrouter", installed: false },
+    ],
+  };
+  vi.spyOn(desktop, "onEngineStatus").mockResolvedValue(() => {});
+  vi.spyOn(desktop, "engineStatus").mockResolvedValue(engine);
+  vi.spyOn(desktop, "onHostStatus").mockResolvedValue(() => {});
+  vi.spyOn(desktop, "hostStatus").mockResolvedValue(host);
+  const openPath = vi.spyOn(desktop, "openPath").mockResolvedValue();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<DesktopDiagnostics />));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    const rows = [...container.querySelectorAll(".diag-providers li")].map(li => li.textContent);
+    expect(rows).toEqual(["Claude Codev2.1.331Max subscription", "Ollama2 models"]);
+    expect(container.textContent).toContain("Not set up: LM Studio, OpenRouter");
+    const details = container.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("/Applications/Scarlet.app/Contents/MacOS/scarlet-engine");
+    expect(details?.textContent).toContain("host_0ge1php06je4");
+    expect(details?.textContent).toContain("/Applications/Scarlet.app/Contents/MacOS/scarlet-engine mcp");
+    const buttons = [...container.querySelectorAll("button")];
+    await act(async () => buttons.find(b => b.textContent === "Open")!.click());
+    await act(async () => buttons.find(b => b.textContent === "Logs")!.click());
+    expect(openPath).toHaveBeenNthCalledWith(1, engine.dataDir);
+    expect(openPath).toHaveBeenNthCalledWith(2, engine.logDir);
+  } finally {
+    await act(async () => root.unmount());
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("names Claude Code, Codex and Gemini in the sign-in card's sentence as its rows do, and signs in to all three with one verb", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};

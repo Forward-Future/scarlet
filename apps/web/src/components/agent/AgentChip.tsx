@@ -3,10 +3,10 @@ import { Link, useMatch } from "react-router-dom";
 import type { RunChoice, Task } from "@scarlet/shared";
 import { isDesktop, type HostStatus } from "../../lib/desktop";
 import { AGENT_LABEL, isConfiguredAgent, onlineAgents, useHostsStore } from "../../stores/hosts";
-import { modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
+import { isModelHidden, modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
 import { ProviderIcon, type ModelScope } from "./ModelProviders";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "./ModelRefresh";
-import { FavoriteButton } from "./FavoriteButton";
+import { ModelRow, ModelScopeBar, ModelSearch, scopeModels } from "./ModelSelectorParts";
 import { QuotaDetails } from "./QuotaDetails";
 import { moveSelectorFocus, placeModelSelector } from "./modelSelectorLayout";
 import { BoltIcon, EffortDial, GaugeIcon, TuneDrawer } from "./ModelControls";
@@ -15,7 +15,7 @@ import {
   LOW_QUOTA_THRESHOLD, QUOTA_STALE_MS, formatPercent, isSubscriptionProvider, minRemainingPercent, providerShortName, type QuotaAgent,
 } from "./subscriptionQuota";
 import { useUiStore } from "../../stores/ui";
-import { AgentSignIn, canSignIn, useLocalHost } from "../shell/AgentSignIn";
+import { AgentSignIn, AgentUpdate, canSignIn, useLocalHost } from "../shell/AgentSignIn";
 import { Icon } from "../ui/primitives";
 import { MENU_ITEM_CLASS } from "../shell/WorkspaceNavigation";
 
@@ -47,9 +47,11 @@ export function useAgentAvailability() {
   const agents = onlineAgents(hosts, customOpenaiModels, customClaudeModels, customGeminiModels);
   const pick = useUiStore((s) => s.agent);
   const hidden = useModelPreferences((s) => s.hidden);
+  const shown = useModelPreferences((s) => s.shown);
+  const favorites = useModelPreferences((s) => s.favorites);
   const tuningByModel = useModelPreferences((s) => s.tuningByModel);
   const available = modelChoices(agents);
-  const choices = available.filter((m) => !hidden.includes(m.key));
+  const choices = available.filter((m) => !isModelHidden({ hidden, shown, favorites }, m.key));
   const selected = selectVisibleModel(choices, pick, agents);
   const same = pick.agent === selected?.agent && pick.model === selected?.model;
   const remembered = selected ? tuningByModel[selected.key] : undefined;
@@ -86,6 +88,22 @@ function SignInRows({ agents }: { agents: HostStatus["agents"] }) {
  */
 function stillConnecting(hostsReady: boolean, localHost: HostStatus | null) {
   return !hostsReady || (isDesktop() && !localHost?.agents.length) || (!!localHost && !localHost.connected && !localHost.error);
+}
+
+/** Nothing is signed in and nothing is on its way: the editor has a model to set up. An empty or offline catalog doesn't establish that. */
+function setupNeeded(hostsReady: boolean, localHost: HostStatus | null, hasConfiguredHost: boolean) {
+  const checkingLocalAgents = isDesktop() && !localHost?.agents.length;
+  return hostsReady && !checkingLocalAgents && !hasConfiguredHost && !localHost?.agents.some(isConfiguredAgent);
+}
+
+/** What the message box says to a message sent while the model button reads "Connecting…". */
+export const CONNECTING_REASON = "Still connecting. Try again in a moment.";
+
+/** True while the model button reads "Connecting…": no model is online yet and Scarlet is still finding them. */
+export function useModelsConnecting({ agents, hasConfiguredHost }: Pick<ReturnType<typeof useAgentAvailability>, "agents" | "hasConfiguredHost">) {
+  const hostsReady = useHostsStore(s => s.status === "ready");
+  const localHost = useLocalHost();
+  return !agents.length && !setupNeeded(hostsReady, localHost, hasConfiguredHost) && stillConnecting(hostsReady, localHost);
 }
 
 /**
@@ -189,9 +207,18 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
   // Installed on this computer but not signed in yet: offer the one-click sign-in.
   const needsSignIn = (localHost?.agents ?? []).filter((a) => a.installed && canSignIn(a.id) && a.loggedIn === false && !agents.some((x) => x.id === a.id));
 
-  // An empty or offline catalog doesn't establish that the editor needs to sign in.
-  const checkingLocalAgents = isDesktop() && !localHost?.agents.length;
-  const needsSetup = hostsReady && !checkingLocalAgents && !hasConfiguredHost && !localHost?.agents.some(isConfiguredAgent);
+  // A newer Claude Code, Codex or Gemini the app can update in place: the header's button carries the amber dot and the
+  // selector offers the update, as Settings does.
+  const updates = (localHost?.agents ?? []).filter((a) => a.installed && a.latestVersion && canSignIn(a.id));
+  const updateNote = updates.length ? `A newer ${updates.map((a) => AGENT_LABEL[a.id]).join(" and ")} is available` : undefined;
+  const updateRows = updates.map((a) => (
+    <div key={a.id} className="px-3 py-2 grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 border-t border-line/60" data-agent-update={a.id}>
+      <span className="flex min-w-0 items-center gap-2 text-[13px] text-muted"><span className="truncate">{AGENT_LABEL[a.id]}</span><span className="menu-dot" aria-hidden /></span>
+      <AgentUpdate agent={a} compact />
+    </div>
+  ));
+
+  const needsSetup = setupNeeded(hostsReady, localHost, hasConfiguredHost);
   const inMenu = variant === "menu";
   const inHeader = variant === "header";
   const iconOnly = variant === "icon";
@@ -303,38 +330,11 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
       : undefined;
   const hasDock = Boolean((effective && hasOptions) || quotaProviders.length > 0);
 
-  const query = search.trim().toLowerCase();
-  const matches = choices.filter((m) => `${AGENT_LABEL[m.agent]} ${m.label} ${m.model ?? ""}`.toLowerCase().includes(query));
-  const scoped = query
-    ? matches
-    : active === "all"
-      ? matches
-      : active === "favorites"
-        ? matches.filter((m) => favorites.includes(m.key))
-        : matches.filter((m) => m.agent === active);
-  const favRows = scoped.filter((m) => favorites.includes(m.key));
-  const otherRows = scoped.filter((m) => !favorites.includes(m.key));
-  const multiProvider = Boolean(query) || active === "all" || active === "favorites";
+  const { query, scoped, favRows, otherRows, multiProvider } = scopeModels(choices, favorites, search, active);
   const selectedInView = Boolean(selected && scoped.some((m) => m.key === selected.key));
 
   const renderModelRow = (m: (typeof choices)[number]) => (
-    <div key={m.key} className="group flex items-center rounded-md pr-1 hover:bg-raised">
-      <button
-        type="button"
-        role="radio"
-        aria-checked={selected?.key === m.key}
-        aria-label={`${AGENT_LABEL[m.agent]} · ${m.label}`}
-        onClick={() => choose({ agent: m.agent, model: m.model })}
-        className={`flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pl-2.5 pr-1 text-left text-[13px] focus-visible:-outline-offset-2 ${selected?.key === m.key ? "font-medium text-fg" : "text-muted group-hover:text-fg"}`}
-      >
-        <span className="flex w-3 shrink-0 items-center justify-center">
-          {selected?.key === m.key && <Icon name="check" size={12} />}
-        </span>
-        {multiProvider && <span className="shrink-0 opacity-85"><ProviderIcon id={m.agent} size={13} /></span>}
-        <span className="truncate">{m.label}</span>
-      </button>
-      <FavoriteButton choice={m} revealOnHover />
-    </div>
+    <ModelRow key={m.key} choice={m} selected={selected?.key === m.key} multiProvider={multiProvider} onPick={() => choose({ agent: m.agent, model: m.model })} />
   );
 
   return (
@@ -345,7 +345,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={iconOnly ? "Choose model" : emptyCatalog ? "Refresh models" : `Model: ${details}. Change model, effort or speed`}
-        aria-description={iconOnly && selected ? details : inHeader && emptyCatalog ? unavailableReason : undefined}
+        aria-description={iconOnly && selected ? details : inHeader && emptyCatalog ? unavailableReason : inHeader ? updateNote : undefined}
         title={iconOnly ? (selected ? `Model: ${details}` : "Choose model") : inHeader ? (emptyCatalog ? unavailableReason : selected ? `Model: ${details}` : undefined) : emptyCatalog ? unavailableReason : selected ? effortTitle : undefined}
         onClick={() => {
           if (!open) {
@@ -372,7 +372,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         {...(inMenu && { role: "menuitem" })}
         className={inMenu ? `${MENU_ITEM_CLASS} text-fg`
           : iconOnly ? "btn-icon aria-expanded:bg-raised aria-expanded:text-fg"
-          : inHeader ? `btn-quiet simple-model aria-expanded:bg-raised aria-expanded:text-fg${none ? " needs-you" : ""}`
+          : inHeader ? `btn-quiet simple-model aria-expanded:bg-raised aria-expanded:text-fg${none || updateNote ? " needs-you" : ""}`
           : `inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] hover:text-fg ${none ? "border-warn/40 text-warn" : "border-line text-muted hover:border-dim"}`}
       >
         {iconOnly ? <EffortDial level={effortLevel(efforts, dialEffort?.id)} /> : inMenu ? <>
@@ -382,6 +382,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
         </> : inHeader ? <>
           <span className="truncate">{label}</span>
           {selected ? <EffortDial level={effortLevel(efforts, dialEffort?.id)} /> : <span className="menu-dot" role="img" aria-label={unavailableReason} />}
+          {selected && updateNote && <span className="menu-dot" role="img" aria-label={updateNote} />}
         </> : <>
           {none && <span className="size-1.5 rounded-full bg-warn" aria-hidden />}
           <span className="truncate">{label}</span>
@@ -417,6 +418,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
             <>
               <p className="px-3 py-3 text-[13px] text-muted">{unavailableReason}</p>
               <SignInRows agents={needsSignIn} />
+              {updateRows}
               <div className="border-t border-line/60 px-3 py-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-x-3">
                   <ModelRefreshButton action={modelRefresh} />
@@ -435,107 +437,25 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
             <>
               <div className="flex h-[39px] items-center gap-1 border-b border-line/60 px-2">
                 {searchOpen ? (
-                  <label className="flex min-w-0 flex-1 items-center gap-2 pl-1 text-muted">
-                    <Icon name="search" size={13} />
-                    <input
-                      type="search"
-                      ref={searchField}
-                      aria-label="Search models"
-                      placeholder="Search models…"
-                      className="min-w-0 flex-1 border-b-0 bg-transparent text-[13px] text-fg outline-none placeholder:text-dim"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                    />
-                    <button
-                      type="button"
-                      aria-label="Close search"
-                      title="Close search"
-                      onClick={() => { setSearch(""); setSearchOpen(false); panel.current?.focus(); }}
-                      className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-fg"
-                    >
-                      <Icon name="x" size={12} />
-                    </button>
-                  </label>
+                  <ModelSearch inputRef={searchField} value={search} onChange={setSearch}
+                    onClose={() => { setSearch(""); setSearchOpen(false); panel.current?.focus(); }} />
                 ) : (
-                  <>
-                    <div role="group" aria-label="Providers" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-                      <button
-                        type="button"
-                        aria-pressed={active === "all"}
-                        onClick={() => { setScope("all"); setGearOpen(false); }}
-                        className={`flex h-[26px] shrink-0 items-center rounded-md px-2 text-[11.5px] font-medium transition-colors ${active === "all" ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"}`}
-                      >
-                        All
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="Favorites"
-                        title="Favorites"
-                        aria-pressed={active === "favorites"}
-                        onClick={() => { setScope("favorites"); setGearOpen(false); }}
-                        className={`flex size-[26px] shrink-0 items-center justify-center rounded-md transition-colors ${active === "favorites" ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"}`}
-                      >
-                        <Icon name="star" size={12} />
-                      </button>
-                      {providers.map((id) => {
-                        const agentInfo = agents.find((a) => a.id === id);
-                        const minPct = agentInfo && isSubscriptionProvider(agentInfo) ? minRemainingPercent(agentInfo.quota) : undefined;
-                        const isLow = minPct !== undefined && minPct < LOW_QUOTA_THRESHOLD;
-                        const pillTitle = minPct !== undefined
-                          ? `${AGENT_LABEL[id]} · ${formatPercent(minPct)} remaining`
-                          : AGENT_LABEL[id];
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            aria-label={AGENT_LABEL[id]}
-                            title={pillTitle}
-                            aria-pressed={active === id}
-                            onClick={() => { setScope(id); setGearOpen(false); }}
-                            className={`relative flex size-[26px] shrink-0 items-center justify-center rounded-md transition-colors ${active === id ? "bg-raised text-fg" : "text-muted opacity-75 hover:bg-raised/60 hover:opacity-100"}`}
-                          >
-                            <ProviderIcon id={id} size={14} />
-                            {minPct !== undefined && (
-                              <span
-                                data-quota-bar={id}
-                                data-low={isLow ? "true" : "false"}
-                                className="pointer-events-none absolute bottom-[2px] left-[4px] right-[4px] h-[2px] overflow-hidden rounded-full bg-line/70"
-                                aria-hidden="true"
-                              >
-                                <span
-                                  className={`block h-full rounded-full ${isLow ? "bg-warn" : "bg-fg/55"}`}
-                                  style={{ width: `${Math.max(4, Math.min(100, minPct))}%` }}
-                                />
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-0.5 pl-1">
-                      <button
-                        type="button"
-                        aria-label="Search models"
-                        title="Search models"
-                        onClick={() => { setGearOpen(false); setSearchOpen(true); }}
-                        className="flex size-[26px] items-center justify-center rounded-md text-muted hover:bg-raised hover:text-fg"
-                      >
-                        <Icon name="search" size={13} />
-                      </button>
-                      <button
-                        ref={gearButton}
-                        type="button"
-                        aria-label="Model actions"
-                        aria-haspopup="menu"
-                        aria-expanded={gearOpen}
-                        title="Model settings"
-                        onClick={() => setGearOpen((v) => !v)}
-                        className={`flex size-[26px] items-center justify-center rounded-md transition-colors ${gearOpen ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
-                      >
-                        <Icon name="settings" size={13} />
-                      </button>
-                    </div>
-                  </>
+                  <ModelScopeBar providers={providers} agents={agents} active={active}
+                    onScope={(next) => { setScope(next); setGearOpen(false); }}
+                    onSearch={() => { setGearOpen(false); setSearchOpen(true); }}>
+                    <button
+                      ref={gearButton}
+                      type="button"
+                      aria-label="Model actions"
+                      aria-haspopup="menu"
+                      aria-expanded={gearOpen}
+                      title="Model settings"
+                      onClick={() => setGearOpen((v) => !v)}
+                      className={`flex size-[26px] items-center justify-center rounded-md transition-colors ${gearOpen ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
+                    >
+                      <Icon name="settings" size={13} />
+                    </button>
+                  </ModelScopeBar>
                 )}
               </div>
 
@@ -706,6 +626,7 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
               )}
 
               <SignInRows agents={needsSignIn} />
+              {updateRows}
 
               {modelRefresh.result !== null && (
                 <div className="border-t border-line/60 px-3 py-1.5">

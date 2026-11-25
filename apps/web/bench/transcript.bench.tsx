@@ -13,8 +13,9 @@ import { useProjectStore } from "../src/stores/project";
 const db = buildDb();
 const project = db.projects.find(p => p.id === PRJ)!;
 const source = { ...project.media[0]!, duration: 2400, transcriptId: "transcript" };
+// The pane reads the whole transcript at once: 50 passages of 18 words.
 const transcript = (from: number) => ({
-  id: "transcript", mediaId: source.id, segments: Array.from({ length: 10 }, (_, s) => ({
+  id: "transcript", mediaId: source.id, segments: Array.from({ length: 50 }, (_, s) => ({
     id: String(from + s * 6), start: from + s * 6, end: from + (s + 1) * 6, text: "spoken passage",
     words: Array.from({ length: 18 }, (_, w) => ({text: w === 17 ? "word." : "word",
       start: from + s * 6 + w / 3, end: from + s * 6 + (w + 1) / 3})),
@@ -23,24 +24,19 @@ const transcript = (from: number) => ({
 const current = { id: PRJ, project, timeline: db.timelines[project.head!]!, media: [source],
   changes: db.changes, notes: db.notes, tasks: db.tasks, renders: db.renders, taskEvents: db.taskEvents };
 
-describe("select and read five transcript pages, 900 visible words", () => {
+describe("select and read a whole transcript, 900 visible words", () => {
   let root: Root, words: HTMLElement[];
   const container = document.createElement("div");
   async function setup() {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
-    vi.spyOn(api, "transcript").mockImplementation(async (_id, q) => transcript(q?.from ?? 0));
+    vi.spyOn(api, "transcript").mockImplementation(async () => transcript(0));
     useProjectStore.setState({ current, status: "ready" });
     document.body.append(container);
     root = createRoot(container);
     await act(async () => root.render(<MemoryRouter><TranscriptPane source={source} onAsk={() => {}} /></MemoryRouter>));
-    for (let i = 0; i < 4; i++) {
-      const next = [...container.querySelectorAll("button")].find(b => b.textContent === "Load later words");
-      if (!next) throw new Error("Missing transcript paging action");
-      await act(async () => next.click());
-    }
     words = [...container.querySelectorAll<HTMLElement>("[data-w]")];
-    if (words.length !== 900) throw new Error("Expected all transcript pages");
+    if (words.length !== 900) throw new Error("Expected the whole transcript");
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", false);
   }
   const options = {

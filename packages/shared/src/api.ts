@@ -80,7 +80,7 @@
  *   GET    /tasks/:taskId/prompt?workDir=&fresh=         → TaskPrompt (what the agent is told; hosts call this before each run)
  *   POST   /tasks/:taskId/cancel?queuedOnly=1&withdrawn=1 → { task: Task } (both optional; withdrawn: the editor took the words back, so no rule is learned from them)
  *   POST   /tasks/:taskId/retry  RunChoice?              → { task: Task } (resume an interrupted request or retry a failure, on the model given)
- *   POST   /tasks/:taskId/answer    { text }             → { task: Task }     (human answers an agent question)
+ *   POST   /tasks/:taskId/answer    { text, attachments?, pictureMarks? } → { task: Task } (human answers an agent question; files sent with it are kept with the request)
  *   GET    /projects/:id/usage?by=thread|task|agent|model|day → UsageResponse  (agent token usage, newest group first)
  *   GET    /usage?by=project|thread|task|agent|model|day    → UsageResponse  (all projects, including trashed ones not yet removed)
  *   GET    /under-way                                    → { edits, queued, exports }  (what quitting would stop, in every project)
@@ -136,6 +136,10 @@
  */
 import { z } from "zod/v3";
 import { CheckIn } from "./checkIn.js";
+import { DEFAULT_TASK_MODELS, TASK_MODELS_MAX, TaskModelType } from "./taskModels.js";
+
+/** The longest "Talking to you" the editor can write: a few short lines of how they like to be spoken to. */
+export const TALKING_TO_YOU_MAX = 2000;
 import {
   Author,
   ChangeState,
@@ -377,6 +381,8 @@ export const Render = z.object({
   export: ExportSave.extend({ owner: z.string().uuid() }).optional(),
   /** Finished, seekable segments of an in-progress full preview. */
   cachedRanges: z.array(TimeRange).optional(),
+  /** Of a running full or export render: the seconds already encoded by an earlier render, and the progress they account for. */
+  reused: z.object({ seconds: z.number().nonnegative(), progress: z.number().min(0).max(1) }).optional(),
   id: Id,
   projectId: Id,
   version: Id,
@@ -511,15 +517,26 @@ export const ServerSettings = z.object({
   /** How many of a pass's cuts, the ones Scarlet thinks most likely to be wrong, the editor is asked to check. */
   checkIn: CheckIn.default("balanced"),
   /**
+   * How Scarlet writes to the editor, in their own words: in the chat and on its cards, in every project, whichever
+   * model runs the request. Their own instructions for Claude Code, Codex or Gemini are for their own chats and never
+   * reach Scarlet's runs, so this is where they say it for Scarlet. Empty = nothing added.
+   */
+  talkingToYou: z.string().max(TALKING_TO_YOU_MAX).default(""),
+  /**
    * Which model listens to cuts for a request whose own model can't hear: "auto" (the best one signed in), "off", or
    * one model as "agent:model" (`chooseListener`).
    */
   listening: z.string().regex(/^(auto|off|[a-z]+:[^\s]+)$/).default("auto"),
+  /**
+   * Kinds of work the editor gives to a model of their choosing, each with what counts as it (Settings → Models → Task
+   * models). The model running a request hands such work to that model with `hand_off`. "same" leaves it with the chat's.
+   */
+  taskModels: z.array(TaskModelType).max(TASK_MODELS_MAX).default(DEFAULT_TASK_MODELS),
 });
 export type ServerSettings = z.infer<typeof ServerSettings>;
 
 export function selectedLocalModel(settings: Pick<ServerSettings["transcription"], "localModel" | "whisperCppPath" | "whisperModelPath">): LocalTranscriptionModel {
-  return settings.localModel ?? (settings.whisperCppPath || settings.whisperModelPath ? "custom" : "crisperwhisper");
+  return settings.localModel ?? (settings.whisperCppPath || settings.whisperModelPath ? "custom" : "whispercpp");
 }
 
 export const ApiError = z.object({

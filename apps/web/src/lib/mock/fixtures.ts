@@ -3,7 +3,7 @@
  * generated public/sample.mp4 (20 s), a few versions (including a branch),
  * changes in every state, notes, renders, tasks, hosts, skills and settings.
  */
-import { isDialogueGuide } from "@scarlet/shared";
+import { DEFAULT_TASK_MODELS, isDialogueGuide } from "@scarlet/shared";
 import type {
   Learning,
   AgentHost,
@@ -702,7 +702,9 @@ export function buildDb(chatLayouts = false): MockDb {
     render: { handleSeconds: 1.5, previewHeight: DEFAULT_PREVIEW_HEIGHT, concurrency: 2, hwaccel: "auto" },
     defaultAgent: "claude",
     checkIn: "balanced",
+    talkingToYou: "",
     listening: "auto",
+    taskModels: DEFAULT_TASK_MODELS,
   };
 
   return {

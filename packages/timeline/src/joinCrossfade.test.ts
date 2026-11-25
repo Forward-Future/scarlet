@@ -109,6 +109,27 @@ describe("centered dialogue crossfades", () => {
     );
     expect(() => audioCrossfadeOps(occupiedAfterMuted, media, joins, 0.08)).toThrow(/already has sound/);
   });
+
+  it("crossfades clips a millisecond or two apart or overlapping, centred on the seam, and says how far apart others are", () => {
+    // Picture sync on Matt's talking head left its sound pieces this far apart (2026-11-23).
+    const timeline = emptyTimeline("project");
+    timeline.tracks[1]!.clips = [
+      makeMediaClip("m", 0, 1, 0, { id: "a" }),
+      makeMediaClip("m", 4, 5, 1.002, { id: "b" }),
+      makeMediaClip("m", 8, 9, 2.0007, { id: "c" }),
+    ];
+    const result = applyOps(timeline, audioCrossfadeOps(timeline, media, joins, 0.08));
+    const [a, b, c] = result.tracks[1]!.clips as Array<Clip & { kind: "media" }>;
+    // The two sounds overlap by the duration asked for, and each stays in sync with its own source.
+    expect(clipEnd(a!) - b!.timelineIn).toBeCloseTo(0.08, 9);
+    expect(clipEnd(b!) - c!.timelineIn).toBeCloseTo(0.08, 9);
+    expect(b!.sourceIn - b!.timelineIn).toBeCloseTo(4 - 1.002, 9);
+    expect(c!.sourceIn - c!.timelineIn).toBeCloseTo(8 - 2.0007, 9);
+    expect(timelineDuration(result)).toBeCloseTo(timelineDuration(timeline), 9);
+
+    timeline.tracks[1]!.clips[1] = makeMediaClip("m", 4, 5, 1.01, { id: "b" });
+    expect(() => audioCrossfadeOps(timeline, media, joins, 0.08)).toThrow("Choose touching audible clips on the same track: a, b (10.0 ms apart)");
+  });
 });
 
 describe("the editor's crossfade on dialogue joins", () => {
@@ -252,5 +273,21 @@ describe("the editor's crossfade on dialogue joins", () => {
       faded: [5],
       plain: [{ at: 2, reason: "the dialogue track already has sound there" }],
     });
+  });
+});
+
+describe("crossfaded sound keeps its levels and stream", () => {
+  it("keeps the level changes on the same footage and the audio stream on the sound a picture hands to its dialogue track", () => {
+    const { timeline, track } = cut("video");
+    const b = track.clips[1]!;
+    if (b.kind === "media") {
+      b.audioTrack = 1;
+      // At 0.5 s into the clip, timeline 1.5 s: footage the crossfade doesn't move.
+      b.volumeKeyframes = [{ time: 0.5, db: -6, ease: "linear" }];
+    }
+    const result = applyOps(timeline, audioCrossfadeOps(timeline, media, joins, 0.08));
+    const sound = result.tracks.at(-1)!.clips[1]!;
+    expect(sound).toMatchObject({ timelineIn: 0.96, audioTrack: 1 });
+    expect(sound.kind === "media" && sound.volumeKeyframes?.[0]?.time).toBeCloseTo(0.54, 9);
   });
 });

@@ -166,6 +166,8 @@ impl ExportDestinations {
                 (destination.temp, destination.saver) = (None, None);
                 return ((), true);
             }
+            // A timeline or captions save that failed keeps its ticket too, so the window can try it again.
+            if !saved { return ((), false) }
             paths.remove(&ticket);
             ((), kept)
         })
@@ -565,6 +567,26 @@ mod tests {
         assert!(second.start_save(1, b.path(), saver).unwrap());
         second.finish_save(1, b.path(), true, true).unwrap();
         assert_eq!(first.change(|paths| (paths.contains_key(&1), false)), Ok(false));
+    }
+
+    /// Timeline and caption exports save without being kept. One that fails while the engine restarts is tried again
+    /// with the same ticket.
+    #[test]
+    fn a_failed_save_of_a_ticket_never_kept_can_be_tried_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = ExportDestinations::default();
+        app.load(dir.path().join("export-destinations.json"));
+        app.record_choice(1, dir.path().join("Cut.otio")).unwrap();
+        let saver = crate::host::spawn::this_scarlet();
+        let first = dir.path().join(".tmpFirst");
+        assert!(!app.start_save(1, &first, saver.clone()).unwrap());
+        app.finish_save(1, &first, false, false).unwrap();
+        assert_eq!(app.path_for(1), Ok(dir.path().join("Cut.otio")));
+        // The retry saves, and then the ticket is spent.
+        let second = dir.path().join(".tmpSecond");
+        assert!(!app.start_save(1, &second, saver).unwrap());
+        app.finish_save(1, &second, false, true).unwrap();
+        assert_eq!(app.path_for(1).unwrap_err(), "Export destination expired");
     }
 
     #[test]

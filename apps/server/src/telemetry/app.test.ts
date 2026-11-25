@@ -236,3 +236,28 @@ it("reports to the project key in the environment", async () => {
 
   expect(engine.requests.map(request => request.api_key)).toEqual(["phc_env"]);
 });
+
+it("reports each export by its route, and the install's first export once", async () => {
+  const off = boot({ key: "phc_test", env: { SCARLET_TELEMETRY_ENABLED: "false" } });
+  const { project } = (await off.api<{ project: { id: string } }>("POST", "/projects", { name: "Secret film" })).body;
+  expect((await off.api("GET", `/projects/${project.id}/versions/head/export.otio`)).status).toBe(200);
+  await off.close();
+  expect(existsSync(join(off.dataDir, "telemetry-exported"))).toBe(false);
+
+  // This library exported while reports were off, so its next export isn't its first.
+  const engine = boot({ key: "phc_test", dataDir: off.dataDir });
+  expect((await engine.api("GET", `/projects/${project.id}/versions/head/export.otio`)).status).toBe(200);
+  const fresh = boot({ key: "phc_test" });
+  const second = (await fresh.api<{ project: { id: string } }>("POST", "/projects", { name: "Secret film" })).body.project;
+  expect((await fresh.api("GET", `/projects/${second.id}/versions/head/export.otio`)).status).toBe(200);
+  expect((await fresh.api("GET", `/projects/${second.id}/versions/head/export.otio`)).status).toBe(200);
+  await Promise.all([engine.close(), fresh.close()]);
+
+  const exports = (e: Booted) => e.events("export.finished").map(event => [event.properties.route, event.properties.firstExport]);
+  expect(exports(engine)).toEqual([["otio", false]]);
+  expect(exports(fresh)).toEqual([["otio", true], ["otio", false]]);
+  expect(fresh.events("feature.used").map(event => event.properties.feature)).toEqual(["project.create", "timeline.export_otio", "timeline.export_otio"]);
+  expect(existsSync(join(fresh.dataDir, "telemetry-exported"))).toBe(true);
+  expect(fresh.events("server.boot.heartbeat")[0]!.properties.channel).toBe("dev");
+  expect(JSON.stringify(fresh.requests)).not.toContain(second.id);
+});

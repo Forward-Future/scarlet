@@ -9,12 +9,16 @@ import type { AgentUsage } from "@scarlet/shared";
 import { jsonLine } from "./spawn.js";
 import { addUsage, geminiTranscriptStepUsage } from "./usage.js";
 
-/** Path to `agy`'s per-session `transcript.jsonl`, where completed planner steps are written mid-turn. */
-function agyTranscriptPath(env: Record<string, string | undefined>, sessionId: string): string | undefined {
+/**
+ * Path to `agy`'s per-session `transcript.jsonl`, where completed planner steps are written mid-turn: in the run's own
+ * Gemini folder (`--gemini-dir`), or the user's `~/.gemini` when the run has none.
+ */
+function agyTranscriptPath(env: Record<string, string | undefined>, geminiDir: string | undefined, sessionId: string): string | undefined {
   if (!sessionId || /[/\\]|\.\./.test(sessionId)) return undefined;
   const home = env.HOME || env.USERPROFILE || homedir();
-  if (!home) return undefined;
-  return join(home, ".gemini", "antigravity-cli", "brain", sessionId, ".system_generated", "logs", "transcript.jsonl");
+  const dir = geminiDir ?? (home ? join(home, ".gemini") : undefined);
+  if (!dir) return undefined;
+  return join(dir, "antigravity-cli", "brain", sessionId, ".system_generated", "logs", "transcript.jsonl");
 }
 
 export class TranscriptUsageTailer {
@@ -23,8 +27,8 @@ export class TranscriptUsageTailer {
   private seenSteps = new Set<number>();
   private turnUsage: AgentUsage | undefined;
 
-  open(env: Record<string, string | undefined>, sessionId: string, skipExisting: boolean) {
-    this.path = agyTranscriptPath(env, sessionId);
+  open(env: Record<string, string | undefined>, geminiDir: string | undefined, sessionId: string, skipExisting: boolean) {
+    this.path = agyTranscriptPath(env, geminiDir, sessionId);
     this.offset = 0;
     if (skipExisting && this.path) {
       try {

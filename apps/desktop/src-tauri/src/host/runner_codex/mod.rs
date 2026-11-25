@@ -100,6 +100,32 @@ fn isolated_codex_home(opts: &RunOptions) -> std::result::Result<std::path::Path
     Ok(home)
 }
 
+/// `codex exec` reads the user's own `AGENTS.md` from their Codex home, even with `--ignore-user-config` and
+/// `--ignore-rules`, so their personal instructions for their own chats with Codex would reach the run. It gets the
+/// run's own home too, with the file-backed login linked, wherever its login is an API key or that file: a login kept
+/// anywhere else stays in the user's home, so the run still signs in.
+fn exec_codex_home(opts: &RunOptions) -> Option<std::path::PathBuf> {
+    let user_home = env_get(&opts.env, "CODEX_HOME").filter(|home| !home.is_empty()).map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".codex"));
+    let user_home = opts.cwd.join(user_home).canonicalize().ok();
+    let auth = user_home.as_ref().map(|home| home.join("auth.json")).filter(|auth| auth.metadata().is_ok_and(|m| m.is_file() && m.len() > 0));
+    if auth.is_none() && !has_api_key("codex", &opts.env) { return None; }
+    let home = codex_home_dir(&opts.cwd);
+    crate::config::private_directory(&home).ok()?;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink as link_file;
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_file as link_file;
+    if let (Some(user_home), Some(auth)) = (user_home, auth) {
+        for (from, name) in [(auth, "auth.json"), (user_home.join("auth.lock"), "auth.lock")] {
+            let link = home.join(name);
+            if std::fs::symlink_metadata(&link).is_ok() { std::fs::remove_file(&link).ok()?; }
+            link_file(from, link).ok()?;
+        }
+    }
+    Some(home)
+}
+
 async fn try_app_server(opts: &RunOptions, bin: &str, home: &Path) -> Option<RunResult> {
     let mut spawn = opts.spawn_options(None);
     env_remove_ci(&mut spawn.env, &["CODEX_HOME", "CODEX_SQLITE_HOME"]);
@@ -161,13 +187,13 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
     opts.env.extend(opts.mcp.env.clone());
     let bin = match opts.resolve_bin("codex") {
         Ok(b) => b,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
     let tmp_dir = opts.cwd.join(".scarlet");
     let _ = tokio::fs::create_dir_all(&tmp_dir).await;
     let built = build_codex_command(opts.model.as_deref(), opts.effort.as_deref(), opts.service_tier.as_deref(), &opts.system_prompt, &opts.instruction, opts.plan, opts.workspace.as_ref(), &opts.mcp, &opts.cwd, &bin, &tmp_dir);
     if let Err(e) = write_files(&built.cmd.files).await {
-        return RunResult::failed(e.to_string());
+        return RunResult::failed(format!("{e:#}"));
     }
     match isolated_codex_home(&opts) {
         Ok(home) => {
@@ -196,16 +222,21 @@ pub async fn run_codex(mut opts: RunOptions) -> RunResult {
         report_usage(&on_usage, &mut sent_usage, s.usage.clone());
         std::mem::take(&mut s.should_stop)
     });
+    let mut spawn = opts.spawn_options(built.cmd.stdin);
+    if let Some(home) = exec_codex_home(&opts) {
+        env_remove_ci(&mut spawn.env, &["CODEX_HOME", "CODEX_SQLITE_HOME"]);
+        spawn.env.insert("CODEX_HOME".into(), home.to_string_lossy().into_owned());
+    }
     let outcome = match spawn_lines(
         &built.cmd.file,
         &built.cmd.args,
-        opts.spawn_options(built.cmd.stdin),
+        spawn,
         handler,
     )
     .await
     {
         Ok(o) => o,
-        Err(e) => return RunResult::failed(e.to_string()),
+        Err(e) => return RunResult::failed(format!("{e:#}")),
     };
     let s = st.lock().unwrap().clone();
     let mut last = s.last_message.clone();

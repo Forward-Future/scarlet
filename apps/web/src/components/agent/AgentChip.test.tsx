@@ -1108,3 +1108,39 @@ it("shows Option A subscription quota micro-bars, bottom dock pill, mutually exc
     vi.unstubAllGlobals();
   }
 });
+
+it("marks the header's model button when a newer Codex is out and updates it from the selector", async () => {
+  const host = modelHost(["gpt-6.1-sol"]);
+  host.agents = [{ ...host.agents[0]!, version: "0.50.0", latestVersion: "0.171.0" }];
+  const { container, root, hostStatus } = setupModelRefresh(host);
+  let finish: (version: string | null) => void = () => {};
+  const update = vi.spyOn(desktop, "agentUpdate").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await act(() => root.render(<MemoryRouter><AgentChip variant="header" /></MemoryRouter>));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  const trigger = container.querySelector<HTMLButtonElement>(".simple-model")!;
+  // The model's name and dial stay; the amber dot says something needs the editor, and what.
+  expect(trigger.classList.contains("needs-you")).toBe(true);
+  expect(trigger.textContent).toBe("gpt-6.1-sol");
+  expect(trigger.querySelectorAll("svg")).toHaveLength(1);
+  expect(trigger.querySelector('.menu-dot[role="img"]')?.getAttribute("aria-label")).toBe("A newer Codex is available");
+  expect(trigger.getAttribute("aria-description")).toBe("A newer Codex is available");
+
+  await act(() => trigger.click());
+  const row = container.querySelector('[aria-label="Model selector"] [data-agent-update="codex"]')!;
+  expect(row.textContent).toContain("Codex");
+  expect(row.querySelector(".menu-dot")).toBeTruthy();
+  const press = [...row.querySelectorAll("button")].find(b => b.textContent === "Update to 0.171.0")!;
+  expect(press.title).toBe("Codex 0.50.0 is installed");
+  await act(() => press.click());
+  expect(update).toHaveBeenCalledWith("codex");
+  expect(row.textContent).toContain("Updating…");
+  await act(async () => finish("0.171.0"));
+
+  // Once the app has the new version there is nothing to offer: no dot and no row.
+  hostStatus.agents = [{ ...host.agents[0]!, version: "0.171.0", latestVersion: undefined }];
+  await act(() => root.render(<MemoryRouter><AgentChip key="again" variant="header" /></MemoryRouter>));
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  const after = container.querySelector<HTMLButtonElement>(".simple-model")!;
+  expect(after.classList.contains("needs-you")).toBe(false);
+  expect(after.querySelector(".menu-dot")).toBeNull();
+});

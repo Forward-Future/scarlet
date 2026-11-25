@@ -38,7 +38,8 @@ const LOG_NAMES: Array<[RegExp, string]> = [
   [/\bs[_-]?log[_-]?3\b/i, "S-Log3"],
   [/\bs[_-]?log[_-]?2\b/i, "S-Log2"],
   [/\bs[_-]?log\b/i, "S-Log"],
-  [/\bv[_-]?log\b/i, "V-Log"],
+  // A separator is needed here: "vlog" alone is also the word for a video blog, as in a downloaded clip's title.
+  [/\bv[_-]log\b/i, "V-Log"],
   [/\bc[_-]?log[_-]?3\b/i, "C-Log3"],
   [/\bc[_-]?log[_-]?2\b/i, "C-Log2"],
   [/\bc[_-]?log\b/i, "C-Log"],
@@ -69,7 +70,7 @@ export function pictureColorOf(stream: ColorStream | undefined, formatTags?: Rec
   const hdr: HdrTransfer | undefined = transfer === "arib-std-b67" ? "hlg" : transfer === "smpte2084" ? "pq" : undefined;
   const tagText = [stream.tags, formatTags].flatMap(tags => Object.entries(tags ?? {}).map(([k, v]) => `${k} ${v ?? ""}`));
   // FFmpeg 8 names Panasonic's curve as a transfer ("vlog"); its generic log curves are "log100" and "log316".
-  const log = logName([transfer, ...tagText]) ?? (/^log(100|316)$/.test(transfer) ? `Log (${transfer})` : undefined);
+  const log = (transfer === "vlog" ? "V-Log" : logName([transfer, ...tagText])) ?? (/^log(100|316)$/.test(transfer) ? `Log (${transfer})` : undefined);
   const bits = Number(stream.bits_per_raw_sample) || Number(/p(\d{2})(?:le|be)$/.exec(stream.pix_fmt ?? "")?.[1]) || 8;
   const color: PictureColor = {
     ...(hdr && { hdr }),

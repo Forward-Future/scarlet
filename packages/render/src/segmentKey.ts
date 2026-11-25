@@ -7,7 +7,7 @@ import path from "node:path";
 import { sha256, SOURCE_PREVIEW_SECONDS, stableStringify } from "@scarlet/timeline";
 import type { Clip, MediaAsset, Project, Timeline, TimeRange, Track, TransitionPlan } from "@scarlet/timeline";
 import { fileInDirectory } from "./assetPath.js";
-import { effectKind } from "./effects.js";
+import { audioEffectDelay, effectKind } from "./effects.js";
 import { TONE_MAP_REVISION } from "./hdr.js";
 import { fnum } from "./exec.js";
 import { clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graphTransform.js";
@@ -68,6 +68,7 @@ function mediaFingerprint(asset: MediaAsset | undefined, format: SegmentKeyOptio
     path: asset.hash ? undefined : asset.path,
     kind: asset.kind,
     hasAudio: format.pictureOnly ? undefined : asset.hasAudio,
+    ...(format.pictureOnly || asset.audioTrack === undefined ? {} : { audioTrack: asset.audioTrack }),
     sourceAlpha: format.pictureOnly || format.allowProxy ? asset.hasAlpha : undefined,
     proxyGeometry: format.allowProxy ? [asset.width, asset.height, asset.fps, asset.previewClock] : undefined,
     // An HDR source's picture is tone-mapped to SDR. Absent for every other source, so their keys stay as they were.
@@ -104,9 +105,12 @@ function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset
   // Footage off the project's frames is drawn filled to them. Saying so here sets its sections apart from the ones
   // cached before it was, and leaves every other clip's part of the key as it has been.
   const frameFill = (track.kind === "video" && !track.hidden && !!asset && fillsFrames(rest, asset, settings.fps)) || undefined;
+  // A sound an effect plays late used to end that much early in each section. Saying so sets these sections apart
+  // from the ones cached then, and leaves every other clip's part of the key as it has been.
+  const lateTail = (heard && audioEffectDelay(rest.effects) > 0) || undefined;
   if (!asset?.hash || rest.effects.some(effect => effect.enabled && effect.type === "lut")) {
     // Pending/legacy sources and external LUTs retain the old placement-sensitive identity.
-    return { ...rest, timelineIn, range, media: mediaFingerprint(asset, format), frameFill, motion };
+    return { ...rest, timelineIn, range, media: mediaFingerprint(asset, format), frameFill, lateTail, motion };
   }
   const { sourceIn, sourceOut: _out, ...input } = rest;
   const videoStart = videoClockStart(rest, p.local0);
@@ -118,7 +122,7 @@ function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset
   return { ...input, placement, media: mediaFingerprint(asset, format),
     seek: fnum(sourceIn + p.local0 * rest.speed), sourceDuration: fnum(p.vis * rest.speed),
     videoStart: fnum(videoStart), audioStart: fnum(audioStart), shift: fnum(p.pos - videoStart), delaySamples: format.pictureOnly ? undefined : Math.round(p.pos * settings.sampleRate),
-    videoFadeStart: fadeStart(rest.videoFadeOut), audioFadeStart: fadeStart(rest.audioFadeOut), frameFill, motion };
+    videoFadeStart: fadeStart(rest.videoFadeOut), audioFadeStart: fadeStart(rest.audioFadeOut), frameFill, lateTail, motion };
 }
 
 /** Fingerprint the rendered window independently of its absolute timeline position. */

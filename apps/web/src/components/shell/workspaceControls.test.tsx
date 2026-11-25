@@ -100,13 +100,15 @@ it("lists Settings once, with the key of the computer it is on, and the keys of 
   await mount(<ShortcutsModal />);
   expect(keysFor("Open Settings")).toEqual(["Ctrl ,"]);
   expect(keysFor("Select all projects")).toEqual(["Ctrl A"]);
+  expect(keysFor("Clear the marked range (also Esc or Delete)")).toEqual(["Alt X"]);
   expect(keysFor("Clear the selection")).toEqual(["Esc"]);
-  // The same rows name ⌘ on a Mac.
+  // The same rows name ⌘ and ⌥ on a Mac.
   computer.mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15");
   await act(async () => useUiStore.setState({ shortcutsOpen: false }));
   await act(async () => useUiStore.setState({ shortcutsOpen: true }));
   expect(keysFor("Open Settings")).toEqual(["⌘ ,"]);
   expect(keysFor("Select all projects")).toEqual(["⌘ A"]);
+  expect(keysFor("Clear the marked range (also Esc or Delete)")).toEqual(["⌥ X"]);
   // No row is for another computer.
   expect(el.querySelector("dialog")!.textContent).not.toMatch(/macOS|Ctrl/);
 });

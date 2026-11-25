@@ -1,9 +1,10 @@
-import { readFile, rm, stat } from "node:fs/promises";
+import { open, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { newId, type TranscriptSegment, type TranscriptWord } from "@scarlet/timeline";
 import { extractWav } from "../render/ffmpeg.js";
 import { fallbackAdapter } from "../render/adapter.js";
 import { clip } from "../logText.js";
+import { readWavDataLayout } from "../util.js";
 import type { TranscribeInput, TranscribeResult, TranscriptionProvider } from "./index.js";
 import { SEAM_CONTEXT, savedWindows } from "./seams.js";
 
@@ -15,6 +16,20 @@ const SHORTEST_CHUNK_BYTES = 78 + 3200;
 async function emptyDecode(wav: string) {
   if ((await stat(wav)).size >= SHORTEST_CHUNK_BYTES) return false;
   return (await readFile(wav)).toString("latin1", 0, 4) === "RIFF";
+}
+
+/** Seconds of sound in a file whose container doesn't give its length, from decoding all of it once. */
+async function decodedSeconds(input: TranscribeInput) {
+  const wav = join(input.tmpDir, `${newId("chunk")}.wav`);
+  try {
+    await extractWav(input.path, wav, { audio: input.audio, signal: input.signal });
+    const handle = await open(wav, "r");
+    try {
+      return ((await readWavDataLayout(handle))?.samples ?? 0) / 16000;
+    } finally { await handle.close(); }
+  } finally {
+    await rm(wav, { force: true });
+  }
 }
 
 /**
@@ -64,10 +79,12 @@ export class OpenAIProvider implements TranscriptionProvider {
       }
       return { language: json.language, segments: toSegments(json, 0) };
     }
-    const duration = input.duration ?? (await fallbackAdapter.probeMedia(input.path)).duration;
     const { checkpoint } = input;
     const segments = [...(checkpoint?.result.segments ?? [])];
     let language = checkpoint?.result.language;
+    let duration = input.duration || (await fallbackAdapter.probeMedia(input.path)).duration;
+    // A file can leave its length out (a voice note a browser recorded to WebM): its decoded sound says how long it is.
+    if (!(duration > 0)) duration = await decodedSeconds(input);
     const length = duration > 0 ? duration : 1;
     const windows = savedWindows(checkpoint?.through ?? 0, (through, chunk) => {
       checkpoint?.save(through, { language, segments: chunk }, through / length);
@@ -87,11 +104,21 @@ export class OpenAIProvider implements TranscriptionProvider {
         let chunk: TranscriptSegment[] = [];
         let heard = from === 0;
         if (!heard) {
-          await extractWav(input.path, out, { start: from, duration: Math.min(1, seam - from), signal: input.signal });
+          await extractWav(input.path, out, {
+            start: from,
+            duration: Math.min(1, seam - from),
+            audio: input.audio,
+            signal: input.signal,
+          });
           heard = !await emptyDecode(out);
         }
         if (heard) {
-          await extractWav(input.path, out, { start: readFrom, duration: readTo - readFrom, signal: input.signal });
+          await extractWav(input.path, out, {
+            start: readFrom,
+            duration: readTo - readFrom,
+            audio: input.audio,
+            signal: input.signal,
+          });
           const json = await this.call(out, input.language ?? this.opts.language, input);
           language ??= json.language;
           chunk = toSegments(json, readFrom);

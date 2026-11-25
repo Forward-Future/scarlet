@@ -51,8 +51,8 @@ export const CutAssessment = z.object({
   proposes: z.literal("keep").optional(),
   /**
    * Set by the engine on a cut Scarlet asks the editor about: the order its pass's asks reached them in, from 1. The
-   * editor's number for the call goes by it, so a later ask, earlier in the video, doesn't renumber the calls they've
-   * seen. It goes with the note onto a later part.
+   * editor never sees it (a call goes by its time), but it keeps the calls' order steady when a later ask lands earlier
+   * in the video. It goes with the note onto a later part.
    */
   askOrder: z.number().int().positive().optional(),
 });
@@ -166,6 +166,11 @@ export const Change = z.object({
     .default([]),
   /** Agent task that produced it, if any. */
   taskId: Id.optional(),
+  /**
+   * The model the request handed this work to, as a kind of work the editor gave it in Task models: the hand-off run
+   * that saved it, the kind of work by the editor's name for it, and the model. `taskId` stays the request's.
+   */
+  handedOff: z.object({ taskId: Id, name: z.string().max(40), agent: z.string(), model: z.string().optional() }).optional(),
   /** The thread (one request and everything that followed) this change belongs to. */
   threadId: Id.optional(),
   /**
