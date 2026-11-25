@@ -121,6 +121,8 @@ pub(crate) fn windows_local_app_dirs(local: &Path) -> Vec<PathBuf> {
         // Where the official Antigravity CLI (Gemini) installer puts agy.exe, and the folder older builds used.
         local.join("agy").join("bin"),
         local.join("antigravity-cli").join("bin"),
+        // Where the official Codex Windows installer puts codex.exe.
+        local.join("Programs").join("OpenAI").join("Codex").join("bin"),
         local.join("Microsoft/WinGet/Links"),
         local.join("pnpm"),
         local.join("Programs").join("nodejs"),
