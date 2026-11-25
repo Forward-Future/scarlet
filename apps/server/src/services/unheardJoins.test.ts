@@ -203,3 +203,17 @@ it("finishes a pass whose check couldn't read a recording in another language, w
   expect(done).toMatchObject({ state: "done", repeatAudit: { version, noFindings: false, unavailable: [expect.stringContaining("The scan couldn't run.")] } });
   expect(done.interrupted).toBeUndefined();
 });
+
+it("checks repeats for a running Cutting hand-off and saves the receipt on it", async () => {
+  const { ctx } = workspace;
+  recording("mic");
+  await quietEmissions("mic");
+  const request = pass();
+  const handOff = start(createTask(ctx, { projectId: project.id, kind: "hand_off", agent: "claude", instruction: "Cut the filler",
+    context: { threadId: request.id, checksTaskId: request.id, handOff: { typeId: "cutting", name: "Cutting", brief: "Cut the filler" } },
+    createdBy: { type: "human", name: "Editor" } }));
+  const version = assemble(request, [["one", "mic", 0, 4, 0], ["two", "mic", 8.3, 15, 4]]);
+  const found = await check(handOff, version);
+  expect(found).toMatchObject({ version, remaining: 0 });
+  expect(ctx.repos.tasks.get(handOff.id)?.repeatAudit).toMatchObject({ version, noFindings: true });
+});
