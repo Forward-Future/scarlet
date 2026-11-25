@@ -3,18 +3,19 @@ import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, t
 import { createPortal } from "react-dom";
 import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
 import { EditVersion, RejectedMark, ThreadAction, ThreadEdits } from "../../../components/review/ThreadEdits";
-import { asksEditor, editGroups, revisionWord, useAdding, useRejecting, useReviewed, useRevising, waitingPassRows, waitingRows } from "../../../components/review/threadEditState";
+import { asksEditor, editGroups, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, waitingPassRows, waitingRows } from "../../../components/review/threadEditState";
 import { Icon } from "../../../components/ui/primitives";
 import { useFloatingPosition } from "../../../lib/uiHooks";
 import { editKindWord, editRowWord } from "../../../lib/editKind";
 import { listMoments, type Moment } from "../../../lib/editMoments";
 import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../../../lib/format";
-import { editKey } from "../../../lib/keptEdits";
+import { editKey, unkeepEdits } from "../../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../../lib/madeSentence";
 import { decidedPassCalls, rejectedCallRef } from "../../../lib/passCalls";
 import { inListOrder, ReviewLinger, rowPlace, tabShown, type ListOrder, type RowPlace } from "./reviewTabsBeta";
 import { isRecheck, type Thread } from "../../../lib/threads";
 import { useKeepSelectedInView } from "../../../lib/uiHooks";
+import { recordUndo } from "../../../lib/undo";
 import { useReviewRail, type RailSection } from "../railStore";
 import { callRowKey, isWorking, letGo, listedBefore, noNests, noRejected, noSpent, type ChatActions, type HoveredReviewRow, type Nest, type PassList, type Spent } from "../types";
 
@@ -193,6 +194,9 @@ interface PassRow {
   title?: string;
   on: boolean;
   open?: () => void;
+  /** Take back Keep on this row from its hover control. */
+  unkeep?: () => void;
+  unkeepTip?: string;
   fresh: boolean;
 }
 
@@ -234,6 +238,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   /** The row key whose question is currently displayed over the message box, so it lights up. */
   askingRowKey?: string }) {
   const reviewed = useReviewed(projectId, thread);
+  const canUnkeep = useCanUnkeep(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
   const adding = useAdding(thread);
@@ -335,15 +340,26 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       // Scarlet's own ends on its version there, as a revised call does, until it is kept or sent back again.
       const rawKind = editRowWord(e);
       const kindWord = rail && rawKind === "Edit" ? undefined : rawKind;
+      const unkeepable = decided && !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(key));
+      const label = (e.reason && e.summary) || e.label;
       return [{ key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey),
         at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
-        label: (e.reason && e.summary) || e.label, n: 0, num: undefined,
+        label, n: 0, num: undefined,
         state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: editRemovedLabel(e) ?? kindWord, word, revised, rejected: false, skipped: false,
         forYou, onlyForYou: false,
         // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
         busy: !!sent && isWorking(sent.state), pending: !!sent, needs, asks, sentBack, decided,
         version: e.previous.length ? e.previous.length + 1 : 0, title: revised || e.reason ? undefined : e.check,
-        on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e), fresh: fresh.has(e.changeId) }];
+        on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e),
+        ...(unkeepable && {
+          unkeep: () => {
+            actions.lightMark();
+            unkeepEdits(projectId, thread.id, [e]);
+            recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: [e], name: label });
+          },
+          unkeepTip: e.check ? "Move back to For you" : tabbed ? "Move back to low risk" : "Unkeep",
+        }),
+        fresh: fresh.has(e.changeId) }];
     }),
     // A call goes by its time, as on its card and in the box's tag.
     ...(pass?.calls ?? []).map((c): PassRow => {
@@ -359,6 +375,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         version: c.version > 1 ? c.version : 0, title: c.earlier && `v${c.version - 1}: ${c.earlier.reason ?? "Scarlet’s earlier version."}${c.earlier.note ? `\nYou: “${c.earlier.note}”` : ""}`,
         on: listening?.changeId === pass!.change.id && listening.index === c.index, word: undefined, revised: false, rejected: false,
         forYou: true, onlyForYou: false, fresh: false,
+        ...(c.state === "approved" && !pass!.deciding && pass!.unkeepCall && {
+          unkeep: () => { actions.lightMark(); pass!.unkeepCall!(c.index); },
+          unkeepTip: "Move back to For you",
+        }),
         // In the column of edits a call sent back opens from its row in Working, as an edit sent back does: its card
         // says where its revision stands, and ↑ ↓ then step through Working's rows.
         open: c.state === "revising" && !rail ? undefined : () => pass!.openCall(c.index) };
@@ -420,9 +440,16 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     const sent = members.find(m => m.asks) ?? members.find(m => m.busy) ?? members.find(m => m.word === "Up next") ?? members.find(m => m.pending);
     const more = others.length === 1 ? `+ ${(others[0]!.beforeCut ? "cut" : editKindWord(others[0] as ThreadEdit)?.toLowerCase()) ?? "1 edit"}` : `+ ${others.length} edits`;
     const allDecided = members.every(m => m.decided);
+    const unkeepMembers = allDecided ? moment.edits.filter(e => !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(editKey(e)))) : [];
     entries.push({ key: main.key, row: { ...main, displayAt: Math.min(...members.map(m => m.displayAt)), on: main.on && !actions.showingSingle,
       decided: allDecided, decision: allDecided ? main.decision ?? "Kept" : undefined, word: sent?.word ?? main.word, asks: !!sent?.asks, busy: !sent?.asks && members.some(m => m.busy),
       revised: !sent && members.some(m => m.revised), pending: members.some(m => m.pending),
+      unkeep: unkeepMembers.length > 0 ? () => {
+        actions.lightMark();
+        unkeepEdits(projectId, thread.id, unkeepMembers);
+        recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepMembers, name: main.label });
+      } : undefined,
+      unkeepTip: unkeepMembers.length > 0 ? (tabbed ? "Move back to low risk" : "Unkeep") : undefined,
       was: members.flatMap(m => m.was ?? []), title: members.map(m => m.label).join("\n") }, members, more, moment: moment.key,
       unfolded: unfolded.has(moment.key) || members.some(m => m.on),
       place: members.some(m => asks.has(m.key)) ? "you" : rowPlace(members, { waits: m => m.needs || m.asks, sent: m => m.pending, kept: m => m.decided }),
@@ -535,7 +562,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         const aimLead = <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}</span>;
         const tipText = moment && row.title ? row.title : row.label;
         const tipDetail = !moment && row.title && row.title !== row.label ? row.title : undefined;
-        return <li key={row.key} className={linger.of(entry.key)?.leaving ? "is-leaving" : undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
+        const leaving = (id === "you" || id === "optional") && !!linger.of(entry.key)?.leaving;
+        const canUnkeepRow = !!row.unkeep && !leaving;
+        return <li key={row.key} className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
           data-log-control="open-pass-item" data-log-label={moment ? "Moment" : "Pass item"} disabled={!row.open}
           title={rail ? undefined : (row.title || row.label)} data-row-tip={rail ? tipText : undefined} data-row-detail={rail ? tipDetail : undefined} onClick={letGo(() => row.open?.())}
           aria-label={more ? `${clockLabel(row.displayAt)} ${row.label}, ${more.replace("+ ", "and ")}` : row.rejected ? `${clockLabel(row.displayAt)} ${row.label}, rejected` : undefined}
@@ -556,10 +585,16 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
               Scarlet is on it, amber once it is back and waits on the editor. One word a row, on the row's own line. */}
           {row.word && <span className={`simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={spent.get(row.key)}>{row.word}</span>}
         </button>
+        {canUnkeepRow && <span className="simple-row-unkeep"
+          onPointerEnter={() => actions.lightMark(row.mark, row.hover)} onPointerLeave={() => actions.lightMark()}>
+          <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
+            aria-label={`Unkeep ${row.label}`} title={row.unkeepTip ?? "Unkeep"}
+            onClick={letGo(() => row.unkeep!())}>Unkeep</button>
+        </span>}
         <AimRow on={!!row.on}>{aimLead}<span className="composer-aim-words">{row.label}</span></AimRow>
         {under(entry).map(nest => nest.node)}
         {open && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
-          {members.map(m => <li key={m.key}><button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
+          {members.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}><button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
             data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open}
             title={rail ? undefined : (m.title || m.label)} data-row-tip={rail ? m.label : undefined} data-row-detail={rail && m.title && m.title !== m.label ? m.title : undefined} onClick={letGo(() => m.open?.())}
             onPointerEnter={() => actions.lightMark(m.mark, m.hover)} onPointerLeave={() => actions.lightMark()}>
@@ -567,7 +602,13 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
               {m.version > 0 && <EditVersion n={m.version} hover={spent.get(m.key)} />}</span>
             {m.value && !m.word && <span className={m.busy && !m.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(m.key)}>{m.value}</span>}
             {m.word && <span className={`simple-pass-check${m.revised || m.asks ? "" : " is-kept"}${m.busy ? " working-text" : ""}`} title={spent.get(m.key)}>{m.word}</span>}
-          </button>{nests.filter(nest => nest.key === m.key && m.key !== row.key).map(nest => nest.node)}</li>)}
+          </button>
+          {m.unkeep && <span className="simple-row-unkeep"
+            onPointerEnter={() => actions.lightMark(m.mark, m.hover)} onPointerLeave={() => actions.lightMark()}>
+            <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
+              aria-label={`Unkeep ${m.label}`} title={m.unkeepTip ?? "Unkeep"}
+              onClick={letGo(() => m.unkeep!())}>Unkeep</button>
+          </span>}{nests.filter(nest => nest.key === m.key && m.key !== row.key).map(nest => nest.node)}</li>)}
         </ol>}</li>;
       })}
     </ol>;

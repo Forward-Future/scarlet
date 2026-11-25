@@ -15563,3 +15563,71 @@ it("loads the new layout without crashing when the focused waiting pass has a fl
     expect(columnOpen()).toBe("Flagged zoom");
   });
 });
+
+it("lets the editor unkeep a kept edit in Done without opening it, and re-keeps it on ⌘Z", async () => {
+  onlyFlagged();
+  data = { ...data, tasks: [...data.tasks, { ...data.tasks.find(t => t.id === "task_done")!, id: "task_pass", kind: "edit" as const,
+    instruction: "/dialogue-pass", context: { message: "/dialogue-pass" }, changeIds: ["chg_approved_2"] }] };
+  useProjectStore.setState({ current: data });
+  const keep = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined as never);
+  const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined as never);
+  await showFolded();
+  await act(async () => {});
+  const pass = turnFor("chg_approved_2").querySelector<HTMLElement>(".simple-pass")!;
+  await click(pass.querySelector(".simple-pass-need")!);
+  await act(async () => {});
+  await press("k");
+  await act(async () => {});
+  expect(editPanel()).toBeNull();
+  await click(tabNamed(pass, "Done"));
+  await act(async () => {});
+  expect(pass.querySelectorAll(".simple-pass-list > li")).toHaveLength(1);
+  const unkeepBtn = pass.querySelector<HTMLButtonElement>(".simple-unkeep")!;
+  expect(unkeepBtn).not.toBeNull();
+  expect(unkeepBtn.textContent).toBe("Unkeep");
+  expect(unkeepBtn.title).toBe("Move back to For you");
+  // Clicking Unkeep moves the edit back to For you without opening its card or leaving Done.
+  await click(unkeepBtn);
+  await act(async () => {});
+  expect(unkeep).toHaveBeenCalledTimes(1);
+  expect(editPanel()).toBeNull();
+  expect(reviewModes(pass)).toEqual(tabs("Done"));
+  expect(pass.querySelector(".simple-review-empty")?.textContent).toBe("Nothing decided yet.");
+  expect(pass.querySelector(".simple-pass-need")?.getAttribute("title")).toBe("1 needs you");
+  // ⌘Z takes back Unkeep and keeps the edit again.
+  const keepsBefore = keep.mock.calls.length;
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+  await act(async () => {});
+  expect(keep.mock.calls.length).toBe(keepsBefore + 1);
+  expect(pass.querySelector(".simple-pass-need")?.getAttribute("title")).toBeNull();
+  expect(pass.querySelectorAll(".simple-pass-list > li")).toHaveLength(1);
+});
+
+it("lets the editor unkeep an approved waiting pass call in Done, and does not offer Unkeep on a rejected call", async () => {
+  const save = flagged();
+  const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
+  useProjectStore.setState({ current: data, approve });
+  await show();
+  await act(async () => {});
+  await click(passCard().querySelector(".simple-pass-need")!);
+  await press("k");
+  await act(async () => {});
+  await click(tabNamed(passCard(), "Done"));
+  await act(async () => {});
+  const unkeepBtn = passCard().querySelector<HTMLButtonElement>(".simple-unkeep")!;
+  expect(unkeepBtn).not.toBeNull();
+  await click(unkeepBtn);
+  await act(async () => {});
+  expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ choices: [], applyWhenDone: false }));
+  expect(passCard().querySelector(".simple-pass-need")?.getAttribute("title")).toBe("2 need you");
+  // Rejecting a call leaves it in Done as Rejected, with no Unkeep button.
+  await click(tabNamed(passCard(), "For you"));
+  await act(async () => {});
+  await click(passRows()[0]!);
+  await press("x");
+  await act(async () => {});
+  await click(tabNamed(passCard(), "Done"));
+  await act(async () => {});
+  expect(passRows()[0]?.querySelector(".simple-pass-value")?.textContent).toBe("Rejected");
+  expect(passCard().querySelector(".simple-unkeep")).toBeNull();
+});

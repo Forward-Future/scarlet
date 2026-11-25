@@ -878,6 +878,17 @@ export function LegacySimpleWorkspace() {
         state: sentBack(a.index) ? "revising" : passChoices[a.index] === undefined ? "open" : passChoices[a.index] === approves(a) ? "approved" : "skipped" };
     }),
     openCall: index => { const call = allCalls.find(a => a.index === index); if (call) listenCall(pass, call); },
+    unkeepCall: index => {
+      if (deciding === pass.id) return;
+      const choices = choicesOf(pass);
+      const was = choices[index];
+      if (was === undefined) return;
+      const { [index]: _decided, ...rest } = choices;
+      recordUndo({ kind: "call", word: "Unkeep", projectId: current.id, changeId: pass.id, index, was,
+        name: cutName({ changeId: pass.id, cutIndex: index }) });
+      appLog("action", "unkeep-call", { change: pass.id, index });
+      void saveChoices(pass, rest, false);
+    },
     apply: () => void (passRunning ? saveChoices(pass, choicesOf(pass), true) : approveReview(pass)),
   } : undefined;
   const actions: ChatActions = {
