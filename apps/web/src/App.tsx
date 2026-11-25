@@ -16,6 +16,7 @@ export function ProjectHome() {
 }
 
 const loadSkillEditor = async () => ({ Component: (await import("./pages/SkillEditorPage")).SkillEditorPage });
+const loadStyleGuideEditor = async () => ({ Component: (await import("./pages/StyleGuideEditorPage")).StyleGuideEditorPage });
 
 const router = createBrowserRouter(createRoutesFromElements(
   <>
@@ -26,9 +27,12 @@ const router = createBrowserRouter(createRoutesFromElements(
       <Route index element={<ProjectsPage />} />
       <Route path="/settings" lazy={async () => ({ Component: (await import("./pages/SettingsPage")).SettingsPage })}>
         <Route path="skills" lazy={async () => ({ Component: (await import("./pages/SkillsPage")).SkillsPage })} />
+        <Route path="style-guides" lazy={async () => ({ Component: (await import("./pages/StyleGuidesPage")).StyleGuidesPage })} />
       </Route>
       <Route path="/settings/skills/new" lazy={loadSkillEditor} />
       <Route path="/settings/skills/:skillId" lazy={loadSkillEditor} />
+      <Route path="/settings/style-guides/new" lazy={loadStyleGuideEditor} />
+      <Route path="/settings/style-guides/:styleGuideId" lazy={loadStyleGuideEditor} />
       <Route path="/p/:id" lazy={async () => ({ Component: (await import("./components/shell/ProjectLayout")).ProjectLayout })}>
         <Route index lazy={async () => ({ Component: (await import("./pages/SimpleWorkspace")).SimpleWorkspace })} />
         <Route path="*" element={<ProjectHome />} />

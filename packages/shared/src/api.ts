@@ -532,6 +532,8 @@ export const ServerSettings = z.object({
    * models). The model running a request hands such work to that model with `hand_off`. "same" leaves it with the chat's.
    */
   taskModels: z.array(TaskModelType).max(TASK_MODELS_MAX).default(DEFAULT_TASK_MODELS),
+  /** Opt-in Style guides (Beta) library, preview editor, and @name mentions in chat/skills. Off by default. */
+  styleGuidesBeta: z.boolean().default(false),
 });
 export type ServerSettings = z.infer<typeof ServerSettings>;
 

@@ -18,6 +18,7 @@ import { useSpeech } from "../../../lib/speech";
 import type { Thread } from "../../../lib/threads";
 import { useProjectStore } from "../../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../../stores/skills";
+import { commandStyleGuideIds } from "../../../stores/styleGuides";
 import { draftInserter, editTargetAt, markedRangeOf, pointOf, playheadPoints, spliceDraft, useUiStore, withMarkedRange, type AgentContext } from "../../../stores/ui";
 import { Icon, Spinner, InlineError } from "../../../components/ui/primitives";
 import { AgentChip, CONNECTING_REASON, runChoiceDiffers, useAgentAvailability, useModelsConnecting } from "../../../components/agent/AgentChip";
@@ -218,9 +219,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   });
   /** Continue the focused thread, start a note at a moment, or start a new request. */
   /** Sends the message, and says whether the files attached to it went with it. An answer to Scarlet's question carries them as any other message does. */
-  const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[], files?: TaskAttachment[], drawn?: PictureMarks): Promise<boolean> => {
+  const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[], files?: TaskAttachment[], drawn?: PictureMarks, styleGuideIds?: string[]): Promise<boolean> => {
     const attachments = files?.length ? files : undefined;
     const carried = attachments && { attachments, ...(drawn && { pictureMarks: drawn }) };
+    const guides = styleGuideIds?.length ? { styleGuideIds } : undefined;
     if (question) {
       // An answer about an edit says which, by its time and name: "Edit at 0:08 · Sponsor transition — …".
       const answer = anchor?.editIndex !== undefined ? `${[`Edit at ${clock(anchor.time)}`, anchor.label].filter(Boolean).join(" · ")} — ${text}`
@@ -243,18 +245,18 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         if (task) recordRevision(task);
         return true;
       }
-      context = { skillIds, version: head, ...position, threadId: thread.id, ...carried };
+      context = { skillIds, ...guides, version: head, ...position, threadId: thread.id, ...carried };
     } else if (anchor?.mediaId) {
-      context = { skillIds, version: anchor.version ?? head, mediaId: anchor.mediaId, time: anchor.time, end: anchor.end, ...carried };
+      context = { skillIds, ...guides, version: anchor.version ?? head, mediaId: anchor.mediaId, time: anchor.time, end: anchor.end, ...carried };
     } else if (anchor && attachments) {
       // A note at a moment takes no files, so a message that carries some is a request about that moment.
-      context = { skillIds, version: anchor.version ?? head, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, markedRange: anchor.markedRange, ...carried };
+      context = { skillIds, ...guides, version: anchor.version ?? head, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, markedRange: anchor.markedRange, ...carried };
     } else if (anchor) {
       const { task } = await createNote(project.id, { skillIds, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, text, voiceTranscript, version: anchor.version ?? head, ...assignment(effective) });
       if (task) onCreated?.(task);
       return true;
     } else {
-      context = { skillIds, version: head, ...carried };
+      context = { skillIds, ...guides, version: head, ...carried };
     }
     const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context });
     // A reply stays in its thread; anything else is a new request the page goes to.
@@ -328,9 +330,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     setRefused(false);
     setBusy(true);
     try {
-      const skillIds = await commandSkillIds(draft);
+      const [skillIds, styleGuideIds] = await Promise.all([commandSkillIds(draft), commandStyleGuideIds(draft)]);
       const { files, drawn, done } = await filesFor();
-      done(await send(text, undefined, displayAnchor, skillIds, files, drawn));
+      done(await send(text, undefined, displayAnchor, skillIds, files, drawn, styleGuideIds));
       clearSentDraft(owner, { agentDraft: draft, agentContext: context });
       if (boxIsFree()) onSent?.();
     } catch (e) {
