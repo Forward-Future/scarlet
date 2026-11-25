@@ -1723,6 +1723,56 @@ it("takes the card off an edit sent back for revision until its new version land
   expect([keptInForYou.classList.contains("is-decided"), keptInForYou.querySelector(".simple-edit-value")?.textContent]).toEqual([true, "Kept"]);
 });
 
+it("summarizes a revised edit's card from its latest version rather than the earlier version it replaced", async () => {
+  appliedEdits();
+  const base = data.changes.find(c => c.id === "chg_approved_2")!;
+  const v1 = {
+    ...base,
+    id: "chg_board_v1",
+    threadId: "thr_board",
+    createdAt: "2026-11-25T15:40:00.000Z",
+    ops: [{ op: "addClip", trackId: "trk_v1", clip: { id: "tier_board_1", kind: "media", mediaId: "med_1", label: "Tier board", timelineIn: 0, sourceIn: 0, sourceOut: 16, speed: 1 } }],
+    timelineEdits: [{ label: "Show the tier board", range: { start: 0, end: 16 } }],
+  };
+  const v2 = {
+    ...base,
+    id: "chg_board_v2",
+    threadId: "thr_board",
+    createdAt: "2026-11-25T15:42:00.000Z",
+    fromVersion: v1.toVersion,
+    toVersion: "ver_board_v2",
+    appliedVersion: "ver_board_v2",
+    ops: [{ op: "updateClip", clipId: "tier_board_1", patch: { transform: { scale: 1.19, x: 0, y: -0.09 } } }],
+    timelineEdits: [{ label: "Show the whole lower row", range: { start: 0, end: 16 }, reason: "Viewers can see the lower row.", replaces: { changeId: v1.id, spot: 0 } }],
+  };
+  data = {
+    ...data,
+    changes: [...data.changes.filter(c => c.id !== "chg_approved_2"), v1 as never, v2 as never],
+    project: { ...data.project, head: "ver_board_v2" },
+    timeline: { ...data.timeline!, version: "ver_board_v2" },
+  };
+  useProjectStore.setState({ current: data });
+  vi.spyOn(api, "threadEdits").mockResolvedValue({
+    version: "ver_board_v2",
+    edits: [{
+      changeId: v2.id,
+      spot: 0,
+      label: "Show the whole lower row",
+      kind: "zoom" as const,
+      range: { start: 0, end: 16 },
+      reason: "Viewers can see the lower row.",
+      check: "Check that every model name fits.",
+      previous: [{ changeId: v1.id, spot: 0 }],
+    }],
+  });
+  await show();
+  await act(async () => {});
+  await click(turnFor(v1.id).querySelector(".simple-edit")!);
+  await act(async () => {});
+  expect(editPanel()!.querySelector(".edit-card-what")?.textContent).toBe("Zoom to 119%");
+  expect(editPanel()!.querySelector(".edit-card-title")?.textContent).toBe("Viewers can see the lower row. Check that every model name fits.");
+});
+
 /** The timeline's dots, left to right, each by its state: "check" while it asks for a look, "kept" once kept. Dots carry no numbers. */
 const markStates = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")].map(d => d.dataset.state);
 
