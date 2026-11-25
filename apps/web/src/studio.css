@@ -502,6 +502,7 @@
   gap: 20px;
   align-items: start;
 }
+.about-sidebar { display: grid; gap: 16px; min-width: 0; }
 .about-changelog, .about-telemetry { min-width: 0; padding: 20px; }
 .about-changelog h2, .about-telemetry h2 { font-size: 17px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
 .about-changelog-head {
