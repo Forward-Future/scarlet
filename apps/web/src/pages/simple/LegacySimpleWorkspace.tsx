@@ -34,7 +34,7 @@ import { appLog } from "../../lib/appLog";
 import { clock as clockLabel, lengthLabel, parseTimestamp, plural, removedSeconds, distinctClock } from "../../lib/format";
 import { editPlaybackRange } from "../../lib/editPlaybackRange";
 import { listMoments, momentRange } from "../../lib/editMoments";
-import { reviewStops, rowAfter, rowBeside, rowPlace, rowsOfTab, stopsShown, tabShown, type ListOrder, type ReviewStop } from "../../lib/reviewTabs";
+import { reviewStops, rowAfter, rowBeside, rowNext, rowPlace, rowsOfTab, stopsShown, tabShown, type ListOrder, type ReviewStop } from "../../lib/reviewTabs";
 import { editFocus, editKindWord } from "../../lib/editKind";
 import { player } from "../../lib/player";
 import { cutChange } from "../../lib/appliedCutPlayback";
@@ -1372,17 +1372,19 @@ export function LegacySimpleWorkspace() {
       : delta > 0 ? list[0] : list.at(-1);
     return stopTarget(next, row => row.find(passWaitsOrAsks) ?? row[0]!);
   }
-  // Keep goes to the next row that waits on the editor in For you, in its order, a call or a flagged edit, wrapping to
-  // the earlier ones, and the card closes once nothing is left. With For you's low risk edits included and on an edit
-  // Scarlet didn't flag, it goes to the next low risk row instead, then to what waits. A request with one list of
+  // Keep goes to the next row in For you's list: with low risk edits included, the very next row down that one list
+  // (flagged edit, call or low risk edit alike), wrapping to what still waits at the end, and closing once none is
+  // left; with low risk edits off, the next row that waits, wrapping to earlier ones. A request with one list of
   // every edit goes down that list to the next row that hasn't been kept.
   const unkeptEdit = (e: ThreadEdit) => !e.check && !reviewed(e) && !revisingEdit(e);
   const stillWaits = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.call ? callWaitsOrAsks(stop.call) : !!stop.row?.some(waits);
+  const reviewable = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.place === "optional" ? !!stop.row : stillWaits(waits)(stop);
   const waitingStops = rowsOfTab(focusStops, "you", false, focusOrder).filter(stillWaits(waitsOrAsks));
-  const onOptional = focusList === "all" && !!hereStop?.row && !hereStop.row.some(e => !!e.check);
+  const keepStops = focusList === "all" ? rowsOfTab(focusStops, "you", true, focusOrder).filter(reviewable(waitsOrAsks)) : waitingStops;
   const afterKeep = !reviewingEdit || !focusTabbed ? undefined
-    : onOptional ? rowAfter(rowsOfTab(focusStops, "you", true, focusOrder).filter(stop => stop.place === "optional"), hereStop, here!, focusOrder) ?? waitingStops[0]
-    : rowAfter(waitingStops, hereStop, here!, focusOrder);
+    : focusList === "all"
+      ? rowNext(keepStops, hereStop, here!, focusOrder) ?? waitingStops.find(stop => stop !== hereStop)
+      : rowAfter(waitingStops, hereStop, here!, focusOrder);
   const afterListKeep = reviewingEdit && !focusTabbed ? keepGoesTo<Call>(editsByRow, shownRow, e => unkeptEdit(e) || waitsOrAsks(e), []) : undefined;
   // Keep reaches a moment as ↑ ↓ do: whole, at the edit it is named for, however much of it is kept already. The
   // first of its edits still to keep would open alone and unfold the moment.
@@ -1390,12 +1392,17 @@ export function LegacySimpleWorkspace() {
   const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitsOrAsks) ?? momentLead(row.find(unkeptEdit) ?? row[0]!)) ?? afterListKeep;
   const nextEditAfterKeep = nextAfterKeep && "edit" in nextAfterKeep ? afterKeep ? nextAfterKeep.edit : momentLead(nextAfterKeep.edit) : undefined;
   const nextCallAfterKeep = nextAfterKeep && "call" in nextAfterKeep ? nextAfterKeep.call : undefined;
-  // Keep or Reject edit on a call goes on the same way: to the next row that waits in For you, a call or a flagged edit.
+  // Keep or Reject edit on a call goes on the same way: to the next row in For you's list (including low risk edits when shown).
   const openStops = listening && pass ? passStopsNow() : [];
-  const nextAfterCallDecision = !listening || !pass ? undefined : stopTarget(
-    rowAfter(rowsOfTab(openStops, "you", false, passOrder).filter(stillWaits(passWaitsOrAsks)), openStops.find(stop => stop.call?.index === listening.index),
-      { at: listedAt.get(listening.index) ?? listening.cut.start, num: callNo.get(listening.index) }, passOrder),
-    row => row.find(passWaitsOrAsks) ?? row[0]!);
+  const callHereStop = listening ? openStops.find(stop => stop.call?.index === listening.index) : undefined;
+  const callHere = listening ? { at: listedAt.get(listening.index) ?? listening.cut.start, num: callNo.get(listening.index) } : undefined;
+  const passWaitingStops = rowsOfTab(openStops, "you", false, passOrder).filter(stillWaits(passWaitsOrAsks));
+  const passKeepStops = passList === "all" ? rowsOfTab(openStops, "you", true, passOrder).filter(reviewable(passWaitsOrAsks)) : passWaitingStops;
+  const afterCallDecision = !listening || !pass ? undefined
+    : passList === "all"
+      ? rowNext(passKeepStops, callHereStop, callHere!, passOrder) ?? passWaitingStops.find(stop => stop !== callHereStop)
+      : rowAfter(passWaitingStops, callHereStop, callHere!, passOrder);
+  const nextAfterCallDecision = stopTarget(afterCallDecision, row => row.find(passWaitsOrAsks) ?? row[0]!);
   const onCall = !!openCall && !openCallBack && !reviewingEdit;
   const upcomingCall = onCall ? (nextAfterCallDecision && "call" in nextAfterCallDecision ? nextAfterCallDecision.call : undefined) : nextCallAfterKeep;
   const upcomingEdit = onCall ? (nextAfterCallDecision && "edit" in nextAfterCallDecision ? nextAfterCallDecision.edit : undefined) : nextEditAfterKeep;

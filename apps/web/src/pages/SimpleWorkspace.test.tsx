@@ -2169,10 +2169,10 @@ it("keeps the message box aimed at an edit while Scarlet works in that request, 
   expect(threadWith("chg_approved_2").question?.id).toBe("task_resumed");
   expect(target()).toContain("Revising “captions” at 0:00");
   expect(useUiStore.getState().agentDraft).toBe("Make the captions smaller");
-  // Once the message is sent, the card goes on as Keep does, to the next edit under For you's optional line, and the
+  // Once the message is sent, the card goes on as Keep does, to the next row in For you's list, and the
   // box follows what's open.
   await act(async () => { useUiStore.getState().setAgentDraft(""); composer.props!.onSent!(); });
-  expect(target()).toContain("Revising “music bed” at 0:00");
+  expect(target()).toContain("Revising “wrap” at 0:11");
   // Closing the edit leaves the question Scarlet asked first as what the next message answers.
   await press("Escape");
   expect(target()).toContain("Answering");
@@ -2393,8 +2393,8 @@ it("rejects one applied edit with the × after Keep, asking Scarlet to put back 
   }));
   await act(async () => { sent(); });
   expect(vi.mocked(api.recordEditReview).mock.calls).toEqual([[PRJ, { changeId: "chg_approved_2", spot: 1, decision: "undo" }]]);
-  // It goes on as Keep would: an edit Scarlet didn't flag, to the other one under For you's optional line.
-  expect(openTitle()).toBe("music bed");
+  // It goes on as Keep would: to the very next row in For you's list.
+  expect(openTitle()).toBe("wrap");
   expect(localStorage.getItem(`scarlet.kept-edits.v1/${PRJ}/${threadWith("chg_approved_2").id}`) ?? "").not.toContain("chg_approved_2/1");
   // ⌘Z takes the rejection back as it would a revision: the request stops, and the card goes back to the edit.
   expect(container.querySelector(".timeline-foot .timeline-undo")).toBeNull();
@@ -14379,7 +14379,7 @@ it("goes from a kept edit Scarlet didn't flag to a call still waiting, or a flag
   expect(keepGoesTo([[edit(13, undefined, true)], [edit(21)]], 1, still, [])).toBeUndefined();
 });
 
-it("keeps on through the optional edits and then what waits, on a pass with its optional line open", async () => {
+it("advances through every row of For you in exact list order on Keep when low risk edits are included on a waiting pass", async () => {
   const { save } = runningPass(STAGED.slice(0, 2)); // calls at 0:02 (Cut 1) and 0:06 (Cut 2)
   const part = { ...data.changes.find(c => c.id === "chg_approved_2")!, id: "chg_part", taskId: "task_done", threadId: undefined, noteIds: [],
     timelineEdits: [
@@ -14403,36 +14403,39 @@ it("keeps on through the optional edits and then what waits, on a pass with its 
   const cardTitle = () => editPanel()?.querySelector(".edit-card-title")?.textContent;
   await show();
   await act(async () => {});
-  // The optional line lists the edits Scarlet didn't flag under the three that wait: the cut at 0:02, mid check (0:05)
-  // and the cut at 0:06, then intro trim, mid trim, late trim and outro trim.
+  // Low risk edits join For you's list in video order: intro trim (0:01), Cut 0:02, mid trim (0:04), mid check (0:05),
+  // late trim (0:05.5), Cut 0:06, outro trim (0:09).
   await click(seeAll(passCard())!);
   await act(async () => {});
   await click(passRow("intro trim"));
   await act(async () => {});
   expect(cardTitle()).toBe("intro trim");
-  // Keep goes on down the optional edits, not to the calls between them on the timeline.
-  await press("k");
-  expect(cardTitle()).toBe("mid trim");
-  await press("k");
-  expect(cardTitle()).toBe("late trim");
-  await press("k");
-  expect(cardTitle()).toBe("outro trim");
-  // After the last optional edit it goes to what waits: the cut at 0:02, the flagged edit, then the cut at 0:06.
+  // Keep advances strictly to the very next row in the list, across low risk edits, calls, and flagged edits alike.
   await press("k");
   await act(async () => {});
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 0:02");
   await press("k");
   await act(async () => {});
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
+  expect(cardTitle()).toBe("mid trim");
+  await press("k");
+  await act(async () => {});
   expect(cardTitle()).toBe(SUMMARY);
   await press("k");
   await act(async () => {});
+  expect(cardTitle()).toBe("late trim");
+  await press("k");
+  await act(async () => {});
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 0:06");
-  // The cut at 0:06 is the last call waiting: Keep schedules the pass, and with nothing left to keep the card closes.
+  // The cut at 0:06 is the last call waiting: Keep schedules the pass and moves on to the next row, outro trim.
   await press("k");
   await act(async () => {});
   expect(save).toHaveBeenLastCalledWith("chg_ready", expect.objectContaining({ applyWhenDone: true }));
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
+  expect(cardTitle()).toBe("outro trim");
+  // Keeping the last row closes the card once nothing else waits.
+  await press("k");
+  await act(async () => {});
   expect(editPanel()).toBeNull();
 });
 
@@ -14478,7 +14481,7 @@ it("steps ↑ and ↓ through For you as its list goes while a pass waits, low r
   expect(passCard().querySelector(".simple-low-risk")?.querySelectorAll("button").length).toBe(1);
 });
 
-it("keeps advancing through the optional edits from one of them, then goes to what waits", async () => {
+it("advances strictly down the list on Keep when low risk edits are included, never skipping flagged or low risk rows", async () => {
   appliedEdits();
   vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -14494,14 +14497,44 @@ it("keeps advancing through the optional edits from one of them, then goes to wh
   expect(editLists(turn)).toEqual([["Edits that need you", ["music bed", "captions", "zoom", "wrap"]]]);
   await click(editRowsIn(turn)[0]!);
   expect(openTitle()).toBe("music bed");
-  // Keep goes on down the optional edits: zoom is next, not the flagged captions.
-  await press("k");
-  expect(openTitle()).toBe("zoom");
-  // After the last optional edit it goes to what waits, in order, and closes the card when nothing is left.
+  // Keep goes strictly to the next row in the list: flagged captions, then low risk zoom, then flagged wrap.
   await press("k");
   expect(openTitle()).toBe("captions");
   await press("k");
+  expect(openTitle()).toBe("zoom");
+  await press("k");
   expect(openTitle()).toBe("wrap");
+  await press("k");
+  expect(editPanel()).toBeNull();
+});
+
+it("does not skip low risk edits between flagged edits on an applied pass when low risk edits are included", async () => {
+  const { lists } = appliedPass(true);
+  lists[threadWith("chg_approved_2").id] = [
+    { changeId: "chg_approved_2", spot: 0, label: "early low risk", range: { start: 1, end: 2 }, previous: [] },
+    { changeId: "chg_approved_2", spot: 1, label: "first flagged", range: { start: 3, end: 4 }, previous: [], check: CHECK },
+    { changeId: "chg_approved_2", spot: 2, label: "middle low risk 1", range: { start: 5, end: 6 }, previous: [] },
+    { changeId: "chg_approved_2", spot: 3, label: "middle low risk 2", range: { start: 7, end: 8 }, previous: [] },
+    { changeId: "chg_approved_2", spot: 4, label: "second flagged", range: { start: 9, end: 10 }, previous: [], check: CHECK },
+  ];
+  await showFolded();
+  await act(async () => {});
+  const pass = turnFor("chg_approved_2").querySelector(".simple-pass")!;
+  await click(seeAll(pass)!);
+  await act(async () => {});
+  const cardTitle = () => editPanel()?.querySelector(".edit-card-title")?.textContent;
+  const rowNamed = (text: string) => [...pass.querySelectorAll<HTMLButtonElement>(".simple-pass-list > li > button")].find(r => r.textContent?.includes(text))!;
+  await click(rowNamed("first flagged"));
+  await act(async () => {});
+  expect(cardTitle()).toBe(`first flagged. ${CHECK}`);
+  // Keep moves to the very next row (middle low risk 1), not jumping ahead to second flagged.
+  await press("k");
+  expect(cardTitle()).toBe("middle low risk 1");
+  await press("k");
+  expect(cardTitle()).toBe("middle low risk 2");
+  await press("k");
+  expect(cardTitle()).toBe(`second flagged. ${CHECK}`);
+  // At the end of the list with nothing else waiting, the card closes rather than jumping back to an earlier low risk edit.
   await press("k");
   expect(editPanel()).toBeNull();
 });

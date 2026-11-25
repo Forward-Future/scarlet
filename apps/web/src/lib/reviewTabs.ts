@@ -53,12 +53,17 @@ export function rowBeside<R extends { at: number; num?: number }>(list: readonly
   return delta > 0 ? list.find(r => after(r) >= 0) : list.findLast(r => after(r) < 0);
 }
 
+/** The next row of `list` after `current`, without wrapping to earlier rows. */
+export function rowNext<R extends { at: number; num?: number }>(list: readonly R[], current: R | undefined, where: { at: number; num?: number }, order: ListOrder): R | undefined {
+  const here = current ? list.indexOf(current) : -1;
+  if (here >= 0) return list[here + 1];
+  const after = fromHere(list, where, order);
+  return list.find(r => after(r) > 0);
+}
+
 /** Where Keep goes from `current`: the next row of `list` after it, wrapping to the earlier ones. */
 export function rowAfter<R extends { at: number; num?: number }>(list: readonly R[], current: R | undefined, where: { at: number; num?: number }, order: ListOrder): R | undefined {
-  const here = current ? list.indexOf(current) : -1;
-  if (here >= 0) return list[here + 1] ?? (here > 0 ? list[0] : undefined);
-  const after = fromHere(list, where, order);
-  return list.find(r => after(r) > 0) ?? list[0];
+  return rowNext(list, current, where, order) ?? (current && list[0] === current ? undefined : list[0]);
 }
 
 /**
