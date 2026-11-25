@@ -5,14 +5,14 @@ import type { Change } from "@scarlet/timeline";
 import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { useAgentAvailability } from "../../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../../components/review/RunBundle";
-import { useReviewed, useRevising, useThreadEdits, waitingPassRows, waitingRows } from "../../../components/review/threadEditState";
+import { useReviewed, useRevising, useThreadEdits } from "../../../components/review/threadEditState";
 import { Icon } from "../../../components/ui/primitives";
 import { TipButton } from "../../../components/ui/TipButton";
 import { errorMessage } from "../../../lib/client";
 import { clock as clockLabel, parseTimestamp } from "../../../lib/format";
 import { editKey } from "../../../lib/keptEdits";
 import { markedFrameUrl } from "../../../lib/markedFramePictures";
-import { decidedPassCalls, isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../../lib/passCalls";
+import { isDialoguePass, isOpenPass, openPass, waitsToPlay } from "../../../lib/passCalls";
 import { ReviewLinger } from "./reviewTabsBeta";
 import { aboutOne, aimOf, closingReply, notesStillAsked, threadRuns, waitingToStart, type Run } from "../../../lib/requestRuns";
 import { runAim, runIsActive, spentLabel } from "../../../lib/taskRun";
@@ -350,16 +350,6 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
 
   // Whether Scarlet has this request and it can be stopped: such a request has Stop at its heading's right.
   const stoppable = (r: Run) => runIsActive(r.task) && !(waitingToStart(r.task) && r.root === r.task.id);
-  // How many of the request's calls and flagged edits still wait on the editor: the number its For you tab shows,
-  // counted as the tab counts it (`waitingPassRows`, `waitingRows`). Only a folded request's band says it, so it is
-  // counted only then.
-  const forYou = () => {
-    if (!hasRows) return 0;
-    if (!summed) return waitingRows(listed, { reviewed, revising });
-    const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
-    const fromCalls = decidedPassCalls(pass ? undefined : thread, listed, rejected).decidedCallEditKeys;
-    return waitingPassRows(pass?.calls, listed, e => !!e.check || fromCalls.has(editKey(e)), { reviewed, revising });
-  };
 
   const unit = (run: Run, inside = false): ReactElement => {
     const { task } = run;
@@ -422,9 +412,6 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       }
     });
     const final = finalOf(run);
-    // The arrow at the band's left folds the request to its heading, on one line, and opens it again. What is under the
-    // band stays mounted, so Scarlet's work goes on being read while it is out of sight.
-    const shut = !inside && !!request && !!actions.collapsed?.has(run.root);
     // The requests about one of this block's cuts or edits, each drawn under its row.
     // One that asks a question, or stopped early and offers its one action, itself waits on the editor.
     const below = !inside && run === owner ? [...nested].map(([root, key]) => ({ key, run: runs.find(r => r.root === root)! })) : [];
@@ -481,9 +468,11 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       : undefined;
     const requestControl = editActions ?? (!editsProject && stop && <button type="button" className="simple-link unit-stop" onClick={stop}>Stop</button>);
     // The request Scarlet is working on keeps its time and tokens in view, where they count up. Any other (finished,
-    // stopped, waiting on the editor or its turn) and one under a row show them when the pointer rests on the heading:
+    // stopped, waiting on the editor or its turn) and one under a row show them when the pointer rests on the bubble:
     // under a row, the row and the line of what Scarlet is on say enough.
-    const headingEnd = <><RequestMetrics attempts={run.attempts} events={events} quiet={inside || !isWorking(task.state)} />{requestControl}</>;
+    const quietMetrics = inside || !isWorking(task.state);
+    const metrics = <RequestMetrics attempts={run.attempts} events={events} quiet={quietMetrics} />;
+    const headingEnd = <>{metrics}{requestControl}</>;
     // The sentence Scarlet opened the request with is written once and stays: picked up after a pause or a restart,
     // the request keeps it, from the first attempt that said one. Only an attempt's whole history says whether it did.
     const before = task.resumeRootId && isWorking(task.state) ? run.attempts.filter(t => t !== task && (t.resumeRootId ?? t.id) === task.resumeRootId) : [];
@@ -526,45 +515,37 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const markable = !!actions.mark;
     const marked = markable && actions.marked === thread.id;
     const pressable = markable || !!actions.fitTimeline;
-    // Folded, everything under the band is out of sight, so the band says what waits on the editor there: For you and
-    // how many calls or flagged edits still wait, and the dot for a question, its own or one under a row. Both when both.
-    const need = shut && run === owner ? forYou() : 0;
-    const asksUnder = shut && task.state !== "waiting_for_user" && below.some(({ run: about }) => about.task.state === "waiting_for_user");
-    const block = <div key={run.root} className={`unit${shut ? " is-collapsed" : ""}`} data-run={run.root} data-pinned={isPinned || undefined}>
+    const block = <div key={run.root} className="unit" data-run={run.root} data-pinned={isPinned || undefined}>
       {request && <div className={`unit-msg${pressable ? " is-markable" : ""}${marked ? " is-marked" : ""}${isWorking(task.state) || worksUnder ? " is-live" : ""}`}
         aria-current={marked || undefined} onClick={pressable ? e => {
           if ((e.target as Element).closest('button, a, input, textarea, [role="menu"]') || window.getSelection()?.toString()) return;
           if (markable) actions.mark!(thread.id);
           actions.fitTimeline?.();
         } : undefined}>
-        {actions.collapse && <TipButton className="unit-fold" tip={shut ? "Expand" : "Collapse"} aria-expanded={!shut}
-          aria-label={`${shut ? "Expand" : "Collapse"} this edit: ${request.text}`} onClick={() => actions.collapse!(run.root)}><Icon name="chevron" size={11} /></TipButton>}
         <span className="simple-who">You</span>
-        {/* The editor's words are a bubble at the chat's right, so what they said never reads as Scarlet's. Where the
-            request stands, its controls and its time are one small line under the bubble. */}
+        {/* The editor's words are a bubble at the chat's right, so what they said never reads as Scarlet's. Quiet
+            metrics sit on the bubble itself (never inside display:none .unit-meta) so hover stats anchor to the bubble. */}
         <div className="unit-bubble">
           <Said fixed lead={<>{(about ?? tag) && <span className="simple-revising">{about ?? tag}</span>}<MarkedFrameOnRequest projectId={projectId} task={task} /></>} text={request.text} />
+          {quietMetrics && metrics}
         </div>
         <div className="unit-meta">
           <span className="unit-state">{standing}</span>
           {answerHere}
-          {asksUnder && <span className="unit-state"><span className="unit-dot" aria-hidden /></span>}
-          {!rail && need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>For you<span className="unit-need-count">{need}</span></span>}
-          {headingEnd}</div></div>}
+          {!quietMetrics && metrics}
+          {requestControl}</div></div>}
       {bundle}
       {learnedIn(run).map(l => <LearnedLine key={l.id} learning={l} onReview={actions.reviewLearning} />)}
       {wrong}
     </div>;
     // Scarlet's closing words on what it applied read under the block and go where it goes: above the message box
     // with it, and out of the chat with a request about one cut or edit that has left. The open list takes their place.
-    const replies = listing || shut ? [] : entries.flatMap((e, i) => closingReply(e) && ids.has(e.replyTo!) ? [loose(e, i)] : []);
+    const replies = listing ? [] : entries.flatMap((e, i) => closingReply(e) && ids.has(e.replyTo!) ? [loose(e, i)] : []);
     // Always the same shape, so the block isn't mounted anew when its replies give way to its list and come back.
     const node = <Fragment key={run.root}>{block}{replies}</Fragment>;
     return isPinned && pinHost ? createPortal(node, pinHost, run.root) : node;
   };
   const placed = new Set<string>();
-  // The request the lines that follow are under. Folded to its heading, it takes them out of sight with it.
-  let under: Run | undefined;
   const nodes = entries.flatMap((item, i) => {
     if (item.kind === "change" && folded.has(item.change.id)) return [];
     const run = item.taskId ? runOf.get(item.taskId) : undefined;
@@ -572,7 +553,6 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
       if (placed.has(run.root)) return [];
       placed.add(run.root);
       if (settled(run) || nested.has(run.root)) return [];
-      under = run;
       return [unit(run)];
     }
     // A closing reply is drawn with the request it answers.
@@ -581,7 +561,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     // "Put the camera in the bottom-right corner" read twice).
     if (!owner && hasRows && item.kind === "change" && item.change.state === "approved") return [];
     // What a queued request says is in the tray.
-    return item.taskId || (under && actions.collapsed?.has(under.root)) ? [] : [loose(item, i)];
+    return item.taskId ? [] : [loose(item, i)];
   });
   // A run that has said nothing yet still shows.
   for (const run of runs) if (!placed.has(run.root) && !settled(run) && !nested.has(run.root)) nodes.push(unit(run));

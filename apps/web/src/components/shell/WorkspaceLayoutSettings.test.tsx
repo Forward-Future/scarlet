@@ -545,4 +545,105 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     const legacyReply = container.querySelector<HTMLElement>(".simple-msg.from-scarlet .said, .req-say.said:not(.is-yours)")!;
     expect(foldsAt(legacyReply)).toBe(2);
   });
+
+  it("omits the fold arrow in the beta layout and anchors finished token usage stats to the message bubble instead of the top-left corner", async () => {
+    const db = buildDb(true);
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const doneTask = db.tasks.find(t => t.id === "task_chat_direct")!;
+    // Even if a request was collapsed in the default layout, the beta layout renders no fold arrow and keeps turns open.
+    localStorage.setItem(`scarlet.collapsedRequests.v1:${PRJ}`, JSON.stringify([doneTask.id]));
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: db.tasks.filter(t => t.state !== "waiting_for_user"),
+      taskEvents: db.taskEvents,
+      taskUsage: {
+        [doneTask.id]: {
+          inputTokens: 12000,
+          outputTokens: 1800,
+          cacheReadTokens: 34000,
+          cacheWriteTokens: 400,
+          totalTokens: 48200,
+          reasoningTokens: 0,
+          estimatedApiCostUsd: 0.14,
+          runs: 1,
+          firstAt: null,
+          lastAt: null,
+          models: ["claude-opus-4-5"],
+        },
+      },
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true, showRunTokens: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockResolvedValue({ version: project.head!, edits: [] });
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // No fold arrows and no collapsed turns in the beta layout.
+    expect(container.querySelectorAll("#simple-chat .unit-fold")).toHaveLength(0);
+    expect(container.querySelectorAll("#simple-chat .unit.is-collapsed")).toHaveLength(0);
+
+    // Quiet metrics sit inside .unit-bubble (not inside display:none .unit-meta) so hover opens and anchors to the bubble.
+    const unit = container.querySelector<HTMLElement>(`.unit[data-run="${doneTask.id}"]`)!;
+    const msg = unit.querySelector<HTMLElement>(":scope > .unit-msg")!;
+    const bubble = msg.querySelector<HTMLElement>(".unit-bubble")!;
+    const quietBtn = bubble.querySelector<HTMLButtonElement>(".run-tokens.is-quiet")!;
+    expect(quietBtn).not.toBeNull();
+    expect(msg.querySelector(".unit-meta .run-tokens.is-quiet")).toBeNull();
+
+    vi.spyOn(quietBtn, "getBoundingClientRect").mockReturnValue({
+      top: 320, bottom: 370, left: 421, right: 421, width: 0, height: 50, x: 421, y: 320, toJSON: () => ({}),
+    } as DOMRect);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // Hovering empty space on .unit-msg outside the bubble does not open the stats popover.
+      await act(async () => {
+        msg.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" }));
+        vi.advanceTimersByTime(450);
+      });
+      expect(document.querySelector(".tokens-tip")).toBeNull();
+
+      // Resting on the bubble opens the stats popover positioned above the bubble, not at (8px, 8px).
+      await act(async () => {
+        bubble.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" }));
+        vi.advanceTimersByTime(450);
+      });
+      const tip = document.querySelector<HTMLElement>(".tokens-tip")!;
+      expect(tip).not.toBeNull();
+      expect(tip.textContent).toContain("48,200");
+      expect(parseFloat(tip.style.top)).toBeGreaterThan(200);
+      expect(parseFloat(tip.style.left)).toBeGreaterThan(200);
+
+      await act(async () => {
+        bubble.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }));
+      });
+      expect(document.querySelector(".tokens-tip")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // Switching back to the default layout keeps its fold arrow intact.
+    await act(async () => useUiStore.getState().setNewLayout(false));
+    await act(async () => {});
+    expect(container.querySelector("#simple-chat .unit-fold")).not.toBeNull();
+  });
 });
