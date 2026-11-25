@@ -257,6 +257,10 @@ export class MockClient implements ScarletApi {
     this.requireAuth();
     return this.latency(uploadMedia(this.store, projectId, file, name, kind), 200);
   }
+  async expandMediaPaths(paths: string[]): Promise<{ files: string[]; folders: number; emptyFolders: Array<{ path: string; name: string }> }> {
+    this.requireAuth();
+    return { files: [...paths], folders: 0, emptyFolders: [] };
+  }
   async importMedia(projectId: string, body: { path?: string; url?: string; kind?: string; importId?: string }, signal?: AbortSignal): Promise<{ media: MediaAsset }> {
     this.requireAuth();
     if (signal) {
