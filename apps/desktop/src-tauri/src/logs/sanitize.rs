@@ -166,37 +166,65 @@ fn support_field(key: &str, value: &str) -> Option<String> {
     safe.then(|| value.to_owned())
 }
 
+fn write_ui_event(out: &mut String, ui: &regex::Captures<'_>) {
+    let (event, mut fields) = (&ui[3], &ui[4]);
+    let _ = write!(out, "[ui] [{}] {} {event}", &ui[1], &ui[2]);
+    if matches!(event, "stream" | "transport" | "timeline" | "monitor" | "source") {
+        let candidate = fields.trim_start();
+        let word = candidate.split(' ').next().unwrap_or("");
+        if !word.is_empty() && word.len() <= 40 && word.bytes().all(|c| c.is_ascii_lowercase() || c == b'-') {
+            let _ = write!(out, " {word}");
+            fields = &candidate[word.len()..];
+        }
+    }
+    write_fields(out, fields);
+}
+
 /// Export operational fields only. Legacy messages use fixed prefixes, and quoted messages, user
 /// text, paths and stack traces stay in the local log.
 pub(super) fn support_log(text: &str) -> String {
-    static PATTERNS: LazyLock<[Regex; 8]> = LazyLock::new(|| [
+    static PATTERNS: LazyLock<[Regex; 9]> = LazyLock::new(|| [
         r"^(\[\d{4}-\d\d-\d\d\]\[\d\d:\d\d:\d\d\])\[[\w:.-]+\]\[(TRACE|DEBUG|INFO|WARN|ERROR)\] (.*)$",
+        r"^(\d{4}-\d\d-\d\d)T(\d\d:\d\d:\d\d)\.\d{3}Z id=(com\.forwardfuture\.scarlet(?:\.[a-z0-9-]{1,40}){0,3}) pid=(\d{1,10}) (start(?: .*)?|exit|\[request\] .*)$",
         r"^\[engine\] \[(activity|align|audio|cleanup|dialogue|dialogue-scan|edit|error|http|ingest|inspection|lifecycle|graphics|log|mcp|media|model|models|project|render|review|skills|speakers|storage|task|transcribe|transfer|trash|voice-note|whisper|ws)\] (.*)$",
         r"^((?:tsk|med|prj|rnd|chg)_[a-z0-9]{12}|chg_[a-f0-9]{64}_(?:applied|review))\b(?: (queued|claimed|running|waiting_for_user|done|failed|cancelled|approved|rejected|ready|ingesting|started|interrupted|revising)\b)?(?: → (running|waiting_for_user|queued|ready|approved|rejected|failed|revising)\b)?(?: after (\d+(?:ms|s|m|h)(?: \d+[sm])?))?",
         r"^(slow request: )?(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) (\S+) → (\d{3}) (?:in|after) (\d+(?:ms|s|m|h)(?: \d+[sm])?)\b(.*)$",
-        r"^\[ui\] \[(app|nav|action|api|realtime|playback|window|error|import|review|request|voice|marks|timeline|export)\] (\d\d:\d\d:\d\d\.\d{3} \+\d+ms) ([a-zA-Z0-9_.-]{1,40})\b(.*)$",
+        r"^\[(app|nav|action|api|realtime|playback|window|error|import|review|request|voice|marks|timeline|export)\] (\d\d:\d\d:\d\d\.\d{3} \+\d+ms) ([a-zA-Z0-9_.-]{1,40})\b(.*)$",
         r"^([a-z][a-z0-9_-]{0,47})(?: +|$)(.*)$",
         r"^a client disconnected with code (\d{1,4}) \((\d+) open\)$",
         r"^\[(desktop|host|update|export)\] (.*)$",
     ].map(|pattern| Regex::new(pattern).expect("valid support log pattern")));
-    let [record_pattern, engine_pattern, entity_pattern, http_pattern, ui_pattern, event_pattern, ws_closed, native_pattern] = &*PATTERNS;
+    let [record_pattern, copy_pattern, engine_pattern, entity_pattern, http_pattern, ui_pattern, event_pattern, ws_closed, native_pattern] = &*PATTERNS;
     let mut out = String::new();
     for line in text.lines() {
-        let Some(record) = record_pattern.captures(line) else { continue };
+        let Some(record) = record_pattern.captures(line) else {
+            if let Some(copy) = copy_pattern.captures(line) {
+                let body = &copy[5];
+                let ui = ui_pattern.captures(body);
+                if ui.is_none() && body.starts_with('[') { continue; }
+                let _ = write!(out, "[{}][{}][INFO] [copy] id={} pid={} ", &copy[1], &copy[2], &copy[3], &copy[4]);
+                if let Some(ui) = ui {
+                    write_ui_event(&mut out, &ui);
+                } else if let Some(fields) = body.strip_prefix("start") {
+                    out.push_str("start");
+                    for field in fields.split(' ').skip(1).take(2) {
+                        match field.split_once('=') {
+                            Some((key @ "version", value)) => if let Some(value) = support_field(key, value) { let _ = write!(out, " {key}={value}"); },
+                            Some(("build", value @ ("release" | "debug" | "demo"))) => { let _ = write!(out, " build={value}"); }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    out.push_str("exit");
+                }
+                out.push('\n');
+            }
+            continue;
+        };
         let message = &record[3];
         let _ = write!(out, "{}[{}] ", &record[1], &record[2]);
-        if let Some(ui) = ui_pattern.captures(message) {
-            let (event, mut fields) = (&ui[3], &ui[4]);
-            let _ = write!(out, "[ui] [{}] {} {event}", &ui[1], &ui[2]);
-            if matches!(event, "stream" | "transport" | "timeline" | "monitor" | "source") {
-                let candidate = fields.trim_start();
-                let word = candidate.split(' ').next().unwrap_or("");
-                if !word.is_empty() && word.len() <= 40 && word.bytes().all(|c| c.is_ascii_lowercase() || c == b'-') {
-                    let _ = write!(out, " {word}");
-                    fields = &candidate[word.len()..];
-                }
-            }
-            write_fields(&mut out, fields);
+        if let Some(ui) = message.strip_prefix("[ui] ").and_then(|rest| ui_pattern.captures(rest)) {
+            write_ui_event(&mut out, &ui);
         } else if let Some(engine) = engine_pattern.captures(message) {
             let (component, detail) = (&engine[1], &engine[2]);
             let _ = write!(out, "[{component}]");
@@ -312,6 +340,10 @@ mod tests {
         for private in ["rain", "hidden", "private", "secret", "user content", "Someone's words"] {
             assert!(!safe.contains(private), "unexpected {private:?} in {safe}");
         }
+        assert_eq!(
+            support_log(&format!("{RECORD} [ui] [request] 02:03:04.700 +5ms send how=typed build=release\n")),
+            "[2026-11-05][02:03:04][INFO] [ui] [request] 02:03:04.700 +5ms send how=typed\n"
+        );
     }
 
     #[test]
