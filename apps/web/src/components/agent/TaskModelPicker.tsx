@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isComposing } from "../../lib/hotkeys";
 import type { AgentId } from "@scarlet/shared";
 import { AGENT_LABEL, type OnlineAgent } from "../../stores/hosts";
 import { useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
@@ -63,7 +64,8 @@ export function TaskModelPicker({ id, label, value, choices, agents, missing, on
     const onMouseDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
     // Esc closes the search first, then the selector, and nothing behind it: Settings stays open.
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      // While an input method composes in the search, Esc is its own.
+      if (e.key !== "Escape" || isComposing(e)) return;
       e.preventDefault();
       e.stopPropagation();
       if (searchOpen) { setSearch(""); setSearchOpen(false); panel.current?.focus(); }

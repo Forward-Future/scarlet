@@ -752,7 +752,7 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
     expect(plain.completes).toMatchObject([{ state: "done", summary: "Done." }]);
   });
 
-  it("falls back to the default limits when agent.json holds a value that isn't a positive number", async ({ signal }) => {
+  it("falls back to the default limits when agent.json holds a value that isn't a positive number, and turns the stall limit off at 0", async ({ signal }) => {
     const seen: RunAgentOptions[] = [];
     const runner: RunAgentFn = async (opts) => {
       seen.push(opts);
@@ -766,7 +766,8 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
       expect(srv.claims[0]).toMatchObject({ body: { agents: ["claude"], checkAgents: ["claude"] } });
       expect(srv.prompts.map((p) => p.timeLimit)).toEqual([undefined]);
     }
-    expect(seen.map((run) => [run.timeoutMs, run.stallMs])).toEqual([[undefined, DEFAULT_STALL_MS], [undefined, DEFAULT_STALL_MS], [undefined, DEFAULT_STALL_MS]]);
+    // 0 turns the stall limit off, as it does in desktop.json: it isn't a mistake to correct. A run has no time limit unless one is set, so 0 there changes nothing.
+    expect(seen.map((run) => [run.timeoutMs, run.stallMs])).toEqual([[undefined, DEFAULT_STALL_MS], [undefined, DEFAULT_STALL_MS], [undefined, 0]]);
   });
 
   it("says why it stopped a silent run or one at its time cap, and marks both as interrupted so they can be resumed", async ({ signal }) => {

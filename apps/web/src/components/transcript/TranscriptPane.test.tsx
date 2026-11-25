@@ -374,3 +374,28 @@ it("follows the playhead without gliding when motion is reduced, and glides agai
   expect(scroll.mock.contexts.at(-1)).toBe(at(20));
   expect(scroll).toHaveBeenLastCalledWith({ block: "center", behavior: "smooth" });
 });
+
+it("leaves Enter and Esc to an input method that is composing in the search", async () => {
+  await mount();
+  await search("word4");
+  const field = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const count = () => container.querySelector(".transcript-search-count")?.textContent;
+  const key = (init: KeyboardEventInit) => act(async () => { field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+  const seek = vi.spyOn(player, "seek").mockImplementation(() => {});
+  expect(count()).toBe("1 of 11");
+  // The Enter that commits a composition (keyCode 229 in WebKit) places no playhead and steps to no match, and its
+  // Esc clears nothing.
+  await key({ key: "Enter", keyCode: 229 });
+  await key({ key: "Enter", isComposing: true });
+  expect(seek).not.toHaveBeenCalled();
+  expect(count()).toBe("1 of 11");
+  await key({ key: "Escape", isComposing: true });
+  expect(field.value).toBe("word4");
+  // Enter places the playhead on the match in view, then steps on.
+  await key({ key: "Enter" });
+  expect(seek).toHaveBeenCalledTimes(1);
+  await key({ key: "Enter" });
+  expect(count()).toBe("2 of 11");
+  await key({ key: "Escape" });
+  expect(field.value).toBe("");
+});

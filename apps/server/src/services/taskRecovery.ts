@@ -11,7 +11,7 @@ import { latestTranscription, startTranscription, transcribeForDialogue } from "
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { runAttempts, runRoot } from "./runAttempts.js";
 import { recoveryInstruction, savedChanges } from "./taskRecap.js";
-import { appendTaskEvent, cancelTask, createTask, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
+import { appendTaskEvent, cancelTask, createTask, dropOrphanedChecks, dropWaitingLooks, FINISHED_TASK, hasTranscript, PROJECT_EDIT_KINDS, recordWorkThrough, returnRulesLeftWithQuestions, saveTask } from "./tasks.js";
 import { RESUMABLE } from "./taskPrompts.js";
 
 /** A run that keeps losing its worker stops carrying on by itself after this many attempts, and waits for the editor. */
@@ -98,6 +98,12 @@ export function holdProjectEditing(ctx: Ctx, projectId: string) {
       const next = resumeTask(ctx, task, { afterProjectStop: true });
       return [ctx.repos.tasks.get(task.id)!, next];
     });
+    // A hand-off still at work for a request that isn't (it asked the editor something meanwhile) would go on saving
+    // edits: it stops, as one does whose request was retired above. What it saved stays the request's, and the
+    // request hears it was stopped when it next asks after it.
+    for (const run of ctx.repos.tasks.select("project_id = ? AND kind = 'hand_off' AND state IN ('claimed','running')", [projectId], "created_at, rowid")) {
+      cancelTask(ctx, run);
+    }
     return { project, tasks };
   }), "immediate")();
 }
@@ -242,6 +248,11 @@ export function recoverTasks(ctx: Ctx, starting = false): void {
         ctx.db.savepoint(() => returnRulesLeftWithQuestions(ctx));
       } catch (err) {
         ctx.log(`[task] couldn’t return the rules left with questions: ${errorMessage(err)}`);
+      }
+      try {
+        ctx.db.savepoint(() => dropOrphanedChecks(ctx));
+      } catch (err) {
+        ctx.log(`[task] couldn’t put away the checks left waiting for runs that are over: ${errorMessage(err)}`);
       }
     }
   }, "immediate")();

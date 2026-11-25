@@ -231,6 +231,12 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
         if (shift && now.current.onShiftPress) now.current.onShiftPress(toFrame(at, now.current.fps)); else now.current.onPress(at);
       }
     };
+    // The release can be lost with the window (⌘Tab, a system dialog in the middle of a drag). The drag ends there, as
+    // a cancelled one does, so the next click anywhere doesn't land a stale stretch.
+    const lost = () => {
+      g.stop();
+      setLive(undefined);
+    };
     g.stop = () => {
       if (gesture.current !== g) return;
       gesture.current = undefined;
@@ -240,6 +246,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       document.removeEventListener("pointermove", move, true);
       document.removeEventListener("pointerup", up, true);
       document.removeEventListener("pointercancel", up, true);
+      window.removeEventListener("blur", lost);
       if (drag.current === held) drag.current = null;
       lifetime.abort();
       finish?.({ marked: !!g.marked });
@@ -251,6 +258,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     document.addEventListener("pointermove", move, true);
     document.addEventListener("pointerup", up, true);
     document.addEventListener("pointercancel", up, true);
+    window.addEventListener("blur", lost);
     // Held still, the press opens the close-up: on a handle at that end, on the ruler at the frame pressed.
     g.hold = window.setTimeout(() => {
       if (gesture.current !== g || g.moved) return;

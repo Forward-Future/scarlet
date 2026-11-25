@@ -4,7 +4,7 @@
  * be run over stdio (see cli.ts) or embedded in-process.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod/v3";
@@ -54,7 +54,7 @@ import {
   unmeasuredLine,
   type ToolResult,
 } from "./tool-result.js";
-import { readArtifact, writeArtifact } from "./workspace-files.js";
+import { readArtifact, removeSessionFiles, writeArtifact } from "./workspace-files.js";
 
 export { SCARLET_TOOL_NAMES, type ScarletToolName } from "@scarlet/shared";
 export { doubledSoundText, validateOps } from "./timeline-validation.js";
@@ -180,6 +180,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const fetchImpl = ctx.fetch ?? globalThis.fetch.bind(globalThis);
   let tempDir: Promise<string> | undefined;
   const artifactDir = () => ctx.workDir ?? (tempDir ??= mkdtemp(join(tmpdir(), "scarlet-mcp-")));
+  /** Files `export_otio` wrote in the session's own temporary folder. The editor was given their paths, so they outlast the session. */
+  const keptExports = new Set<string>();
 
   const errors = createSessionErrorHelpers();
 
@@ -389,9 +391,10 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   // The only close handler: a second assignment would replace this one.
   server.server.onclose = () => {
     diagnosticSessionClosed = true; inspection.close(); reviewTools.close();
-    // The folder made for this session's files when the harness gave none (listening copies, exports, downloaded
-    // videos) is this session's alone: it goes with it. A folder the harness gave is left as it is.
-    if (tempDir) void tempDir.then(dir => rm(dir, { recursive: true, force: true })).catch(err => console.error("[scarlet-mcp] removing the session's temporary files:", err));
+    // The folder made for this session's files when the harness gave none (listening copies, downloaded videos) is
+    // this session's alone: it goes with it, all but a timeline exported for the editor, who was told where it is to
+    // import it in Resolve. A folder the harness gave is left as it is.
+    if (tempDir) void tempDir.then(dir => removeSessionFiles(dir, keptExports)).catch(err => console.error("[scarlet-mcp] removing the session's temporary files:", err));
   };
 
   const perception = registerPerception({
@@ -429,6 +432,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   registerExportAndTaskTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, startedAt, task: ctx.task,
     agent: ctx.agent, getHeader: session.getHeader, artifactDir, postEvent, taskModels: ctx.taskModels, waitLeft,
+    exported: path => { if (!ctx.workDir) keptExports.add(path); },
   });
 
   watchRefusedArguments(server, async (name, args, began, result) => {

@@ -2,7 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, COMPACTING, COMPACTION_ENDED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, prettyToolName, questionText, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { briefInput, COMPACTED, COMPACTING, COMPACTION_ENDED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, prettyToolName, questionText, toolCallTarget, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
 import { earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, claudeUsage, createUsageReporter, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
@@ -193,7 +193,11 @@ export function parseClaudeLine(line: string, st: ClaudeParseState): RunnerEvent
           events.push({ type: "log", text: t });
         }
       } else if (block.type === "tool_use") {
-        const b = block as { id: string; name: string; input: unknown };
+        const made = block as { id: string; name: string; input: unknown };
+        // A run with brief tools (Ollama, LM Studio, OpenRouter) reaches most tools through `tool_call`: the call it
+        // makes is what the run did, named as Claude Code names that tool.
+        const through = toolCallTarget(made.name, made.input);
+        const b = through ? { id: made.id, name: `mcp__scarlet__${through.name}`, input: through.input } : made;
         const pretty = prettyToolName(b.name);
         if (planCall(st.plan, b.name, b.id, b.input)) {
           events.push(...planChange(st.plan));

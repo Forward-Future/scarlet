@@ -8,9 +8,11 @@ import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { handOff, handOffTypes } from "./taskModels.js";
-import { taskPrompt } from "./taskPrompts.js";
-import { cancelTask, completeTask, createTask } from "./tasks.js";
+import { startDecisionCheck } from "./learnings.js";
+import { followUpInstruction, taskPrompt } from "./taskPrompts.js";
+import { appendTaskEvent, cancelTask, completeTask, createTask } from "./tasks.js";
 import { claimTask } from "./taskQueue.js";
+import { holdProjectEditing, recoverTasks } from "./taskRecovery.js";
 
 let dataDir: string;
 let workspace: ScarletApp;
@@ -116,4 +118,90 @@ it("says plainly when the work is the request's own or its model isn't signed in
   cancelTask(ctx, ctx.repos.tasks.get(claude.id)!);
   expect(ctx.repos.tasks.get(run!.id)?.state).toBe("cancelled");
   expect(claimTask(ctx, host, undefined, [], undefined, ["gemini"])).toBeNull();
+});
+
+/** A hand-off at work, as its host claimed it, with one look at a frame its save asked for still waiting to start. */
+async function handOffWithLook() {
+  ctx.repos.settings.update({ taskModels: graphics("gemini:gemini-3-pro") });
+  const host = hostWith([{ id: "claude", installed: true }, { id: "gemini", installed: true, models: ["gemini-3-pro"] }]);
+  const asked = request("claude");
+  const claude = ctx.repos.tasks.put({ ...asked, context: { ...asked.context, message: asked.instruction } });
+  claimTask(ctx, host, claude.id);
+  await handOff(ctx, claude.id, { type: "Motion graphics", brief: "Add a title" }, 0);
+  const run = claimTask(ctx, host, undefined, [], undefined, ["gemini"])!;
+  expect(run.kind).toBe("hand_off");
+  const look = createTask(ctx, { projectId: run.projectId, kind: "area_check", agent: run.agent, model: run.model, instruction: "What viewers may see of screen.mov at 12 s",
+    context: { checksTaskId: run.id, areaCheck: { mediaId: "med_screen", at: 12 } }, createdBy: run.createdBy });
+  return { host, claude, run, look };
+}
+
+it("leaves no look at a frame waiting once the hand-off that asked for it finishes or is stopped", async () => {
+  const done = await handOffWithLook();
+  completeTask(ctx, ctx.repos.tasks.get(done.run.id)!, { state: "done", summary: "Added the title." });
+  expect(ctx.repos.tasks.get(done.look.id)?.state).toBe("cancelled");
+  const stopped = await handOffWithLook();
+  cancelTask(ctx, ctx.repos.tasks.get(stopped.run.id)!);
+  expect(ctx.repos.tasks.get(stopped.look.id)?.state).toBe("cancelled");
+});
+
+it("puts away, as the engine starts, a look or a listen left waiting for a run that is over, and leaves the rest", async () => {
+  const { claude, run, look } = await handOffWithLook();
+  // Left by an engine that didn't stop a hand-off's looks with it: the hand-off is done and its look still waits.
+  ctx.repos.tasks.put({ ...ctx.repos.tasks.get(run.id)!, state: "done", finishedAt: new Date().toISOString() });
+  const gone = createTask(ctx, { projectId: run.projectId, kind: "listen_check", agent: "gemini", instruction: "Listen", context: { checksTaskId: "task_gone" }, createdBy: by });
+  // The request is still at work, so its own look waits its turn, and a learning check reads the editor's words whether or not their request is over.
+  const live = createTask(ctx, { projectId: run.projectId, kind: "area_check", agent: "claude", instruction: "Look", context: { checksTaskId: claude.id, areaCheck: { mediaId: "med_screen", at: 400 } }, createdBy: by });
+  const reading = createTask(ctx, { projectId: run.projectId, kind: "learning_check", agent: "claude", instruction: "Read", context: { checksTaskId: run.id }, createdBy: by });
+  recoverTasks(ctx, true);
+  expect(ctx.repos.tasks.get(look.id)?.state).toBe("cancelled");
+  expect(ctx.repos.tasks.get(gone.id)?.state).toBe("cancelled");
+  expect(ctx.repos.tasks.get(live.id)?.state).toBe("queued");
+  expect(ctx.repos.tasks.get(reading.id)?.state).toBe("queued");
+});
+
+it("keeps a hand-off out of what the request's thread is told and out of whose model reads the editor's decisions", async () => {
+  ctx.repos.settings.update({ taskModels: graphics("gemini:gemini-3-pro") });
+  const host = hostWith([{ id: "claude", installed: true }, { id: "gemini", installed: true, models: ["gemini-3-pro"] }]);
+  const claude = request("claude", "opus");
+  claimTask(ctx, host, claude.id);
+  await handOff(ctx, claude.id, { type: "Motion graphics", brief: "Add a lower third for Ana." }, 0);
+  const run = claimTask(ctx, host, undefined, [], undefined, ["gemini"])!;
+  completeTask(ctx, ctx.repos.tasks.get(run.id)!, { state: "done", summary: "Saved chg_1: the lower third." });
+  completeTask(ctx, ctx.repos.tasks.get(claude.id)!, { state: "done", summary: "Tightened it and added Ana's lower third." });
+  // The editor's next words in the thread are told what they asked and what Scarlet replied, once.
+  const told = followUpInstruction(ctx, claude.projectId, claude.id, "Make the lower third smaller");
+  expect(told).toContain("- Asked: Tighten it and add a lower third for Ana at 0:05");
+  expect(told).toContain("You replied: Tightened it and added Ana's lower third.");
+  expect(told.match(/- Asked:/g)).toHaveLength(1);
+  expect(told).not.toContain("Saved chg_1");
+  // Their decisions are read for a rule on the chat's model, not the one a kind of work was handed to.
+  ctx.repos.skills.put({ id: "skl_look", name: "look", description: "The look", content: "# Look", scope: "team", ownerId: null, projectId: null, agents: [], enabled: true, version: 1 });
+  for (const check of ctx.repos.tasks.select("kind = 'learning_check' AND state = 'queued'")) cancelTask(ctx, check);
+  expect(startDecisionCheck(ctx, claude.projectId, claude.id)).toMatchObject({ kind: "learning_check", agent: "claude", model: "opus", context: { checksTaskId: claude.id } });
+});
+
+it("stops a hand-off at work when the editor pauses editing while its request waits on their answer", async () => {
+  const { claude, run, look } = await handOffWithLook();
+  // The request heard its hand-off was still working, carried on, and asked the editor something.
+  appendTaskEvent(ctx, ctx.repos.tasks.get(claude.id)!, { type: "question", text: "Which take of the intro?" } as never);
+  expect(ctx.repos.tasks.get(claude.id)?.state).toBe("waiting_for_user");
+  holdProjectEditing(ctx, claude.projectId);
+  // Nothing edits the video while editing is paused. The request keeps its question, and hears the hand-off was stopped when it next asks.
+  expect(ctx.repos.tasks.get(run.id)?.state).toBe("cancelled");
+  expect(ctx.repos.tasks.get(look.id)?.state).toBe("cancelled");
+  expect(ctx.repos.tasks.get(claude.id)).toMatchObject({ state: "waiting_for_user", question: "Which take of the intro?" });
+  expect(await handOff(ctx, claude.id, { handoffId: run.id }, 0)).toMatchObject({ state: "failed", error: "The hand-off was stopped." });
+});
+
+it("logs a hand-off's end as the hand-off's, so its request reads as finished once", async () => {
+  const { claude, run } = await handOffWithLook();
+  // The app sends the editor's words as the request's message, and a hand-off is told them: its end is still its own.
+  expect(run.context.message).toBe("Tighten it and add a lower third for Ana at 0:05");
+  completeTask(ctx, ctx.repos.tasks.get(run.id)!, { state: "done", summary: "Added the title." });
+  completeTask(ctx, ctx.repos.tasks.get(claude.id)!, { state: "done", summary: "Tightened it." });
+  const log = ctx.repos.activity.select("project_id = ? AND (type LIKE 'request.%' OR type LIKE 'hand_off.%')", [claude.projectId], "created_at, rowid").map(a => [a.type, a.summary, a.data.taskId]);
+  expect(log).toEqual([
+    ["hand_off.done", "Gemini finished Motion graphics: “Add a title”", run.id],
+    ["request.done", "Claude Code finished “Tighten it and add a lower third for Ana at 0:05”", claude.id],
+  ]);
 });

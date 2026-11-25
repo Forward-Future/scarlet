@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
 import { buildCodexCommand, tomlInlineTable, tomlString } from "./codex.js";
 import { newCodexState, parseCodexLine } from "./codexParse.js";
-import { acpMcpServer, buildGeminiCommand, geminiDir, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
+import { acpMcpServer, buildGeminiCommand, geminiDir, isScarletMcpPermission, namesPath, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
 import { quoteForCmd, spawnLines, spawnSpec } from "./spawn.js";
 import { briefInput, isQuestionTool, prettyToolName, workspaceEnv, type RunnerEvent } from "./types.js";
 import { holdQuestion, settleQuestion, type QuestionCallState } from "./questionCalls.js";
@@ -88,6 +88,20 @@ describe("claude stream-json parser", () => {
     expect(st.question).toBe("Keep the cold open?");
     expect(st.questionPosted).toBe(true);
     expect(st.shouldStop).toBe(true);
+  });
+  it("names the tool a call through tool_call makes, with that tool's arguments, and leaves a question asked that way unasked", () => {
+    // Ollama, LM Studio and OpenRouter run through Claude Code with brief tools, so most of Scarlet's tools are reached through tool_call.
+    const use = (id: string, input: object) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "mcp__scarlet__tool_call", input }] } });
+    const st = newClaudeState();
+    expect(feed([use("t1", { name: "transcript_get", arguments: { mediaId: "m1" } }), use("t2", { name: " MCP__Scarlet__Timeline_Get " })], st, parseClaudeLine)).toEqual([
+      { type: "tool", text: 'scarlet.transcript_get {"mediaId":"m1"}', data: { tool: "mcp__scarlet__transcript_get", input: { mediaId: "m1" }, toolUseId: "t1" } },
+      { type: "tool", text: "scarlet.timeline_get", data: { tool: "mcp__scarlet__timeline_get", input: {}, toolUseId: "t2" } },
+    ]);
+    // The server refuses a question asked through tool_call, and a call that names no tool is shown as it was made.
+    const asked = { name: "task_question", arguments: { text: "Which take?" } };
+    expect(feed([use("t3", asked), use("t4", { name: "../x" })], st, parseClaudeLine).map((e) => e.data)).toEqual([
+      { tool: "mcp__scarlet__tool_call", input: asked, toolUseId: "t3" }, { tool: "mcp__scarlet__tool_call", input: { name: "../x" }, toolUseId: "t4" }]);
+    expect(st.question).toBeUndefined();
   });
   it("reports error results and a failed MCP server", () => {
     const st = newClaudeState();
@@ -432,6 +446,23 @@ describe("gemini ACP parser", () => {
     expect(evs.map((e) => e.type)).toEqual(["plan", "tool", "error"]);
     expect(evs[0]!.data).toEqual({ steps: [{ text: "Inspect footage", state: "done" }, { text: "Cut pauses", state: "in_progress" }] });
     expect(evs[2]!.text).toContain("Invalid ops");
+  });
+
+  it("reads what a file holds as text, not as a path, and still checks every path", () => {
+    const roots = ["/w"];
+    const write = (rawInput: object) => workspacePermission({ toolCall: { name: "write_file", rawInput } }, roots);
+    // A file's content that opens with a comment starts with a slash, and one that imports from a folder above has `../`: neither is where the file is.
+    expect(write({ file_path: "/w/artifacts/title.js", content: "// The title card\nconst title = 'Ana';\n" })).toBe(true);
+    expect(write({ file_path: "artifacts/title.css", content: "/* The look */\r\n@import '../base.css';\n" })).toBe(true);
+    // The path itself is checked as before, with or without a break at its ends, and so is content of one line that reads as a path.
+    expect(write({ file_path: "/etc/hosts", content: "// The title card\nconst title = 'Ana';\n" })).toBe(false);
+    expect(write({ file_path: "/etc/hosts\n", content: "x" })).toBe(false);
+    expect(write({ file_path: "\n../outside.txt", content: "x" })).toBe(false);
+    expect(write({ file_path: "artifacts/a.txt", content: "/etc/hosts" })).toBe(false);
+    // On Windows a path that starts with a backslash is from the drive's root, or a share: it is checked, not waved through.
+    expect([namesPath("\\Users\\me\\secret.txt", true), namesPath("\\\\server\\share\\x", true)]).toEqual([true, true]);
+    expect([namesPath("\\d+\\.jpg", false), namesPath("artifacts\\a.txt", true), namesPath("C:\\Users\\me", false)]).toEqual([false, false, true]);
+    expect([namesPath("// a comment\ncode", true), namesPath("/w/a.txt", false), namesPath("~/x", false), namesPath("a/../b", false)]).toEqual([false, true, true, true]);
   });
 
   it("enforces Scarlet MCP-only permissions and builds the agy acp command", () => {

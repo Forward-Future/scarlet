@@ -246,7 +246,8 @@ describe("MCP file tools", () => {
     }
   });
 
-  it("removes the temporary folder it made for files when the session closes, and never a folder it was given", async () => {
+  it("removes the temporary folder it made for files when the session closes, keeping only what it exported for the editor, and never a folder it was given", async () => {
+    // An export is handed to the editor by its path, to import in Resolve: it outlasts the session that wrote it.
     const c = await connect(undefined, undefined, undefined, undefined, "codex");
     const exported = await c.callTool({ name: "export_otio", arguments: { version: "v1" } }) as CallToolResult;
     expect(exported.isError).toBeFalsy();
@@ -254,8 +255,36 @@ describe("MCP file tools", () => {
     const made = dirname(dirname(path));
     expect(made.startsWith(await realpath(tmpdir()))).toBe(true);
     expect(await readFile(path, "utf8")).toContain("v1");
+    // The session's other files, such as a listening copy, still go with it.
+    await mkdir(join(made, "frames"));
+    await writeFile(join(made, "frames", "a.jpg"), "frame");
+    await writeFile(join(made, "listen.wav"), "passage");
     await c.close();
-    await vi.waitFor(async () => expect(await stat(made).then(() => true, () => false)).toBe(false));
+    const there = (file: string) => stat(file).then(() => true, () => false);
+    await vi.waitFor(async () => expect([await there(join(made, "listen.wav")), await there(join(made, "frames"))]).toEqual([false, false]));
+    expect(await readFile(path, "utf8")).toContain("v1");
+    await rm(made, { recursive: true, force: true });
+    // A session that exported nothing leaves nothing.
+    const extra = mock.state.extra;
+    mock.state.extra = async (rec, res) => {
+      if (!rec.path.includes("/web-videos")) return extra ? extra(rec, res) : false;
+      if (rec.method === "GET") { res.writeHead(200, { "content-type": "application/octet-stream" }); res.end(Buffer.from("....ftypisom part")); }
+      else { res.writeHead(201, { "content-type": "application/json" }); res.end(JSON.stringify({ video: { url: "https://www.youtube.com/watch?v=agents", title: "Agents" },
+        part: { id: "part1", from: 1, to: 2, duration: 1, width: 1920, height: 1080, size: 17 } })); }
+      return true;
+    };
+    try {
+      const run = Task.parse({ id: "tsk_edit_tmp", projectId: "prj_test", kind: "edit", agent: "claude", state: "running", instruction: "Show the demo", createdBy: { type: "human", name: "Editor" } });
+      const plain = await connect(run.id, undefined, run);
+      const part = await plain.callTool({ name: "web_video", arguments: { url: "https://www.youtube.com/watch?v=agents", from: 1, to: 2 } }) as CallToolResult;
+      expect(part.isError, textOf(part)).toBeFalsy();
+      const folder = dirname(JSON.parse(textOf(part)).path as string);
+      expect(folder.startsWith(await realpath(tmpdir()))).toBe(true);
+      await plain.close();
+      await vi.waitFor(async () => expect(await there(folder)).toBe(false));
+    } finally {
+      mock.state.extra = extra;
+    }
     // A folder the harness gave is its own: closing leaves it and what was saved there.
     const given = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
     try {

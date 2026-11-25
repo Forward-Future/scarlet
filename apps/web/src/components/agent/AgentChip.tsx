@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isComposing } from "../../lib/hotkeys";
 import { Link, useMatch } from "react-router-dom";
 import type { RunChoice, Task } from "@scarlet/shared";
 import { isDesktop, type HostStatus } from "../../lib/desktop";
@@ -181,7 +182,8 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
     // Esc closes layered menus first (gear -> search -> picker) and nothing behind the picker:
     // left to go on, the same press also cancels the dialog the picker sits in, such as a note.
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      // While an input method composes in the search, Esc is its own.
+      if (e.key !== "Escape" || isComposing(e)) return;
       e.preventDefault();
       e.stopPropagation();
       if (gearOpen) {

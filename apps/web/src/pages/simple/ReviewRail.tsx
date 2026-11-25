@@ -52,8 +52,13 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   };
 }
 
-export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow, compact = false, reserve = 0 }: {
+export function ReviewRail({ store, threads, forYouRows = 0, open, onOpen, selected, onDoneLow, compact = false, reserve = 0 }: {
   store: RailStore;
+  /**
+   * The rows drawn under For you. They can be more than the store counts as waiting on the editor: a request about a
+   * cut or edit that stopped early keeps its row there, uncounted, so For you isn't empty and the column isn't hidden.
+   */
+  forYouRows?: number;
   /** The requests in the order their rows are listed: the latest first. */
   threads: readonly Thread[];
   open: { working: boolean; done: boolean; low: boolean }; onOpen(section: "working" | "done" | "low", open: boolean): void;
@@ -73,7 +78,7 @@ export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow, 
   const [tipLeft, setTipLeft] = useState<number | null>(null);
   const need = store.total("you"), optional = store.total("optional");
   const working = store.total("working"), done = store.total("done");
-  const nothing = need + optional + working + done === 0;
+  const nothing = need + forYouRows + optional + working + done === 0;
   // The row of the cut or edit that's open stays in view as Keep, ↑ ↓, or unfolding reveals it.
   useEffect(() => {
     if (selected) host.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" });
@@ -202,7 +207,7 @@ export function ReviewRail({ store, threads, open, onOpen, selected, onDoneLow, 
     <div className="review-rail-scroll">
       <div className="review-rail-list" role="group" aria-label="For you">
         {slots("you")}
-        {need === 0 && <p className="simple-review-empty">Nothing waits on you.</p>}
+        {need + forYouRows === 0 && <p className="simple-review-empty">Nothing waits on you.</p>}
       </div>
       {/* The edits Scarlet didn't flag, listed at once and quieter, open until the editor folds them. */}
       <div className="review-low" hidden={optional === 0}>

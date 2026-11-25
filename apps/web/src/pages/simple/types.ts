@@ -114,6 +114,12 @@ export interface ChatActions {
   collapse?(run: string): void;
   /** Show the whole timeline, from a press on any request's band. */
   fitTimeline?(): void;
+  /**
+   * The new layout's column of edits hears how many rows a request draws under For you. That can be more than it
+   * counts as waiting on the editor: a request about a cut or edit that stopped early keeps its row there, with its
+   * Resume or Retry.
+   */
+  forYouRows?(threadId: string, rows: number): void;
   pass?: OpenPass;
   reviewingId?: string;
   listening?: Listening;

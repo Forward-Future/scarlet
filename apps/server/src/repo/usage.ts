@@ -18,14 +18,19 @@ interface TotalsRow {
   last_at: string | null;
 }
 
+/** The request a row's task worked for, when that task is a hand-off. */
+const HAND_OFF_ASKER = `(SELECT json_extract(t.json, '$.context.checksTaskId') FROM tasks t WHERE t.id = task_usage.task_id AND t.kind = 'hand_off')`;
+
 /** Fixed SQL per grouping, so a query value never reaches the statement text. */
 const GROUP_KEY: Record<UsageGroupBy, string> = {
   project: "project_id",
   thread: "thread_id",
-  task: "task_id",
+  // A hand-off's tokens are its request's: the request handed it the work, and the chat shows the request alone.
+  task: `coalesce(${HAND_OFF_ASKER}, task_id)`,
   agent: "agent",
   model: "model",
-  day: "substr(at, 1, 10)",
+  // The day on the engine's own clock, which is the editor's: `at` is UTC, and their evening isn't tomorrow.
+  day: "date(at, 'localtime')",
 };
 
 const SUMS = `count(*) AS runs,
@@ -107,9 +112,10 @@ export class UsageRepo {
     return !!this.db.prepare("SELECT 1 FROM task_usage WHERE task_id = ? AND run_started_at = ?").get(taskId, runStartedAt);
   }
 
-  /** One task's totals across its runs. */
+  /** One task's totals across its runs, with those of the work it handed to other models. */
   taskTotals(taskId: string): UsageTotals {
-    return toTotals(this.db.prepare(`SELECT ${TASK_SUMS} FROM task_usage WHERE task_id = ?`).get(taskId) as TotalsRow | undefined, this.prices);
+    return toTotals(this.db.prepare(`SELECT ${TASK_SUMS} FROM task_usage WHERE task_id = ?
+      OR task_id IN (SELECT id FROM tasks WHERE kind = 'hand_off' AND json_extract(json, '$.context.checksTaskId') = ?)`).get(taskId, taskId) as TotalsRow | undefined, this.prices);
   }
 
   /** Totals and groups, most recently used first. Omit `projectId` for every project. */

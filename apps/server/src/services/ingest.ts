@@ -350,9 +350,11 @@ async function ingestInBackground(ctx: Ctx, projectId: string, asset: MediaAsset
   let preparation = asset.preparation;
   const publish = ctx.db.transaction((status: MediaWithStatus["status"], preparation?: MediaAsset["preparation"], error?: string) => {
     // A manual transcription can finish while the proxy is being built, and the recording's voice roles or audio track can be saved.
+    // So can the editor's note on the file, and the page a graphic was drawn from.
     const current = ctx.repos.projects.getMedia(asset.id);
     const media = ctx.repos.projects.putMedia(projectId, { ...asset, transcriptId: current?.transcriptId,
       lastTranscription: current?.lastTranscription, voiceRoles: current?.voiceRoles,
+      editorNote: current?.editorNote, graphic: current?.graphic ?? asset.graphic,
       audioTrack: current?.audioTrack, audioStreams: current?.audioStreams ?? asset.audioStreams, preparation }, status, error);
     ctx.bus.publish({ type: "media.updated", projectId, media });
     return media;

@@ -9,6 +9,7 @@ import {
   nextPlanEvent,
   prettyToolName,
   questionText,
+  toolCallTarget,
   type McpSpec,
   type RunnerEvent,
 } from "./types.js";
@@ -113,11 +114,8 @@ function namesScarletTool(candidate: unknown): boolean {
  * stays as it is: the server refuses one asked through `tool_call`, so it was never asked.
  */
 function throughToolCall(rawName: string, input: unknown): { rawName: string; input: unknown } {
-  if (prettyToolName(rawName) !== "scarlet.tool_call") return { rawName, input };
-  const call = asRecord(input);
-  const name = asString(call?.name)?.trim().toLowerCase().replace(/^(?:mcp__scarlet__|mcp_scarlet_|scarlet__|scarlet[./:])/, "");
-  if (!name || !/^[a-z0-9_]+$/.test(name) || isQuestionTool(name)) return { rawName, input };
-  return { rawName: `scarlet.${name}`, input: call!.arguments ?? {} };
+  const target = toolCallTarget(rawName, input);
+  return target ? { rawName: `scarlet.${target.name}`, input: target.input } : { rawName, input };
 }
 
 /**
@@ -138,17 +136,29 @@ export function isScarletMcpPermission(params: unknown): boolean {
 }
 
 /**
+ * Whether one of a call's input values is a path to check: one from a root (`/…`, `~/…`, a drive's `C:\…`), or one
+ * that climbs out of the folder it is read from (`../`). On Windows a path that starts with a backslash is from a root
+ * too, the current drive's (`\Users\…`) or a share's (`\\server\share`); elsewhere a backslash is a character like any
+ * other. Text with a line break in it is what a file holds, not where it is: a `// comment` or a `/* rule *\/` at the
+ * top of a file's content is no path. Breaks at its ends don't count, as the path is read trimmed.
+ */
+export function namesPath(value: string, windows = process.platform === "win32"): boolean {
+  const v = value.trim();
+  const absolute = /^(?:\/|[a-zA-Z]:[\\/]|~\/)/.test(v) || (windows && v.startsWith("\\"));
+  const climbs = /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(v);
+  return (absolute || climbs) && value.length < 4096 && !/[\n\r]/.test(v);
+}
+
+/**
  * Every path a permission request names: its locations, and any absolute path among its input's values, or any that
  * climbs out of the folder it is read from (`../`).
  */
 function namedPaths(params: unknown): string[] {
   const tc = asRecord(asRecord(params)?.toolCall);
   const out: string[] = [];
-  const absolute = (v: string) => /^(?:\/|[a-zA-Z]:[\\/]|~\/)/.test(v.trim());
-  const climbs = (v: string) => /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(v.trim());
   const visit = (value: unknown, depth: number) => {
     if (depth > 4) return;
-    if (typeof value === "string") { if ((absolute(value) || climbs(value)) && value.length < 4096) out.push(value.trim()); return; }
+    if (typeof value === "string") { if (namesPath(value)) out.push(value.trim()); return; }
     if (Array.isArray(value)) { for (const v of value) visit(v, depth + 1); return; }
     const rec = asRecord(value);
     if (rec) for (const v of Object.values(rec)) visit(v, depth + 1);

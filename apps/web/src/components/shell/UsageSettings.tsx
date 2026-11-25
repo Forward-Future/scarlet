@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentId, UsageGroup, UsageResponse } from "@scarlet/shared";
 import { api, errorMessage } from "../../lib/client";
 import { plural, relTime, tokenBreakdown, tokenLabel } from "../../lib/format";
@@ -56,7 +56,7 @@ function shareLabel(part: number, total: number): string {
   return pct < 1 ? "<1%" : `${Math.round(pct)}%`;
 }
 
-/** Format a YYYY-MM-DD UTC date key as a short label like "Nov 22". */
+/** Format a YYYY-MM-DD date key as a short label like "Nov 22". */
 function shortDayLabel(key: string): string {
   const [y, m, d] = key.split("-").map(Number);
   if (!y || !m || !d) return key;
@@ -98,12 +98,16 @@ function compactBreakdown(g: UsageGroup): string {
   return parts.filter(Boolean).join(" · ");
 }
 
-/** Build a contiguous 14-day UTC series ending on today (or the latest recorded day if ahead). */
+/**
+ * Build a contiguous 14-day series ending on today (or the latest recorded day if ahead). The engine groups runs by
+ * the day on the editor's own clock, so today is read off that clock too; the days before it are plain calendar steps.
+ */
 function buildDailySeries(groups: UsageGroup[]) {
   const valid = groups.filter((g): g is UsageGroup & { key: string } => typeof g.key === "string" && DAY_KEY_RE.test(g.key));
   if (!valid.length) return null;
   const byKey = new Map(valid.map(g => [g.key, g]));
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const latestKey = valid.map(g => g.key).sort().at(-1)!;
   const endKey = latestKey > todayKey ? latestKey : todayKey;
   const [ey, em, ed] = endKey.split("-").map(Number) as [number, number, number];
@@ -142,15 +146,21 @@ function SubscriptionLimits() {
     [subscriptionAgents],
   );
 
-  // Quietly refresh stale subscription quota when opening Settings → Usage.
+  // Quietly refresh stale subscription quota when opening Settings → Usage: once for each plan while it is open. The
+  // list is built again whenever the host says it is there, and a plan that reports no limits never stops being stale,
+  // so asking on every change kept the checks running and Refresh flipping to "Refreshing…".
+  const asked = useRef(new Set<string>());
   useEffect(() => {
-    if (!subscriptionAgents.length) return;
     const stale = subscriptionAgents.some(a => {
+      if (asked.current.has(a.id)) return false;
       if (!a.quota) return true;
       const ms = Date.parse(a.quota.fetchedAt);
       return !Number.isFinite(ms) || Date.now() - ms > QUOTA_STALE_MS;
     });
-    if (stale) void refreshQuota({ force: false });
+    if (!stale) return;
+    // One check reads every plan's limits.
+    for (const a of subscriptionAgents) asked.current.add(a.id);
+    void refreshQuota({ force: false });
   }, [subscriptionAgents, refreshQuota]);
 
   if (!quotaProviders.length) return null;

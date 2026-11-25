@@ -184,10 +184,10 @@ impl HostManager {
         status
     }
 
-    /// Whether a run is using `agent` right now. Its CLI isn't updated under it.
+    /// Whether a run is using `agent`'s CLI right now. It isn't updated under it.
     pub async fn is_running(&self, agent: &str) -> bool {
         let rt = self.runtime.lock().await.clone();
-        rt.is_some_and(|rt| rt.running.lock().unwrap().values().any(|run| run.agent == agent))
+        rt.is_some_and(|rt| rt.running.lock().unwrap().values().any(|run| runs_on(&run.agent, agent)))
     }
 
     /// Look again for newer CLIs now, as after an update.
@@ -210,6 +210,12 @@ impl HostManager {
             None => self.status().await,
         }
     }
+}
+
+/// Whether a run for `run_agent` has `cli`'s program running: its own, and Claude Code for a run with Ollama, LM Studio
+/// or OpenRouter, which go through it.
+pub(super) fn runs_on(run_agent: &str, cli: &str) -> bool {
+    run_agent == cli || (cli == "claude" && providers::is_extra_provider(run_agent))
 }
 
 /// Five times the longest silence measured across real editing runs (1.9 minutes).

@@ -8,6 +8,7 @@ import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { ConfirmDialog, ErrorState, Icon, InlineError, Loading, Modal, Spinner, Toggle } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
 import { desktop, isDesktop } from "../lib/desktop";
+import { isComposing } from "../lib/hotkeys";
 import { taskActivityLabel } from "../lib/taskActivity";
 import { isActiveTask } from "../lib/taskRun";
 import { useEscapeToLeave, useFileDropTarget } from "../lib/uiHooks";
@@ -343,6 +344,7 @@ export function StyleGuideEditorPage() {
             onChange={e => { setNameErr(null); setName(e.target.value); }}
             onBlur={() => void commitName()}
             onKeyDown={e => {
+              if (isComposing(e)) return;
               if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
             }}
           />

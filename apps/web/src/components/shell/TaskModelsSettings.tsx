@@ -3,6 +3,7 @@ import { TASK_MODELS_MAX, taskModelChoice, taskModelId, type AgentHost, type Age
 import { AGENT_LABEL, onlineAgents, useHostsStore, type OnlineAgent } from "../../stores/hosts";
 import { isModelHidden, modelChoices, useModelPreferences, type ModelChoice } from "../../stores/modelPicker";
 import { TaskModelPicker } from "../agent/TaskModelPicker";
+import { isComposing } from "../../lib/hotkeys";
 import { Icon, InlineError } from "../ui/primitives";
 import { useServerSetting } from "./useServerSetting";
 
@@ -100,6 +101,8 @@ function TaskModelRow({ type, choices, agents, missing, focus, onFocused, onChan
     if (next !== type.description) onChange({ description: next });
   };
   const onEnter = (e: KeyboardEvent<HTMLInputElement>) => {
+    // While an input method composes, Enter and Esc are its own.
+    if (isComposing(e)) return;
     if (e.key === "Enter") e.currentTarget.blur();
     else if (e.key === "Escape") {
       // Esc puts the field back as it was saved, and stops there instead of leaving Settings.
