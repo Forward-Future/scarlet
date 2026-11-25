@@ -127,10 +127,11 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-low-done")?.textContent).toBe("Keep all");
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
-    // Empty Working and Done sections stay hidden, chat doesn't repeat "For you N", and Low risk uses times instead of colliding numbers.
+    // Empty Working and Done sections stay hidden, chat doesn't repeat "For you N", and every row leads with its time, never a number.
     expect(container.querySelector(".review-rail-foot")).toBeNull();
     expect(container.querySelector("#simple-chat .simple-need-link")).toBeNull();
-    expect(container.querySelector(".review-rail-list .edit-badge")?.textContent).toBe("1");
+    expect(container.querySelector(".review-rail-list .edit-badge")).toBeNull();
+    expect(container.querySelector(".review-rail-list .edit-row-time")?.textContent).toMatch(/^\d+:\d\d$/);
     expect(container.querySelector(".review-low-body .edit-badge")).toBeNull();
     expect(container.querySelector(".review-low-body .edit-row-time")?.textContent).toBe("0:00");
     // Generic fallback "Edit" word is omitted from row ends, and clicking a message bubble never turns it violet.

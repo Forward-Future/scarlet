@@ -235,10 +235,11 @@ it("says what Scarlet is doing this moment on one line under its opening sentenc
   const spoken = [...joins, said("The opening is saved, and I’ve found the retake of the letter.", 60)];
   view.rerender(<RunBundle task={running} events={spoken} changes={[]} banded />);
   expect(now(view.host)).toBe("The opening is saved, and I’ve found the retake of the letter.");
-  // A cut Scarlet asked about is named by its call's number, not by where it comes among the pass's cuts.
-  const asked = [{ id: "chg", cutAssessments: [{ index: 1, verdict: "ask", askOrder: 1 }, { index: 7, verdict: "ask", askOrder: 0 }] }] as never;
+  // A cut Scarlet asked about is named by its time, never by a number. One it hasn't asked about is a flagged cut.
+  const asked = [{ id: "chg", cutReasons: [{ start: 10, end: 11 }, { start: 167, end: 168 }, { start: 200, end: 201 }, { start: 300, end: 301 }],
+    cutAssessments: [{ index: 1, verdict: "ask", askOrder: 1 }, { index: 7, verdict: "ask", askOrder: 0 }] }] as never;
   view.rerender(<RunBundle task={running} events={[...spoken, tool("dialogue_review_inspect", 70, { changeId: "chg", index: 1, count: 1 })]} changes={asked} banded />);
-  expect(now(view.host)).toBe("Listening to Cut 2");
+  expect(now(view.host)).toBe("Listening to the cut at 2:47");
   view.rerender(<RunBundle task={running} events={[...spoken, tool("dialogue_review_inspect", 70, { changeId: "chg", index: 3, count: 1 })]} changes={asked} banded />);
   expect(now(view.host)).toBe("Listening to a flagged cut");
   // Under a heading that carries Stop, the line has none. With no heading, Stop ends the line.

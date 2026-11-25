@@ -519,13 +519,14 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } }));
   const seek = vi.fn(), opened: number[] = [];
-  const edit = (time: number, n: number) => ({ time, n, title: `Edit ${n} of 6 · ${time}s`, summary: `Summary ${n}`, open: () => { opened.push(n); } });
-  // 100 s across 1000 px. Edits 1 to 4 sit a second apart, so their circles would touch. Edit 5 has room.
+  const edit = (time: number, n: number) => ({ time, title: `Edit at ${time}s`, summary: `Summary ${n}`, open: () => { opened.push(n); } });
+  // 100 s across 1000 px. Edits 1 to 4 sit a second apart, so their dots would touch. Edit 5 has room.
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={seek}
     marks={[edit(10, 1), edit(11, 2), edit(12, 3), edit(13, 4), edit(60, 5)]} />);
   const markers = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
-  expect(markers().map(m => m.textContent)).toEqual(["1–4", "5"]);
-  expect(markers().every(m => m.classList.contains("is-numbered") && m.dataset.state === undefined)).toBe(true);
+  // Neither says a number or a time: one is a pill, the other a dot.
+  expect(markers().map(m => [m.textContent, m.classList.contains("is-pill")])).toEqual([["", true], ["", false]]);
+  expect(markers().every(m => m.classList.contains("is-dot") && m.dataset.state === undefined)).toBe(true);
   const strip = () => container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   const point = (type: string, clientX: number) => act(() => strip().dispatchEvent(new PointerEvent(type, { pointerId: 1, isPrimary: true, button: 0, clientX, bubbles: true })));
@@ -533,11 +534,11 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   await point("pointermove", 115);
   expect(strip().classList.contains("is-aimed")).toBe(true);
   expect(container.querySelector(".simple-timeline-need, .simple-timeline-tip")).toBeNull();
-  // A press zooms to its run, where each edit has its own number, and opens nothing.
+  // A press zooms to its run, where each edit has its own dot, and opens nothing.
   await point("pointerdown", 115);
   expect(opened).toEqual([]);
   expect(seek).not.toHaveBeenCalled();
-  expect(markers().map(m => m.textContent)).toEqual(["1", "2", "3", "4"]);
+  expect(markers().map(m => m.classList.contains("is-pill"))).toEqual([false, false, false, false]);
   // Back on the whole video, a press on a dot opens its edit; beside a marker a press scrubs as before.
   await fitBySlider();
   vi.spyOn(strip(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
@@ -550,41 +551,41 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   expect(opened).toEqual([5]);
 });
 
-it("zooms a pill when another group's circle is under the pointer too", async () => {
+it("zooms a pill when another group's dot is under the pointer too", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } }));
   const openOther = vi.fn(), openCall = vi.fn(), seek = vi.fn();
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={seek} marks={[
-    { time: 11.1, n: 13, title: "Edit 13", open: openOther },
-    { time: 10.25, n: 12, title: "Cut 12", group: "call", open: openCall },
-    { time: 11.75, n: 14, title: "Cut 14", group: "call", open: openCall },
+    { time: 11.1, title: "Edit at 0:11", open: openOther },
+    { time: 10.5, title: "Cut at 0:10", group: "call", open: openCall },
+    { time: 11.5, title: "Cut at 0:11", group: "call", open: openCall },
   ]} />);
   const pill = container.querySelector<HTMLElement>(".simple-timeline-mark.is-pill")!;
-  expect([pill.textContent, pill.style.left]).toEqual(["12+", "11%"]);
+  expect([pill.textContent, pill.style.left]).toEqual(["", "11%"]);
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   await act(() => strip.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, clientX: 111, bubbles: true })));
   expect(openOther).not.toHaveBeenCalled();
   expect(openCall).not.toHaveBeenCalled();
   expect(seek).not.toHaveBeenCalled();
-  expect([...container.querySelectorAll(".simple-timeline-mark")].map(mark => mark.textContent)).toEqual(["12", "13", "14"]);
+  expect([...container.querySelectorAll(".simple-timeline-mark")].map(mark => mark.classList.contains("is-pill"))).toEqual([false, false, false]);
 });
 
 it("names what waits on the editor in one amber line under the frame", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
-  const dot = (time: number, n: number, waits = false) => ({ time, n, title: `Cut ${n} of 6`, open: () => {},
-    ...waits && { state: "check" as const, need: `Cut ${n}` } });
+  const dot = (time: number, waits = false) => ({ time, title: `Cut at ${time}`, open: () => {},
+    ...waits && { state: "check" as const, need: `Cut at 0:${time}` } });
   // 100 s across 1000 px: cuts 1 to 3 share a pill, and the second of them waits on the editor.
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={() => {}}
-    marks={[dot(10, 1), dot(11, 2, true), dot(12, 3), dot(60, 4)]} />);
+    marks={[dot(10), dot(11, true), dot(12), dot(60)]} />);
   const pill = container.querySelector<HTMLElement>(".simple-timeline-mark")!;
-  expect([pill.textContent, pill.dataset.state]).toEqual(["1–3", "check"]);
+  expect([pill.textContent, pill.dataset.state]).toEqual(["", "check"]);
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   const point = (clientX: number) => act(() => strip.dispatchEvent(new PointerEvent("pointermove", { pointerId: 1, isPrimary: true, button: 0, clientX, bubbles: true })));
   await point(108);
-  expect(container.querySelector(".simple-timeline-need")?.textContent).toBe("Cut 2 needs you");
+  expect(container.querySelector(".simple-timeline-need")?.textContent).toBe("Cut at 0:11 needs you");
   // A marker with nothing waiting writes nothing under the frame.
   await point(600);
   expect(container.querySelector(".simple-timeline-need")).toBeNull();

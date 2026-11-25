@@ -518,12 +518,12 @@ it("uses the same input for a selected transcript, revision, or agent question",
   await submit();
   expect(useProjectStore.getState().answerTask).toHaveBeenCalledWith(asking.question!.id, "Yes, keep it", undefined);
 
-  await show({ thread: asking, selectedEdit: { changeId: ready.latest!.id, editNumber: 2, editIndex: 0,
+  await show({ thread: asking, selectedEdit: { changeId: ready.latest!.id, editIndex: 0,
     label: "Sponsor transition", time: 8.75, end: 11.75, clipIds: [] } });
   await type("Keep the words on both sides");
   await submit();
   expect(useProjectStore.getState().answerTask).toHaveBeenLastCalledWith(asking.question!.id,
-    "Edit 2 · Sponsor transition — Keep the words on both sides", undefined);
+    "Edit at 0:08 · Sponsor transition — Keep the words on both sides", undefined);
 });
 
 it("prompts for a fix and sends feedback on the failed attempt", async () => {
@@ -734,7 +734,7 @@ it("pins a reply to the selected individual edit while typing and sends it in th
   const target = { changeId: change.id, editIndex: 1, version: project.head!, time: 1, end: 3, clipIds: [], label: "Opening caption" };
   await show({ thread, selectedEdit: target });
   const header = container.querySelector(".composer-context-row")!;
-  expect(header.querySelector(".composer-target-name")?.textContent).toBe("Edit 2");
+  expect(header.querySelector(".composer-target-name")?.textContent).toBe("Edit at 0:01");
   expect(header.contains(container.querySelector(".composer-model"))).toBe(true);
   expect(container.querySelector(".composer-box")?.contains(header)).toBe(false);
   await type("Hold this caption for another second");
@@ -786,20 +786,18 @@ it("sends words chosen in a call's passage as a revision of that one cut, where 
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
 });
 
-it("shows a call's number and cut time, and clicking the time toggles milliseconds", async () => {
+it("shows a call by its time alone, never a number, and clicking the time toggles milliseconds", async () => {
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
-  useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut 3" });
-  usePlayerStore.setState({ time: 177.4 });
-  await show({ thread: ready, targetTag: "Cut 3", aimTime: 167.2, pausedAt: { time: 177.4, version: "ver_before" } });
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47");
+  useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 2:47" });
+  await show({ thread: ready, targetTag: "Cut at 2:47", targetTime: 167.2 });
+  expect(aimName()?.textContent).toBe("Cut 2:47");
   expect(container.querySelector(".composer-aim-when")).toBeNull();
   const timeBtn = container.querySelector<HTMLButtonElement>(".composer-aim-time")!;
   await act(async () => timeBtn.click());
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47.200");
+  expect(aimName()?.textContent).toBe("Cut 2:47.200");
   expect(aimName()?.querySelector(".time-ms")?.textContent).toBe(".200");
   await act(async () => timeBtn.click());
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47");
-  usePlayerStore.setState({ time: 0 });
+  expect(aimName()?.textContent).toBe("Cut 2:47");
 });
 
 it("shows where the editor paused in an open cut's tag, and sends the message to the cut with that frame", async () => {
@@ -1333,8 +1331,8 @@ it("shows the Range tag for words chosen in the transcript (Ask about this), and
   expect(Array.from(aimName()!.querySelectorAll(".time-ms")).map(el => el.textContent)).toEqual([".200", ".500"]);
   // Words chosen inside an open cut still carry the cut's own tag.
   await act(async () => useUiStore.getState().setAgentContext({ changeId: "chg_1", cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "“I”" }));
-  await show({ targetTag: "Cut 1" });
-  expect(aimName()?.textContent).toBe("Cut 1");
+  await show({ targetTag: "Cut at 0:02" });
+  expect(aimName()?.textContent).toBe("Cut 0:02");
 });
 
 it("answers Scarlet's question with words chosen in the transcript beside Answer, and clears the range before Answer", async () => {

@@ -149,7 +149,7 @@ interface PassRow {
   mark?: number;
   hover?: HoveredReviewRow;
   label: string;
-  /** A call's number; 0 for any other row. */
+  /** The order a call reached the editor in, never shown; 0 for any other row. */
   n: number;
   num?: number;
   state?: string;
@@ -191,7 +191,7 @@ interface Entry {
 /**
  * What a dialogue pass made, as the rows of its block. Once it has something for the editor to review, its rows sit
  * under three tabs and each is under exactly one. For you, shown until another is pressed, lists what waits on the
- * editor: open calls and flagged edits, each by its number while the pass waits, with Scarlet's note. Pressed, it opens
+ * editor: open calls and flagged edits, each by its time, with Scarlet's note. Pressed, it opens
  * the first one still waiting. A row the editor has just decided or sent back stays there a moment with its new word,
  * then fades and leaves. Over those rows one box includes the edits Scarlet didn't flag ("Include 112 low risk edits");
  * ticked, they join For you's list in their place in the video, edits that play as one change on one row. Working has the rows Scarlet has, each with
@@ -306,7 +306,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
       const at = (e as ThreadEdit).at ?? e.range.start;
       const displayAt = (!seen && !sent ? e.reviewRange?.start : undefined) ?? at;
-      // Listed with the calls, it has the number it has among them. One that came back revised with a reason of
+      // Listed with the calls, by its time. One that came back revised with a reason of
       // Scarlet's own ends on its version there, as a revised call does, until it is kept or sent back again.
       return [{ key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey),
         at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
@@ -318,7 +318,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         version: e.previous.length ? e.previous.length + 1 : 0, title: revised || e.reason ? undefined : e.check,
         on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e), fresh: fresh.has(e.changeId) }];
     }),
-    // A call goes by its number, as on its card and on the timeline.
+    // A call goes by its time, as on its card and in the box's tag.
     ...(pass?.calls ?? []).map((c): PassRow => {
       const callWord = c.state === "revising" ? (revisionWord(c.run, { recheck: !!c.run && isRecheck(c.run), nextQueuedId: actions.nextQueuedId }) ?? "Revising…") : undefined;
       return { key: callRowKey(c), id: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at,
@@ -481,7 +481,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     // Every list leads with each row's time and keeps its version and amount: the time is bold amber on a tint while
     // the row needs the editor, and a decided row is ticked. A pass's rows lead with times while it waits too, never
     // its numbers, so including the low risk edits changes nothing about the rows that wait (the editor's call,
-    // 2026-11-24). Numbers stay on the timeline, the card and the box's tag. A list widens its time column for all its
+    // 2026-11-24), and nothing anywhere goes by a number. A list widens its time column for all its
     // rows once one on screen is past an hour ("1:02:07").
     return <ol key={id} className={pastHour ? "simple-pass-list has-hours" : "simple-pass-list"} aria-label={label}>
       {list.map(entry => {
@@ -557,8 +557,8 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
 
 /**
  * What any other request made, as the rows of its block: one sentence, then a link that opens the edits themselves,
- * numbered as on the timeline. Edits of one name that overlap exactly are one edit. Once Scarlet flagged one, the rows
- * sit under three tabs, as a pass's do, each with the number it has in the whole list: For you lists the flagged edits
+ * each by its time. Edits of one name that overlap exactly are one edit. Once Scarlet flagged one, the rows
+ * sit under three tabs, as a pass's do: For you lists the flagged edits
  * not yet decided and counts them, with the edits Scarlet didn't flag behind one line under them ("3 optional");
  * Working has the ones sent back, each with its request under its row; Done has the ones kept or rejected. A row just
  * decided or sent back stays in For you a moment with its new word, then fades and leaves. A request about an edit

@@ -174,3 +174,12 @@ export function playbackClock(seconds: number): string {
   const ms = Math.max(0, Math.round(seconds * 1000));
   return `${clock(Math.floor(ms / 1000))}.${String(ms % 1000).padStart(3, "0")}`;
 }
+
+/**
+ * A time as the clock says it, to the millisecond only when another of `among` falls in the same second, so two cuts
+ * named by their times never read alike: "2:47.120" and "2:47.800", and "2:47" on its own.
+ */
+export function distinctClock(seconds: number, among: readonly number[]): string {
+  const label = clock(seconds);
+  return among.some(t => Math.abs(t - seconds) > 1e-3 && clock(t) === label) ? playbackClock(seconds) : label;
+}
