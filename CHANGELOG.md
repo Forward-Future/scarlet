@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- An empty library now has a "Try a sample project" button that opens a short sample clip with a finished edit pass ready to play, review, and compare Before and After.
 - Dialogue cuts now place cleanly in rooms with steady background noise, like a fan, air conditioning or traffic hum, without cutting into soft word endings.
 - Settings › About (and the startup error screen) now have a Report a problem button that saves a log zip and opens a pre-filled bug report you can drag it into. It reminds you that reports are public and the logs show file and folder names.
 - In the beta three-column layout, the middle edits column can now be resized from its right edge, every row stays on a single line, and hovering a row shows the full line in a Scarlet tooltip.
