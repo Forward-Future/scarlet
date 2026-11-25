@@ -19,9 +19,11 @@ function uncovered(range: TimeRange, covered: readonly TimeRange[]): TimeRange[]
 /** Ripples can also remove empty time or generated picture. Each track has its own selection clock
  * after a track-specific ripple. Marker, clip and track property edits leave that clock in place. */
 export function rippleOutsideSelection(before: Timeline, ops: readonly TimelineOp[], allowed: TimeRange[]): TimeRange | undefined {
-  const clocks = new Map(before.tracks.map(t => [t.id, allowed]));
+  // Touching ranges, such as one recording's selection split across two clips, are one passage.
+  const merged = mergeRanges([...allowed], 1e-6);
+  const clocks = new Map(before.tracks.map(t => [t.id, merged]));
   for (const op of ops) {
-    if (op.op === "addTrack") clocks.set(op.track.id, allowed);
+    if (op.op === "addTrack") clocks.set(op.track.id, merged);
     if (op.op === "removeTrack") clocks.delete(op.trackId);
     if (op.op !== "rippleDelete" && op.op !== "rippleInsertGap") continue;
     for (const id of op.trackIds ?? clocks.keys()) {

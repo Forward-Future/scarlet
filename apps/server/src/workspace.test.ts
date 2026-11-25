@@ -1711,6 +1711,18 @@ it("applies activity filters and page limits before loading documents", async ()
   }
 });
 
+it("pages server activity through entries logged in the same millisecond", async () => {
+  const createdAt = "2025-02-01T00:00:00.000Z";
+  for (const id of ["tie-a", "tie-b", "tie-c"]) {
+    workspace.ctx.repos.activity.put({ id, projectId: null, createdAt, type: "note.added", summary: "test",
+      actor: { type: "scarlet", name: "Scarlet" }, data: {} });
+  }
+  const ids = async (path: string) => (await (await api("GET", path)).json()).activity.map((a: { id: string }) => a.id);
+  const first = await ids("/activity?limit=2&before=2025-02-01T00:00:00.001Z");
+  expect(first).toEqual(["tie-c", "tie-b"]);
+  expect(await ids(`/activity?limit=2&before=${createdAt}&beforeId=${first[1]}`)).toEqual(["tie-a"]);
+});
+
 it("uses the project frame rate for proposal previews and version diffs", async () => {
   const { repos } = workspace.ctx;
   repos.projects.update(project.id, { settings: { fps: 60 } });
@@ -6056,8 +6068,10 @@ it("removes day-old working files a killed engine left behind, and nothing newer
   for (const [name, file] of Object.entries(files)) if (name !== "freshTmp") utimesSync(file, old, old);
   await ctx.close();
   workspace = openWorkspace();
+  // The orphan copy landed just now, though it carries old times as an imported copy does: its import may still be
+  // under way in another engine, so it stays until a day after it landed.
   expect(Object.fromEntries(Object.entries(files).map(([name, file]) => [name, existsSync(file)]))).toEqual({
-    tmp: false, freshTmp: true, part: false, orphan: false, original: true, proxyPart: false, proxy: true, segmentPart: false });
+    tmp: false, freshTmp: true, part: false, orphan: true, original: true, proxyPart: false, proxy: true, segmentPart: false });
 });
 
 it("carries a run's CLI session to the attempt that resumes it after a quit, and starts cold when the host no longer has it", async () => {

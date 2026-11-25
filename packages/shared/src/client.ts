@@ -740,7 +740,7 @@ export class ScarletClient extends ClientTransport {
   activity(projectId: string, q: { before?: string; beforeId?: string; limit?: number; type?: string } = {}) {
     return this.get<{ activity: ActivityEntry[] }>(withQuery(`/projects/${projectId}/activity`, q));
   }
-  serverActivity(q: { before?: string; limit?: number } = {}) {
+  serverActivity(q: { before?: string; beforeId?: string; limit?: number } = {}) {
     return this.get<{ activity: ActivityEntry[] }>(withQuery("/activity", q));
   }
   trash() {

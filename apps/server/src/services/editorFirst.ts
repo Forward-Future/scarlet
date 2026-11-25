@@ -132,10 +132,12 @@ export class EditorFirst {
     if (background === entry.lowered) return;
     entry.lowered = background;
     this.apply!(pid, background).catch((error: NodeJS.ErrnoException & { code?: unknown }) => {
+      // Not changed, so the next check tries again.
+      if (this.adopted.get(pid) === entry && entry.lowered === background) entry.lowered = !background;
       // A process that has just exited can't change priority, and that isn't worth a line.
       if (this.adopted.get(pid) !== entry || this.failed) return;
       this.failed = true;
-      this.log?.(`[media] couldn't change a background process's priority, so it keeps its own: ${error.message}`);
+      this.log?.(`[media] couldn't change a background process's priority, so it stays where it was: ${error.message}`);
     });
   }
 }

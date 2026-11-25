@@ -367,6 +367,20 @@ async function collectFiles(folder: string, prefix = ""): Promise<Array<{ rel: s
   return out;
 }
 
+/**
+ * Replace whole relative links with their new paths in one pass. A target only matches between URL
+ * delimiters (quotes, parentheses, `=`, whitespace, `?`, `#`), longest first, so `bg.png` never
+ * matches inside `hero-bg.png` and a path already put in is never scanned again.
+ */
+function rewriteLinks(html: string, targets: Map<string, string>): string {
+  if (!targets.size) return html;
+  const pattern = [...targets.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map(target => target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  return html.replace(new RegExp(`(?<=^|["'\`(=,\\s])(?:${pattern})(?=$|["'\`)?#,\\s])`, "g"), match => targets.get(match) ?? match);
+}
+
 /** Strip the 8-hex-char dedupe prefix added by `adoptLinkedFiles` so saved asset names stay clean. */
 function cleanLinkedName(rel: string): string {
   const base = basename(rel);
@@ -416,7 +430,7 @@ export async function createStyleGuideFromGraphic(
     const folder = dirname(page);
     const files = await collectFiles(folder);
     const copiedAssets: StyleGuideAsset[] = [];
-    let rewrittenHtml = rawHtml;
+    const linkTargets = new Map<string, string>();
 
     for (const file of files) {
       const assetId = newId("sga");
@@ -432,10 +446,11 @@ export async function createStyleGuideFromGraphic(
       // Rewrite relative links (encoded or raw) to absolute paths inside the style guide's asset folder
       // so both `renderStyleGuidePreview` and future project graphics can adopt them cleanly.
       const encodedRel = file.rel.split("/").map(encodeURIComponent).join("/");
-      for (const target of new Set([file.rel, `./${file.rel}`, encodedRel, `./${encodedRel}`])) {
-        rewrittenHtml = rewrittenHtml.split(target).join(dest);
+      for (const target of [file.rel, `./${file.rel}`, encodedRel, `./${encodedRel}`]) {
+        if (!linkTargets.has(target)) linkTargets.set(target, dest);
       }
     }
+    const rewrittenHtml = rewriteLinks(rawHtml, linkTargets);
 
     const instructions = summarizeGraphicStyle(cleanTitle, rewrittenHtml, copiedAssets);
     const updated = ctx.db.transaction(() => {

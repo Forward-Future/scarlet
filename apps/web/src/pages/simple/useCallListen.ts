@@ -25,6 +25,17 @@ import { afterPlayerMount, type JoinedListen, type Listening, type Side } from "
 /** A revision of one call that is still at work: the call as the editor sent it back, and where it sits in the pass now. */
 interface RevisionInput { call: Call; index: number; previous: Change }
 
+/**
+ * A pass's cuts, staged on `stagedOn`, placed on `shownOn` by their footage. One that can't be placed there is
+ * undefined, and so is each one when the version they were staged on isn't known.
+ */
+export function cutsOnVersion(cuts: readonly TimeRange[], stagedOn: Timeline | undefined, shownOn: Timeline, fps: number): (TimeRange | undefined)[] {
+  if (!stagedOn) return cuts.map(() => undefined);
+  if (stagedOn.version === shownOn.version) return [...cuts];
+  const onto = { map: makeTimeMap(stagedOn, shownOn, fps), timeline: shownOn };
+  return cuts.map(cut => cutOnWorkingCut(cut, onto, fps));
+}
+
 interface CallListenInputs {
   current: Pick<ProjectData, "id" | "project" | "renderSettingsRevision">;
   pass: Change | undefined;
@@ -125,6 +136,15 @@ export function useCallListen({ current, pass, passThread, revisionInput, listen
   }, [conflict, cutOverride, placed, timeline, head, savedBefore.timeline, fps]);
   const callTimeline = conflict ? (timeline && head === timeline.version ? timeline : undefined)
     : versionBefore ? savedBefore.timeline ?? undefined : timeline ?? undefined;
+  // The pass's other cuts where the open call's cut is, so its edges stop short of them: on the working cut as the call
+  // is placed, or on the version a changed call is heard on.
+  const callSiblings = useMemo(() => {
+    if (!passRemovals) return;
+    if (!versionBefore) return passRemovals.map(r => placeCut(r));
+    if (!callTimeline) return passRemovals.map(() => undefined);
+    const staged = stagedOn.timeline ?? (liveReview && liveReview.original.version === pass?.fromVersion ? liveReview.original : undefined);
+    return cutsOnVersion(passRemovals, staged, callTimeline, fps);
+  }, [passRemovals, versionBefore, callTimeline, stagedOn.timeline, liveReview, pass?.fromVersion, toWorkingCut, placing, fps]); // eslint-disable-line react-hooks/exhaustive-deps
   const callDuration = useMemo(() => callTimeline && timelineDuration(callTimeline), [callTimeline]);
   const pinnedCallVersion = versionBefore && (head !== versionBefore || timeline?.version !== versionBefore) ? versionBefore : undefined;
   const versionAfter = !conflict ? cutOverride?.previewVersion : undefined;
@@ -319,7 +339,7 @@ export function useCallListen({ current, pass, passThread, revisionInput, listen
   // A click inside the call's cut on the timeline: After steps over that footage, so it plays in Before from there.
   const listenFrom = (time: number) => { player.pause(); setListening(l => l && { ...l, side: "before", take: l.take + 1, at: time }); };
   return {
-    returningCall, review, liveReview, passRemovals, listenRemovals, stagedOn, toWorkingCut, placing, placeCut, placed,
+    returningCall, review, liveReview, passRemovals, listenRemovals, callSiblings, stagedOn, toWorkingCut, placing, placeCut, placed,
     overrideForCall, cutOverride, rechecking, conflict, answeringCut, versionBefore, callPlaybackKey, beforeVersion, preparedCall, savedBefore,
     callTimeline, callDuration, pinnedCallVersion, versionAfter, savedAfter, needsSingleCut, single, heard, audition, listenJoined,
     listedPassEdits, rejectedPassEdits, locatedPassEdits, callView, visit, viewAudition, viewJoined, playedAudition, callViewNow,

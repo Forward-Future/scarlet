@@ -203,13 +203,11 @@ export function styleGuideRoutes(ctx: Ctx) {
     if (!found) throw notFound("style guide asset");
     const contentType = found.asset.mime ?? "application/octet-stream";
     const active = /^image\/svg\+xml|^text\/html/i.test(contentType);
-    const res = await serveOriginal(c.req.raw, found.path, {
+    return serveOriginal(c.req.raw, found.path, {
       contentType,
       cacheControl: "private, no-cache",
       ...(active && { downloadName: found.asset.name }),
     });
-    if (active) res.headers.set("Content-Security-Policy", "sandbox");
-    return res;
   });
 
   r.post("/style-guides/:styleGuideId/assets/:assetId/read", async (c) => {

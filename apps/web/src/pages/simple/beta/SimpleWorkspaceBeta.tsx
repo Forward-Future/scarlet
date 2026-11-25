@@ -357,7 +357,7 @@ export function SimpleWorkspaceBeta() {
     [reviewContext, pass?.id, pass?.toVersion, current.renderSettingsRevision]);
   const preparedCandidates = useMemo(() => new Map<string, PreparedCut>(), [draftCache]);
   const {
-    returningCall, review, liveReview, passRemovals, listenRemovals, stagedOn, toWorkingCut, placing, placeCut, placed,
+    returningCall, review, liveReview, passRemovals, listenRemovals, callSiblings, stagedOn, toWorkingCut, placing, placeCut, placed,
     overrideForCall, cutOverride, rechecking, conflict, answeringCut, versionBefore, callPlaybackKey, beforeVersion, preparedCall, savedBefore,
     callTimeline, callDuration, pinnedCallVersion, versionAfter, savedAfter, needsSingleCut, single, heard, audition, listenJoined,
     listedPassEdits, rejectedPassEdits, locatedPassEdits, callView, visit, viewAudition, viewJoined, playedAudition, callViewNow,
@@ -2443,8 +2443,8 @@ export function SimpleWorkspaceBeta() {
     },
     ...(adjustName && { cutName: tagOf(adjustName) }),
     pass, openCall, listening, setListening, conflict: !!conflict, openCallBack, deciding: !!deciding,
-    heard, callTimeline, callView, passRemovals,
-    onSkipCall: () => { if (openCall) void decideCut(approves(openCall) === "cut" ? "keep" : "cut"); },
+    heard, callTimeline, callView, passRemovals: callSiblings,
+    onDecideCall: choice => { if (openCall) void decideCut(choice); },
   });
 
   const reviewVisible = railView.need + railView.forYouRows + railView.optional + railView.working + railView.done > 0;

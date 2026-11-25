@@ -2,7 +2,8 @@
  * Pure ACP message parsing, permission allowlisting and command construction for Gemini via Antigravity CLI
  * (`agy acp`). `gemini.ts` drives the session.
  */
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import {
   briefInput,
   isQuestionTool,
@@ -150,41 +151,86 @@ export function namesPath(value: string, windows = process.platform === "win32")
 }
 
 /**
- * Every path a permission request names: its locations, and any absolute path among its input's values, or any that
- * climbs out of the folder it is read from (`../`).
+ * The input keys a file tool says where it reads or writes under. A plain name under one (`a.json`) is a path to check
+ * too: inside the task folder it may be a link to a file anywhere.
+ */
+const PATH_KEYS = new Set(["path", "paths", "file_path", "filepath", "absolute_path", "dir_path", "target", "source", "destination"]);
+
+/**
+ * Every path a permission request names: its locations, any absolute path among its input's values, or any that climbs
+ * out of the folder it is read from (`../`), and any name at all under a key that holds where a file tool works.
  */
 function namedPaths(params: unknown): string[] {
   const tc = asRecord(asRecord(params)?.toolCall);
   const out: string[] = [];
-  const visit = (value: unknown, depth: number) => {
+  const visit = (value: unknown, depth: number, pathKey: boolean) => {
     if (depth > 4) return;
-    if (typeof value === "string") { if (namesPath(value)) out.push(value.trim()); return; }
-    if (Array.isArray(value)) { for (const v of value) visit(v, depth + 1); return; }
+    if (typeof value === "string") {
+      const v = value.trim();
+      if (namesPath(value) || (pathKey && v && v.length < 4096 && !/[\n\r]/.test(v))) out.push(v);
+      return;
+    }
+    if (Array.isArray(value)) { for (const v of value) visit(v, depth + 1, pathKey); return; }
     const rec = asRecord(value);
-    if (rec) for (const v of Object.values(rec)) visit(v, depth + 1);
+    if (rec) for (const [k, v] of Object.entries(rec)) visit(v, depth + 1, PATH_KEYS.has(k.toLowerCase()));
   };
   if (Array.isArray(tc?.locations)) for (const loc of tc.locations) { const path = asString(asRecord(loc)?.path); if (path) out.push(path); }
-  visit(tc?.rawInput, 0);
+  visit(tc?.rawInput, 0, false);
   return out;
 }
 
 /**
- * Whether a request's agent may use one of agy's own tools: yes unless it names a path outside the folders it works in
- * (its task folder, and those its programs live in). agy's sandbox restricts its terminal; its file tools reach as far
- * as the user's files do, the library that holds Scarlet's token among them. A relative path is read from the task
- * folder, the first of them, as agy reads it.
+ * Where a path really is, through any link on the way: the nearest part of it that exists, made real, with the rest
+ * after it, as a file about to be written has no real path of its own yet. Undefined when a part exists but can't be
+ * made real (a link to nowhere, which a write would create the file at the far end of).
  */
-export function workspacePermission(params: unknown, roots: string[]): boolean {
+function realPath(path: string): string | undefined {
+  let head = path;
+  const rest: string[] = [];
+  for (;;) {
+    try { return join(realpathSync.native(head), ...rest); } catch { /* not there, or not reachable */ }
+    if (lstatSync(head, { throwIfNoEntry: false })) return undefined;
+    const up = dirname(head);
+    if (up === head) return path;
+    rest.unshift(basename(head));
+    head = up;
+  }
+}
+
+/** ACP kinds of tool call that only look: they may reach the folders a request's programs live in, besides its own. */
+const READ_KINDS = new Set(["read", "search", "execute"]);
+
+/**
+ * Whether a request's agent may use one of agy's own tools: yes unless it names a path outside the folders it works in.
+ * It writes only in its task folder (`writeRoots`); a call that only reads may also reach the folders its programs and
+ * certificates live in (`readRoots`), never writable, as Claude's and Codex's sandboxes have them. agy's sandbox
+ * restricts its terminal, so a shell command counts as a look here; its file tools reach as far as the user's files do,
+ * the library that holds Scarlet's token among them. A relative path is read from the task folder, the first of the
+ * write roots, as agy reads it. Paths are compared where they really are, through links, so a link the shell made in
+ * the task folder doesn't lead a file tool out of it, and a file there with a second hard link (which could be one to
+ * Scarlet's token) is refused. A link swapped in between this check and the tool running still gets past it.
+ */
+export function workspacePermission(params: unknown, writeRoots: string[], readRoots: string[] = []): boolean {
   if (isScarletMcpPermission(params)) return true;
-  const norm = (p: string, from?: string) => (from === undefined ? resolvePath(p) : resolvePath(from, p)).replace(/\\/g, "/").replace(/\/+$/, "");
-  const within = roots.filter((r) => r.trim()).map((r) => norm(r));
-  const taskFolder = within[0];
+  const slash = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const real = (p: string) => slash(realPath(p) ?? p);
+  const writable = writeRoots.filter((r) => r.trim()).map((r) => real(resolvePath(r)));
+  const kind = asString(asRecord(asRecord(params)?.toolCall)?.kind);
+  const within = [...writable, ...(kind && READ_KINDS.has(kind) ? readRoots.filter((r) => r.trim()).map((r) => real(resolvePath(r))) : [])];
+  const inside = (p: string, roots: string[]) => roots.some((root) => p === root || p.startsWith(`${root}/`));
+  const taskFolder = writeRoots.find((r) => r.trim());
   return namedPaths(params).every((path) => {
     if (path.startsWith("~")) return false;
     const relative = !isAbsolute(path) && !/^[a-zA-Z]:[\\/]/.test(path);
     if (relative && taskFolder === undefined) return false;
-    const p = relative ? norm(path, taskFolder) : norm(path);
-    return within.some((root) => p === root || p.startsWith(`${root}/`));
+    const resolved = relative ? resolvePath(taskFolder!, path) : resolvePath(path);
+    const found = realPath(resolved);
+    if (found === undefined) return false;
+    const p = slash(found);
+    if (!inside(p, within)) return false;
+    if (!inside(p, writable)) return true;
+    const st = lstatSync(found, { throwIfNoEntry: false });
+    return !(st?.isFile() && st.nlink > 1);
   });
 }
 

@@ -114,8 +114,8 @@ describe("style guide assets", () => {
 
     const svgDownload = await api("GET", `/style-guides/${created.id}/assets/${svgAsset.id}`);
     expect(svgDownload.status).toBe(200);
-    expect(svgDownload.headers.get("content-security-policy")).toBe("sandbox");
-    expect(svgDownload.headers.get("content-disposition")).toContain("attachment");
+    expect(svgDownload.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect(svgDownload.headers.get("content-disposition")).toBe(`attachment; filename="logo.svg"; filename*=UTF-8''logo.svg`);
 
     // Local path upload + read
     const tmpFile = join(directory, "rules.md");
@@ -175,6 +175,44 @@ describe("1-click save as style from graphic", () => {
     expect(styleGuide.assets[0]!.name).toBe("logo.svg");
     const copiedPath = join(workspace.ctx.paths.styleGuideAssets(styleGuide.id), styleGuide.assets[0]!.id, "logo.svg");
     expect(readFileSync(copiedPath, "utf8")).toContain("<svg");
+  });
+
+  it("rewrites each asset link to its own copy when one file name is inside another", async () => {
+    const mediaId = "med_gfx_overlap";
+    const gfxDir = join(workspace.ctx.paths.project(project.id), "graphics", mediaId);
+    mkdirSync(gfxDir, { recursive: true });
+    writeFileSync(join(gfxDir, "bg.png"), "bg");
+    writeFileSync(join(gfxDir, "hero-bg.png"), "hero");
+    writeFileSync(
+      join(gfxDir, "index.html"),
+      `<!doctype html><html><head><style>.hero{background:url(hero-bg.png)}</style></head><body><img src="bg.png"><img src="./hero-bg.png"></body></html>`,
+    );
+    workspace.ctx.repos.projects.putMedia(project.id, {
+      id: mediaId,
+      name: "Hero.mov",
+      kind: "video",
+      path: `graphics/${mediaId}/graphic.mov`,
+      duration: 4,
+      width: 1280,
+      height: 720,
+      fps: 30,
+      hasAudio: false,
+      graphic: { source: `graphics/${mediaId}/index.html` },
+    }, "ready");
+
+    const res = await api("POST", "/style-guides/from-graphic", { projectId: project.id, mediaId, name: "hero-look" });
+    expect(res.status).toBe(201);
+    const { styleGuide } = await res.json() as { styleGuide: StyleGuideRecord };
+    const pathOf = (name: string) => {
+      const asset = styleGuide.assets.find(a => a.name === name)!;
+      return join(workspace.ctx.paths.styleGuideAssets(styleGuide.id), asset.id, name);
+    };
+    const html = styleGuide.instructions.split("## Reference HTML")[1]!;
+    expect(html).toContain(`url(${pathOf("hero-bg.png")})`);
+    expect(html).toContain(`src="${pathOf("bg.png")}"`);
+    expect(html).toContain(`src="${pathOf("hero-bg.png")}"`);
+    expect(html).not.toContain("hero-/");
+    expect(html).not.toContain(".//");
   });
 });
 

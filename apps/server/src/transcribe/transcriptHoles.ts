@@ -312,7 +312,7 @@ export async function fillTranscriptHoles(input: { wav: string; segments: Transc
   const levels = await wavLevels(wav, signal);
   const heardOnly = withoutUnheardSegments(input.segments, levels, word => alignerHeard.get(word));
   if (heardOnly.dropped.length) {
-    const lines = heardOnly.dropped.map(s => `“${s.text.trim()}” at ${s.words[0]!.start.toFixed(1)} s`);
+    const lines = heardOnly.dropped.map(s => `“${s.text.trim()}” at ${(s.words[0]?.start ?? s.start).toFixed(1)} s`);
     input.log(`[transcribe] took out ${lines.length} ${lines.length === 1 ? "line" : "lines"} Whisper wrote over quiet: ${lines.slice(0, 6).join(", ")}${lines.length > 6 ? ", …" : ""}`);
   }
   // Placed on the sound first: a word stretched over a wait would hide the stretch the holes are looked for in.

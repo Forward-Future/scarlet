@@ -198,3 +198,32 @@ it("checks a plan's limits once when Usage opens, not again each time the host s
     await view.unmount();
   }
 });
+
+// A model's name is only a guess at its provider: Ollama's gpt-oss is Ollama's, while a Codex model no host lists still
+// shows Codex.
+it("shows a model's icon from the live host that serves it before guessing from its name", async () => {
+  useHostsStore.setState({
+    status: "ready",
+    hosts: [{
+      id: "h1", userId: "u1", name: "Mac", platform: "darwin", online: true,
+      agents: [{ id: "ollama", installed: true, loggedIn: true, models: ["gpt-oss:20b"] }],
+    }],
+  } as unknown as Partial<ReturnType<typeof useHostsStore.getState>>);
+  vi.spyOn(api, "usage").mockImplementation(async (by = "project"): Promise<UsageResponse> => by === "model"
+    ? { by, total: totals(2), groups: [{ key: "gpt-oss:20b", ...totals(1) }, { key: "gpt-5-codex", ...totals(1) }] }
+    : { by, total: totals(2), groups: [] });
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: [] } as unknown as Awaited<ReturnType<typeof api.projects>>);
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+
+  const view = await renderUsage();
+  try {
+    const modelTab = [...view.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(b => b.textContent?.includes("Models"))!;
+    await act(async () => modelTab.click());
+    const rows = [...view.container.querySelectorAll('[aria-label="By model"] .usage-row')];
+    const icon = (key: string) => rows.find(r => r.textContent?.includes(key))?.querySelector(".usage-row-icon img")?.getAttribute("src");
+    expect(icon("gpt-oss:20b")).toContain("ollama");
+    expect(icon("gpt-5-codex")).toContain("openai");
+  } finally {
+    await view.unmount();
+  }
+});

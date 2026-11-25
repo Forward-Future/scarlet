@@ -15,7 +15,7 @@ export interface PendingAttachment {
 }
 
 /** How many files one message can carry, as the engine takes them. */
-const MAX_ATTACHMENTS = 20;
+export const MAX_ATTACHMENTS = 20;
 
 interface AttachmentsState {
   /** By project: the next message there carries them, whichever request the box is aimed at. */

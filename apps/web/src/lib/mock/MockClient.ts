@@ -244,9 +244,11 @@ export class MockClient implements ScarletApi {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
     return this.latency({ activity: list.slice(0, q.limit ?? 200) }, 150);
   }
-  async serverActivity(q: { before?: string; limit?: number } = {}): Promise<{ activity: ActivityEntry[] }> {
+  async serverActivity(q: { before?: string; beforeId?: string; limit?: number } = {}): Promise<{ activity: ActivityEntry[] }> {
     this.requireAuth();
-    return this.latency({ activity: this.store.activityLog.filter((a) => a.projectId === null && (!q.before || a.createdAt < q.before)).slice(0, q.limit ?? 200) });
+    const list = this.store.activityLog.filter((a) => a.projectId === null && (!q.before || a.createdAt < q.before || (a.createdAt === q.before && q.beforeId && a.id < q.beforeId)))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    return this.latency({ activity: list.slice(0, q.limit ?? 200) });
   }
   // --- media ----------------------------------------------------------------------
   async media(projectId: string): Promise<{ media: MediaAsset[] }> {

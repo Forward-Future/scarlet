@@ -194,7 +194,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   const answerRequest = (msg: Record<string, unknown>) => {
     if (msg.method === "session/request_permission") {
       // A request's agent has agy's own tools inside its folder; a side check has Scarlet's only.
-      const allow = opts.workspace ? workspacePermission(msg.params, [opts.cwd, ...opts.workspace.readDirs])
+      const allow = opts.workspace ? workspacePermission(msg.params, [opts.cwd], opts.workspace.readDirs)
         : isScarletMcpPermission(msg.params);
       if (!allow) refused.push(extractToolName(asRecord(asRecord(msg.params)?.toolCall) ?? {}));
       send({ id: msg.id, result: { outcome: permissionOutcome(msg.params, allow) } });

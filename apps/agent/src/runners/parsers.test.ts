@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
@@ -467,7 +467,7 @@ describe("gemini ACP parser", () => {
 
   it("enforces Scarlet MCP-only permissions and builds the agy acp command", () => {
     // A request's agent may use agy's own tools inside its folders; a path outside them, or one in the home, is refused.
-    const roots = ["/w", "/Applications/Google Chrome.app"];
+    const roots = ["/w"];
     expect(workspacePermission({ toolCall: { name: "mcp__scarlet__timeline_get" } }, roots)).toBe(true);
     expect(workspacePermission({ toolCall: { name: "run_shell_command", rawInput: { command: "ffmpeg -version" } } }, roots)).toBe(true);
     expect(workspacePermission({ toolCall: { name: "write_file", locations: [{ path: "/w/artifacts/page.html" }] } }, roots)).toBe(true);
@@ -515,8 +515,8 @@ describe("gemini ACP parser", () => {
   });
 
   it("reads a relative path from the task folder, so one that climbs out of it is refused", () => {
-    const roots = ["/w", "/Applications/Google Chrome.app"];
-    const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, roots);
+    const roots = ["/w"];
+    const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, roots, ["/Applications/Google Chrome.app"]);
     // Three folders up from a task folder is Scarlet's own, where its token is kept.
     expect(allow({ name: "read_file", rawInput: { path: "../../../agent.json" } })).toBe(false);
     expect(allow({ name: "read_file", rawInput: { file_path: "artifacts/../../secret" } })).toBe(false);
@@ -536,6 +536,48 @@ describe("gemini ACP parser", () => {
     expect(workspacePermission({ toolCall: { name: "list_dir", rawInput: { paths: ["/w/artifacts", "/w2"] } } }, ["/w/sub/.."])).toBe(false);
     expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: process.cwd() }] } }, [""])).toBe(false);
     expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: "/etc/passwd" }] } }, ["", "   "])).toBe(false);
+  });
+
+  it("follows links and hard links out of the task folder, so a link the shell made there leads nowhere else", () => {
+    const base = mkdtempSync(join(tmpdir(), "scarlet-perm-"));
+    try {
+      const task = join(base, "work", "tsk_1");
+      mkdirSync(task, { recursive: true });
+      writeFileSync(join(base, "agent.json"), "{\"token\":\"secret\"}");
+      writeFileSync(join(task, "notes.md"), "notes");
+      symlinkSync(join(base, "agent.json"), join(task, "a.json"));
+      symlinkSync(join(task, "notes.md"), join(task, "b.md"));
+      symlinkSync(join(base, "nowhere.txt"), join(task, "c.txt"));
+      linkSync(join(base, "agent.json"), join(task, "d.json"));
+      const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, [task]);
+      // A link to a file outside, by its full path, by its plain name, or under any key a file tool names a file with.
+      expect(allow({ name: "read_file", locations: [{ path: join(task, "a.json") }] })).toBe(false);
+      expect(allow({ name: "read_file", rawInput: { path: "a.json" } })).toBe(false);
+      expect(allow({ name: "write_file", rawInput: { file_path: "a.json", content: "x" } })).toBe(false);
+      expect(allow({ name: "list_dir", rawInput: { paths: ["notes.md", "a.json"] } })).toBe(false);
+      // A link to nowhere, which a write would make the file at the far end of, and a second hard link to a file.
+      expect(allow({ name: "write_file", rawInput: { file_path: "c.txt", content: "x" } })).toBe(false);
+      expect(allow({ name: "read_file", rawInput: { absolute_path: join(task, "d.json") } })).toBe(false);
+      // A real file, a new one, one in a new folder, and a link that stays inside are all fine.
+      expect(allow({ name: "read_file", rawInput: { path: "notes.md" } })).toBe(true);
+      expect(allow({ name: "write_file", locations: [{ path: join(task, "artifacts", "page.html") }], rawInput: { file_path: "artifacts/page.html" } })).toBe(true);
+      expect(allow({ name: "read_file", rawInput: { path: "b.md" } })).toBe(true);
+      expect(allow({ name: "list_dir", rawInput: { dir_path: "." } })).toBe(true);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a call only read, never write, the folders a request's programs live in", () => {
+    const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, ["/w"], ["/opt/scarlet-fixture/bin"]);
+    expect(allow({ name: "write_file", kind: "edit", rawInput: { file_path: "/opt/scarlet-fixture/bin/ffmpeg", content: "x" } })).toBe(false);
+    expect(allow({ name: "write_file", kind: "edit", locations: [{ path: "/opt/scarlet-fixture/bin/new" }] })).toBe(false);
+    expect(allow({ name: "move", kind: "move", rawInput: { source: "/w/a", destination: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(false);
+    expect(allow({ name: "write_file", rawInput: { file_path: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(false);
+    expect(allow({ name: "read_file", kind: "read", rawInput: { file_path: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(true);
+    expect(allow({ name: "run_shell_command", kind: "execute", rawInput: { command: "/opt/scarlet-fixture/bin/ffmpeg -version" } })).toBe(true);
+    expect(allow({ name: "write_file", kind: "edit", rawInput: { file_path: "/w/artifacts/page.html" } })).toBe(true);
+    expect(allow({ name: "read_file", kind: "read", rawInput: { file_path: "/etc/passwd" } })).toBe(false);
   });
 });
 

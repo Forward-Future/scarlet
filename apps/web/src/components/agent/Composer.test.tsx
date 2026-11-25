@@ -2021,6 +2021,24 @@ it("counts the marked frame among the 20 files a message can carry, so the messa
   expect(sent.at(-1)).toMatchObject({ id: "att_frame" });
 });
 
+it("keeps a message with twenty files and a frame marked after them in the box, says why, and uploads nothing more", async () => {
+  vi.spyOn(markedFrame, "markedFramePicture").mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+  const upload = vi.spyOn(api, "uploadAttachment").mockImplementation(async (_project, file) => "path" in file
+    ? { attachment: { id: `att_${file.path}`, name: file.path.split("/").pop()!, size: 10 } }
+    : { attachment: { id: "att_frame", name: "Marked frame 0.07.png", size: 3, mime: "image/png" } });
+  await show();
+  await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(Array.from({ length: 20 }, (_, i) => `/Users/me/shot-${i + 1}.png`)));
+  // The frame is marked once the twenty files are on the box: there is no place left for it.
+  await act(async () => usePictureMarksStore.setState({ marking: null, byProject: { [PRJ]: { time: 7, version: project.head!, picture: "frame://7", marks: [{ kind: "box", box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } }] } } }));
+  await type("Match these shots to the marked frame");
+  await submit();
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+  expect(upload).toHaveBeenCalledTimes(20);
+  expect(container.querySelector("textarea")!.value).toBe("Match these shots to the marked frame");
+  expect(container.querySelector('.composer-dock > [role="alert"]')?.textContent).toBe("A message can carry 20 files, the marked frame included. Remove one.");
+  expect(usePictureMarksStore.getState().byProject[PRJ]?.marks).toHaveLength(1);
+});
+
 it("sends a message about a moment that carries files as a request about that moment, since a note takes none", async () => {
   vi.spyOn(api, "uploadAttachment").mockResolvedValue({ attachment: { id: "att_logo", name: "logo.png", size: 3 } });
   await show();

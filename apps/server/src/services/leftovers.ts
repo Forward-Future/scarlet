@@ -25,7 +25,8 @@ function temporaryMedia(name: string) {
  */
 export function sweepLeftovers(ctx: Ctx, now = Date.now()): number {
   let removed = 0;
-  const sweep = (dir: string, leftover: (name: string) => boolean) => {
+  /** `copied`: an imported original, which keeps its source's modified time and so can look old the moment it lands. */
+  const sweep = (dir: string, leftover: (name: string) => boolean, copied?: (name: string) => boolean) => {
     let names: string[];
     try {
       if (!lstatSync(dir).isDirectory()) return;
@@ -38,7 +39,10 @@ export function sweepLeftovers(ctx: Ctx, now = Date.now()): number {
       const file = join(dir, name);
       try {
         const info = lstatSync(file);
-        if (!info.isFile() || now - info.mtimeMs < DAY) continue;
+        // A copy's age is from when it landed: its change time is set when it is written or given times, and nothing
+        // sets it back.
+        const touched = copied?.(name) ? Math.max(info.mtimeMs, info.ctimeMs) : info.mtimeMs;
+        if (!info.isFile() || now - touched < DAY) continue;
         rmSync(file, { force: true });
         removed++;
       } catch { /* Another engine removed it, or it can't be read. Leave it. */ }
@@ -59,7 +63,7 @@ export function sweepLeftovers(ctx: Ctx, now = Date.now()): number {
       // An original is copied into the project before its row is written. A copy with no row was never imported.
       const media = /^(med_[A-Za-z0-9]+)\.[A-Za-z0-9]+$/.exec(name)?.[1];
       return !!media && !known.get(media);
-    });
+    }, name => /^med_/.test(name));
     // A voice note's recording is saved before its words are read and its note written. One no note names never became one.
     sweep(ctx.paths.notes(id), name => /^note_[A-Za-z0-9]+\.[A-Za-z0-9]+$/.test(name) && !namedRecording.get(id, name));
     sweep(ctx.paths.proxies(id), name => name.endsWith(".part.mp4"));
