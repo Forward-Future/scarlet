@@ -213,7 +213,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
    * its words. The store logs the request the engine made of it, or why it couldn't.
    */
   const sendFields = (how: string, chars: number, anchor: AgentContext | null = displayAnchor) => ({
-    how, to: question ? "answer" : replying ? "reply" : anchor ? "moment" : "new-edit", chars, aim: aimKind(anchor),
+    how, dest: question ? "answer" : replying ? "reply" : anchor ? "moment" : "new-edit", chars, aim: aimKind(anchor),
     project: project.id, thread: thread?.id, question: question?.id,
     files: useAttachmentsStore.getState().byProject[project.id]?.length || undefined,
     marks: usePictureMarksStore.getState().byProject[project.id]?.marks.length || undefined,

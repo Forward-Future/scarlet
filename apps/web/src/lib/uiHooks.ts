@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type RefObject } from "react";
+import { appLog } from "./appLog";
 import { IS_DESKTOP } from "./client";
 import { dropTargets, fileDropZone } from "./dropTargets";
 import { isComposing, isInEditableElement } from "./hotkeys";
@@ -85,7 +86,7 @@ export function useFloatingPosition(
 export function useBeforeUnloadGuard(active: boolean) {
   useEffect(() => {
     if (!active) return;
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    const warn = (e: BeforeUnloadEvent) => { appLog("window", "unload-blocked"); e.preventDefault(); e.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [active]);

@@ -262,11 +262,9 @@ export function appendTaskEvent(ctx: Ctx, task: Task, ev: TaskEvent): { task: Ta
     // The CLI session this run works in. A run cut short when Scarlet quits carries on in it.
     if (next.session?.id !== ev.data.sessionId) next = { ...next, session: { agent: task.agent, id: ev.data.sessionId } };
   }
+  // The step it takes (running, waiting for the editor, queued again) is logged once, where it is saved. What was asked
+  // and what was answered stay out of the log.
   if (next !== task) next = saveTask(ctx, next);
-  // What was asked and what was answered stay out of the log.
-  if (next.state !== task.state) {
-    ctx.log(`[task] ${task.id} ${task.state} → ${next.state}${ev.type === "question" ? ": asked the editor a question" : ev.type === "answer" ? ": the editor answered" : ""}`);
-  }
   ctx.bus.publish({ type: "task.event", projectId: task.projectId, taskId: task.id, event });
   if (ev.type === "answer") ctx.bus.taskQueued({ taskId: task.id, projectId: task.projectId });
   return { task: next, event };

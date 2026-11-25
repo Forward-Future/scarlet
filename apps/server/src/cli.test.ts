@@ -108,6 +108,11 @@ it("serves for the desktop app: hands over its address and token, and stops when
   expect(info).toEqual({ port: expect.any(Number), url: `http://127.0.0.1:${info.port}`, token: expect.stringMatching(/^sct_[a-f0-9]{64}$/),
     userId: expect.stringMatching(/^usr_/), dataDir: resolve(data) });
   expect(out.filter(line => !line.startsWith("[") && !line.startsWith("SCARLET_READY"))).toEqual([]);
+  // One line in the log says what started: never the token.
+  await vi.waitFor(() => expect(out.filter(line => line.startsWith("[lifecycle] ready "))).toEqual([
+    expect.stringMatching(new RegExp(`^\\[lifecycle\\] ready port=${info.port} version=\\S+ node=v\\S+ solo=true transcription=\\S+ telemetry=(on|off|unavailable) data=`)),
+  ]));
+  expect(out.filter(line => !line.startsWith("SCARLET_READY")).join("\n")).not.toContain(info.token);
   expect(fs.existsSync(join(data, "access-token"))).toBe(true);
   const session = JSON.parse(fs.readFileSync(join(data, "desktop-session.json"), "utf8"));
   expect(session.port).toBe(info.port);
@@ -131,6 +136,7 @@ it("serves for the desktop app: hands over its address and token, and stops when
   await vi.waitFor(() => expect(exits).toEqual([0]));
   await expect(fetch(`${info.url}/health`)).rejects.toThrow();
   expect(out).not.toContain("shutting down...");
+  expect(out.filter(line => line.startsWith("[lifecycle] shutting down"))).toEqual(["[lifecycle] shutting down via=stdin"]);
 });
 
 it.each([

@@ -113,8 +113,8 @@ it("logs what each press of send did, never the words: sent, ignored and why, or
     await enter();
     flushAppLog();
     const said = lines.filter(line => line.startsWith("[request]"));
-    expect(said[0]).toMatch(/ send-ignored reason=empty how=typed to=new-edit chars=0 aim=whole project=/);
-    expect(said.some(line => / send how=typed to=new-edit chars=36 /.test(line))).toBe(true);
+    expect(said[0]).toMatch(/ send-ignored reason=empty how=typed dest=new-edit chars=0 aim=whole project=/);
+    expect(said.some(line => / send how=typed dest=new-edit chars=36 /.test(line))).toBe(true);
     expect(said.some(line => / send-failed how=typed chars=15 name=Error error="The engine is busy."/.test(line))).toBe(true);
     expect(said.join("\n")).not.toMatch(/music|intro/);
   } finally {

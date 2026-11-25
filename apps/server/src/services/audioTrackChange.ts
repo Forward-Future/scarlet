@@ -93,7 +93,8 @@ export async function afterAudioTrackChange(ctx: Ctx, before: Media, after: Medi
   await Promise.all(old.map(path => rm(path, { recursive: true, force: true })
     .catch(error => ctx.log(`[media] ${after.id} left ${path} behind: ${errorMessage(error)}`))));
   if (after.kind === "video") {
-    ctx.track(remakeTrackPreview(ctx, after), projectId).catch(() => {});
+    ctx.track(remakeTrackPreview(ctx, after), projectId)
+      .catch(error => ctx.log(`[media] track-preview-failed id=${logId(after.id)} project=${logId(projectId)} ${errorMessage(error)}`));
     prepareSourceProxies(ctx, [after.id]);
   }
 }
