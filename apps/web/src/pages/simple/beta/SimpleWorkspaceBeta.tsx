@@ -814,6 +814,8 @@ export function SimpleWorkspaceBeta() {
   // or "Edit at 8:52" for one that took no footage out. The order they reached the editor in is kept, but never shown.
   const passRoot = pass ? (stagingTask(pass, changes, tasks) ?? tasks.find(t => t.id === pass.taskId)) : undefined;
   const { callNo, passEditNo } = usePassCallNumbers(current.id, pass, passThread, passRoot, allCalls, passEdits, passThread ? rejectedPassEdits : noEdits);
+  const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
+    ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
   const revisions = useMemo(() => pass ? callRevisions(pass, tasks, changes) : undefined, [pass, tasks, changes]);
   const queuedCuts = new Set(cutRuns.keys());
   const sentBack = (index: number) => index === revisingIndex || queuedCuts.has(index);
@@ -1226,8 +1228,6 @@ export function SimpleWorkspaceBeta() {
   const passList = passThread ? lists[passThread.id] : undefined;
   const passIsFocus = !!pass && !!passThread && passThread.id === focusThread?.id;
   const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
-  const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
-    ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
   // The waiting pass's calls and flagged edits together, in the order For you lists them: by time, as its rows lead
   // with their times.
   const passForYouItems = pass && passThread ? passForYouOrder(

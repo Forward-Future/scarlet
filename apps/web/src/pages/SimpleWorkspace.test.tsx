@@ -15415,3 +15415,27 @@ it("goes on from the last flagged edit kept to the same request's edit that says
     localStorage.clear();
   });
 });
+
+it("loads the new layout without crashing when the focused waiting pass has a flagged edit on the timeline", async () => {
+  await inNewLayout(async () => {
+    runningPass();
+    const ready = data.changes.find(c => c.id === "chg_ready")!;
+    const part = { ...ready, id: "chg_part", intent: "requested" as const, state: "approved" as const, cutAssessments: undefined, cutChoices: undefined,
+      createdAt: new Date(Date.parse(ready.createdAt!) - 60_000).toISOString() };
+    data = { ...data, changes: data.changes.flatMap(c => c.id === "chg_ready" ? [part, c] : [c]),
+      tasks: data.tasks.map(t => t.id === "task_done" ? { ...t, changeIds: [part.id, ...t.changeIds] } : t) };
+    useProjectStore.setState({ current: data });
+    const thread = threadWith("chg_ready");
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+      edits: threadId !== thread.id ? [] : [
+        { changeId: "chg_part", spot: 0, label: "Flagged zoom", range: { start: 12, end: 14 }, kind: "zoom" as const, previous: [], check: "Check framing." },
+        { changeId: "chg_part", spot: 1, label: "Settled zoom", range: { start: 20, end: 22 }, kind: "zoom" as const, previous: [] },
+      ] }));
+    await showFolded();
+    await act(async () => {});
+    // Focusing the waiting pass (as opening or reopening its flagged edit on load does) builds timeline dots with passEditNum.
+    await click(columnRows("For you").find(row => columnWords(row) === "Flagged zoom")!);
+    await act(async () => {});
+    expect(columnOpen()).toBe("Flagged zoom");
+  });
+});
