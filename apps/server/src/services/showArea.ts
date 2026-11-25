@@ -11,6 +11,7 @@ import { AREA_HOLDS_AT, AREA_PICTURE_CHANGE, AREA_SIDES, SHOW_EDGE_HEIGHT, SHOW_
   type AreaBox, type AreaSide, type HeldArea, type ShowArea } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest, notFound } from "../errors.js";
+import { waitFor } from "../events.js";
 import { agentCapabilities, areaAt, wholePicture } from "@scarlet/shared";
 import { atomicWriteFile, errorMessage, rememberLast } from "../util.js";
 import { FINISHED_TASK, createTask } from "./tasks.js";
@@ -172,7 +173,13 @@ export async function askAreas(ctx: Ctx, media: VideoMedia, opts: { seconds: num
   const NEAR = 150;
   const taken: number[] = live.map(task => task.context.areaCheck!.at);
   const open = () => watched.filter(task => !FINISHED_TASK.has(ctx.repos.tasks.get(task.id)?.state ?? "done"));
-  const settle = async () => { while (open().length && Date.now() < deadline) await new Promise(done => setTimeout(done, 500)); };
+  // Woken as a look this engine runs changes state; read again every half second for looks another engine runs.
+  const settle = async () => {
+    while (open().length && Date.now() < deadline) {
+      const ids = new Set(open().map(task => task.id));
+      await waitFor(ctx.bus, "ws", Math.min(500, deadline - Date.now()), e => e.type === "task.updated" && ids.has(e.task.id));
+    }
+  };
   const start = (seconds: number[], most: number) => {
     const allWhole = state.areas.length >= 2 && state.areas.every(a => wholePicture(a.area));
     let started = 0;
