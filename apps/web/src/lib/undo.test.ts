@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Task } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
+import { flushAppLog, startAppLog, stopAppLog } from "./appLog";
 import { api } from "./client";
 import { forgetCalls, lastStep, recordUndo, undoLast, useUndoStore } from "./undo";
 
@@ -112,4 +113,17 @@ it("takes a call's Keep back through the page that holds its pass, not the Keep 
   forgetCalls("prj");
   expect(lastStep(useUndoStore.getState().steps, "prj")).toMatchObject({ kind: "keep" });
   expect(lastStep(useUndoStore.getState().steps, "other")).toMatchObject({ kind: "call", changeId: "pass_other" });
+});
+
+it("logs a ⌘Z that had nothing to take back, or came while another was still under way", async () => {
+  const lines: string[] = [];
+  startAppLog(batch => lines.push(...batch));
+  expect(await undoLast("prj", { changes: [], tasks: [] }, noRevert)).toBeUndefined();
+  recordUndo({ kind: "revision", projectId: "prj", taskId: "task_a" });
+  useUndoStore.setState({ undoing: 1 });
+  expect(await undoLast("prj", { changes: [], tasks: [] }, noRevert)).toBeUndefined();
+  flushAppLog();
+  stopAppLog();
+  expect(lines).toEqual([expect.stringMatching(/^\[action\] .* undo-skipped project=prj reason=empty$/), expect.stringMatching(/^\[action\] .* undo-skipped project=prj reason=busy$/)]);
+  expect(lastStep(useUndoStore.getState().steps, "prj")).toMatchObject({ taskId: "task_a" });
 });

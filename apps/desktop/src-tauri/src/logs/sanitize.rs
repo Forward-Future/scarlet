@@ -107,9 +107,11 @@ fn support_field(key: &str, value: &str) -> Option<String> {
         "path" | "route" | "to" | "from" => {
             if value.starts_with('/') { return support_path(value); }
             numeric(value) || (key == "route" && value == "unmatched") || (key == "to" && matches!(value, "edit" | "call"))
+                // A task's state change (`[task] state from=queued to=claimed`).
+                || (matches!(key, "to" | "from") && log_state(value))
         }
         "request" | "import" => request_id(value),
-        "task" | "project" | "media" | "render" | "change" | "host" | "blocker" | "thread" =>
+        "task" | "project" | "media" | "render" | "change" | "host" | "blocker" | "thread" | "question" | "note" | "retryOf" =>
             entity_id(value) || matches!(value, "unknown" | "none"),
         "id" | "el" => entity_id(value) || (value.len() <= 9 && matches!(value.as_bytes().first(), Some(b'v' | b's')) && value[1..].bytes().all(|c| c.is_ascii_digit())),
         "attempt" => numeric(value) || TIME.is_match(value) || value == "unknown",
@@ -131,7 +133,12 @@ fn support_field(key: &str, value: &str) -> Option<String> {
             "project_config" | "project_unavailable" | "question" | "read" | "retry-limit" | "review" | "revision" | "rewording" |
             "shutdown" | "stale" | "thread_policy_mismatch" | "thread_start_failed" | "timeout" | "transcripts" | "unsettled" |
             "viewer_gone" | "worker_gone" | "worker_lost" | "write" | "cli_unavailable" | "request_failed" | "invalid_response" |
-            "repeated_cursor" | "timed_out" | "process_failed" | "incomplete_response"),
+            "repeated_cursor" | "timed_out" | "process_failed" | "incomplete_response" |
+            // Why a press of send, a recording or an undo did nothing (`[ui] [request]`, `[voice]`, `[action]`).
+            "empty" | "slash-only" | "time-only" | "still-sending" | "listening" | "no-model" | "no-question" | "busy" |
+            "unsupported" | "send" | "discard" | "cap" | "too-short" | "before-start" | "unmount" | "failed"),
+        // A key by its name and modifiers ("Escape", "mod+z", "alt+x"), never a typed character run.
+        "key" => value.len() <= 24 && value.split('+').all(|part| WORD.is_match(part)),
         "provider" => matches!(value, "claude" | "codex" | "gemini" | "ollama" | "lmstudio" | "openrouter" | "api" | "whispercpp" | "openai"),
         "control" => matches!(value,
             "transcript-word" | "send-request" | "save-queued-request" | "approve-call" | "skip-call" | "revise-call" |
@@ -139,18 +146,21 @@ fn support_field(key: &str, value: &str) -> Option<String> {
             "export" | "reveal-export" | "open-pass-item" | "open-edit" | "button" | "a" | "tab" | "option" | "menuitem" |
             "menuitemradio" | "switch" | "checkbox" | "radio" | "summary" | "input" | "select" | "textarea" | "label" | "video"),
         "cmd" | "operation" | "code" | "stage" | "phase" | "origin" | "event" | "outcome" | "failure" |
-        "tool" | "lane" | "work" | "blocker_work" | "kind" | "choice" | "encoder" | "format" => WORD.is_match(value) || numeric(value),
+        "tool" | "lane" | "work" | "blocker_work" | "kind" | "choice" | "encoder" | "format" | "how" | "dest" | "aim" | "via" | "did" =>
+            WORD.is_match(value) || numeric(value),
         "range" | "buf" | "between" | "loop" | "ready" | "staged" | "loading" | "approvedCuts" | "skippedCuts" | "clearedCuts" if value.starts_with('[') =>
             value.len() <= 120 && value.bytes().all(|c| c.is_ascii_digit() || b"[].,-".contains(&c)),
         "frames" => numeric(value) || value.split_once('/').is_some_and(|(a, b)| numeric(a) && numeric(b)),
-        "clean" | "paused" | "seeking" | "muted" | "playing" | "flagged" | "repeat" | "hidden" | "first" | "have" | "legacy" | "resumed" =>
+        "clean" | "paused" | "seeking" | "muted" | "playing" | "flagged" | "repeat" | "hidden" | "first" | "have" | "legacy" | "resumed" |
+        "voice" | "queuedOnly" =>
             matches!(value, "true" | "false") || numeric(value),
         "elapsedMs" | "wait_ms" | "elapsed_ms" | "evidenceMisses" | "ms" | "unlogged" | "count" | "status" | "exitCode" | "signal" | "pid" |
         "changes" | "left" | "cut" | "call" | "edit" | "of" | "at" | "across" | "ahead" | "blocked" | "remaining" | "attempts" |
         "approved" | "skipped" | "cleared" | "startByte" | "endByte" | "readBytes" | "expectedBytes" | "bytes" |
         "width" | "height" | "scale" | "ready" | "net" | "t" | "for" | "after" | "offset" | "duration" | "start" |
         "section" | "sections" | "appending" | "frame" | "files" | "links" | "uploads" | "interruptions" | "replay" | "matched" |
-        "raw_os_error" | "waited" | "vol" | "rate" | "adec" | "vdec" | "reset" => numeric(value),
+        "raw_os_error" | "waited" | "vol" | "rate" | "adec" | "vdec" | "reset" | "chars" | "marks" | "otherDrafts" | "seconds" |
+        "recordings" | "end" => numeric(value),
         _ => false,
     };
     safe.then(|| value.to_owned())
@@ -161,10 +171,10 @@ fn support_field(key: &str, value: &str) -> Option<String> {
 pub(super) fn support_log(text: &str) -> String {
     static PATTERNS: LazyLock<[Regex; 8]> = LazyLock::new(|| [
         r"^(\[\d{4}-\d\d-\d\d\]\[\d\d:\d\d:\d\d\])\[[\w:.-]+\]\[(TRACE|DEBUG|INFO|WARN|ERROR)\] (.*)$",
-        r"^\[engine\] \[(activity|align|audio|cleanup|dialogue|dialogue-scan|edit|error|http|ingest|inspection|log|mcp|media|model|models|project|render|review|skills|speakers|storage|task|transcribe|transfer|trash|voice-note|whisper|ws)\] (.*)$",
+        r"^\[engine\] \[(activity|align|audio|cleanup|dialogue|dialogue-scan|edit|error|http|ingest|inspection|lifecycle|graphics|log|mcp|media|model|models|project|render|review|skills|speakers|storage|task|transcribe|transfer|trash|voice-note|whisper|ws)\] (.*)$",
         r"^((?:tsk|med|prj|rnd|chg)_[a-z0-9]{12}|chg_[a-f0-9]{64}_(?:applied|review))\b(?: (queued|claimed|running|waiting_for_user|done|failed|cancelled|approved|rejected|ready|ingesting|started|interrupted|revising)\b)?(?: → (running|waiting_for_user|queued|ready|approved|rejected|failed|revising)\b)?(?: after (\d+(?:ms|s|m|h)(?: \d+[sm])?))?",
         r"^(slow request: )?(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS) (\S+) → (\d{3}) (?:in|after) (\d+(?:ms|s|m|h)(?: \d+[sm])?)\b(.*)$",
-        r"^\[ui\] \[(app|nav|action|api|realtime|playback|window|error|import|review)\] (\d\d:\d\d:\d\d\.\d{3} \+\d+ms) ([a-zA-Z0-9_.-]{1,40})\b(.*)$",
+        r"^\[ui\] \[(app|nav|action|api|realtime|playback|window|error|import|review|request|voice|marks|timeline|export)\] (\d\d:\d\d:\d\d\.\d{3} \+\d+ms) ([a-zA-Z0-9_.-]{1,40})\b(.*)$",
         r"^([a-z][a-z0-9_-]{0,47})(?: +|$)(.*)$",
         r"^a client disconnected with code (\d{1,4}) \((\d+) open\)$",
         r"^\[(desktop|host|update|export)\] (.*)$",
@@ -281,6 +291,8 @@ mod tests {
             format!("[engine] [mcp] tool-finished task={task} attempt=2026-11-05T02:03:04.532Z tool=transcript_search outcome=degraded elapsedMs=450 evidenceMisses=1"),
             "[engine] [audio] waiting work=transcript media=med_123456789abc lane=audio wait_ms=1000".to_string(),
             "[engine] [ws] a client disconnected with code 1006 (0 open)".into(),
+            r#"[ui] [request] 02:03:04.600 +5ms send-failed how=typed dest=new-edit chars=36 aim=whole project=prj_123456789abc name=TypeError error="Couldn't reach the private engine""#.to_string(),
+            "[ui] [request] 02:03:04.700 +5ms send-ignored reason=time-only how=typed chars=4".into(),
             "panic: user content".into(),
             "[ui] startup failed: private text".into(),
         ].map(|line| format!("{RECORD} {line}\n")).concat();
@@ -291,6 +303,8 @@ mod tests {
             "route=/api/renders/:renderId/file outcome=failed expectedBytes=400 readBytes=240 code=EIO",
             "tool=transcript_search outcome=degraded elapsedMs=450 evidenceMisses=1", "[audio] waiting work=transcript", "[ws] disconnected code=1006 count=0",
             "[desktop] panic", "[ui] [app] startup-failed",
+            "[ui] [request] 02:03:04.600 +5ms send-failed how=typed dest=new-edit chars=36 aim=whole project=prj_123456789abc name=TypeError",
+            "send-ignored reason=time-only how=typed chars=4",
         ] {
             assert!(safe.contains(expected), "missing {expected:?} in {safe}");
         }

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { PictureMark, PictureMarkKind } from "@scarlet/shared";
+import { appLog } from "../lib/appLog";
 
 /** The frame the editor marked: where it is in the video, and their marks on it, in fractions of the frame. */
 export interface MarkedFrame {
@@ -26,7 +27,8 @@ interface PictureMarksState {
    * to that frame. Marks made on another video are replaced.
    */
   start(projectId: string, at: Omit<MarkedFrame, "marks">): MarkedFrame;
-  stop(): void;
+  /** `via` is what ended it, for the log: a key, playing on, a seek away, another video, leaving the page. */
+  stop(via?: string): void;
   setTool(tool: PictureMarkKind): void;
   add(projectId: string, mark: PictureMark): void;
   replace(projectId: string, index: number, mark: PictureMark): void;
@@ -46,13 +48,15 @@ export const usePictureMarksStore = create<PictureMarksState>((set, get) => ({
     const frame = held?.marks.length && held.version === at.version && held.mediaId === at.mediaId ? held : { ...at, marks: [] };
     set(state => ({ marking: projectId, byProject: { ...state.byProject, [projectId]: frame },
       ...(frame !== held && { past: { ...state.past, [projectId]: undefined } }) }));
+    appLog("marks", "start", { frame: frame.time, count: frame.marks.length });
     return frame;
   },
-  stop: () => {
+  stop: via => {
     const { marking, byProject } = get();
     if (!marking) return;
     // A frame left with nothing on it goes with the marking.
     const left = byProject[marking];
+    appLog("marks", "end", { via, count: left?.marks.length ?? 0 });
     set({ marking: null, ...(left && !left.marks.length && { byProject: { ...byProject, [marking]: undefined } }) });
   },
   setTool: tool => set({ tool }),

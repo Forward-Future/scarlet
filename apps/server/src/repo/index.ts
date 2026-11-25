@@ -91,9 +91,17 @@ class TasksRepo extends JsonStore<Task> {
     }));
   }
 
+  /** Told after each write that adds a task (`from` null) or changes its state. The engine logs it, once per step. */
+  onStateChange?: (task: Task, from: Task["state"] | null) => void;
+
   override put(task: Task): Task {
+    const before = this.onStateChange
+      ? this.database.prepare("SELECT state FROM tasks WHERE id = ?").get(task.id) as { state: Task["state"] } | undefined
+      : undefined;
     const { doc, rowid } = this.write({ ...task, createdAt: task.createdAt ?? now(), queueSequence: undefined });
-    return { ...doc, queueSequence: rowid };
+    const saved = { ...doc, queueSequence: rowid };
+    if (this.onStateChange && before?.state !== saved.state) this.onStateChange(saved, before?.state ?? null);
+    return saved;
   }
 
   override get(id: string): Task | null {

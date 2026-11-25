@@ -26,6 +26,7 @@ import { api, errorMessage } from "../lib/client";
 import { parseTimestamp } from "../lib/format";
 import { subscribeProject } from "../lib/realtime";
 import { mergeTaskEvents } from "../lib/taskActivity";
+import { failure, requestLog } from "../lib/requestLog";
 import { createHeldProjectController, mergeSinceLoad, READ_AGAIN_AFTER_MS, sameVersion, upsert, upsertAnswered, upsertEditingTasks } from "./projectHelpers";
 
 type Status = "idle" | "loading" | "ready" | "error";
@@ -210,14 +211,28 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     return { changes, versions: undefined, historyRevision: (d.historyRevision ?? 0) + 1 };
   });
   /** Keep the task a request about it answers with, unless the socket already has it further on. */
-  const taskAnswered = async (request: Promise<{ task: Task }>) => {
-    const { task } = await request;
+  const taskAnswered = async (request: Promise<{ task: Task }>, event = "answered", fields?: Record<string, unknown>) => {
+    const { task } = await logged(event, request, fields ?? {});
     patch(task.projectId, (d) => ({ tasks: upsertAnswered(d.tasks, task) }));
   };
   /** Keep a new note and the request it started. */
   const noteCreated = (projectId: string, res: { note: Note; task?: Task }) => {
     patch(projectId, (d) => ({ notes: upsert(d.notes, res.note), tasks: res.task ? upsertAnswered(d.tasks, res.task) : d.tasks }));
     return res;
+  };
+  /**
+   * A call to the engine about a request, in the app log as what it made (`created task=…`) or why it failed. The
+   * `[api]` line names the route; this one names the request, so the two read together.
+   */
+  const logged = async <T extends { task?: { id: string } }>(event: string, call: Promise<T>, fields: Record<string, unknown>) => {
+    try {
+      const result = await call;
+      requestLog(event, { ...fields, task: result.task?.id ?? fields.task });
+      return result;
+    } catch (error) {
+      requestLog(`${event}-failed`, { ...fields, ...failure(error) }, "warn");
+      throw error;
+    }
   };
   /** Show the working cut an edit of the history made. The list of versions it changed is read again when next asked for. */
   const showRewritten = (projectId: string, project: Project) => patch(projectId, d => {
@@ -668,7 +683,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       return change.appliedVersion ?? change.toVersion;
     },
     async revise(changeId, body) {
-      const res = await api.reviseChange(changeId, body);
+      const res = await logged("revision-created", api.reviseChange(changeId, body),
+        { change: changeId, chars: body.text?.length, voice: body.voiceTranscript ? true : undefined });
       replaceChange(res.change);
       noteCreated(res.change.projectId, res);
       return res.task;
@@ -726,10 +742,10 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     },
 
     async createNote(projectId, body) {
-      return noteCreated(projectId, await api.createNote(projectId, body));
+      return noteCreated(projectId, await logged("note-created", api.createNote(projectId, body), { project: projectId, chars: body.text?.length }));
     },
     async createVoiceNote(projectId, blob, fields) {
-      return noteCreated(projectId, await api.createVoiceNote(projectId, blob, fields));
+      return noteCreated(projectId, await logged("voice-note-created", api.createVoiceNote(projectId, blob, fields), { project: projectId, bytes: blob.size }));
     },
 
     async approveLearning(learningId, skillId, runWith) {
@@ -747,13 +763,18 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     },
 
     async createTask(projectId, body) {
-      const { task } = await api.createTask(projectId, body);
+      const context = body.context as { threadId?: string; changeId?: string; attachments?: unknown[]; time?: number } | undefined;
+      const { task } = await logged("created", api.createTask(projectId, body), {
+        project: projectId, kind: body.kind ?? "edit", agent: body.agent, model: body.model, chars: body.instruction.length,
+        thread: context?.threadId, change: context?.changeId, files: context?.attachments?.length || undefined,
+        at: context?.time, voice: body.voiceTranscript ? true : undefined,
+      });
       // A project switch or a newer worker event can precede the creation response.
       patch(projectId, d => ({ tasks: d.tasks.some(t => t.id === task.id) ? d.tasks : [...d.tasks, task] }));
       return task;
     },
     async cancelTask(taskId, queuedOnly) {
-      const { task } = await api.cancelTask(taskId, queuedOnly);
+      const { task } = await logged("cancelled", api.cancelTask(taskId, queuedOnly), { task: taskId, queuedOnly: queuedOnly || undefined });
       patch(task.projectId, (d) => ({ tasks: upsert(d.tasks, task) }));
       refreshListActivity(task.projectId);
     },
@@ -764,7 +785,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       return changeEditing(projectId, () => runWith ? api.resumeEditing(projectId, runWith) : api.resumeEditing(projectId));
     },
     async retryTask(taskId, runWith) {
-      const { task } = await api.retryTask(taskId, runWith);
+      const { task } = await logged("retried", api.retryTask(taskId, runWith), { retryOf: taskId, agent: runWith?.agent, model: runWith?.model });
       const current = get().current;
       if (current?.id !== task.projectId) return;
       // The new attempt can already have been claimed by the time the HTTP request returns.
@@ -777,19 +798,20 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     },
     async answerTask(taskId, text, skillIds, runWith, files) {
       // Files attached to the answer go with it. Without any, the call is as it always was.
-      if (files) return taskAnswered(api.answerTask(taskId, text, skillIds, runWith, files));
-      return taskAnswered(runWith ? api.answerTask(taskId, text, skillIds, runWith) : api.answerTask(taskId, text, skillIds));
+      const fields = { task: taskId, chars: text.length, files: files?.attachments.length || undefined, agent: runWith?.agent, model: runWith?.model };
+      if (files) return taskAnswered(api.answerTask(taskId, text, skillIds, runWith, files), "answered", fields);
+      return taskAnswered(runWith ? api.answerTask(taskId, text, skillIds, runWith) : api.answerTask(taskId, text, skillIds), "answered", fields);
     },
     async holdForRewording(taskId, on) {
       // Letting go of a hold lets Scarlet start the request, and so does saving its new words. The socket may have it
       // claimed before this answer says "queued": that answer must not put a running request back in the tray.
-      return taskAnswered(api.holdForRewording(taskId, on));
+      return taskAnswered(api.holdForRewording(taskId, on), on ? "held-for-rewording" : "released-from-rewording", { task: taskId });
     },
     async startBeforeCalls(taskId) {
-      return taskAnswered(api.startBeforeCalls(taskId));
+      return taskAnswered(api.startBeforeCalls(taskId), "started-before-calls", { task: taskId });
     },
     async rewordTask(taskId, text, skillIds) {
-      return taskAnswered(api.rewordTask(taskId, text, skillIds));
+      return taskAnswered(api.rewordTask(taskId, text, skillIds), "reworded", { task: taskId, chars: text.length });
     },
     async loadTaskEvents(taskId, scope = "all") {
       const cur = get().current;

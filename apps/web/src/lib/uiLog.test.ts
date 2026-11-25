@@ -332,3 +332,15 @@ it("uses the registered transcript control identity without recording its word",
   document.querySelector("span")!.click();
   expect(written()).toEqual([expect.stringMatching(/click on="Transcript word" control=transcript-word$/)]);
 });
+
+it("hears a key that a control stops before it reaches the document", () => {
+  const swallow = (e: KeyboardEvent) => e.stopImmediatePropagation();
+  window.addEventListener("keydown", swallow, true);
+  try {
+    fresh();
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(written()).toEqual([expect.stringMatching(/^\[action\] .* key key=Escape$/)]);
+  } finally {
+    window.removeEventListener("keydown", swallow, true);
+  }
+});

@@ -16,6 +16,8 @@ import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { actorFor, logActivity, quote } from "./activity.js";
+import { logId } from "../logText.js";
+import { errorMessage } from "../util.js";
 import { ingestMedia } from "./ingest.js";
 import { safeFileName } from "./fileName.js";
 import { previewPictures } from "./previewPictures.js";
@@ -301,6 +303,9 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
       const timeline = project.head ? resolveTimeline(ctx, project, "head") : null;
       checkAt = timeline && o.checkAt !== undefined ? o.checkAt : undefined;
       const size = { width: 960, height: Math.round(960 * height / width) };
+      // The check goes on without the picture; the log says why it came back without one.
+      const checkPictureFailed = (stage: "background" | "overlay", at: number, error: unknown) =>
+        ctx.log(`[graphics] check-picture-failed stage=${stage} task=${input.taskId ? logId(input.taskId) : "none"} project=${logId(project.id)} at=${at.toFixed(2)} ${errorMessage(error).slice(0, 200)}`);
       pictures = await Promise.all(checkTimes.map(async t => {
         let background: Buffer | null = null;
         if (timeline && checkAt !== undefined) {
@@ -308,9 +313,15 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
           const range = { start: at, end: at + 1 / project.settings.fps };
           const root = ctx.paths.media(project.id);
           background = await renderTimelineFrame(project, timeline, range, root, signal, 960, { pictureSource: previewPictures(root, { signal }) })
-            .catch(() => renderTimelineFrame(project, timeline, range, root, signal, 960)).catch(() => null);
+            .catch(() => renderTimelineFrame(project, timeline, range, root, signal, 960)).catch((error: unknown) => {
+              if (!signal.aborted) checkPictureFailed("background", t, error);
+              return null;
+            });
         }
-        return graphicOver(movie, t, background, size, { signal }).catch(() => undefined);
+        return graphicOver(movie, t, background, size, { signal }).catch((error: unknown) => {
+          if (!signal.aborted) checkPictureFailed("overlay", t, error);
+          return undefined;
+        });
       }));
     }
     const checks = coverage.map((c, i) => ({ ...c, ...(pictures[i] && { jpeg: pictures[i]!.toString("base64") }) }));
