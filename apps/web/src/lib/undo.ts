@@ -22,6 +22,8 @@ export type UndoStep = {
   word: "Keep" | "Done";
   threadId: string;
   refs: KeptRef[];
+  /** Additional threads' edits kept together when a unified beta row combines edits across requests. */
+  extraParts?: { threadId: string; refs: KeptRef[] }[];
   /** The edit the card was on, opened again once its Keep is taken back. */
   edit: EditRef & { single?: boolean };
 } | {
@@ -46,6 +48,8 @@ export type UndoStep = {
   word: "Unkeep";
   threadId: string;
   refs: KeptRef[];
+  /** Additional threads' edits unkept together when a unified beta row combines edits across requests. */
+  extraParts?: { threadId: string; refs: KeptRef[] }[];
 } | {
   /** Keep, Reject edit, or Unkeep on a call of a pass that waits on the editor. */
   kind: "call";
@@ -125,8 +129,14 @@ export async function undoLast(projectId: string, project: { changes: readonly C
   if (!step) { appLog("action", "undo-skipped", { project: projectId, reason: "empty" }); return; }
   useUndoStore.setState({ undoing: step.id, error: undefined });
   try {
-    if (step.kind === "keep") unkeepEdits(projectId, step.threadId, step.refs);
-    else if (step.kind === "unkeep") keepEdits(projectId, step.threadId, step.refs);
+    if (step.kind === "keep") {
+      if (step.refs.length) unkeepEdits(projectId, step.threadId, step.refs);
+      for (const part of step.extraParts ?? []) if (part.refs.length) unkeepEdits(projectId, part.threadId, part.refs);
+    }
+    else if (step.kind === "unkeep") {
+      if (step.refs.length) keepEdits(projectId, step.threadId, step.refs);
+      for (const part of step.extraParts ?? []) if (part.refs.length) keepEdits(projectId, part.threadId, part.refs);
+    }
     else if (step.kind === "keepAll") for (const part of step.parts) unkeepEdits(projectId, part.threadId, part.refs);
     else if (step.kind === "call") {
       if (!uncall) throw new Error("its pass isn’t open here.");
@@ -144,7 +154,7 @@ export async function undoLast(projectId: string, project: { changes: readonly C
     else if (step.version) await revert(step.version);
     else if (step.taskId) await undoRevision(step.taskId, project, revert);
     appLog("action", "undo", { project: projectId, kind: step.kind, ...(step.kind === "keep" && { change: step.edit.changeId }),
-      ...(step.kind === "unkeep" && { count: step.refs.length }),
+      ...(step.kind === "unkeep" && { count: step.refs.length + (step.extraParts?.reduce((n, part) => n + part.refs.length, 0) ?? 0) }),
       ...(step.kind === "keepAll" && { count: step.parts.reduce((n, part) => n + part.refs.length, 0) }) });
     useUndoStore.setState(s => ({ steps: s.steps.filter(other => other.id !== step.id) }));
     return step;

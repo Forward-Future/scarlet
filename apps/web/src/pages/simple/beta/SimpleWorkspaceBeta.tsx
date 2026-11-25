@@ -63,7 +63,7 @@ import { TRANSCRIPT_RAIL_MIN, TranscriptRail } from "../TranscriptRail";
 import { savedRewording, saveRewording } from "../rewordingStorage";
 import { savedOpenLists, saveOpenLists } from "../openListsStorage";
 import { REVIEW_RAIL_MIN, ReviewRail } from "../ReviewRail";
-import { RailStore, ReviewRailContext } from "../railStore";
+import { RailStore, ReviewRailContext, type RailSection, type UnifiedRailRow } from "../railStore";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError, WorkingEditCard } from "../ReviewCards";
 import { TimelineWorking } from "../../../components/review/TimelineWorking";
 import { Turn } from "./TurnBeta";
@@ -146,7 +146,6 @@ export function SimpleWorkspaceBeta() {
     return buildThreads({ changes, tasks: tasks.filter(t => !takenFromQueue(t) || again.has(t.id)), notes: notesStillAsked(notes, tasks) });
   }, [changes, tasks, notes]);
   const ordered = useMemo(() => [...threads].sort((a, b) => parseTimestamp(a.createdAt) - parseTimestamp(b.createdAt)), [threads]);
-  const railThreads = useMemo(() => [...ordered].reverse(), [ordered]);
   const { justLanded, landedAt } = useLandingTracker(changes, current.reviewStatus);
 
   // The request Scarlet is asking about: the question at the front of the line. With no cut or edit open, the next
@@ -167,17 +166,12 @@ export function SimpleWorkspaceBeta() {
     listsOf.current = current.id;
     setLists(savedOpenLists(current.id));
   }, [current.id, lists]);
-  // The column of edits beside the chat is one list for the whole video: each request draws its rows into it (`rail`).
+  // The column of edits beside the chat is one unified list per section for the whole video (`rail`).
   // Working, at the column's foot, is open until the editor folds it, so what Scarlet has is in view; Done opens on a press.
   const [rail] = useState(() => new RailStore());
   const railVersion = useSyncExternalStore(rail.subscribe, rail.snapshot, rail.snapshot);
+  const railView = rail.view();
   const [railOpen, setRailOpen] = useState({ working: true, done: false, low: true });
-  // The rows each request draws under For you there. They can be more than `rail` counts as waiting on the editor: a
-  // request about a cut or edit that stopped early keeps its row in For you, so the column stays to show it.
-  const [forYouRows, setForYouRows] = useState<Readonly<Record<string, number>>>({});
-  const reportForYouRows = useCallback((threadId: string, rows: number) =>
-    setForYouRows(was => (was[threadId] ?? 0) === rows ? was : { ...was, [threadId]: rows }), []);
-  const rowsForYou = Object.values(forYouRows).reduce((sum, rows) => sum + rows, 0);
   // One list of every edit is open at a time, so two "Hide" links never stand for one timeline: opening another
   // request's closes it. The list of what needs the editor is a review list, and leaves the others as they are.
   const listOf = (threadId: string): PassList => [lists[threadId], next => {
@@ -547,14 +541,18 @@ export function SimpleWorkspaceBeta() {
       projectId: current.id, changeId: pass.id, index: listening.index, ...(was && { was }) });
     // A and S reach the log as a bare key: this says which call it decided and how many still wait.
     appLog("action", choice === approves(allCalls.find(a => a.index === listening.index)) ? "approve-call" : "skip-call", { change: pass.id, cut: listening.index, at: listening.cut.start, left: remainingCalls.length });
-    const next = nextAfterCallDecision;
+    const view = rail.view();
+    const currentCallRow = passThread ? view.findForCall(passThread.id, listening.index) : undefined;
+    const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
+    const nextRow = nextRowAfter(waits, currentCallRow, listedAt.get(listening.index) ?? listening.cut.start);
+    const nextSamePassCall = nextRow?.isCall && nextRow.threadId === passThread?.id && nextRow.callIndex !== undefined
+      ? allCalls.find(a => a.index === nextRow.callIndex) : undefined;
     player.pause();
-    if (next && "call" in next) {
-      setListening({ changeId: pass.id, index: next.call.index, cut: { start: next.call.start, end: next.call.end }, side: "after", take: 0, key: `${pass.id}/${next.call.index}` });
+    if (nextSamePassCall) {
+      setListening({ changeId: pass.id, index: nextSamePassCall.index, cut: { start: nextSamePassCall.start, end: nextSamePassCall.end }, side: "after", take: 0, key: `${pass.id}/${nextSamePassCall.index}` });
       return void saveChoices(pass, decidedNow);
     }
-    const nextEdit = next && "edit" in next && passThread ? next.edit : undefined;
-    if (nextEdit) actions.openEdit(passThread!, nextEdit);
+    if (nextRow) nextRow.open?.();
     else setListening(undefined);
     if (remainingCalls.length > 0) return void saveChoices(pass, decidedNow);
     // The last call is made. The revised cut comes back as a new call, so a pass under revision waits for it before
@@ -562,7 +560,7 @@ export function SimpleWorkspaceBeta() {
     // A call changed after every call was made applies the pass as the last call does: nothing holds it back.
     if (revision || queuedCuts.size) return void saveChoices(pass, decidedNow);
     if (passRunning) return void saveChoices(pass, decidedNow, true);
-    await approveReview(pass, decidedNow, !!nextEdit);
+    await approveReview(pass, decidedNow, !!nextRow);
   }
   /**
    * Apply one proposal: the pass, with the editor's calls and Scarlet's picks for the rest, or the suggestion on its card.
@@ -1273,41 +1271,76 @@ export function SimpleWorkspaceBeta() {
   // request's keep the order its edits are listed in.
   const focusOrder: ListOrder = threadTimeline.moments ? { numbers: false } : undefined;
   const passOrder: ListOrder = { numbers: false };
-  // Every request's rows are in the column of edits, each under one of its parts (For you, Low risk, Working, Done).
+  // Every request's rows are in the unified column of edits, each under one of its parts (For you, Low risk, Working, Done).
   const focusStops = reviewingEdit ? focusStopsNow() : [];
   const hereStop = reviewingEdit ? focusStops.find(stop => stop.row?.includes(reviewingEdit)) : undefined;
   const here = reviewingEdit ? { at: reviewingEdit.at ?? reviewingEdit.range.start, num: passIsFocus ? passEditNum(reviewingEdit) : undefined } : undefined;
+  const openRailRow = (reviewingEdit && focusThread ? railView.findForEdit(focusThread.id, reviewingEdit) : undefined)
+    ?? (openCall && passThread ? railView.findForCall(passThread.id, openCall.index) : undefined)
+    ?? (reviewingEdit || openCall ? railView.findOpen() : undefined);
   // The edit open is a low-risk row: one Scarlet didn't flag that the editor hasn't decided, under Low risk. One just
   // rejected is no row any more: it is low risk if Scarlet hadn't flagged it, unless Working or Done is the list shown.
-  const onLowRisk = hereStop ? hereStop.place === "optional"
+  const onLowRisk = openRailRow ? openRailRow.section === "low"
+    : hereStop ? hereStop.place === "optional"
     : tabShown(focusList) === "you" && !!reviewingEdit && !reviewingEdit.check && !reviewingEdit.wasCheck;
   /** What ↑, ↓ or Keep opens for a stop: its call, or the edit its row is opened by. */
   const stopTarget = (stop: Stop | undefined, lead: (row: readonly ThreadEdit[]) => ThreadEdit): { call: Call } | { edit: ThreadEdit } | undefined =>
     !stop ? undefined : stop.call ? { call: stop.call } : stop.row ? { edit: lead(stop.row) } : undefined;
+  const isSteppableRailRow = (row: UnifiedRailRow) => !!row.open && !row.rejected && !row.skipped;
+  function nextRowAfter(list: readonly UnifiedRailRow[], current: UnifiedRailRow | undefined, whereAt: number): UnifiedRailRow | undefined {
+    const idx = current ? list.findIndex(r => r.key === current.key) : -1;
+    if (idx >= 0) return list[idx + 1] ?? (idx > 0 ? list[0] : undefined);
+    const filtered = current ? list.filter(r => r.key !== current.key) : list;
+    return filtered.find(r => r.at > whereAt) ?? filtered[0];
+  }
   function editBeside(delta: number): { edit: ThreadEdit } | { call: Call } | undefined {
     if (!reviewingEdit) return undefined;
-    // ↑ and ↓ step through the rows of the part of the column the edit is in, in its order: For you's rows that wait,
-    // Low risk's, Working's or Done's. From an edit that isn't a row there (one just rejected) they step to the row
-    // after or before where it is. Past the request's last row they go on in the next request's (see `stepEdit`).
     return stopTarget(rowBeside(sectionStops(focusStops, focusList, onLowRisk, focusOrder), hereStop, here!, delta, focusOrder),
       row => row.find(waitsOrAsks) ?? row[0]!);
   }
-  // ↑ and ↓ reach the log as a bare key: this says which call they went to.
-  function stepToCall(change: Change, call: Call) {
-    appLog("action", "step", { to: "call", call: callNo.get(call.index), of: allCalls.length, change: change.id, cut: call.index });
-    actions.listen(change, call);
+  function stepInRail(delta: 1 | -1) {
+    if (openMoment && reviewingEdit) {
+      const subIdx = openMoment.members.indexOf(reviewingEdit);
+      const subNext = subIdx >= 0 ? openMoment.members[subIdx + delta] : undefined;
+      if (subNext) {
+        actions.playEdit(subNext, true);
+        return;
+      }
+    }
+    const view = rail.view();
+    const current = (reviewingEdit && focusThread ? view.findForEdit(focusThread.id, reviewingEdit) : undefined)
+      ?? (openCall && passThread ? view.findForCall(passThread.id, openCall.index) : undefined)
+      ?? (reviewingEdit || openCall ? view.findOpen() : undefined);
+    const section: RailSection = current?.section
+      ?? (reviewingEdit ? (onLowRisk ? "low" : tabShown(focusList)) : openCall ? tabShown(passList) : "you");
+    const whereAt = reviewingEdit ? (reviewingEdit.at ?? reviewingEdit.range.start)
+      : openCall ? (listedAt.get(openCall.index) ?? openCall.start)
+      : 0;
+    const list = view.sections[section].filter(isSteppableRailRow);
+    let next: UnifiedRailRow | undefined;
+    if (!reviewingEdit && !openCall) {
+      next = delta > 0 ? list[0] : list.at(-1);
+    } else {
+      const idx = current ? list.findIndex(r => r.key === current.key) : -1;
+      if (idx >= 0) next = list[idx + delta];
+      else next = delta > 0 ? list.find(r => r.at >= whereAt) : list.findLast(r => r.at < whereAt);
+    }
+    if (next) {
+      if (next.isCall && next.callIndex !== undefined && pass && next.threadId === passThread?.id) {
+        appLog("action", "step", { to: "call", call: callNo.get(next.callIndex), of: allCalls.length, change: pass.id, cut: next.callIndex });
+      } else if (next.editRef) {
+        appLog("action", "step", { to: "edit", change: next.editRef.changeId });
+      }
+      next.open?.();
+      return;
+    }
+    // Past the end of For you, ↓ continues into Low risk; above Low risk, ↑ goes back into For you.
+    // Working and Done stay within their own unified lists.
+    if (section === "you" && delta > 0) view.sections.low.find(isSteppableRailRow)?.open?.();
+    else if (section === "low" && delta < 0) view.sections.you.findLast(isSteppableRailRow)?.open?.();
   }
   function stepEdit(delta: number) {
-    const next = editBeside(delta);
-    // Past a request's last row the list goes on with the next request's: from a row that waits, then on into Low risk
-    // after the last of them; from a low-risk row, the next request's, and back up into For you before the first.
-    if (!next) return void openElsewhere(focusThread?.id, delta, false, onLowRisk ? "low" : "you", onLowRisk || tabShown(focusList) === "you");
-    if ("call" in next && pass) return stepToCall(pass, next.call);
-    if ("edit" in next) {
-      // ↑ and ↓ reach the log as a bare key: this says which edit they went to.
-      appLog("action", "step", { to: "edit", edit: threadEdits.indexOf(next.edit) + 1, of: threadEdits.length, change: next.edit.changeId });
-      actions.playEdit(next.edit, openOnItsOwn(next.edit));
-    }
+    stepInRail(delta > 0 ? 1 : -1);
   }
   function callBeside(delta: number): { call: Call } | { edit: ThreadEdit } | undefined {
     if (!pass || !passThread) return undefined;
@@ -1451,68 +1484,95 @@ export function SimpleWorkspaceBeta() {
     return { edit: { changeId: edit.changeId, spot: edit.spot, ...(threadTimeline.single && { single: true }) },
       ...(named && { name: threadTimeline.selectedMoment ? `${threadTimeline.selectedMoment.edits.length} edits` : tagOf(named) }) };
   };
-  // The column lists every request's rows as one list, the latest request first, so Keep and ↑ ↓ go on from one
-  // request's last row that waits to the next request's first (or, going up, the one before's last). Low risk, under
-  // For you's rows, is one list the same way: ↓ past the last row that waits goes on to its first row, and ↑ above its
-  // first row goes back to the last row that waits. From Working or Done (`onward` false) they go nowhere: ↑ and ↓
-  // stay within that part, and another request's row that waits is For you's. `wrap` goes round to the requests
-  // before, for Keep.
-  function openElsewhere(from: string | undefined, delta: number, wrap = false, section: "you" | "low" = "you", onward = true) {
-    if (!onward) return false;
-    const ids = railThreads.map(thread => thread.id), at = from ? ids.indexOf(from) : -1;
-    const others = delta > 0 ? [...ids.slice(at + 1), ...(wrap ? ids.slice(0, Math.max(at, 0)) : [])] : ids.slice(0, Math.max(at, 0)).reverse();
-    if (openIn(section, delta, others)) return true;
-    if (section === "you" && delta > 0 && !wrap) return openIn("low", 1, ids);
-    if (section === "low" && delta < 0) return openIn("you", -1, [...ids].reverse());
-    return false;
-  }
-  /** Opens the first (or, going up, the last) row of one part of the column in the first of `ids` that has any. */
-  function openIn(section: "you" | "low", delta: number, ids: readonly string[]) {
-    const next = ids.find(id => ((section === "you" ? rail.info(id)?.you : rail.info(id)?.optional) ?? 0) > 0);
-    const info = next ? rail.info(next) : undefined;
-    if (!info) return false;
-    (section === "you" ? delta > 0 ? info.openFirst : info.openLast : delta > 0 ? info.openFirstLow : info.openLastLow)?.();
-    return true;
-  }
   function keepShown() {
     if (!reviewingEdit || !focusThread) return;
     // K reaches the log as a bare key, and the button as "Keep": this says which edit was kept.
     appLog("action", "keep-edit", { edit: shownIndex + 1, of: threadEdits.length, change: reviewingEdit.changeId, flagged: !!reviewingEdit.check || undefined });
-    // An edit made in several places is kept in all of them: it is one edit, on one row.
-    const row = editsByRow[shownRow] ?? [reviewingEdit];
-    // ⌘Z takes back what this Keep kept, and no more: an edit of the row kept on its own earlier stays kept.
-    const fresh = notYetKept(current.id, focusThread.id, row);
-    if (keepEdits(current.id, focusThread.id, row, head ?? undefined)) {
+    // A combined row across requests (or an edit made in several places) keeps all of its underlying edits together.
+    const unified = !openMoment ? rail.view().findForEdit(focusThread.id, reviewingEdit) : undefined;
+    const byThread = new Map<string, Omit<ThreadEdit, "at">[]>();
+    if (unified && unified.members.length > 0) {
+      for (const member of unified.members) {
+        const list = byThread.get(member.threadId);
+        if (list) {
+          if (!list.some(e => editKey(e) === editKey(member.edit))) list.push(member.edit);
+        } else byThread.set(member.threadId, [member.edit]);
+      }
+    } else {
+      byThread.set(focusThread.id, editsByRow[shownRow] ?? [reviewingEdit]);
+    }
+    const primaryEdits = byThread.get(focusThread.id) ?? [];
+    const primaryFresh = notYetKept(current.id, focusThread.id, primaryEdits);
+    const extraParts: { threadId: string; refs: Omit<ThreadEdit, "at">[] }[] = [];
+    for (const [tid, edits] of byThread) {
+      if (tid === focusThread.id) continue;
+      const fresh = notYetKept(current.id, tid, edits);
+      if (fresh.length) extraParts.push({ threadId: tid, refs: fresh });
+    }
+    let keptAny = false;
+    if (primaryEdits.length && keepEdits(current.id, focusThread.id, primaryEdits, head ?? undefined)) {
+      keptAny = true;
       recordEditReview(current.id, threadTimeline.selectedTarget, "keep");
-      recordUndo({ kind: "keep", word: reviewingEdit.marker ? "Done" : "Keep", projectId: current.id, threadId: focusThread.id, refs: fresh, ...undoneEdit(reviewingEdit) });
+    }
+    for (const part of extraParts) {
+      if (keepEdits(current.id, part.threadId, part.refs, head ?? undefined)) {
+        keptAny = true;
+        recordEditReviews(current.id, part.refs, "keep");
+      }
+    }
+    if (keptAny) {
+      recordUndo({
+        kind: "keep",
+        word: reviewingEdit.marker ? "Done" : "Keep",
+        projectId: current.id,
+        threadId: focusThread.id,
+        refs: primaryFresh,
+        ...(extraParts.length > 0 && { extraParts }),
+        ...undoneEdit(reviewingEdit),
+      });
     }
     moveOnFromShown();
   }
-  // Keep, Add and Reject edit go on to the same place: the next edit or call that still waits, then the first low-risk
-  // row, else the card closes. From a low-risk row: the next low-risk row, another request's, then what waits, else
-  // the card closes.
+  // Keep, Add and Reject edit go on to the next waiting row in unified For you (then first Low risk row), or from
+  // Low risk to the next unified Low risk row (then For you), else close the card.
   function moveOnFromShown() {
-    if (nextEditAfterKeep) actions.playEdit(nextEditAfterKeep, openOnItsOwn(nextEditAfterKeep));
-    else if (nextCallAfterKeep) actions.listen(pass!, nextCallAfterKeep);
-    else if (onLowRisk) {
-      if (!openElsewhere(focusThread?.id, 1, true, "low") && !openWaiting()) closeEdit();
+    if (openMoment && reviewingEdit && nextEditAfterKeep && openMoment.edits.includes(nextEditAfterKeep)) {
+      actions.playEdit(nextEditAfterKeep, true);
+      return;
     }
-    else if (!openElsewhere(focusThread?.id, 1, true) && !openIn("low", 1, railThreads.map(thread => thread.id))) closeEdit();
+    const view = rail.view();
+    const current = (reviewingEdit && focusThread ? view.findForEdit(focusThread.id, reviewingEdit) : undefined)
+      ?? (reviewingEdit ? view.findOpen() : undefined);
+    const whereAt = reviewingEdit ? (reviewingEdit.at ?? reviewingEdit.range.start) : 0;
+    const section = current?.section ?? (onLowRisk ? "low" : "you");
+    if (section === "low") {
+      const lows = view.sections.low.filter(isSteppableRailRow);
+      const next = nextRowAfter(lows, current, whereAt);
+      if (next) { next.open?.(); return; }
+      if (!openWaiting(current)) closeEdit();
+      return;
+    }
+    const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
+    const next = nextRowAfter(waits, current, whereAt);
+    if (next) { next.open?.(); return; }
+    const firstLow = view.sections.low.find(r => isSteppableRailRow(r) && r.key !== current?.key);
+    if (firstLow) { firstLow.open?.(); return; }
+    closeEdit();
   }
-  /** Opens what still waits on the editor, this request's first and then another's. Says whether there was any. */
-  function openWaiting() {
-    const waits = stopTarget(waitingStops[0], row => row.find(waitsOrAsks) ?? row[0]!);
-    if (waits && "edit" in waits) { actions.playEdit(waits.edit, openOnItsOwn(waits.edit)); return true; }
-    if (waits && "call" in waits) { actions.listen(pass!, waits.call); return true; }
-    return openElsewhere(focusThread?.id, 1, true);
+  /** Opens the first row that still waits on the editor in unified For you. Says whether there was any. */
+  function openWaiting(exclude?: UnifiedRailRow) {
+    const first = rail.view().sections.you.find(r => isSteppableRailRow(r) && (r.needs || r.asks) && r.key !== exclude?.key);
+    if (!first) return false;
+    first.open?.();
+    return true;
   }
-  // Mark all done keeps every low-risk edit of the column at once, every request's, as Keep keeps one: the engine is
+  // Keep all keeps every low-risk edit of the column at once, every request's, as Keep keeps one: the engine is
   // told, each is Done's, and one ⌘Z takes them all back (the editor's choice, 2026-11-24). A low-risk edit open on the
   // card goes on as Keep would from it, to what still waits, else the card closes.
   function keepLowRisk() {
-    const parts = railThreads.flatMap(thread => {
-      const fresh = notYetKept(current.id, thread.id, rail.info(thread.id)?.lowRiskEdits?.() ?? []);
-      return fresh.length ? [{ threadId: thread.id, refs: fresh }] : [];
+    const parts = rail.view().lowRiskParts().flatMap(({ threadId, edits }) => {
+      const fresh = notYetKept(current.id, threadId, edits);
+      return fresh.length ? [{ threadId, refs: fresh }] : [];
     });
     if (!parts.length) return;
     const wasOpen = !!reviewingEdit && onLowRisk;
@@ -1522,15 +1582,17 @@ export function SimpleWorkspaceBeta() {
     if (wasOpen && !openWaiting()) closeEdit();
   }
   // A revision sent from a row of For you goes on as Keep does (the editor chose this on 2026-11-23): the row is
-  // Working's now, and the card moves to the next one that waits. From Working or Done, and in a request with one
-  // list of every edit, the card stays on the edit it revised.
+  // Working's now, and the card moves to the next one that waits. From Working or Done, the card stays on the edit it revised.
   function moveOnFromRevised() {
-    if (reviewingEdit) { if (tabShown(focusList) === "you") moveOnFromShown(); return; }
-    if (!openCall || !pass || !passThread || tabShown(passList) !== "you") return;
-    const next = nextAfterCallDecision;
+    if (reviewingEdit) { if ((openRailRow?.section ?? tabShown(focusList)) === "you") moveOnFromShown(); return; }
+    if (!openCall || !pass || !passThread) return;
+    const view = rail.view();
+    const currentCallRow = view.findForCall(passThread.id, openCall.index);
+    if ((currentCallRow?.section ?? tabShown(passList)) !== "you") return;
+    const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
+    const nextRow = nextRowAfter(waits, currentCallRow, listedAt.get(openCall.index) ?? openCall.start);
     player.pause();
-    if (next && "call" in next) listenCall(pass, next.call);
-    else if (next && "edit" in next) actions.openEdit(passThread, next.edit);
+    if (nextRow) nextRow.open?.();
     else setListening(undefined);
   }
   // ⌘Z takes back the editor's last Keep or revision, and the one before it on the next press. A Keep
@@ -1589,15 +1651,10 @@ export function SimpleWorkspaceBeta() {
   useWatchedMomentAutoKeep(watching, watchedMoments, current.id, focusThread?.id, head);
   useEditCardShortcuts(workspaceActive && !!reviewingEdit, stepEdit, closeEdit);
 
-  // ↑ and ↓ step through the pass's For you items (calls and flagged edits), one at a time.
+  // ↑ and ↓ step through the unified edits column, one row at a time.
   const stopListening = () => { player.pause(); setListening(undefined); };
   function stepCut(delta: number) {
-    const next = callBeside(delta);
-    if (!next && passThread) return void openElsewhere(passThread.id, delta, false, "you", tabShown(passList) === "you");
-    if (!next || !pass || !passThread) return;
-    if ("call" in next) return stepToCall(pass, next.call);
-    appLog("action", "step", { to: "edit", edit: passEditList.indexOf(next.edit) + 1, of: passEditList.length, change: next.edit.changeId });
-    actions.openEdit(passThread, next.edit);
+    stepInRail(delta > 0 ? 1 : -1);
   }
   // The suggestion on the card is the one being applied: it stays up until that lands.
   const applyingShown = !!suggestion && deciding === suggestion.id;
@@ -1662,16 +1719,19 @@ export function SimpleWorkspaceBeta() {
   }, [appliedTarget?.version, threadTimeline.located, reviewingEdit]);
   const editOpen = !!reviewingEdit;
   const openEditKey = reviewingEdit && editKey(reviewingEdit);
-  // Opening a low-risk edit while the Low risk section is folded unfolds it so the open row is lit in the column.
-  // Manually folding Low risk while the same edit stays open keeps it folded.
-  const lastUnfoldedLow = useRef<string>(undefined);
+  // Opening an edit while its section (Low risk, Working, or Done) is folded unfolds it so the open row is lit.
+  // Manually folding that section while the same edit stays open keeps it folded.
+  const lastUnfoldedSection = useRef<string>(undefined);
   useEffect(() => {
-    const key = reviewingEdit && onLowRisk && focusThread ? `${focusThread.id}:${openEditKey}` : undefined;
-    if (!key) { lastUnfoldedLow.current = undefined; return; }
-    if (lastUnfoldedLow.current === key) return;
-    lastUnfoldedLow.current = key;
-    setRailOpen(was => was.low ? was : { ...was, low: true });
-  }, [reviewingEdit, onLowRisk, focusThread, openEditKey]);
+    const sec = openRailRow?.section;
+    const openKey = reviewingEdit && focusThread ? `${focusThread.id}:${openEditKey}` : openCall && pass ? `call:${pass.id}:${openCall.index}` : undefined;
+    const key = openKey && sec && sec !== "you" ? `${sec}:${openKey}` : undefined;
+    if (!key || !sec || sec === "you") { lastUnfoldedSection.current = undefined; return; }
+    if (lastUnfoldedSection.current === key) return;
+    lastUnfoldedSection.current = key;
+    const targetSec: "low" | "working" | "done" = sec;
+    setRailOpen(was => was[targetSec] ? was : { ...was, [targetSec]: true });
+  }, [openRailRow?.section, reviewingEdit, focusThread, openEditKey, openCall, pass]);
   // The edit that's open, for a rejection that lands after the editor stepped on: only the edit it was sent from moves on.
   const openEditNow = useRef(openEditKey);
   openEditNow.current = openEditKey;
@@ -2164,7 +2224,7 @@ export function SimpleWorkspaceBeta() {
     const words = editingPaused ? undefined : waitsOnEditor(task);
     return words ? { words, startNow: waitFor(task)?.kind === "review" ? () => void queueAction(startBeforeCalls(task.id)).catch(() => {}) : undefined } : undefined;
   };
-  const chatActions: ChatActions = { ...actions, waitsOn, forYouRows: reportForYouRows, ...(nextQueuedId && { nextQueuedId }) };
+  const chatActions: ChatActions = { ...actions, waitsOn, ...(nextQueuedId && { nextQueuedId }) };
   // The queued request whose words are in the message box to change, and the words as they stand there. Scarlet
   // doesn't start it meanwhile. A message being written waits, and is in the box again once these words are done.
   // They are kept as they are typed, as an unsent message is: after a quit the request is in the box again with the
@@ -2387,7 +2447,7 @@ export function SimpleWorkspaceBeta() {
     onSkipCall: () => { if (openCall) void decideCut(approves(openCall) === "cut" ? "keep" : "cut"); },
   });
 
-  const reviewVisible = rail.total("you") + rowsForYou + rail.total("optional") + rail.total("working") + rail.total("done") > 0;
+  const reviewVisible = railView.need + railView.forYouRows + railView.optional + railView.working + railView.done > 0;
   return <ReviewRailContext.Provider value={rail}><AimHostContext.Provider value={aimHost}><EditHoverContext.Provider value={hoveredEdit}>
     <main className="min-h-0 flex flex-1 flex-col" data-new-layout="">
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
@@ -2414,7 +2474,7 @@ export function SimpleWorkspaceBeta() {
               {current.reviewStatus === "loading" ? <Loading label="Loading edits…" />
                 : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}{" "}
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
-                : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
+                : ordered.length ? ordered.map((thread, threadOrder) => <Turn key={thread.id} projectId={current.id} thread={thread} threadOrder={threadOrder} actions={chatActions}
                   pinned={compact ? pinned : undefined} pinHost={compact ? pinHost : null} list={listOf(thread.id)}
                   askingRowKey={askedInfo?.rowKey}
                   reportReviewMarkers={showOtherFlags && thread.id !== focusThread?.id && thread.id !== passThread?.id
@@ -2436,9 +2496,10 @@ export function SimpleWorkspaceBeta() {
             {composer}
           </div>
         </ChatRail>
-        <ReviewRail store={rail} threads={railThreads} forYouRows={rowsForYou} compact={compact} reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}
+        <ReviewRail projectId={current.id} store={rail} compact={compact} reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}
           open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
-          selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined} onDoneLow={keepLowRisk} />
+          selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined}
+          onDoneLow={keepLowRisk} onHover={lightMark} />
         <div className="workspace-stage simple-stage">
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}

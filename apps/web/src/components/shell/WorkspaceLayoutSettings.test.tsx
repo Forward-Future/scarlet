@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fullRenderContext, Task } from "@scarlet/shared";
+import { makeMediaClip, makeTrack } from "@scarlet/timeline";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { buildThreads } from "../../lib/threads";
 import { api } from "../../lib/client";
@@ -645,5 +646,141 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => useUiStore.getState().setNewLayout(false));
     await act(async () => {});
     expect(container.querySelector("#simple-chat .unit-fold")).not.toBeNull();
+  });
+
+  it("unifies lists across requests by video time and combines cross-request edits touching the same graphic clip", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const baseTimeline = structuredClone(db.timelines[project.head!]!);
+    baseTimeline.tracks.push({
+      ...makeTrack("video", "Graphics", "v2"),
+      clips: [
+        makeMediaClip("gfx_opus", 0, 5, 18, { id: "model_intro_opus", label: "Opus 5.5 title" }),
+        makeMediaClip("gfx_haiku", 0, 3, 119, { id: "model_intro_haiku", label: "Haiku 5.5 title" }),
+      ],
+    });
+    const baseApproved = db.changes.find(c => c.state === "approved") ?? db.changes[0]!;
+    const addChange = {
+      ...baseApproved,
+      id: "chg_add_gfx",
+      state: "approved" as const,
+      taskId: "task_add_gfx",
+      appliedVersion: project.head!,
+      appliedReview: undefined,
+      approvedSpots: undefined,
+      cutChoices: undefined,
+      noteIds: [],
+      createdAt: "2026-11-24T10:00:00.000Z",
+      description: "Added model titles.",
+      ops: [
+        { op: "addClip", trackId: "v2", clip: baseTimeline.tracks.at(-1)!.clips[0]! },
+        { op: "addClip", trackId: "v2", clip: baseTimeline.tracks.at(-1)!.clips[1]! },
+      ],
+    };
+    const moveChange = {
+      ...baseApproved,
+      id: "chg_move_gfx",
+      state: "approved" as const,
+      taskId: "task_move_gfx",
+      appliedVersion: project.head!,
+      appliedReview: undefined,
+      approvedSpots: undefined,
+      cutChoices: undefined,
+      noteIds: [],
+      createdAt: "2026-11-24T10:05:00.000Z",
+      description: "Moved Opus title and added Fable title.",
+      ops: [
+        { op: "updateClip", clipId: "model_intro_opus", patch: { transform: { x: -0.56, y: 0.29, scale: 1 } } },
+      ],
+    };
+    const addTask = Task.parse({
+      id: "task_add_gfx", projectId: PRJ, kind: "edit", agent: "claude",
+      instruction: "Add titles", state: "done", createdBy: { type: "human", name: "Editor" },
+      changeIds: [addChange.id], createdAt: "2026-11-24T10:00:00.000Z",
+    });
+    const moveTask = Task.parse({
+      id: "task_move_gfx", projectId: PRJ, kind: "edit", agent: "claude",
+      instruction: "Move the Opus title to the bottom left", state: "done", createdBy: { type: "human", name: "Editor" },
+      changeIds: [moveChange.id], createdAt: "2026-11-24T10:05:00.000Z",
+    });
+    const changes = [addChange, moveChange];
+    const tasks = [addTask, moveTask];
+    const threads = buildThreads({ changes, tasks, notes: [] });
+    const addThread = threads.find(t => t.changes.some(c => c.id === addChange.id))!;
+    const moveThread = threads.find(t => t.changes.some(c => c.id === moveChange.id))!;
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: baseTimeline,
+      media: [...project.media, { id: "gfx_opus", name: "Opus", path: "/opus.mov", kind: "graphic", duration: 5 } as never],
+      changes,
+      notes: [],
+      renders: db.renders,
+      tasks,
+      taskEvents: {},
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    const keepSpy = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+    const unkeepSpy = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined as never);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === addThread.id ? [
+        { changeId: addChange.id, spot: 0, label: "Opus 5.5 title", range: { start: 18, end: 21 }, kind: "graphic", previous: [] },
+        { changeId: addChange.id, spot: 1, label: "Haiku 5.5 title", range: { start: 119, end: 122 }, kind: "graphic", previous: [] },
+      ] : threadId === moveThread.id ? [
+        { changeId: moveChange.id, spot: 0, label: "Opus 5.5 title", summary: "Moved the Opus 5.5 title to the bottom left.", reason: "Moved to bottom left.", range: { start: 18, end: 23 }, kind: "graphic", previous: [] },
+        { changeId: moveChange.id, spot: 1, label: "Fable 5.2 title", range: { start: 62, end: 65 }, kind: "graphic", previous: [] },
+      ] : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // One unified <ol> inside Low risk, sorted by video time (0:18, 1:02, 1:59), with add + move combined into one row.
+    const lowBody = container.querySelector<HTMLElement>('.review-low-body[aria-label="Low risk"]')!;
+    expect(lowBody.querySelectorAll("ol")).toHaveLength(1);
+    const lowRows = [...lowBody.querySelectorAll<HTMLButtonElement>("ol > li > button")];
+    expect(lowRows.map(r => [
+      r.querySelector(".edit-row-time")?.textContent,
+      r.querySelector(".simple-pass-words")?.textContent,
+      r.querySelector(".simple-edit-value")?.textContent,
+    ])).toEqual([
+      ["0:18", "Moved the Opus 5.5 title to the bottom left.", "Graphic"],
+      ["1:02", "Fable 5.2 title", "Graphic"],
+      ["1:59", "Haiku 5.5 title", "Graphic"],
+    ]);
+    expect(container.querySelector(".review-low-head b")?.textContent).toBe("3");
+
+    // Keeping the combined row keeps BOTH underlying thread edits together and moves one combined row into Done.
+    await act(async () => lowRows[0]!.click());
+    await act(async () => {});
+    const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")].find(b => b.textContent?.trim() === "Keep")!;
+    await act(async () => keepBtn.click());
+    await act(async () => {});
+    expect(keepSpy).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".review-low-head b")?.textContent).toBe("2");
+    const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")].find(b => b.textContent?.includes("Done"))!;
+    expect(doneHead.textContent).toContain("1");
+
+    // ⌘Z undoes BOTH threads' Keep together so the combined row returns cleanly to Low risk.
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    await act(async () => {});
+    expect(unkeepSpy).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".review-low-head b")?.textContent).toBe("3");
   });
 });
