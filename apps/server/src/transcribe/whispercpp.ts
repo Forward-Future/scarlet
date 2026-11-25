@@ -1,4 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
+import { open, readFile, rm } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join, win32 } from "node:path";
 import { z } from "zod/v3";
@@ -6,6 +6,7 @@ import { normalizeTranscriptToken } from "@scarlet/shared";
 import { newId, type TranscriptSegment, type TranscriptWord } from "@scarlet/timeline";
 import { extractWav, FfmpegError, run } from "../render/ffmpeg.js";
 import { decodedRecording } from "../services/recordingAudio.js";
+import { readWavDataLayout } from "../util.js";
 import { SAMPLE_RATE } from "./ctcAlign.js";
 import { crisperWorker } from "./crisperWorker.js";
 import { SEAM_CONTEXT, savedWindows } from "./seams.js";
@@ -172,6 +173,12 @@ export class WhisperCppProvider implements TranscriptionProvider {
   }
 
   async transcribeWav(wav: string, tmpDir: string, signal?: AbortSignal, language?: string, prompt?: string, onProgress?: (fraction: number) => void) {
+    // whisper-cli's WAV loader (miniaudio) exits with code 11 on a valid 0-sample WAV.
+    if (await isEmptyWav(wav)) {
+      onProgress?.(1);
+      const selected = language && language !== "auto" ? language : this.opts.language && this.opts.language !== "auto" ? this.opts.language : undefined;
+      return { language: selected, segments: [] };
+    }
     // Fetch the model before either build runs. A download that fails is nothing the GPU did: it is thrown as it is,
     // and no build runs.
     const model = typeof this.opts.model === "function" ? await this.opts.model(signal) : this.opts.model;
@@ -234,6 +241,20 @@ export class WhisperCppProvider implements TranscriptionProvider {
     const json = readOutput(await readFile(base + ".json", "utf8"));
     const modelLabel = adapterModelLabel(json.result?.model);
     return { language: json.result?.language, segments: parseWhisperJson(json), ...(modelLabel && { modelLabel }) };
+  }
+}
+
+/** True when `wav` is an existing RIFF/WAV file whose `data` chunk holds zero PCM samples. */
+async function isEmptyWav(wav: string): Promise<boolean> {
+  let handle;
+  try {
+    handle = await open(wav, "r");
+    const layout = await readWavDataLayout(handle);
+    return layout !== undefined && layout.samples === 0;
+  } catch {
+    return false;
+  } finally {
+    await handle?.close();
   }
 }
 

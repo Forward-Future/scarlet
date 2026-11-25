@@ -463,3 +463,20 @@ it("gives the CrisperWhisper adapter, which reads a whole recording in one run, 
     expect(await windows(new WhisperCppProvider({ binary: "whisper-cli" }))).toEqual([128, 136, 136, 136, 136, 108]);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+it("returns empty segments without spawning whisper-cli for a zero-sample WAV", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-whisper-empty-"));
+  try {
+    const emptyWav = join(dir, "empty.wav");
+    const wav = Buffer.alloc(44);
+    wav.write("RIFF", 0); wav.writeUInt32LE(36, 4); wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(32000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write("data", 36); wav.writeUInt32LE(0, 40);
+    await writeFile(emptyWav, wav);
+    const run = vi.spyOn(ffmpeg, "run");
+    const whisper = new WhisperCppProvider({ binary: "whisper-cli", model: "model.bin" });
+    expect(await whisper.transcribeWav(emptyWav, dir, undefined, "en")).toEqual({ language: "en", segments: [] });
+    expect(run).not.toHaveBeenCalled();
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
