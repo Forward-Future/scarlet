@@ -1,11 +1,13 @@
 import { useEffect } from "react";
 import { ALT_KEY, PLATFORM_KEY, SHORTCUTS } from "../../lib/hotkeys";
+import { usePlayerStore } from "../../stores/player";
 import { useUiStore } from "../../stores/ui";
 import { Kbd, Modal } from "../ui/primitives";
 
 export function ShortcutsModal() {
   const open = useUiStore((s) => s.shortcutsOpen);
   const setOpen = useUiStore((s) => s.setShortcutsOpen);
+  const speedUpRate = usePlayerStore((s) => s.speedUpRate);
   // Page shortcuts stop while a dialog is open, this one included, so the list listens for the key that closes it.
   useEffect(() => {
     if (!open) return;
@@ -26,19 +28,24 @@ export function ShortcutsModal() {
     <Modal open={open} onClose={() => setOpen(false)} title="Keyboard shortcuts" width={520}>
       <table className="w-full text-[12.5px]">
         <tbody>
-          {SHORTCUTS.map((s) => (
-            <tr key={`${s.keys.join(" ")} ${s.what}`} className="border-b border-line/60 last:border-0">
-              <td className="py-1.5 pr-3 whitespace-nowrap">
-                <span className="inline-flex gap-1">
-                  {s.keys.map((k) => (
-                    <Kbd key={k}>{k === PLATFORM_KEY ? platformKey : k === ALT_KEY ? altKey : k}</Kbd>
-                  ))}
-                </span>
-              </td>
-              <td className="py-1.5 text-fg">{s.what}</td>
-              <td className="py-1.5 text-dim text-right whitespace-nowrap">{s.where}</td>
-            </tr>
-          ))}
+          {SHORTCUTS.map((s) => {
+            const label = s.keys.length === 1 && s.keys[0] === "L"
+              ? `Speed up playback to ${speedUpRate}× (again for 1×, Shift slower)`
+              : s.what;
+            return (
+              <tr key={`${s.keys.join(" ")} ${s.what}`} className="border-b border-line/60 last:border-0">
+                <td className="py-1.5 pr-3 whitespace-nowrap">
+                  <span className="inline-flex gap-1">
+                    {s.keys.map((k) => (
+                      <Kbd key={k}>{k === PLATFORM_KEY ? platformKey : k === ALT_KEY ? altKey : k}</Kbd>
+                    ))}
+                  </span>
+                </td>
+                <td className="py-1.5 text-fg">{label}</td>
+                <td className="py-1.5 text-dim text-right whitespace-nowrap">{s.where}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </Modal>

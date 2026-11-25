@@ -143,7 +143,7 @@ export const SHORTCUTS: Array<{ keys: string[]; what: string; where: string }> =
   { keys: ["Space"], what: "Play / pause", where: "Preview" },
   { keys: ["↑", "↓"], what: "Previous / next edit or call", where: "Edit or call card" },
   { keys: ["←", "→"], what: "Back / forward 1 second (1 frame with Shift)", where: "Preview" },
-  { keys: ["L"], what: "Faster playback, back to 0.5× after 2× (Shift for slower)", where: "Preview" },
+  { keys: ["L"], what: "Speed up playback (again for 1×, Shift for slower)", where: "Preview" },
   { keys: ["−", "+"], what: "Zoom the timeline out / in (0 to fit)", where: "Timeline" },
   { keys: [ALT_KEY, "X"], what: "Clear the marked range (also Esc or Delete)", where: "Timeline" },
   { keys: ["N"], what: "Type a message at the playhead", where: "In a project" },

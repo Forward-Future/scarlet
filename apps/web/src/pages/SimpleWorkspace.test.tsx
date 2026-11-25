@@ -69,7 +69,7 @@ beforeEach(() => {
   vi.spyOn(window, "matchMedia").mockImplementation(query => query === "(prefers-reduced-motion: reduce)"
     ? Object.create(matchMedia(query), { matches: { value: true } }) : matchMedia(query));
   localStorage.clear();
-  usePlayerStore.setState({ time: 0, duration: 0, playing: false, rate: 1 });
+  usePlayerStore.setState({ time: 0, duration: 0, playing: false, rate: 1, speedUpRate: 1.5 });
   // Each test starts with an empty message box, nothing saved for any request and no dialog left open over the keys.
   useUiStore.setState({ agentDraft: "", agentContext: null, savedDrafts: {}, draftOwner: null, notePopover: null, speaking: false, exportNotice: null });
   useExports.setState({ jobs: {} });
@@ -220,10 +220,11 @@ it("loads full steps only for live requests and upgrades a queued request when w
   expect(load).toHaveBeenCalledWith(queued.id, "all");
 });
 
-it("opens the speed stepper from the monitor button and steps the speed with L, round from the fastest to the slowest, with the stepper closed", async () => {
+it("opens the speed popover, lets the editor pick a custom L shortcut speed (default 1.5×), and reaches it in one keypress", async () => {
   await show();
   const trigger = container.querySelector<HTMLButtonElement>('.monitor-controls button[title="Playback speed"]')!;
   const panel = () => container.querySelector<HTMLElement>('[role="group"][aria-label="Playback speed"]');
+  const shortcutPicker = () => panel()!.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Speed-up shortcut speed"]')!;
   const slider = container.querySelector<HTMLElement>(".timeline-slider")!;
   const key = (target: HTMLElement, init: KeyboardEventInit) => act(async () => {
     target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
@@ -236,7 +237,9 @@ it("opens the speed stepper from the monitor button and steps the speed with L, 
   expect(panel()).toBeNull();
   await click(trigger);
   expect(trigger.getAttribute("aria-controls")).toBe(panel()!.id);
-  const [slower, faster] = panel()!.querySelectorAll("button");
+  expect(shortcutPicker().textContent).toBe("1.5×");
+
+  const [slower, faster] = panel()!.querySelectorAll<HTMLButtonElement>(".playback-speed-stepper button");
   await click(slower!);
   check(0.75);
   expect(panel()!.querySelector("output")?.textContent).toBe("0.75×");
@@ -244,21 +247,59 @@ it("opens the speed stepper from the monitor button and steps the speed with L, 
   expect(slower!.disabled).toBe(true);
   await click(faster!);
   check(0.75);
+
+  // First Escape closes an open L-shortcut dropdown without dismissing the speed popover; second Escape closes the popover.
+  await click(shortcutPicker());
+  expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+  await key(shortcutPicker(), { key: "Escape" });
+  expect(document.querySelector('[role="listbox"]')).toBeNull();
+  expect(panel()).not.toBeNull();
   await key(faster!, { key: "Escape" });
   expect(panel()).toBeNull();
   expect(document.activeElement).toBe(trigger);
+
+  // With default 1.5×, L toggles straight to 1.5× in one keypress and back to 1× on the next; repeats don't flutter.
   await act(async () => slider.focus());
   await key(slider, { key: "L", shiftKey: true });
   check(0.5);
   await key(slider, { key: "l" });
+  check(1.5);
+  await key(slider, { key: "l", repeat: true });
+  check(1.5);
   await key(slider, { key: "l" });
   check(1);
-  for (const rate of [1.25, 1.5, 1.75, 2, 0.5]) {
-    await key(slider, { key: "l" });
-    check(rate);
-  }
+  await key(slider, { key: "l" });
+  check(1.5);
+  await key(slider, { key: "l" });
+  check(1);
+
+  // Selecting 2× in the popover's L-shortcut picker persists the choice, leaves the popover open, and reaches 2× in one press.
+  await click(trigger);
+  await click(shortcutPicker());
+  const option2x = [...document.querySelectorAll<HTMLElement>('[role="listbox"] [role="option"]')].find(o => o.textContent === "2×")!;
+  await act(async () => {
+    option2x.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    option2x.click();
+  });
+  expect(panel()).not.toBeNull();
+  expect(shortcutPicker().textContent).toBe("2×");
+  expect(localStorage.getItem("scarlet.speedUpRate")).toBe("2");
+  await key(panel()!, { key: "Escape" });
+  expect(panel()).toBeNull();
+
+  await act(async () => slider.focus());
+  await key(slider, { key: "l" });
+  check(2);
+  await key(slider, { key: "l" });
+  check(1);
+
+  // Shift+L still steps slower and wraps from 0.5× to 2×.
+  await key(slider, { key: "L", shiftKey: true });
+  await key(slider, { key: "L", shiftKey: true });
+  check(0.5);
   await key(slider, { key: "L", shiftKey: true });
   check(2);
+
   // − and + zoom the timeline now: they leave the speed alone.
   await key(slider, { key: "-" });
   await key(slider, { key: "+" });
@@ -13581,7 +13622,7 @@ const bookmark = () => captureProjectPlace({ pathname: `/p/${PRJ}`, search: "", 
 /** The project's view closes, which puts the player back at the start at 1×, and opens again at the bookmark. */
 const reopen = async (at: string) => {
   await act(async () => root.unmount());
-  usePlayerStore.setState({ time: 0, duration: 0, playing: false, rate: 1 });
+  usePlayerStore.setState({ time: 0, duration: 0, playing: false, rate: 1, speedUpRate: 1.5 });
   root = createRoot(container);
   await act(async () => root.render(<MemoryRouter initialEntries={[at]}><SimpleWorkspace /><Address /></MemoryRouter>));
 };

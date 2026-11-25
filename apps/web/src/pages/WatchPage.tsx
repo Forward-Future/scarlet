@@ -40,7 +40,7 @@ import { editFocus } from "../lib/editKind";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
 import { momentRange } from "../lib/editMoments";
 import { editKey } from "../lib/keptEdits";
-import { MAX_RATE, MIN_RATE, PlaybackSpeed, RATE_STEP, stepPlaybackRate } from "./watch/PlaybackSpeed";
+import { MAX_RATE, MIN_RATE, PlaybackSpeed, RATE_STEP, stepPlaybackRate, toggleFastPlaybackRate } from "./watch/PlaybackSpeed";
 import { ImportPreview } from "./watch/ImportPreview";
 import { CutSide, SelectedCutFrame } from "./watch/SelectedCutFrame";
 
@@ -523,7 +523,8 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     } else if (e.key.toLowerCase() === "l") {
       if (!playable || isComposing(e)) return;
       e.preventDefault();
-      stepPlaybackRate(e.shiftKey ? -1 : 1, true);
+      if (e.shiftKey) stepPlaybackRate(-1, true);
+      else if (!e.repeat) toggleFastPlaybackRate();
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
       if (!playable || duration <= 0) return;
