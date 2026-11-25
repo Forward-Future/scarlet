@@ -118,6 +118,12 @@ export class MockClient implements ScarletApi {
     this.store.db.versions[project.id] = [];
     return this.latency({ project }, 250);
   }
+  async createSampleProject(): Promise<{ project: Project }> {
+    this.requireAuth();
+    const demo = this.store.db.projects[0];
+    if (demo) return this.latency({ project: demo }, 250);
+    return this.createProject({ name: "Sample project" });
+  }
   async workspace(id: string) {
     this.requireAuth();
     const project = this.store.projectById(id);

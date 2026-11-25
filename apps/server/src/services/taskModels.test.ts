@@ -34,8 +34,9 @@ function hostWith(agents: AgentAvailability[], seenAgo = 0): AgentHost {
 }
 function request(agent: "claude" | "gemini" = "claude", model?: string): Task {
   const project = ctx.repos.projects.insert(createProject("Interview"));
+  // Made as the message box sends a new request: the editor's words as its instruction, with no separate message.
   return createTask(ctx, { projectId: project.id, kind: "edit", agent, model, instruction: "Tighten it and add a lower third for Ana at 0:05",
-    context: { message: "Tighten it and add a lower third for Ana at 0:05", time: 5 }, createdBy: by });
+    context: { time: 5 }, createdBy: by });
 }
 function api(method: string, path: string, body: unknown, headers: Record<string, string>) {
   return workspace.app.request("/api" + path, { method, body: JSON.stringify(body),

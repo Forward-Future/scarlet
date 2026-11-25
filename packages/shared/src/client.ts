@@ -70,6 +70,9 @@ export class ScarletClient extends ClientTransport {
   createProject(body: { name: string; settings?: Partial<Project["settings"]> }) {
     return this.post<{ project: Project }>("/projects", body);
   }
+  createSampleProject() {
+    return this.post<{ project: Project }>("/projects/sample", {});
+  }
   project(id: string) {
     return this.get<ProjectDetail>(`/projects/${id}`);
   }
