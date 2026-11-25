@@ -605,12 +605,13 @@ export function roomBeforeBreath(page: NonNullable<JoinPage["edges"]>, kept: Wor
 export function roomAfterBreath(page: NonNullable<JoinPage["edges"]>, kept: Word, run: TimeRange): (BreathAfterWord & { room: TimeRange }) | undefined {
   const levels = page.levels;
   if (!levels || run.end >= kept.start) return;
+  const dipBar = levelBars(levels).dip;
   const index = (t: number) => Math.floor((t - levels.from) / levels.step + 1e-6);
   let first = -1, last = -1;
   const from = Math.max(0, index(run.end));
   const to = Math.min(levels.db.length - 1, index(kept.start + keptSlack));
   for (let i = to; i >= from; i--) {
-    if (levels.db[i]! <= DIP_DBFS) { if (last < 0) last = i; first = i; } else if (last >= 0) break;
+    if (levels.db[i]! <= dipBar) { if (last < 0) last = i; first = i; } else if (last >= 0) break;
   }
   if (last < 0) return;
   const quiet = { start: levels.from + first * levels.step, end: levels.from + (last + 1) * levels.step };

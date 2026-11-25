@@ -203,8 +203,8 @@ export function quietReading(rms: ArrayLike<number>, peaks: ArrayLike<number>, f
       for (let r = i; r >= 0 && count < 10 && quiet[r]; r--) if (rms[r]! <= quietBelow) { sum += rms[r]!; count++; }
       const roomCeiling = count ? Math.min(quietBelow, LEAD_ABOVE_ROOM * sum / count) : quietBelow;
       let room = i, runRoom = 0, k = i + 1;
-      for (; k < n && !quiet[k] && rms[k]! <= QUIET_RMS && !spoken(k); k++) {
-        if (rms[k]! <= roomCeiling && peaks[k]! <= QUIET_PEAK) {
+      for (; k < n && !quiet[k] && rms[k]! <= breathCeiling && !spoken(k); k++) {
+        if (rms[k]! <= roomCeiling && peaks[k]! <= peakBelow) {
           runRoom++;
           if (runRoom >= minTail) room = k;
         } else runRoom = 0;
@@ -212,7 +212,7 @@ export function quietReading(rms: ArrayLike<number>, peaks: ArrayLike<number>, f
       if (k >= n || quiet[k] || room === i) continue;
       for (let j = i + 1; j <= room; j++) quiet[j] = true;
       let first = -1, last = -1, loudest = 0;
-      for (let j = i + 1; j <= room; j++) if (rms[j]! > roomCeiling || peaks[j]! > QUIET_PEAK) { if (first < 0) first = j; last = j; loudest = Math.max(loudest, rms[j]!); }
+      for (let j = i + 1; j <= room; j++) if (rms[j]! > roomCeiling || peaks[j]! > peakBelow) { if (first < 0) first = j; last = j; loudest = Math.max(loudest, rms[j]!); }
       if (first >= 0) breaths.push({ start: from + first * step, end: from + (last + 1) * step, db: dbfs(loudest), side: "before" });
     }
   }
