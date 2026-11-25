@@ -309,7 +309,9 @@ pub async fn install(home: &Path, resources: Option<&Path>) -> Result<FfmpegStat
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755));
+            if let Err(e) = std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)) {
+                log::warn!("could not mark {name} executable: {e}");
+            }
         }
         tokio::fs::rename(&staging, &target).await.map_err(|e| {
             let _ = std::fs::remove_file(&staging);

@@ -180,7 +180,7 @@ it("logs what was cleared and what was removed for good, by project", async () =
   for (const project of [id, other]) ctx.repos.projects.softDelete(project);
   const trashed = ctx.repos.projects.listDeleted().map(p => ({ id: p.id, deletedAt: p.deletedAt }));
   expect((await api("POST", "/storage/cleanup", { kind: "trash", projects: trashed })).status).toBe(200);
-  expect(said()).toEqual([`[trash] removed 2 projects for good: ${trashed.map(p => p.id).join(", ")}`]);
+  expect(said()).toEqual([`[trash] removed 2 projects for good: ${trashed.map(p => p.id).join(", ")}`, "[trash] purged count=2"]);
 });
 it("removes a project that has been in the trash for 30 days, and logs that it did", async () => {
   const ctx = workspace.ctx;
@@ -197,9 +197,11 @@ it("removes a project that has been in the trash for 30 days, and logs that it d
   await settle();
   expect(existsSync(ctx.paths.project(id))).toBe(false);
   expect(ctx.repos.projects.listDeleted()).toEqual([]);
-  expect(lines).toEqual([`[trash] removed 1 project for good after 30 days in the trash: ${id}`]);
+  // Then once its folder is gone too.
+  expect(lines).toEqual([`[trash] removed 1 project for good after 30 days in the trash: ${id}`, "[trash] purged count=1"]);
   expect(purgeTrash(ctx, deletedAt + 31 * day)).toBe(0);
-  expect(lines).toHaveLength(1);
+  await settle();
+  expect(lines).toHaveLength(2);
 });
 
 it.runIf(lockable)("removes the other projects for good when one folder can't be deleted, and retries that one later", async () => {

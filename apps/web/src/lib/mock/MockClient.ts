@@ -630,6 +630,104 @@ export class MockClient implements ScarletApi {
     this.requireAuth();
     return this.latency(skillFromChange(this.store, changeId, name, agent), 200);
   }
+  async styleGuides(): Promise<{ styleGuides: import("@scarlet/shared").StyleGuideRecord[] }> {
+    this.requireAuth();
+    return this.latency({ styleGuides: [...this.store.db.styleGuides] }, 100);
+  }
+  async styleGuide(styleGuideId: string): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord; edits: Task[] }> {
+    this.requireAuth();
+    const styleGuide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!styleGuide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const edits = this.store.db.tasks.filter(t => t.kind === "style_guide_edit" && t.context.styleGuideId === styleGuideId).map(t => ({ ...t })).reverse();
+    return this.latency({ styleGuide, edits }, 100);
+  }
+  async createStyleGuide(body: import("@scarlet/shared").CreateStyleGuideRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    if (this.store.db.styleGuides.some(g => g.name.toLowerCase() === body.name.toLowerCase())) {
+      throw new ScarletApiError(409, "style_guide_exists", `A style guide named "@${body.name}" already exists.`);
+    }
+    const ts = new Date().toISOString();
+    if (body.isDefault) for (const g of this.store.db.styleGuides) g.isDefault = false;
+    const styleGuide: import("@scarlet/shared").StyleGuideRecord = {
+      id: newId("sg"), name: body.name, description: body.description?.trim() ?? "", instructions: body.instructions ?? "",
+      isDefault: Boolean(body.isDefault), assets: [], createdAt: ts, updatedAt: ts,
+    };
+    this.store.db.styleGuides.push(styleGuide);
+    this.store.emit({ type: "style_guide.updated", styleGuide });
+    return this.latency({ styleGuide }, 150);
+  }
+  async createStyleGuideFromGraphic(body: import("@scarlet/shared").StyleGuideFromGraphicRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    return this.createStyleGuide({ name: body.name, description: body.description || "Saved from project graphic", isDefault: body.isDefault });
+  }
+  async updateStyleGuide(styleGuideId: string, body: import("@scarlet/shared").UpdateStyleGuideRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    if (body.name && this.store.db.styleGuides.some(g => g.id !== styleGuideId && g.name.toLowerCase() === body.name!.toLowerCase())) {
+      throw new ScarletApiError(409, "style_guide_exists", `A style guide named "@${body.name}" already exists.`);
+    }
+    if (body.isDefault) for (const g of this.store.db.styleGuides) if (g.id !== styleGuideId) g.isDefault = false;
+    Object.assign(guide, {
+      ...(body.name !== undefined && { name: body.name }),
+      ...(body.description !== undefined && { description: body.description.trim() }),
+      ...(body.instructions !== undefined && { instructions: body.instructions }),
+      ...(body.isDefault !== undefined && { isDefault: body.isDefault }),
+      updatedAt: new Date().toISOString(),
+    });
+    this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+    return this.latency({ styleGuide: { ...guide } }, 120);
+  }
+  async deleteStyleGuide(styleGuideId: string): Promise<Record<string, never>> {
+    this.requireAuth();
+    this.store.db.styleGuides = this.store.db.styleGuides.filter(g => g.id !== styleGuideId);
+    this.store.emit({ type: "style_guide.deleted", styleGuideId });
+    return this.latency({});
+  }
+  async editStyleGuide(styleGuideId: string, body: import("@scarlet/shared").EditStyleGuideRequest): Promise<{ task: Task }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const home = this.store.db.projects[0];
+    if (!home) throw new ScarletApiError(409, "no_project", "Create a project first. Scarlet runs its requests from one.");
+    const task = this.store.makeTask(home.id, {
+      kind: "style_guide_edit",
+      agent: body.agent ?? this.store.db.settings.defaultAgent,
+      model: body.model,
+      effort: body.effort,
+      serviceTier: body.serviceTier,
+      instruction: body.prompt,
+      context: { styleGuideId: guide.id, ...(body.attachments?.length && { attachments: body.attachments }) },
+    });
+    setTimeout(() => {
+      guide.description = body.prompt.slice(0, 80);
+      guide.updatedAt = new Date().toISOString();
+      this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+      this.store.updateTask(task, { state: "done", resultStyleGuideId: guide.id, summary: `Updated @${guide.name}.`, finishedAt: new Date().toISOString() });
+    }, 300);
+    return this.latency({ task }, 150);
+  }
+  async uploadStyleGuideAsset(styleGuideId: string, file: Blob | { path: string }, name?: string): Promise<{ asset: import("@scarlet/shared").StyleGuideAsset; styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const named = name ?? (file instanceof Blob ? (typeof File !== "undefined" && file instanceof File ? file.name : "asset") : file.path.split(/[\\/]/).pop() || "asset");
+    const asset: import("@scarlet/shared").StyleGuideAsset = {
+      id: newId("sga"), name: named, size: file instanceof Blob ? file.size : 0,
+      ...(file instanceof Blob && file.type && { mime: file.type }), createdAt: new Date().toISOString(),
+    };
+    guide.assets = [...guide.assets, asset];
+    guide.updatedAt = new Date().toISOString();
+    this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+    return this.latency({ asset, styleGuide: { ...guide } }, 150);
+  }
+  styleGuideAssetUrl(styleGuideId: string, assetId: string) {
+    return this.fileUrl(`/style-guides/${encodeURIComponent(styleGuideId)}/assets/${encodeURIComponent(assetId)}`);
+  }
+  styleGuidePreviewUrl(styleGuideId: string, updatedAt?: string) {
+    const query = updatedAt ? `?v=${encodeURIComponent(updatedAt)}` : "";
+    return this.fileUrl(`/style-guides/${encodeURIComponent(styleGuideId)}/preview${query}`);
+  }
   async localModelStatus() { return { state: "ready" as const }; }
   async settings(): Promise<{ settings: ServerSettings; transcriptionAvailable: boolean; transcriptionIssue?: string }> {
     this.requireAuth();

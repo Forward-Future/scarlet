@@ -5,7 +5,7 @@
 import { clipDuration, sourceToTimeline, timelineToSource, type MediaClip, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { isTag, round2, round3 } from "./analysis.js";
-import { DIP_DBFS, SPEECH_DBFS, dialogueAudioStream, gaps, pageAt, pageReaches, plain, wordMargin, type JoinPage, type Word } from "./dialogue-acoustics.js";
+import { dialogueAudioStream, gaps, levelBars, pageAt, pageReaches, plain, wordMargin, type JoinPage, type Word } from "./dialogue-acoustics.js";
 import { dialogueClips } from "./dialogue-kept-words.js";
 
 /** Two deliveries of one word match on their sound when their levels follow each other at least this closely (Pearson r). */
@@ -82,9 +82,10 @@ export function sameWordJoin(tl: Timeline, project: Pick<Project, "media" | "set
   const index = (t: number) => Math.floor((t - from) / step), centre = (i: number) => from + (i + .5) * step;
   const level = (i: number) => i >= 0 && i < db.length ? Math.max(SAME_WORD_FLOOR, db[i]!) : undefined;
   // The second delivery starts out of a pause: its first sound is where the level rises from quiet.
+  const { speech: speechBar, dip: dipBar } = levelBars(levels);
   let onset = index(second.start - .1);
-  if (onset < 0 || db[onset]! > SPEECH_DBFS) return;
-  while (onset < db.length && centre(onset) < second.end && db[onset]! <= SPEECH_DBFS) onset++;
+  if (onset < 0 || db[onset]! > speechBar) return;
+  while (onset < db.length && centre(onset) < second.end && db[onset]! <= speechBar) onset++;
   // The range ends in that pause, before the second delivery sounds.
   if (onset >= db.length || centre(onset) >= second.end || tE > from + onset * step + 1e-6) return;
   // Keep the match window inside the second delivery rather than spilling into the next word, where a gap after one
@@ -92,7 +93,7 @@ export function sameWordJoin(tl: Timeline, project: Pick<Project, "media" | "set
   // include up to two buckets of the word's rising edge out of room tone.
   const wordEnd = Math.min(onset + 15, Math.round((second.end - from) / step));
   let matchStart = onset;
-  while (wordEnd - matchStart < 5 && matchStart > 0 && onset - matchStart < 2 && db[matchStart - 1]! > DIP_DBFS) matchStart--;
+  while (wordEnd - matchStart < 5 && matchStart > 0 && onset - matchStart < 2 && db[matchStart - 1]! > dipBar) matchStart--;
   const length = Math.min(15, Math.max(5, wordEnd - matchStart));
   const heard = Array.from({ length }, (_, k) => level(matchStart + k));
   if (heard.some(v => v === undefined)) return;

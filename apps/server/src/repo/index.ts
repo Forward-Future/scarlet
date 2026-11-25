@@ -1,5 +1,5 @@
 import { z } from "zod/v3";
-import { ActivityEntry, AgentHost, Learning, QuickAction, Render, Skill, SkillVersion, Task, TaskEvent, type QueueTask } from "@scarlet/shared";
+import { ActivityEntry, AgentHost, Learning, QuickAction, Render, Skill, SkillVersion, StyleGuideRecord, Task, TaskEvent, type QueueTask } from "@scarlet/shared";
 import type { PriceLookup } from "./modelPrices.js";
 import { Author, Change, Note, Transcript } from "@scarlet/timeline";
 import { now, type Db } from "../db.js";
@@ -91,9 +91,17 @@ class TasksRepo extends JsonStore<Task> {
     }));
   }
 
+  /** Told after each write that adds a task (`from` null) or changes its state. The engine logs it, once per step. */
+  onStateChange?: (task: Task, from: Task["state"] | null) => void;
+
   override put(task: Task): Task {
+    const before = this.onStateChange
+      ? this.database.prepare("SELECT state FROM tasks WHERE id = ?").get(task.id) as { state: Task["state"] } | undefined
+      : undefined;
     const { doc, rowid } = this.write({ ...task, createdAt: task.createdAt ?? now(), queueSequence: undefined });
-    return { ...doc, queueSequence: rowid };
+    const saved = { ...doc, queueSequence: rowid };
+    if (this.onStateChange && before?.state !== saved.state) this.onStateChange(saved, before?.state ?? null);
+    return saved;
   }
 
   override get(id: string): Task | null {
@@ -204,6 +212,12 @@ export function createRepos(db: Db, defaultProvider: DefaultProvider = "none", p
       updated_at: s.updatedAt ?? now(),
     })),
     skillVersions: new SkillVersionsRepo(db),
+    styleGuides: new JsonStore<StyleGuideRecord>(db, "style_guides", StyleGuideRecord, (s) => ({
+      name: s.name,
+      is_default: s.isDefault ? 1 : 0,
+      created_at: s.createdAt ?? now(),
+      updated_at: s.updatedAt ?? now(),
+    })),
     activity: new JsonStore<ActivityEntry>(db, "activity", ActivityEntry, (a) => ({
       project_id: a.projectId,
       type: a.type,

@@ -410,6 +410,15 @@ export function ensureProjectRowRevision(db: Db): void {
  */
 export function ensureGraphics(db: Db): void {
   ensureColumn(db, "projects", "style_guide", "ALTER TABLE projects ADD COLUMN style_guide TEXT;");
+  db.exec(`CREATE TABLE IF NOT EXISTS style_guides (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS style_guides_name ON style_guides(name COLLATE NOCASE);`);
 }
 
 /** These derived lookups can coexist with any library that has task events and transcripts.

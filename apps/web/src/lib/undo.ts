@@ -106,9 +106,9 @@ const stepWord = (step: UndoStep) => step.kind === "keep" || step.kind === "keep
 export async function undoLast(projectId: string, project: { changes: readonly Change[]; tasks: readonly Task[] },
   revert: (version: string) => Promise<void>, uncall?: (step: CallStep) => void): Promise<UndoStep | undefined> {
   const state = useUndoStore.getState();
-  if (state.undoing !== undefined) return;
+  if (state.undoing !== undefined) { appLog("action", "undo-skipped", { project: projectId, reason: "busy" }); return; }
   const step = lastStep(state.steps, projectId);
-  if (!step) return;
+  if (!step) { appLog("action", "undo-skipped", { project: projectId, reason: "empty" }); return; }
   useUndoStore.setState({ undoing: step.id, error: undefined });
   try {
     if (step.kind === "keep") unkeepEdits(projectId, step.threadId, step.refs);
