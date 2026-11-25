@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { buildSystemPrompt, type EarlierRequest } from "@scarlet/mcp/prompt";
-import { agentCapabilities, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, isStyleGuideEdit, PROJECT_EDIT_TASK_KINDS, taskRunKind, workspaceCapabilities, type Skill, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
+import { agentCapabilities, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, isStyleGuideEdit, PROJECT_EDIT_TASK_KINDS, requestText, taskRunKind, workspaceCapabilities, type Skill, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { notFound } from "../errors.js";
@@ -11,7 +11,7 @@ import { learningCheckContext } from "./learnings.js";
 import { assistantSkills } from "./skills.js";
 import { resolvePromptStyleGuides, styleGuideAssetPaths, styleGuideEdits } from "./styleGuides.js";
 import { runAttempts, runRoot } from "./runAttempts.js";
-import { handOffTypes } from "./taskModels.js";
+import { handOffTypes, requestOf } from "./taskModels.js";
 import { answerHandoffInstruction, recoveryInstruction, savedChanges } from "./taskRecap.js";
 import { resolveTimeline } from "./timeline.js";
 
@@ -153,7 +153,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     ...graphicsContext(ctx, project, task, activeSkills),
     // The kinds of work the editor gave other models, for a request to hand off; what a hand-off is doing, for one.
     ...(handOff && c.handOff ? { handOff: { name: c.handOff.name, description: c.handOff.description,
-      request: (c.checksTaskId && ctx.repos.tasks.get(c.checksTaskId)?.context.message) || c.message || task.instruction } }
+      request: requestText(requestOf(ctx, task)) } }
       : { taskModels: handOffTypes(ctx, task) }),
   });
   // Whether the host launches the CLI with its own to-do tool on, with its shell, file and web tools (every request:

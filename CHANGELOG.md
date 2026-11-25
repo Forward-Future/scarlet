@@ -60,6 +60,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Changing a project's settings while its video is being edited no longer leaves the old cut on screen when the new timeline takes a moment to load: Scarlet loads it again by itself.
 - An edit set to carry on once its transcripts are ready that can't start again now stops waiting after a few tries, so you can carry on yourself, instead of waiting forever.
 - A Scarlet agent whose agent.json was edited by hand to a time limit or task count that isn't a positive number now uses the usual limits, instead of taking no requests or stopping each run as soon as it starts.
+- When the chat's model hands work to the model you chose for it in Task models, that model now hears what you asked in your own words, not only the chat model's brief.
 
 ## November 23, 2026
 
