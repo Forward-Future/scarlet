@@ -5,7 +5,7 @@
  */
 import { basename, dirname, join } from "node:path";
 import { z } from "zod/v3";
-import type { AgentCapabilities, ScarletClient, Task } from "@scarlet/shared";
+import { styleGuideEditTarget, TaskStyleGuideDraft, type AgentCapabilities, type AgentId, type ScarletClient, type Task } from "@scarlet/shared";
 import type { Author } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 import { errorText, json, type ToolRegistrar, type ToolResult } from "./tool-result.js";
@@ -14,6 +14,8 @@ interface GraphicsDeps {
   tool: ToolRegistrar;
   client: ScarletClient;
   projectId: string;
+  taskId?: string;
+  agent?: AgentId | string;
   task?: Task;
   author: Author;
   caps: Pick<AgentCapabilities, "files" | "images" | "shell">;
@@ -192,16 +194,28 @@ export function registerGraphics(deps: GraphicsDeps) {
 
   tool(
     "attachment_read",
-    `Read a file the editor attached to a request in this project, by its attachment id, or with styleGuide the project's style guide, when the prompt has a Style guide section (a project without one has nothing to read). Text comes back as text; ${deps.caps.images ? "a picture comes back as the picture, and a PDF as pictures of its pages (pages, up to 8 a call; default the first 6) with pageCount when the file says it" : "a picture or a PDF comes back as its name, size and path only"}. A font file comes back as its path, for an @font-face rule.`,
+    `Read a file the editor attached to a request in this project (attachmentId), a file attached to a library style guide (styleGuideId + assetId), or with styleGuide the project's style guide. Text comes back as text; ${deps.caps.images ? "a picture comes back as the picture, and a PDF as pictures of its pages (pages, up to 8 a call; default the first 6) with pageCount when the file says it" : "a picture or a PDF comes back as its name, size and path only"}. A font file comes back as its path, for an @font-face rule.`,
     {
       attachmentId: z.string().optional(),
       styleGuide: z.boolean().optional(),
+      styleGuideId: z.string().optional().describe("Library style guide id containing assetId"),
+      assetId: z.string().optional().describe("Asset id inside a library style guide"),
       pages: z.array(z.number().int().positive()).max(8).optional().describe("PDF pages to read, from 1"),
     },
-    async ({ attachmentId, styleGuide, pages }) => {
-      if (!attachmentId === !styleGuide) return errorText("Name an attachment or the style guide.");
-      const doc = await client.readDocument(deps.projectId,
-        { attachmentId, styleGuide, ...(deps.caps.images && pages && { pages }), ...(!deps.caps.images && { pages: [] }) });
+    async ({ attachmentId, styleGuide, styleGuideId, assetId, pages }) => {
+      const targetGuideId = styleGuideId ?? (assetId ? deps.task?.context.styleGuideId : undefined);
+      const readingStyleAsset = Boolean(assetId && targetGuideId);
+      const modes = Number(Boolean(attachmentId)) + Number(Boolean(styleGuide)) + Number(readingStyleAsset);
+      if (modes !== 1) return errorText("Name an attachmentId, styleGuide, or styleGuideId + assetId.");
+      const requestedPages = deps.caps.images ? pages : [];
+      const doc = readingStyleAsset
+        ? await client.readStyleGuideAsset(targetGuideId!, assetId!, requestedPages)
+        : await client.readDocument(deps.projectId, {
+            attachmentId,
+            styleGuide,
+            ...(deps.caps.images && pages && { pages }),
+            ...(!deps.caps.images && { pages: [] }),
+          });
       const { text: body, pages: shots, image, ...about } = doc;
       const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify({ ...about, ...(shots && deps.caps.images && { pagesShown: shots.map(p => p.page) }) }) }];
       if (body !== undefined) content.push({ type: "text", text: body });
@@ -210,4 +224,71 @@ export function registerGraphics(deps: GraphicsDeps) {
       return { content };
     },
   );
+
+  // -- library style guide authoring (only inside style_guide_edit tasks) ---
+
+  const editingGuide = deps.task && deps.task.id === deps.taskId && (!deps.agent || deps.task.agent === deps.agent)
+    ? styleGuideEditTarget(deps.task, deps.projectId)
+    : undefined;
+  if (deps.task && editingGuide) {
+    const taskId = deps.task.id;
+    tool(
+      "style_guide_update",
+      "Save the updated one-line description and visual style rules (instructions) for this style guide. Include the complete rules that should stay as well as what changed.",
+      TaskStyleGuideDraft.shape,
+      async ({ description, instructions }) => {
+        const { styleGuide } = await client.saveTaskStyleGuideEdit(deps.projectId, taskId, {
+          styleGuideId: editingGuide.styleGuideId,
+          hostId: editingGuide.hostId,
+          ...(description !== undefined && { description }),
+          instructions,
+        });
+        return json({ styleGuideId: styleGuide.id, name: styleGuide.name, description: styleGuide.description });
+      },
+    );
+
+    tool(
+      "style_guide_preview_render",
+      "Draw a 16:9 visual style sheet preview (default 1920x1080) from a complete HTML/CSS page and save it as this style guide's live preview. Link attached fonts and logos by their exact absolute paths from the prompt. Returns missingFonts and installedFonts if any font failed to load (leaving the previous preview intact).",
+      {
+        html: z.string().min(1).max(512 * 1024).describe("Complete HTML document for the 16:9 style sheet preview"),
+        width: z.number().int().positive().max(3840).optional().describe("Default 1920"),
+        height: z.number().int().positive().max(2160).optional().describe("Default 1080"),
+        at: z.number().nonnegative().max(60).optional().describe("Seconds into any animation to capture; default 0.5"),
+      },
+      async ({ html, width, height, at }) => {
+        const res = await client.renderStyleGuidePreview(editingGuide.styleGuideId, { html, width, height, at });
+        const summary = {
+          saved: !res.missingFonts.length,
+          width: res.width,
+          height: res.height,
+          ...(res.styleGuide?.preview && { updatedAt: res.styleGuide.preview.updatedAt }),
+          ...(res.missingFonts.length && {
+            missingFonts: res.missingFonts,
+            ...(res.installedFonts && { installedFonts: res.installedFonts }),
+            next: "Preview not updated. Use an installed font or ask the editor for the custom font file.",
+          }),
+          ...(res.problems.length && { problems: res.problems }),
+        };
+        const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify(summary) }];
+        if (deps.caps.images && res.jpeg) content.push({ type: "image", mimeType: "image/jpeg", data: res.jpeg });
+        return { content };
+      },
+    );
+
+    tool(
+      "style_guide_preview_get",
+      "Read this style guide's current preview HTML (and preview picture when supported) so you can revise it without losing elements the editor already likes.",
+      {},
+      async () => {
+        const src = await client.styleGuidePreviewSource(editingGuide.styleGuideId);
+        const content: ToolResult["content"] = [
+          { type: "text", text: JSON.stringify({ width: src.width, height: src.height, updatedAt: src.updatedAt }) },
+          { type: "text", text: src.html },
+        ];
+        if (deps.caps.images && src.jpeg) content.push({ type: "image", mimeType: "image/jpeg", data: src.jpeg });
+        return { content };
+      },
+    );
+  }
 }

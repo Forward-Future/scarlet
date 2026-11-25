@@ -45,13 +45,13 @@ describe("choosing a transcription provider", () => {
   });
 
   /** As much of the engine as a provider reads: the transcription settings with their policy signal, keys and bundled programs. */
-  function engine(transcription: Partial<ServerSettings["transcription"]>, parts: { openaiKey?: string; whisperCli?: string; whisperGpu?: string; crisperAdapter?: string } = {}) {
+  function engine(transcription: Partial<ServerSettings["transcription"]>, parts: { openaiKey?: string; whisperCli?: string; whisperCliBundled?: boolean; whisperGpu?: string; crisperAdapter?: string } = {}) {
     const policy = new AbortController(), shutdown = new AbortController();
     const settings = vi.fn();
     const model = vi.fn(async (_signal: AbortSignal) => "bundled-model.bin");
     const ctx = {
       repos: { settings: { transcriptionPolicy: () => ({ settings: { provider: "none", openaiModel: "whisper-1", ...transcription }, signal: policy.signal, revision: 7 }) } },
-      paths: { root: dir }, env: { openaiKey: parts.openaiKey }, whisperCli: parts.whisperCli, whisperGpu: parts.whisperGpu, crisperAdapter: parts.crisperAdapter,
+      paths: { root: dir }, env: { openaiKey: parts.openaiKey }, whisperCli: parts.whisperCli, whisperCliBundled: parts.whisperCliBundled, whisperGpu: parts.whisperGpu, crisperAdapter: parts.crisperAdapter,
       whisperModel: { get: model }, shutdown: shutdown.signal, settings, log: vi.fn(),
     } as unknown as Ctx;
     return { ctx, policy, shutdown, settings, model };
@@ -256,6 +256,11 @@ describe("choosing a transcription provider", () => {
   it("snapshots the available provider with the settings' revision for an import", async () => {
     const local = engine({ provider: "whispercpp" }, { whisperCli: "/app/whisper-cli" });
     expect(await importTranscriptionPolicy(local.ctx)).toEqual({ provider: "whispercpp", revision: 7, signal: local.policy.signal });
+    // A dev fallback whisper-cli still qualifies for auto-transcription on import without claiming the bundled GPU lane.
+    onMachine("darwin", "arm64");
+    const devFallback = engine({ provider: "whispercpp" }, { whisperCli: "/opt/homebrew/bin/whisper-cli", whisperCliBundled: false });
+    expect(await importTranscriptionPolicy(devFallback.ctx)).toEqual({ provider: "whispercpp", revision: 7, signal: devFallback.policy.signal });
+    expect(getTranscriptionProvider(devFallback.ctx)).toMatchObject({ name: "whispercpp", localModel: "whispercpp", separateWhisperLane: false });
     expect((await importTranscriptionPolicy(engine({ provider: "openai" }).ctx)).provider).toBeUndefined();
     const paths = { provider: "whispercpp" as const, localModel: "custom" as const, whisperCppPath: process.execPath };
     expect((await importTranscriptionPolicy(engine(paths).ctx)).provider).toBe("whispercpp");

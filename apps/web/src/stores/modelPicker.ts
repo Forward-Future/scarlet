@@ -59,6 +59,8 @@ const safeStorage: StateStorage = {
 
 interface ModelPreferences {
   hidden: string[];
+  /** Models of a provider whose list is opt-in (`OPT_IN_PROVIDERS`) that the editor chose to show. */
+  shown: string[];
   favorites: string[];
   /** Last remembered effort & speed per model key (`${agent}:${model ?? ""}`). */
   tuningByModel: Record<string, ModelTuning>;
@@ -67,15 +69,34 @@ interface ModelPreferences {
   setModelTuning(key: string, tuning: ModelTuning): void;
 }
 
-/** Local to this editor's profile. Newly discovered models are visible by default. */
+/**
+ * Providers that offer hundreds of models: their models stay out of the selector until the editor shows the ones they
+ * want in Settings › Models (or stars one). Every other provider's models show until hidden.
+ */
+export const OPT_IN_PROVIDERS: readonly AgentId[] = ["openrouter"];
+
+const agentOfKey = (key: string) => key.slice(0, Math.max(0, key.indexOf(":"))) as AgentId;
+const optIn = (key: string) => OPT_IN_PROVIDERS.includes(agentOfKey(key));
+
+/** Whether the model with this key is left out of the selector. */
+export function isModelHidden(prefs: Pick<ModelPreferences, "hidden" | "shown" | "favorites">, key: string): boolean {
+  return optIn(key) ? !prefs.shown.includes(key) && !prefs.favorites.includes(key) : prefs.hidden.includes(key);
+}
+
+/** Local to this editor's profile. Newly discovered models are visible by default, except an opt-in provider's. */
 export const useModelPreferences = create<ModelPreferences>()(persist((set) => ({
   hidden: [],
+  shown: [],
   favorites: [],
   tuningByModel: {},
-  setVisible: (keys, visible) => set((state) => ({
-    hidden: visible ? state.hidden.filter((k) => !keys.includes(k)) : [...new Set([...state.hidden, ...keys])],
-    favorites: visible ? state.favorites : state.favorites.filter((k) => !keys.includes(k)),
-  })),
+  setVisible: (keys, visible) => set((state) => {
+    const optKeys = keys.filter(optIn), rest = keys.filter(k => !optIn(k));
+    return {
+      hidden: visible ? state.hidden.filter((k) => !rest.includes(k)) : [...new Set([...state.hidden, ...rest])],
+      shown: visible ? [...new Set([...state.shown, ...optKeys])] : state.shown.filter((k) => !optKeys.includes(k)),
+      favorites: visible ? state.favorites : state.favorites.filter((k) => !keys.includes(k)),
+    };
+  }),
   toggleFavorite: (key) => set((state) => ({
     favorites: state.favorites.includes(key) ? state.favorites.filter((k) => k !== key) : [...state.favorites, key],
     hidden: state.hidden.filter((k) => k !== key),

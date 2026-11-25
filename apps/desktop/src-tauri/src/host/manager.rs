@@ -11,9 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::api::Api;
 use super::workspace::claude_config_dir;
-use super::{detect, Emit, HostIdSink, HostRuntime, HostStatus, McpLauncher, Undelivered};
+use super::{detect, providers, Emit, HostIdSink, HostRuntime, HostStatus, McpLauncher, Undelivered};
 use crate::config::{AppConfig, Paths};
-use crate::util::{child_env, human_duration};
+use crate::util::human_duration;
 
 fn host_name() -> String {
     let h = hostname::get().map(|h| h.to_string_lossy().to_string()).unwrap_or_else(|_| "scarlet-desktop".into());
@@ -137,14 +137,16 @@ impl HostManager {
 
     pub fn stop_blocking(&self) {
         tauri::async_runtime::block_on(async {
-            let _ = tokio::time::timeout(Duration::from_secs(20), self.stop()).await;
+            if tokio::time::timeout(Duration::from_secs(20), self.stop()).await.is_err() {
+                log::warn!("[desktop] host-stop-timeout elapsedMs=20000");
+            }
         });
     }
 
     /// Re-detect installed CLIs and push the result to the server.
     pub async fn refresh_agents(&self) -> HostStatus {
         let rt = self.runtime.lock().await.clone();
-        let env = child_env(&self.paths.home);
+        let env = providers::host_env(&self.paths);
         let mut status = match rt {
             Some(rt) => {
                 let catalog_error = rt.detect_agents(&env).await;
@@ -163,9 +165,16 @@ impl HostManager {
             }
             None => {
                 let models = self.config.lock().unwrap().models.clone();
-                let mut agents = detect::detect(&env, &self.paths.home, &models).await;
                 let mcp = self.mcp.lock().unwrap().clone();
-                if let Some(launcher) = &mcp { launcher.load_catalogs(&mut agents, &env, &self.paths.custom_claude_models(), &self.paths.custom_gemini_models()).await; }
+                let cli_env = providers::cli_env(&env);
+                let clis = async {
+                    let mut agents = detect::detect(&cli_env, &self.paths.home, &models).await;
+                    if let Some(launcher) = &mcp { launcher.load_catalogs(&mut agents, &cli_env, &self.paths.custom_claude_models(), &self.paths.custom_gemini_models()).await; }
+                    agents
+                };
+                let (mut agents, extra) = tokio::join!(clis, providers::detect(&env, &models));
+                let claude = agents.iter().any(|a| a.id == "claude" && a.installed);
+                agents.extend(providers::through_claude(extra, claude));
                 HostStatus { agents, mcp_command: mcp.as_ref().map(|m| m.describe()), ..Default::default() }
             }
         };

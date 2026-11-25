@@ -52,6 +52,7 @@ function sharedContext(asker: Task): Task["context"] {
     ...(c.end !== undefined && { end: c.end }), ...(c.clipIds && { clipIds: c.clipIds }), ...(c.markedRange && { markedRange: c.markedRange }),
     ...(c.messageTime && { messageTime: c.messageTime }), ...(c.attachments && { attachments: c.attachments }),
     ...(c.pictureMarks && { pictureMarks: c.pictureMarks }), ...(c.skillIds && { skillIds: c.skillIds }),
+    ...(c.styleGuideIds && { styleGuideIds: c.styleGuideIds }),
     ...(c.dialogueOperation && { dialogueOperation: c.dialogueOperation }), ...(c.branch && { branch: c.branch }),
     ...(c.message && { message: c.message }),
   };

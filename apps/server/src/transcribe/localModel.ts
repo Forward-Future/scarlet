@@ -1,9 +1,10 @@
 import { hashFile } from "@scarlet/render";
 import type { LocalModelStatus } from "@scarlet/shared";
 import { createHash, randomUUID } from "node:crypto";
-import { createWriteStream, readFileSync, statSync, type WriteStream } from "node:fs";
+import { accessSync, constants, createWriteStream, readFileSync, statSync, type WriteStream } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { isSea } from "node:sea";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
@@ -57,6 +58,43 @@ export function bundledWhisperCli(env: NodeJS.ProcessEnv, avx2 = canRunWhisperAv
       const info = statSync(file, { throwIfNoEntry: false });
       if (info?.isFile() && info.size > 0) return file;
     }
+  }
+}
+
+function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  if (process.platform !== "win32") return env[name];
+  const lower = name.toLowerCase();
+  const key = Object.keys(env).find(k => k.toLowerCase() === lower);
+  return key ? env[key] : undefined;
+}
+
+function usableExecutable(file: string): boolean {
+  try {
+    const info = statSync(file);
+    if (!info.isFile() || info.size === 0) return false;
+    if (process.platform !== "win32") accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fallback `whisper-cli` for development checkouts and fresh worktrees where `build.rs` wrote a zero-byte placeholder.
+ * Packaged SEA builds never fall back here: they must use the `whisper-cli` bundled beside the engine.
+ */
+export function devWhisperCli(env: NodeJS.ProcessEnv, sea = isSea()): string | undefined {
+  if (sea) return;
+  const explicit = envValue(env, "SCARLET_WHISPER_CLI")?.trim();
+  if (explicit && usableExecutable(explicit)) return explicit;
+  const pathValue = envValue(env, "PATH");
+  if (!pathValue) return;
+  const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  for (const raw of pathValue.split(delimiter)) {
+    const dir = raw.replace(/^"|"$/g, "").trim();
+    if (!dir) continue;
+    const file = join(dir, name);
+    if (usableExecutable(file)) return file;
   }
 }
 

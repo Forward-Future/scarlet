@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use super::detect::cli_binary;
 use super::install::{install_env, install_failure_reason, install_spawn_options, npm_package, INSTALL_LOCK};
 use super::spawn::{find_on_path, spawn_lines, SpawnLinesOptions};
-use super::types::AgentAvailability;
+use super::types::{AgentAvailability, CLI_AGENTS};
 use crate::util::child_env;
 
 /// How often Scarlet looks for newer versions while it stays open.
@@ -154,7 +154,8 @@ pub fn offer(agent: &AgentAvailability, latest: Option<&str>, binary: Option<&Pa
 pub async fn offers(agents: &[AgentAvailability], env: &HashMap<String, String>) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
     for agent in agents {
-        let offer = if agent.installed && agent.version.is_some() {
+        // Ollama, LM Studio and OpenRouter aren't CLIs Scarlet updates.
+        let offer = if agent.installed && agent.version.is_some() && CLI_AGENTS.contains(&agent.id.as_str()) {
             let latest = latest_version(&agent.id).await;
             let binary = find_on_path(cli_binary(&agent.id), env).map(PathBuf::from);
             offer(agent, latest.as_deref(), binary.as_deref())

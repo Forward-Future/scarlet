@@ -216,3 +216,80 @@ it("adjusts an end by dragging its handle, landing on a cut's edge", async () =>
   // 666 s is two pixels past the end of the cut footage at 660 s.
   expect(marked).toHaveBeenCalledExactlyOnceWith({ start: 300, end: 660 });
 });
+
+it("shows a range pill with an × button directly above the marked range, hidden while dragging", async () => {
+  await show({ start: 300, end: 450 });
+  const pill = () => container.querySelector<HTMLElement>(".timeline-range-pill");
+  const clearBtn = () => container.querySelector<HTMLButtonElement>(".timeline-range-clear");
+  expect(pill()?.textContent).toBe("5:00 – 7:30");
+  expect(clearBtn()?.getAttribute("aria-label")).toBe("Clear marked range");
+  // While dragging a handle, the floating pill yields to the live range readout.
+  await press(".timeline-range-handle.is-end", 150);
+  await move(170);
+  expect(pill()).toBeNull();
+  await release(170);
+  expect(pill()).not.toBeNull();
+  // Clicking × clears the range without seeking or picking a moment on the timeline.
+  marked.mockClear();
+  seeks.length = picks.length = 0;
+  await act(async () => {
+    clearBtn()!.dispatchEvent(event("pointerdown", 125));
+    clearBtn()!.click();
+  });
+  expect(marked).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(seeks).toEqual([]);
+  expect(picks).toEqual([]);
+});
+
+it("clears the range on ruler double-click, right-click menu, Delete, Backspace, and Option/Alt+X", async () => {
+  await show({ start: 300, end: 450 });
+  // Double-clicking the ruler clears the range.
+  await act(async () => {
+    container.querySelector(".timeline-range-zone")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+  });
+  expect(marked).toHaveBeenLastCalledWith(undefined);
+
+  // Right-clicking outside the range does not open the range menu.
+  marked.mockClear();
+  await act(async () => {
+    container.querySelector(".timeline-slider")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 800, clientY: 30 }));
+  });
+  expect(document.querySelector('[role="menu"][aria-label="Marked range"]')).toBeNull();
+
+  // Right-clicking inside the range opens the menu; Esc closes just the menu without clearing the range.
+  await act(async () => {
+    container.querySelector(".timeline-slider")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 125, clientY: 30 }));
+  });
+  const menu = () => document.querySelector<HTMLElement>('[role="menu"][aria-label="Marked range"]');
+  expect(menu()).not.toBeNull();
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+  expect(menu()).toBeNull();
+  expect(marked).not.toHaveBeenCalled();
+
+  // Right-clicking the pill opens the menu, and clicking Clear range clears it.
+  await act(async () => {
+    container.querySelector(".timeline-range-pill")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 125, clientY: 5 }));
+  });
+  expect(menu()).not.toBeNull();
+  await act(async () => {
+    menu()!.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click();
+  });
+  expect(menu()).toBeNull();
+  expect(marked).toHaveBeenCalledExactlyOnceWith(undefined);
+
+  // Focused handles also accept Delete, Backspace, and Option/Alt+X (including macOS `≈` with code KeyX).
+  const end = container.querySelector<HTMLButtonElement>(".timeline-range-handle.is-end")!;
+  expect(end.title).toContain("Esc to clear");
+  for (const init of [
+    { key: "Delete" },
+    { key: "Backspace" },
+    { key: "x", altKey: true },
+    { key: "≈", code: "KeyX", altKey: true },
+  ]) {
+    marked.mockClear();
+    await act(async () => { end.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+    expect(marked).toHaveBeenCalledExactlyOnceWith(undefined);
+  }
+});

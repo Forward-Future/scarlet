@@ -26,6 +26,18 @@ export interface AgentConfig {
   maxParallel?: number;
   /** Default model per agent runtime. */
   models?: Partial<Record<string, string>>;
+  /** The extra model providers, run through Claude Code. Each also reads its environment variable (`resolveProviders`). */
+  providers?: ProvidersConfig;
+}
+
+/**
+ * Where the extra providers are, and whether each is switched off. A local server's address, else OLLAMA_HOST or
+ * LMSTUDIO_HOST, else its default; OpenRouter's key, else OPENROUTER_API_KEY. The file wins over the environment.
+ */
+export interface ProvidersConfig {
+  ollama?: { url?: string; disabled?: boolean };
+  lmstudio?: { url?: string; disabled?: boolean };
+  openrouter?: { apiKey?: string; disabled?: boolean };
 }
 
 export function scarletHome(env: NodeJS.ProcessEnv = process.env): string {

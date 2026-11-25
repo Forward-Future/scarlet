@@ -5,20 +5,36 @@
  * logs, host id, MCP command) live in DesktopDiagnostics on the Advanced tab, under ExportLogs.
  */
 import { useEffect, useRef, useState } from "react";
+import { isExtraProvider, type AgentAvailability } from "@scarlet/shared";
 import { desktop, isDesktop, type EngineStatus } from "../../lib/desktop";
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { fileBaseName, plural } from "../../lib/format";
 import { AGENT_LABEL, isConfiguredAgent } from "../../stores/hosts";
 import { AgentSignIn, AgentUpdate, authLabel, canSignIn, useLocalHost } from "./AgentSignIn";
 import { followDesktop } from "./followDesktop";
-import { InlineError, Loading, SectionTitle } from "../ui/primitives";
+import { Icon, InlineError, Loading, SectionTitle, Spinner } from "../ui/primitives";
 
 const ENGINE_LABEL: Record<EngineStatus["state"], string> = {
-  starting: "starting…",
-  ready: "running",
-  error: "error",
-  stopped: "stopped",
+  starting: "Starting…",
+  ready: "Running",
+  error: "Error",
+  stopped: "Stopped",
 };
+
+function engineKindLabel(kind: string | null) {
+  if (kind === "sidecar") return "Bundled engine";
+  if (kind === "dev") return "Dev engine (node)";
+  return kind ?? "";
+}
+
+function providerSummary(a: AgentAvailability): string {
+  if (isExtraProvider(a.id)) {
+    if (a.loggedIn === false) return "Invalid key";
+    const count = a.models?.length ?? 0;
+    return count ? plural(count, "model") : "No tool-capable models";
+  }
+  return authLabel(a);
+}
 
 /** Live engine + agent-host status from the desktop shell. */
 function useDesktopStatus() {
@@ -74,7 +90,7 @@ export function DesktopAgents({ onConnected }: { onConnected?: () => void }) {
   );
 }
 
-/** Advanced → Diagnostics: engine process, folders, logs, host id, MCP. */
+/** Advanced → Diagnostics: engine process, host status, providers, folders and technical details. */
 export function DesktopDiagnostics() {
   const [openError, setOpenError] = useState("");
   const { engine, host } = useDesktopStatus();
@@ -83,82 +99,148 @@ export function DesktopDiagnostics() {
     void desktop.openPath(path).catch(e => setOpenError(errorMessage(e)));
   };
 
+  const kind = engine ? engineKindLabel(engine.engineKind) : "";
+  const installed = host?.agents.filter(a => a.installed) ?? [];
+  const missing = host?.agents.filter(a => !a.installed) ?? [];
+  const technicalRows = engine ? [
+    engine.engine && { label: "Engine binary", value: engine.engine },
+    engine.logDir && { label: "Logs folder", value: engine.logDir },
+    host?.hostId && { label: "Host ID", value: host.hostId },
+    host?.mcpCommand && { label: "MCP command", value: host.mcpCommand },
+  ].filter((row): row is { label: string; value: string } => Boolean(row)) : [];
+
   return (
-    <div className="card p-5" id="desktop">
-      <SectionTitle
-        right={
-          engine && (
-            <span className="text-dim text-[11.5px]">
-              Scarlet {engine.version} · {engine.engineKind === "sidecar" ? "bundled engine" : engine.engineKind === "dev" ? "dev engine (node)" : engine.engineKind ?? ""}
-            </span>
-          )
-        }
-      >
-        Diagnostics
-      </SectionTitle>
+    <section className="card p-5 diag-card" id="desktop" aria-labelledby="diagnostics-heading">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 mb-3">
+        <h3 id="diagnostics-heading" className="text-[14px] font-semibold text-fg">Diagnostics</h3>
+        {engine && (
+          <span className="text-dim text-[12px] tnum">
+            Scarlet {engine.version}{kind ? ` · ${kind}` : ""}
+          </span>
+        )}
+      </div>
       {!engine ? (
-        <Loading />
+        <div className="flex items-center gap-2 py-6 text-[12.5px] text-muted">
+          <Spinner className="size-3.5" />
+          <span>Loading diagnostics…</span>
+        </div>
       ) : (
-        <dl className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-2 text-[12.5px]">
-          <dt className="text-muted">Engine</dt>
-          <dd className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className={`size-2 rounded-full ${engine.state === "ready" ? "bg-ok" : engine.state === "error" ? "bg-bad" : "bg-dim"}`} />
-              <span>{ENGINE_LABEL[engine.state]}</span>
-              {engine.url && <code className="font-mono text-muted truncate">{engine.url}</code>}
-              {engine.pid !== null && <span className="text-dim">pid {engine.pid}</span>}
-              {engine.restarts > 0 && <span className="text-dim">{plural(engine.restarts, "restart")}</span>}
+        <>
+          <dl className="diag-rows">
+            <div className="diag-row">
+              <dt>Engine</dt>
+              <dd>
+                <div className="diag-line">
+                  <span className="diag-status">
+                    <span className={`size-2 rounded-full shrink-0 ${engine.state === "ready" ? "bg-ok" : engine.state === "error" ? "bg-bad" : "bg-dim"}`} />
+                    <span>{ENGINE_LABEL[engine.state]}</span>
+                  </span>
+                  {(engine.url || engine.pid !== null || engine.restarts > 0) && (
+                    <span className="diag-meta">
+                      {engine.url && <code className="font-mono">{engine.url}</code>}
+                      {engine.pid !== null && <span>pid {engine.pid}</span>}
+                      {" "}
+                      {engine.restarts > 0 && <span>{plural(engine.restarts, "restart")}</span>}
+                    </span>
+                  )}
+                </div>
+                {engine.error && <InlineError>{engine.error}</InlineError>}
+              </dd>
             </div>
-            {engine.error && <InlineError>{engine.error}</InlineError>}
-            {engine.engine && (
-              <div className="text-dim font-mono text-[11px] truncate" title={engine.engine}>
-                {engine.engine}
+
+            <div className="diag-row">
+              <dt>Agent host</dt>
+              <dd>
+                {!host ? (
+                  <div className="flex items-center gap-2 text-[12.5px] text-muted">
+                    <Spinner className="size-3" />
+                    <span>Connecting…</span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="diag-line">
+                      <span className="diag-status min-w-0">
+                        <span className={`size-2 rounded-full shrink-0 ${host.connected ? "bg-ok" : "bg-dim"}`} />
+                        <span className="shrink-0">{host.connected ? "Connected" : host.configured ? "Connecting…" : "Not configured"}</span>
+                        {host.name && <span className="diag-host-name" title={host.name}>{host.name}</span>}
+                      </span>
+                      <span className="diag-activity">
+                        {host.running.length ? (
+                          <>Running {plural(host.running.length, "task")}: <code className="font-mono">{host.running.join(", ")}</code></>
+                        ) : "Idle"}
+                      </span>
+                    </div>
+                    {host.error && <InlineError>{host.error}</InlineError>}
+                  </>
+                )}
+              </dd>
+            </div>
+
+            {host && host.agents.length > 0 && (
+              <div className="diag-row">
+                <dt>Providers</dt>
+                <dd>
+                  {installed.length > 0 && (
+                    <ul className="diag-providers">
+                      {installed.map(a => (
+                        <li key={a.id}>
+                          <span className="diag-provider-name">
+                            <span className={`size-1.5 mx-[1px] rounded-full shrink-0 ${isConfiguredAgent(a) ? "bg-ok" : "bg-dim"}`} />
+                            <span>{AGENT_LABEL[a.id]}</span>
+                            {a.version && <span className="diag-version">v{a.version}</span>}
+                          </span>
+                          <span className="diag-provider-auth">{providerSummary(a)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {missing.length > 0 && (
+                    <div className={`text-[11.5px] text-dim ${installed.length > 0 ? "mt-2" : ""}`}>
+                      Not set up: {missing.map(a => AGENT_LABEL[a.id]).join(", ")}
+                    </div>
+                  )}
+                </dd>
               </div>
             )}
-          </dd>
 
-          <dt className="text-muted">Data folder</dt>
-          <dd className="flex items-center gap-2 min-w-0">
-            <code className="font-mono truncate" title={engine.dataDir}>
-              {engine.dataDir}
-            </code>
-            <button className="btn-quiet py-0.5" onClick={() => open(engine.dataDir)}>
-              Open
-            </button>
-            <button className="btn-quiet py-0.5" onClick={() => open(engine.logDir)}>
-              Logs
-            </button>
-          </dd>
-
-          {openError && <dd className="col-span-2"><InlineError>{openError}</InlineError></dd>}
-          <dt className="text-muted">Agent host</dt>
-          <dd className="min-w-0">
-            {!host ? (
-              <Loading />
-            ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  <span className={`size-2 rounded-full ${host.connected ? "bg-ok" : "bg-dim"}`} />
-                  <span>{host.connected ? "connected" : host.configured ? "connecting…" : "not configured"}</span>
-                  {host.hostId && <code className="font-mono text-dim">{host.hostId}</code>}
-                  {host.name && <span className="text-dim truncate">{host.name}</span>}
-                </div>
-                {host.error && <InlineError>{host.error}</InlineError>}
-                <div className="text-dim">{host.running.length ? `Running ${plural(host.running.length, "task")}: ${host.running.join(", ")}` : "Idle"}</div>
-                <div className="text-dim">
-                  {host.agents.map((a) => `${AGENT_LABEL[a.id]}: ${a.installed ? `${a.version ? `v${a.version}` : "installed"}, ${authLabel(a)}` : "not installed"}`).join(" · ")}
-                </div>
-                {host.mcpCommand && (
-                  <div className="text-dim font-mono text-[11px] truncate" title={host.mcpCommand}>
-                    MCP: {host.mcpCommand}
+            <div className="diag-row diag-row-center">
+              <dt>Data folder</dt>
+              <dd>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <code className="diag-path" title={engine.dataDir}>{engine.dataDir}</code>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button type="button" className="btn-ghost" title={engine.dataDir} onClick={() => open(engine.dataDir)}>
+                      Open
+                    </button>
+                    <button type="button" className="btn-ghost" title={engine.logDir} onClick={() => open(engine.logDir)}>
+                      Logs
+                    </button>
                   </div>
-                )}
-              </>
-            )}
-          </dd>
-        </dl>
+                </div>
+                {openError && <InlineError>{openError}</InlineError>}
+              </dd>
+            </div>
+          </dl>
+
+          {technicalRows.length > 0 && (
+            <details className="diag-disclosure">
+              <summary>
+                <span>Technical details</span>
+                <Icon name="chevron" size={12} />
+              </summary>
+              <dl className="diag-details">
+                {technicalRows.map(row => (
+                  <div key={row.label} className="diag-detail-row">
+                    <dt>{row.label}</dt>
+                    <dd><code>{row.value}</code></dd>
+                  </div>
+                ))}
+              </dl>
+            </details>
+          )}
+        </>
       )}
-    </div>
+    </section>
   );
 }
 

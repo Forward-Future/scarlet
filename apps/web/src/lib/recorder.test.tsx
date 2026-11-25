@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MicButton } from "../components/agent/MicButton";
 import { ProjectLayout } from "../components/shell/ProjectLayout";
 import { useUiStore } from "../stores/ui";
-import { startAppLog, stopAppLog } from "./appLog";
+import { flushAppLog, startAppLog, stopAppLog } from "./appLog";
 import { MAX_RECORD_SECONDS, useRecorder } from "./recorder";
 
 let root: Root | undefined;
@@ -131,9 +131,11 @@ it("says the recording failed and sends nothing when the recorder breaks part-wa
   expect(recorder).toMatchObject({ state: "error", error: "Recording failed.", recording: false });
   expect(heard).not.toHaveBeenCalled();
   expect(stopTrack).toHaveBeenCalled();
-  expect(lines).toEqual([expect.stringMatching(/^\[error\] .* microphone when=recording$/)]);
-  expect(levels).toEqual(["warn"]);
+  // The recording's own start goes first, written with the failure; the failure is a warning of its own.
+  expect(lines.filter(line => line.startsWith("[error]"))).toEqual([expect.stringMatching(/^\[error\] .* microphone when=recording$/)]);
+  expect(levels.at(-1)).toBe("warn");
   stopAppLog();
+  expect(lines.at(-1)).toMatch(/^\[voice\] .* stop reason=failed seconds=2 bytes=5$/);
   // The microphone can be tried again.
   await act(async () => { void recorder.start(); });
   await act(async () => { grant(stream); });
@@ -146,6 +148,8 @@ it("says the recording failed and sends nothing when the recorder breaks part-wa
 
 it("stops by itself at the longest recording it takes, and hands that over", async () => {
   vi.useFakeTimers();
+  const lines: string[] = [];
+  startAppLog(batch => lines.push(...batch));
   try {
     const { host } = await recording();
     await act(async () => { vi.advanceTimersByTime(30_000); });
@@ -154,14 +158,48 @@ it("stops by itself at the longest recording it takes, and hands that over", asy
     await act(async () => { vi.advanceTimersByTime((MAX_RECORD_SECONDS - 30) * 1000); });
     expect(heard).toHaveBeenCalledOnce();
     expect(heard.mock.calls[0]![0].seconds).toBeCloseTo(MAX_RECORD_SECONDS, 0);
+    flushAppLog();
+    expect(lines.at(-1)).toMatch(/^\[voice\] .* stop reason=cap seconds=120(\.\d+)? bytes=5$/);
     expect(recorder).toMatchObject({ state: "idle", elapsed: 0 });
     // The clock stopped with it.
     await act(async () => { vi.advanceTimersByTime(5000); });
     expect(recorder.elapsed).toBe(0);
     await act(async () => host.unmount());
   } finally {
+    stopAppLog();
     vi.useRealTimers();
   }
+});
+
+it("logs each recording's start and why it stopped: sent, too short, thrown away, or a start while one runs", async () => {
+  const lines: string[] = [];
+  startAppLog(batch => lines.push(...batch.map(line => line.replace(/^(\[\w+\]) \S+ \S+ /, "$1 "))));
+  const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+  const { host } = await recording();
+  await act(async () => { void recorder.start(); });
+  now.mockReturnValue(3000);
+  await act(async () => recorder.stop());
+  await act(async () => { void recorder.start(); });
+  await act(async () => { grant(stream); });
+  now.mockReturnValue(3200);
+  await act(async () => recorder.stop());
+  await act(async () => { void recorder.start(); });
+  await act(async () => { grant(stream); });
+  now.mockReturnValue(9000);
+  await act(async () => recorder.stop(true));
+  flushAppLog();
+  stopAppLog();
+  // The microphone's level meter is optional, and this window may have none to read.
+  expect(lines.filter(line => line.startsWith("[voice]") && !line.includes("meter-failed"))).toEqual([
+    "[voice] start",
+    "[voice] start-ignored reason=busy",
+    "[voice] stop reason=send seconds=2 bytes=5",
+    "[voice] start",
+    "[voice] stop reason=too-short seconds=0.2 bytes=5",
+    "[voice] start",
+    "[voice] stop reason=discard seconds=5.8 bytes=5",
+  ]);
+  await act(async () => host.unmount());
 });
 
 it("throws away a tap too short to be speech, and a recording the editor discards", async () => {

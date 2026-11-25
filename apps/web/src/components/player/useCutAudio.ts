@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { appLog, errorName } from "../../lib/appLog";
 import { usePlayerStore } from "../../stores/player";
 
 /** How long the output device stays open after the editor's last press or move with nothing playing. */
@@ -23,10 +24,17 @@ export function useCutAudio(enabled: boolean, nearby = false) {
     let close: (() => void) | undefined;
     let context: AudioContext | undefined;
     let rest: ReturnType<typeof setTimeout> | undefined;
+    // Without the device the first moments of play can stall. Said once each way it fails: a moving pointer asks again and again.
+    const warned = new Set<string>();
+    const failed = (stage: "create" | "resume", err: unknown) => {
+      if (warned.has(stage)) return;
+      warned.add(stage);
+      appLog("playback", "audio-context-failed", { stage, name: errorName(err) }, { level: "warn" });
+    };
     const open = () => {
       if (close) return;
       let made: AudioContext;
-      try { made = new AudioContext(); } catch { return; }
+      try { made = new AudioContext(); } catch (err) { failed("create", err); return; }
       const gain = made.createGain();
       gain.gain.value = 0;
       const clock = made.createOscillator();
@@ -42,7 +50,7 @@ export function useCutAudio(enabled: boolean, nearby = false) {
         void made.close().catch(() => {});
       };
     };
-    const resume = () => { if (context?.state === "suspended") void context.resume().catch(() => {}); };
+    const resume = () => { if (context?.state === "suspended") void context.resume().catch(err => failed("resume", err)); };
     const idle = () => {
       if (always.current || usePlayerStore.getState().playing) rest = setTimeout(idle, AUDIO_REST_MS);
       else close?.();

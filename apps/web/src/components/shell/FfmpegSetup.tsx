@@ -1,34 +1,41 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { create } from "zustand";
 import { desktop, isDesktop, type FfmpegStatus } from "../../lib/desktop";
 import { errorMessage, IS_MOCK } from "../../lib/client";
 import { InlineError, Spinner } from "../ui/primitives";
 
+/**
+ * One install for the whole app: the Projects banner, the card in Settings and the sample project button share it,
+ * so an install started on one page is still "Installing…" on the other, and can't be started twice.
+ */
+const useFfmpeg = create<{ status: FfmpegStatus | null; installing: boolean; error: string }>(() => ({ status: null, installing: false, error: "" }));
+
+/** FFmpeg is missing on this desktop, as far as Scarlet has checked. False before the check and off the desktop. */
+export function useFfmpegMissing(): boolean {
+  const status = useFfmpeg(s => s.status);
+  return isDesktop() && !IS_MOCK && !!status && !status.installed;
+}
+
 function useFfmpegSetup() {
   const active = isDesktop() && !IS_MOCK;
-  const [status, setStatus] = useState<FfmpegStatus | null>(null);
-  const [installing, setInstalling] = useState(false);
-  const [error, setError] = useState("");
+  const { status, installing, error } = useFfmpeg();
 
   useEffect(() => {
     if (!active) return;
-    let alive = true;
     void desktop.ffmpegStatus()
-      .then(s => { if (alive) setStatus(s); })
+      .then(status => useFfmpeg.setState({ status }))
       .catch(() => undefined);
-    return () => { alive = false; };
   }, [active]);
 
   const install = async () => {
-    if (installing) return;
-    setInstalling(true);
-    setError("");
+    if (useFfmpeg.getState().installing) return;
+    useFfmpeg.setState({ installing: true, error: "" });
     try {
-      const next = await desktop.ffmpegInstall();
-      setStatus(next);
+      useFfmpeg.setState({ status: await desktop.ffmpegInstall() });
     } catch (e) {
-      setError(errorMessage(e));
+      useFfmpeg.setState({ error: errorMessage(e) });
     } finally {
-      setInstalling(false);
+      useFfmpeg.setState({ installing: false });
     }
   };
 
@@ -44,7 +51,7 @@ export function FfmpegSetupBanner() {
   if (!active || !status || status.installed) return null;
 
   return (
-    <section className="card p-4 mb-5 flex flex-wrap items-center justify-between gap-4" role="region" aria-label="Video tools setup">
+    <section className="card ffmpeg-banner p-4 mb-5 flex flex-wrap items-center justify-between gap-4" role="region" aria-label="Video tools setup">
       <div className="min-w-0 space-y-1">
         <h2 className="text-[14px] font-medium text-fg">Install FFmpeg to import and export video</h2>
         <p className="text-[12.5px] text-muted">

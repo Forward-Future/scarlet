@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 use crate::util::{js_len, js_slice_prefix};
 
 pub const CLI_AGENTS: [&str; 3] = ["claude", "codex", "gemini"];
+/// Model servers whose runs go through Claude Code (`host::providers`). Not CLIs: nothing installs, signs in to or
+/// updates them, and they have no subscription quota.
+pub const EXTRA_PROVIDERS: [&str; 3] = ["ollama", "lmstudio", "openrouter"];
 
 // ---------------------------------------------------------------------------
 // Agents & hosts

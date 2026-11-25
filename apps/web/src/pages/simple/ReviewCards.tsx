@@ -13,7 +13,7 @@ import { taskModelName } from "../../components/shell/TaskModelsSettings";
 import { useHostsStore } from "../../stores/hosts";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
-import { useHotkeys } from "../../lib/hotkeys";
+import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
 import { editKey } from "../../lib/keptEdits";
 import type { Call, CutChoice, Revision } from "../../lib/passCalls";
 import { isRecheck, type Thread } from "../../lib/threads";
@@ -134,14 +134,34 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
   </section>;
 }
 
-export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPassNo, editPlace, flaggedCount, editDid, selectedMoment,
+/** A slim card for an edit Scarlet is currently revising (or waiting on an answer for), in the beta layout. */
+export function WorkingEditCard({ label, status, asking, onStop, onAnswer }: {
+  label: string;
+  status: string;
+  asking?: boolean;
+  onStop?(): void;
+  onAnswer?(): void;
+}) {
+  return <section className="edit-card is-working" role="region" aria-label="Edit in progress">
+    <div className="edit-card-bar working-card-bar">
+      <span className={`working-card-badge is-ring${asking ? " is-ask" : ""}`} aria-hidden="true" />
+      <span className="working-card-title" title={label}>{label}</span>
+      <span className={`working-card-status${asking ? " is-ask" : ""}`} role="status">· {status}</span>
+      <span className="working-card-actions">
+        {asking && onAnswer && <button type="button" className="working-card-btn is-ask" onClick={letGo(onAnswer)}>Answer</button>}
+        {onStop && <button type="button" className="working-card-btn" onClick={letGo(onStop)}>Stop</button>}
+      </span>
+    </div>
+  </section>;
+}
+
+export function AppliedEditCard({ projectId, focusThread, reviewingEdit, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
   cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject, madeBy }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
-  shownPassNo?: string;
   editPlace: number;
   flaggedCount: number;
   editDid?: ReactNode;
@@ -189,10 +209,8 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
     {/* Whose footage is playing, and nothing else: the lit icon in the row under it is the way back, and names its key. */}
     {visiting && <PlayingTakenOut at={visiting.at} />}
     <div className="edit-card-bar">
-      {/* One the pass still waits on leads with its number, as on its line in the chat and its dot; its place among the
-          ones still to check is on hover. Any other flagged edit leads with that place. */}
-      {shownPassNo ? <span className="edit-card-count" title={editPlace >= 0 ? `${editPlace + 1} of ${flaggedCount} still to check` : undefined}>{shownPassNo}</span>
-        : editPlace >= 0 && <span className="edit-card-count" title="Edits still to check">{editPlace + 1} of {flaggedCount}</span>}
+      {/* A flagged edit still to check leads with its place among the ones that are: nothing else says how many are left. */}
+      {editPlace >= 0 && <span className="edit-card-count" title="Edits still to check">{editPlace + 1} of {flaggedCount}</span>}
       {/* The note explains the choice and includes any cue for the editor to check. */}
       {/* It's on up to two lines, so an edit with a short note is a single line. A clipped note opens on a click. */}
       {editDid ? <div className="edit-card-text">{editDid}<EditNote key={editKey(reviewingEdit)} text={editNote(reviewingEdit, !!reviewRange)} /></div>
@@ -203,7 +221,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
         : !beforeCut && shownKind && <span className={reviewingEdit.kind === "restore" ? "edit-card-length is-added" : "edit-card-length is-kind"}>{shownKind}</span>}
       {/* Scarlet asks the editor to look or listen at a part of the video, which the timeline marks. It is a pill like the
           edit's kind, in amber: a press plays just that part, and its times are on hover. */}
-      {reviewRange && <button type="button" className="edit-card-length is-check" onClick={onPlayCheck}
+      {reviewRange && <button type="button" className="edit-card-length is-check" onClick={e => { blurOnPointerClick(e); onPlayCheck(); }}
         title={`Play the part to check, ${checkSpan(reviewRange)}`}>Check</button>}
       {madeBy && <MadeBy by={madeBy} />}
     </div>
@@ -244,15 +262,15 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   </section>;
 }
 
-export function CallCard({ projectId, pass, openCall, listening, callNum, callAt, callHistory, callWords, callLength, callKey,
+export function CallCard({ projectId, pass, openCall, listening, callAt, callHistory, callWords, callLength, callKey,
   callScriptOpen, media, conflict, heard, visit, decideError, placing, stagedOnError, onRetryStagedOn, workspaceActive,
   onToggleSide, onToggleScript, openCallBack, callRun, onAnswerCut, choice, deciding, onDecide, onRevise }: {
   projectId: string;
   pass: Change;
   openCall: Call;
   listening: Listening;
-  callNum?: number;
-  callAt?: number;
+  /** Where the cut is, as the clock says it: "2:47", or "2:47.120" beside another call in the same second. */
+  callAt?: string;
   callHistory: readonly Revision[];
   callWords?: { timeline: Timeline; range: TimeRange };
   callLength: string;
@@ -282,9 +300,8 @@ export function CallCard({ projectId, pass, openCall, listening, callNum, callAt
     {visit?.side === "before" && <PlayingTakenOut at={visit.label} />}
     {(decideError || pass.error) && <p className="text-bad" role="alert">{decideError || pass.error}</p>}
     <div className="edit-card-bar">
-      {/* The call's number, the same as on its line in the chat and its dot on the timeline. */}
-      {/* Hovered, it says where the cut is in the video. */}
-      <span className="edit-card-count" title={callAt !== undefined ? `Cut at ${clockLabel(callAt)}` : undefined}>Cut {callNum}</span>
+      {/* Where the cut is in the video, the same as on its row in the chat and its tag in the box. */}
+      <span className="edit-card-count">{callAt !== undefined ? `Cut ${callAt}` : "Cut"}</span>
       {callHistory.length > 0 && <EditVersion n={callHistory.length + 1}
         title={`v${callHistory.length}: ${callHistory.at(-1)!.reason ?? "Scarlet’s earlier version."}${callHistory.at(-1)!.note ? `\nYou: “${callHistory.at(-1)!.note}”` : ""}`} />}
       {/* What Keep would take out, struck, over Scarlet's reason. A revision that leaves the footage in has no such line. */}

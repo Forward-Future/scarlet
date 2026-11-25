@@ -15,6 +15,7 @@ import { DialogSurface, EmptyState, ErrorState, InlineError, Loading, Modal } fr
 import { BootSplash, startup } from "./BootSplash";
 import { DesktopAgents } from "./DesktopSettings";
 import { ModelSettings } from "./ModelSettings";
+import { ProviderSettings } from "./ProviderSettings";
 import { ProjectSettingsDrawer } from "./ProjectSettingsDrawer";
 
 const SkillCreator = lazy(async () => ({ default: (await import("../../pages/SkillEditorPage")).SkillEditorPage }));
@@ -167,7 +168,7 @@ export function ProjectLayout() {
       <ProjectSettingsDrawer onDeleted={() => navigate("/")} />
       <Modal open={!!setup} onClose={closeSetup} title={setup === "models" ? "Choose models" : "Sign in"} width={560}
         footer={<button className="btn-primary" onClick={closeSetup}>Back to project</button>}>
-        {setup === "models" ? <ModelSettings onSignIn={() => useUiStore.getState().setAgentSetupOpen(true)} /> : <DesktopAgents onConnected={closeSetup} />}
+        {setup === "models" ? <div className="space-y-4"><ModelSettings onSignIn={() => useUiStore.getState().setAgentSetupOpen(true)} /><ProviderSettings /></div> : <DesktopAgents onConnected={closeSetup} />}
       </Modal>
     </div>
   );

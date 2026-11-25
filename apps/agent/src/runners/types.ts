@@ -1,4 +1,5 @@
 import { planText, type AgentEffort, type AgentId, type AgentUsage, type PlanStep, type SubscriptionQuota } from "@scarlet/shared";
+import type { ProvidersConfig } from "../config.js";
 
 export type RunnerEventType = "log" | "tool" | "question" | "plan" | "result" | "error";
 
@@ -80,6 +81,13 @@ export interface RunAgentOptions {
   /** Override the CLI executable (tests, or a non-PATH install). */
   bin?: string;
   env?: NodeJS.ProcessEnv;
+  /** The extra providers' addresses and key from agent.json, for an Ollama, LM Studio or OpenRouter run. */
+  providers?: ProvidersConfig;
+  /**
+   * Variables Claude Code takes from its `--settings` flag, which outranks the user's own settings files: a provider
+   * run's address and model, so a user's `env` block can't send it elsewhere. Never a secret: it is on the command line.
+   */
+  settingsEnv?: Record<string, string>;
 }
 
 export interface RunAgentResult {

@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import * as client from "../lib/client";
 import { api } from "../lib/client";
+import * as desktopModule from "../lib/desktop";
 import { desktop } from "../lib/desktop";
 import { dropTargets } from "../lib/dropTargets";
 import { pendingImports } from "../lib/pendingImports";
@@ -653,6 +654,78 @@ it("shows one window-wide update on Projects while building and when ready", asy
     await act(() => root.unmount());
     container.remove();
     useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("offers Try a sample project on an empty library, opens it on success, and reports errors inline", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const db = buildDb();
+  const sample = { ...db.projects.find(p => p.id === PRJ)!, id: "prj_sample", name: "Sample project" };
+  const createSample = vi.fn<() => Promise<typeof sample>>()
+    .mockRejectedValueOnce(new Error("Install FFmpeg first to create the sample project."))
+    .mockResolvedValueOnce(sample);
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  useProjectStore.setState({ list: [], listStatus: "ready", createSampleProject: createSample });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text)!;
+  try {
+    await act(async () => root.render(<MemoryRouter><Routes>
+      <Route path="/" element={<ProjectsPage />} />
+      <Route path="/p/:id" element={<p>Opened sample workspace</p>} />
+    </Routes></MemoryRouter>));
+    expect(button("Try a sample project")).toBeTruthy();
+    await act(async () => button("Try a sample project").click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Install FFmpeg first");
+    await act(async () => button("Try a sample project").click());
+    expect(createSample).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Opened sample workspace");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("waits to offer the sample project until FFmpeg is installed, since the sample clip is made with it", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const db = buildDb();
+  const missing = { installed: false, canInstall: true, installDir: "/Users/editor/.local/bin", ffmpegPath: null, ffprobePath: null };
+  vi.spyOn(desktopModule, "isDesktop").mockReturnValue(true);
+  vi.spyOn(desktop, "ffmpegStatus").mockResolvedValue(missing);
+  vi.spyOn(desktop, "ffmpegInstall").mockResolvedValue({ ...missing, installed: true, ffmpegPath: "/Users/editor/.local/bin/ffmpeg", ffprobePath: "/Users/editor/.local/bin/ffprobe" });
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  useProjectStore.setState({ list: [], listStatus: "ready" });
+  // On the desktop an empty library first asks to sign in to a plan; this editor chose to look around first.
+  const previousUi = useUiStore.getState().signInLater;
+  useUiStore.setState({ signInLater: true });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text);
+  try {
+    await act(async () => root.render(<MemoryRouter><ProjectsPage /></MemoryRouter>));
+    await vi.waitFor(() => expect(button("Install FFmpeg")).toBeTruthy());
+    expect(button("Try a sample project")).toBeUndefined();
+    await act(async () => button("Install FFmpeg")!.click());
+    expect(button("Install FFmpeg")).toBeUndefined();
+    expect(button("Try a sample project")).toBeTruthy();
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    useUiStore.setState({ signInLater: previousUi });
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   }

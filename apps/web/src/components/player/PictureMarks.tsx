@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { PictureMark, PictureMarkKind } from "@scarlet/shared";
+import { appLog } from "../../lib/appLog";
 import { blurOnPointerClick, isInEditableElement } from "../../lib/hotkeys";
 import { player } from "../../lib/player";
 import { usePlayerStore } from "../../stores/player";
@@ -74,7 +75,7 @@ const TOOLS: { tool: PictureMarkKind; label: string; key: string; description: s
 
 const UNDO_KEY = typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh") ? "⌘Z" : "Ctrl+Z";
 const ACTIONS: Record<"undo" | "clear", MarkToolTip> = {
-  undo: { id: "undo", label: "Undo", key: UNDO_KEY, description: "Remove the last mark from this frame." },
+  undo: { id: "undo", label: "Undo", key: UNDO_KEY, description: "Take back the last mark, or put a moved mark back." },
   clear: { id: "clear", label: "Clear marks", description: "Remove all marks from this frame." },
 };
 
@@ -109,7 +110,7 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
   useEffect(() => {
     const playedOn = playing && !wasPlaying.current;
     wasPlaying.current = playing;
-    if (marking && (playedOn || !sameVideo)) usePictureMarksStore.getState().stop();
+    if (marking && (playedOn || !sameVideo)) usePictureMarksStore.getState().stop(playedOn ? "play" : "video");
     if (!marking || playing || !sameVideo) {
       drawing.current = undefined;
       setLive(undefined);
@@ -129,11 +130,11 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
       last = state.time;
       const current = usePictureMarksStore.getState().byProject[projectId];
       if (!current || Math.abs(state.time - current.time) >= 0.5 / Math.max(1, fps)) {
-        usePictureMarksStore.getState().stop();
+        usePictureMarksStore.getState().stop("seek");
       }
     });
   }, [marking, projectId, fps]);
-  useEffect(() => () => { if (usePictureMarksStore.getState().marking === projectId) usePictureMarksStore.getState().stop(); }, [projectId]);
+  useEffect(() => () => { if (usePictureMarksStore.getState().marking === projectId) usePictureMarksStore.getState().stop("leave"); }, [projectId]);
 
   // While marking (or dragging a mark), its keys come first, unless the editor is typing: Esc cancels a drag or leaves, ⌘Z takes the last mark off, D B P pick the tool.
   useEffect(() => {
@@ -141,24 +142,31 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
     const key = (e: KeyboardEvent) => {
       if (isInEditableElement(e.target) || e.isComposing) return;
       const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+      // A menu or a popover open over the picture closes on its own Esc first, and the marking stays.
+      if (e.key === "Escape" && plain && !dragging.current && document.querySelector('[role="menu"], [data-escape-owner], dialog[open], [role="dialog"]')) return;
+      let did: "stop" | "drop" | "undo" | "tool", tool: PictureMarkKind | undefined;
       if (e.key === "Escape" && plain) {
         if (dragging.current) {
           dragging.current = undefined;
           setDrag(undefined);
+          did = "drop";
         } else if (marking) {
           drawing.current = undefined;
           setLive(undefined);
-          usePictureMarksStore.getState().stop();
+          usePictureMarksStore.getState().stop("key");
+          did = "stop";
         } else return;
       } else if (marking) {
         const store = usePictureMarksStore.getState();
         const pick = plain && TOOLS.find(t => t.key.toLowerCase() === e.key.toLowerCase());
-        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") store.undo(projectId);
-        else if (pick) store.setTool(pick.tool);
+        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") { store.undo(projectId); did = "undo"; }
+        else if (pick) { store.setTool(pick.tool); did = "tool"; tool = pick.tool; }
         else return;
       } else return;
       e.preventDefault();
       e.stopImmediatePropagation();
+      // The key goes no further, so nothing after it hears or logs it: it is said here.
+      appLog("marks", "key", { key: did === "undo" ? "mod+z" : e.key, did, tool, count: usePictureMarksStore.getState().byProject[projectId]?.marks.length ?? 0 });
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
@@ -237,6 +245,7 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
           const [dx, dy] = dragDelta(move, e);
           if (move.moved || Math.hypot(dx, dy) >= DRAG_MIN) {
             usePictureMarksStore.getState().replace(projectId, move.index, translateMark(move.origin, dx, dy));
+            appLog("marks", "move", { kind: move.origin.kind, count: frame.marks.length, frame: frame.time });
           }
           return;
         }
@@ -250,7 +259,10 @@ export function PictureMarks({ projectId, version, mediaId, fps }: { projectId: 
         drawing.current = undefined;
         setLive(undefined);
         const mark = shape(line.start, [...line.points, at(e)]);
-        if (mark) usePictureMarksStore.getState().add(projectId, mark);
+        if (mark) {
+          usePictureMarksStore.getState().add(projectId, mark);
+          appLog("marks", "add", { kind: mark.kind, count: usePictureMarksStore.getState().byProject[projectId]?.marks.length ?? 0, frame: frame.time });
+        }
       }}
       onPointerCancel={() => {
         drawing.current = undefined;
@@ -285,7 +297,7 @@ export function PictureMarkTools({ projectId, enabled, onStart }: { projectId: s
   }, [enabled, focused]);
 
   const pick = (next: PictureMarkKind) => {
-    if (marking && tool === next) return store.stop();
+    if (marking && tool === next) return store.stop("tool");
     store.setTool(next);
     if (!marking) onStart();
   };
@@ -343,7 +355,7 @@ export function marksTakeEscape(e: KeyboardEvent) {
 /** Mark the frame under the playhead, or go back to the frame already marked. M, or a tool over the picture. */
 export function toggleMarking(projectId: string, at: Omit<MarkedFrame, "marks">) {
   const store = usePictureMarksStore.getState();
-  if (store.marking === projectId) return store.stop();
+  if (store.marking === projectId) return store.stop("toggle");
   // A video that was playing has run on past the frame by the time it stops: it goes back to the frame marked.
   const wasPlaying = usePlayerStore.getState().playing;
   player.pause();

@@ -5,6 +5,7 @@ import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-d
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isDialogueGuide } from "@scarlet/shared";
 import { api } from "../../lib/client";
+import { flushAppLog, startAppLog, stopAppLog } from "../../lib/appLog";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { dropTargets, fileDropZone } from "../../lib/dropTargets";
 import { useAttachmentsStore } from "../../stores/attachments";
@@ -96,6 +97,29 @@ it("puts nothing above the message box on the first import, even with the dialog
   expect(container.querySelector('button[aria-label="Make a first cut"]')).toBeNull();
   expect(container.querySelector(".composer-first-cut")).toBeNull();
   expect(container.querySelector("textarea")!.value).toBe("");
+});
+
+it("logs what each press of send did, never the words: sent, ignored and why, or failed", async () => {
+  const lines: string[] = [];
+  startAppLog(batch => { lines.push(...batch); });
+  try {
+    await show();
+    const enter = () => act(async () => { container.querySelector("textarea")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    await enter();
+    await type("Lower the music under the interview.");
+    await enter();
+    vi.mocked(useProjectStore.getState().createTask).mockRejectedValueOnce(new Error("The engine is busy."));
+    await type("Trim the intro.");
+    await enter();
+    flushAppLog();
+    const said = lines.filter(line => line.startsWith("[request]"));
+    expect(said[0]).toMatch(/ send-ignored reason=empty how=typed dest=new-edit chars=0 aim=whole project=/);
+    expect(said.some(line => / send how=typed dest=new-edit chars=36 /.test(line))).toBe(true);
+    expect(said.some(line => / send-failed how=typed chars=15 name=Error error="The engine is busy."/.test(line))).toBe(true);
+    expect(said.join("\n")).not.toMatch(/music|intro/);
+  } finally {
+    stopAppLog();
+  }
 });
 
 it("switches models above the draft and sends the edit with the selected model", async () => {
@@ -518,12 +542,12 @@ it("uses the same input for a selected transcript, revision, or agent question",
   await submit();
   expect(useProjectStore.getState().answerTask).toHaveBeenCalledWith(asking.question!.id, "Yes, keep it", undefined);
 
-  await show({ thread: asking, selectedEdit: { changeId: ready.latest!.id, editNumber: 2, editIndex: 0,
+  await show({ thread: asking, selectedEdit: { changeId: ready.latest!.id, editIndex: 0,
     label: "Sponsor transition", time: 8.75, end: 11.75, clipIds: [] } });
   await type("Keep the words on both sides");
   await submit();
   expect(useProjectStore.getState().answerTask).toHaveBeenLastCalledWith(asking.question!.id,
-    "Edit 2 · Sponsor transition — Keep the words on both sides", undefined);
+    "Edit at 0:08 · Sponsor transition — Keep the words on both sides", undefined);
 });
 
 it("prompts for a fix and sends feedback on the failed attempt", async () => {
@@ -734,7 +758,7 @@ it("pins a reply to the selected individual edit while typing and sends it in th
   const target = { changeId: change.id, editIndex: 1, version: project.head!, time: 1, end: 3, clipIds: [], label: "Opening caption" };
   await show({ thread, selectedEdit: target });
   const header = container.querySelector(".composer-context-row")!;
-  expect(header.querySelector(".composer-target-name")?.textContent).toBe("Edit 2");
+  expect(header.querySelector(".composer-target-name")?.textContent).toBe("Edit at 0:01");
   expect(header.contains(container.querySelector(".composer-model"))).toBe(true);
   expect(container.querySelector(".composer-box")?.contains(header)).toBe(false);
   await type("Hold this caption for another second");
@@ -786,20 +810,18 @@ it("sends words chosen in a call's passage as a revision of that one cut, where 
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
 });
 
-it("shows a call's number and cut time, and clicking the time toggles milliseconds", async () => {
+it("shows a call by its time alone, never a number, and clicking the time toggles milliseconds", async () => {
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
-  useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut 3" });
-  usePlayerStore.setState({ time: 177.4 });
-  await show({ thread: ready, targetTag: "Cut 3", aimTime: 167.2, pausedAt: { time: 177.4, version: "ver_before" } });
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47");
+  useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 2:47" });
+  await show({ thread: ready, targetTag: "Cut at 2:47", targetTime: 167.2 });
+  expect(aimName()?.textContent).toBe("Cut 2:47");
   expect(container.querySelector(".composer-aim-when")).toBeNull();
   const timeBtn = container.querySelector<HTMLButtonElement>(".composer-aim-time")!;
   await act(async () => timeBtn.click());
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47.200");
+  expect(aimName()?.textContent).toBe("Cut 2:47.200");
   expect(aimName()?.querySelector(".time-ms")?.textContent).toBe(".200");
   await act(async () => timeBtn.click());
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47");
-  usePlayerStore.setState({ time: 0 });
+  expect(aimName()?.textContent).toBe("Cut 2:47");
 });
 
 it("shows where the editor paused in an open cut's tag, and sends the message to the cut with that frame", async () => {
@@ -1256,6 +1278,23 @@ it("takes a marked range off on the first Esc in an empty box, and leaves a mess
   await esc();
   expect(useUiStore.getState().agentContext).toEqual(cut);
   expect(onClearTarget).not.toHaveBeenCalled();
+
+  // Delete and Option/Alt+X (including macOS `≈` with code KeyX) also take a range off an empty box, and ⌘Z restores it.
+  for (const init of [
+    { key: "Delete" },
+    { key: "x", altKey: true },
+    { key: "≈", code: "KeyX", altKey: true },
+  ]) {
+    await act(async () => useUiStore.getState().setAgentContext(marked));
+    await act(async () => aimField().focus());
+    const ev = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    await act(async () => { aimField().dispatchEvent(ev); });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(useUiStore.getState().agentContext).toEqual(cut);
+    const undo = new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true });
+    await act(async () => { aimField().dispatchEvent(undo); });
+    expect(useUiStore.getState().agentContext).toEqual(marked);
+  }
 });
 
 it("shows the Range tag for words chosen in the transcript (Ask about this), and lets ×, Backspace, Esc and ⌘Z manage it", async () => {
@@ -1316,8 +1355,8 @@ it("shows the Range tag for words chosen in the transcript (Ask about this), and
   expect(Array.from(aimName()!.querySelectorAll(".time-ms")).map(el => el.textContent)).toEqual([".200", ".500"]);
   // Words chosen inside an open cut still carry the cut's own tag.
   await act(async () => useUiStore.getState().setAgentContext({ changeId: "chg_1", cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "“I”" }));
-  await show({ targetTag: "Cut 1" });
-  expect(aimName()?.textContent).toBe("Cut 1");
+  await show({ targetTag: "Cut at 0:02" });
+  expect(aimName()?.textContent).toBe("Cut 0:02");
 });
 
 it("answers Scarlet's question with words chosen in the transcript beside Answer, and clears the range before Answer", async () => {

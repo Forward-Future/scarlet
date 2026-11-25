@@ -1,4 +1,4 @@
-import { closingCheckFailed, taskDialogueOperation, matchesEdit, noteThread, DialogueScanPage, requestText, taskRecoveryAction, taskWasStopped, type Task, type TaskEvent, type Thread, type ThreadEdit } from "@scarlet/shared";
+import { closingCheckFailed, harnessOf, taskDialogueOperation, matchesEdit, noteThread, DialogueScanPage, requestText, taskRecoveryAction, taskWasStopped, type Task, type TaskEvent, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { clock, parseTimestamp } from "./format";
 import { cutSummary, dialogueReceipt, mergeRanges, rangesOverlap, reviewReasons, type TimeRange, type Author, type Change, type Note } from "@scarlet/timeline";
 import { appliedEditSummary, passReceipt } from "../components/review/cutReviewDetails";
@@ -204,7 +204,7 @@ function failureText(t: Task, hasEdit: boolean) {
   if (quiet) return `Scarlet went quiet for ${quiet[1]} ${quiet[1] === "1" ? "minute" : "minutes"}, so the edit was stopped.${kept}`;
   if (limit) return (limit[1] ? `The edit reached its ${limit[1]}-minute limit.` : "The edit ran out of time.") + kept;
   if (t.interrupted) return hasEdit ? "Scarlet was interrupted after saving changes." : "The edit was interrupted before it finished.";
-  if (t.agent === "claude" && t.error?.includes("Sandbox required but unavailable")) {
+  if (harnessOf(t.agent) === "claude" && t.error?.includes("Sandbox required but unavailable")) {
     return "Claude Code couldn’t start because its required shell sandbox was unavailable.";
   }
   // The reason the host or the model gave is what the editor can act on before trying again. With none that reads, the
