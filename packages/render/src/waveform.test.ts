@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { runCapture } from "./exec.js";
+import { runCapture, resolveFfmpeg } from "./exec.js";
 import { audition } from "./inspection.js";
 import { extractFrame } from "./frame.js";
 import {
@@ -23,7 +23,7 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "scarlet-waveform-"));
   tone = join(dir, "tone.mkv");
   // Two seconds: a full-scale tone on the left for the first, silence for the second. The right channel is silent.
-  await runCapture("ffmpeg", ["-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+  await runCapture(resolveFfmpeg(), ["-hide_banner", "-nostdin", "-loglevel", "error", "-y",
     "-f", "lavfi", "-i", "testsrc2=duration=2:size=64x64:rate=10",
     "-f", "lavfi", "-i", "sine=frequency=440:duration=1:sample_rate=16000",
     "-filter_complex", "[1:a]volume=8,apad=whole_dur=2,pan=stereo|c0=c0|c1=0*c0[a]", "-map", "0:v", "-map", "[a]",
@@ -95,7 +95,7 @@ describe("a cached waveform", () => {
 describe("a decoded waveform", () => {
   it("places a late microphone on the recording clock in the cache, a seek and an audition", async () => {
     const file = join(dir, "late-mic.mkv");
-    await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=s=64x64:r=20:d=2",
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "color=s=64x64:r=20:d=2",
       "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=16000:duration=1",
       "-c:v", "libx264", "-c:a", "pcm_s16le", file]);
     const cache = await extractWaveformFull(file, 2, 4);
