@@ -72,6 +72,8 @@ const FEATURES = [
   ["POST", "/projects/:id/versions/:v/restore", "version.restore"],
   ["POST", "/projects/:id/versions/:v/revert", "version.revert"],
   ["POST", "/projects/:id/rejected-edits", "edit.reject"],
+  ["POST", "/projects/:id/adjusted-cut", "edit.adjust"],
+  ["POST", "/projects/:id/adjusted-edit", "edit.adjust"],
   ["POST", "/projects/:id/versions/:v/checkout", "version.checkout"],
 
   ["POST", "/projects/:id/changes", "change.propose"],

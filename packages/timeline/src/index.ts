@@ -22,6 +22,7 @@ export * from "./joinCrossfade.js";
 export * from "./doubledSound.js";
 export * from "./pictureSync.js";
 export * from "./putBack.js";
+export * from "./adjustEdit.js";
 export * from "./volume.js";
 
 export * from "./history.js";

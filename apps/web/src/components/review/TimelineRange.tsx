@@ -446,7 +446,7 @@ function RangeMenu({ at, onClear, onClose }: { at: { x: number; y: number }; onC
  * it opened. A tick under each picture marks its frame, a taller one each whole second with its time, and a red one the
  * edge of a cut or an edit. The side of the line inside the range is shaded.
  */
-function RangeLoupe({ time, at, fps, last, inside, snapped, edges, frameAt, sheet, pictureAspect }: { time: number; at: number; fps: number; last: number;
+export function RangeLoupe({ time, at, fps, last, inside, snapped, edges, frameAt, sheet, pictureAspect }: { time: number; at: number; fps: number; last: number;
   inside: "before" | "after"; snapped: boolean; edges: readonly number[]; frameAt?(time: number, exact?: boolean): string | undefined;
   sheet?: LoupeSheet; pictureAspect: number }) {
   const frame = Math.round(time * fps);

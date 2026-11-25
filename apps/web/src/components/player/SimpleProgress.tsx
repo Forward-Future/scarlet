@@ -1,6 +1,8 @@
 import type { TimeRange } from "@scarlet/timeline";
 
 export interface ProgressFocus {
+  /** Stable identity for the open cut or edit so nudging its edges keeps the timeline's zoom steady. */
+  key?: string;
   /** The stretch of the video the line zooms to. */
   view: TimeRange;
   /** What the change touches: removed footage, or the edited passage. */
@@ -22,11 +24,12 @@ const MOST_OF_THE_VIDEO = 0.8;
 
 /** The context to show around a change: enough to see what comes before and after it. */
 export function focusAround(range: TimeRange, duration: number, bandLabel?: string,
-  { tone, undecided, playbackEnd }: { tone?: ProgressFocus["tone"]; undecided?: boolean; playbackEnd?: number } = {}): ProgressFocus | undefined {
+  { tone, undecided, playbackEnd, key }: { tone?: ProgressFocus["tone"]; undecided?: boolean; playbackEnd?: number; key?: string } = {}): ProgressFocus | undefined {
   if (duration > 0 && range.end - range.start >= duration * MOST_OF_THE_VIDEO) return undefined;
   // Center the band with room past the last played frame, including any neighboring cuts the audition skips.
   const pad = Math.max(5, (range.end - range.start) * 0.15, (playbackEnd ?? range.end) - range.end + 2);
   return {
+    ...(key !== undefined && { key }),
     view: { start: Math.max(0, range.start - pad), end: Math.min(duration || range.end + pad, range.end + pad) },
     band: range, bandLabel, tone, ...undecided && { undecided },
   };
