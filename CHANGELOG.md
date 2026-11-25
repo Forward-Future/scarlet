@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- In the default layout, For you, Working, Done, and edit lists now stay fixed at the bottom above the message box while new messages appear above them.
 - Exported Final Cut Pro XML files now include standard format names (such as 4K 30p and 1080p 29.97p) so Final Cut Pro imports them cleanly.
 - Voice dictation now ignores silence and quiet room tone so silent recordings no longer turn into phantom phrases like "thank you".
 - Added a Cancel button beside active and queued file transcriptions in Media so you can stop a transcription in progress.

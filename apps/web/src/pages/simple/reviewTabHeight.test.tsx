@@ -226,4 +226,33 @@ describe("useReviewTabHeight", () => {
     expect(host.dataset.reviewPad).toBeUndefined();
     expect(animate).not.toHaveBeenCalled();
   });
+
+  it("uses flexBasis collapse keyframes when hosted inside the fixed bottom review dock", async () => {
+    stubLayout();
+    const animate = vi.fn(() => ({ finished: Promise.resolve(), cancel: vi.fn() }) as unknown as Animation);
+    Element.prototype.animate = animate;
+
+    const DockHarness = (props: HarnessProps) => <div className="simple-review-dock"><Harness {...props} /></div>;
+    await act(async () => {
+      root.render(
+        <DockHarness enabled tab="you" counts={{ you: 12, working: 0, done: 0 }} youBase={12} hasLowRisk lowOpen={false} lowRiskCount={17} rows={12} />,
+      );
+    });
+    await act(async () => {
+      root.render(
+        <DockHarness enabled tab="working" counts={{ you: 12, working: 0, done: 0 }} youBase={12} hasLowRisk lowOpen={false} lowRiskCount={17} rows={0} />,
+      );
+    });
+    const host = container.querySelector<HTMLElement>(".simple-pass")!;
+    expect(host.dataset.reviewPad).toBe("");
+    const composer = container.querySelector<HTMLTextAreaElement>(".composer-input")!;
+    await act(async () => {
+      composer.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(host.dataset.reviewPad).toBeUndefined();
+    expect(animate).toHaveBeenCalledWith(
+      [{ height: "356px", flexBasis: "356px" }, { height: "34px", flexBasis: "34px" }],
+      expect.objectContaining({ duration: 220 }),
+    );
+  });
 });

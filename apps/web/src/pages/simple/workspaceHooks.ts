@@ -453,20 +453,46 @@ export function useChatAutoFollow(
     if (!grew && pane.querySelector(SELECTED_REVISION_ROW)) return;
     pane.scrollTop = pane.scrollHeight;
   }, [chat, follow, threadCount, lastActivity, taskCount]);
-  // The spot above the message box grows and shrinks with what it holds, and the chat's room with it. While a
-  // revision row in the chat is selected, keep that row in view; otherwise keep the latest message in view.
+  // The fixed bottom lists dock and message box grow and shrink with what they hold, resizing the chat above them,
+  // and turns inside the chat grow as replies and edit summaries land. While a revision row in the chat is selected,
+  // keep that row in view; otherwise keep the latest message pinned to the bottom above the lists.
   useEffect(() => {
     const pane = chat.current;
-    if (!pane || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
+    if (!pane) return;
+    let lastClient = pane.clientHeight;
+    let lastScroll = pane.scrollHeight;
+    const sync = () => {
       const selected = pane.querySelector(SELECTED_REVISION_ROW);
       if (selected) {
         if (isClippedInScrollAncestors(selected)) selected.scrollIntoView?.({ block: "nearest" });
+      } else if (follow.current) {
+        pane.scrollTop = pane.scrollHeight;
+      }
+      lastClient = pane.clientHeight;
+      lastScroll = pane.scrollHeight;
+    };
+    // A layout shrink from the bottom dock mounting or content growing can fire a scroll event before ResizeObserver
+    // runs; restore follow if the viewport or content size changed rather than the user scrolling up.
+    const onScroll = () => {
+      const resized = pane.clientHeight !== lastClient || pane.scrollHeight !== lastScroll;
+      lastClient = pane.clientHeight;
+      lastScroll = pane.scrollHeight;
+      if (resized && follow.current) {
+        pane.scrollTop = pane.scrollHeight;
         return;
       }
-      if (follow.current) pane.scrollTop = pane.scrollHeight;
-    });
-    observer.observe(pane);
-    return () => observer.disconnect();
+      follow.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop < 48;
+    };
+    pane.addEventListener("scroll", onScroll, { passive: true });
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(sync) : undefined;
+    resizeObserver?.observe(pane);
+    const mutationObserver = typeof MutationObserver !== "undefined" ? new MutationObserver(sync) : undefined;
+    mutationObserver?.observe(pane, { childList: true, subtree: true, characterData: true });
+    sync();
+    return () => {
+      pane.removeEventListener("scroll", onScroll);
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
   }, [chat, follow]);
 }

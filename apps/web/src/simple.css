@@ -680,7 +680,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* What needs the editor, listed under the band, takes the dot's place. A word for how the run ended stays, before it: with calls or edits still waiting, the
    action under them ("Resume") would otherwise have nothing that says the run stopped. Folded, that list is out of
    sight (it is still there, so this would match it): the band keeps the dot for a question, beside its own count. */
-.unit:not(.is-collapsed):has(.simple-review-tab-count) > .unit-msg > .unit-state:has(> .unit-dot) { display: none; }
+.unit:not(.is-collapsed):is(:has(.simple-review-tab-count), [data-has-need]) > .unit-msg > .unit-state:has(> .unit-dot) { display: none; }
 /* A folded request says on its band what waits on the editor under it: For you, as its tab reads, and how many. */
 .unit-need { flex: none; align-self: baseline; font-size: 12.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; }
 .unit-need-count { margin-left: 6px; color: var(--color-warn); font-variant-numeric: tabular-nums; }
@@ -803,6 +803,62 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .simple-pin:has(> .unit:not([hidden])) + .composer-dock { border-top: 0; padding-top: 9px; }
 /* Fixed here, a long message keeps to two lines so the spot holds its place. Its title carries the rest. */
 .simple-pin .unit-msg p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+
+/* The fixed bottom edit lists dock (For you, Working, Done, See all): stays pinned above the message box while
+   new messages flow above it in .simple-chat. Fits compactly to short lists and scrolls internally when long. */
+.simple-review-dock {
+  --chat-gutter: 18px;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 48%;
+  display: flex;
+  flex-direction: column;
+  padding: 0 18px 4px;
+  border-top: 1px solid var(--color-line);
+  background: var(--color-panel);
+}
+.simple-review-dock > .simple-pass {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+.simple-review-dock .simple-review-tabs { margin: 8px 0 8px; }
+.simple-review-dock .simple-low-risk { flex: none; }
+.simple-review-dock :is(.simple-pass-list, .simple-edits) {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  margin: 0 -8px 4px;
+  border-top: 0;
+}
+.simple-review-dock .simple-pass-list.is-moment {
+  max-height: none;
+  overflow: visible;
+  margin: 0 0 2px 46px;
+  padding-left: 4px;
+  border-top: 0;
+  border-left: 1px solid var(--color-line);
+}
+.simple-review-dock .simple-pass-list.has-hours .simple-pass-list.is-moment { margin-left: 60px; }
+.simple-review-dock .simple-pass-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.simple-review-dock .simple-pass-list > li > button.is-on .simple-pass-label { white-space: normal; }
+.simple-review-dock .simple-pass-label:has(> .edit-version),
+.simple-review-dock .simple-pass-label:has(> .simple-pass-more) { display: flex; align-items: baseline; }
+.simple-review-dock .simple-pass-label > :is(.simple-pass-tick, .edit-version, .simple-pass-more) { flex: none; }
+.simple-review-dock .simple-pass[data-review-pad] > :is(.simple-pass-list, .simple-edits, .simple-review-empty) {
+  min-height: 0;
+  flex: 0 1 var(--review-body-height);
+}
+.simple-review-dock .simple-pass-line { flex-wrap: wrap; align-items: baseline; gap: 0 12px; min-height: 24px; padding: 0; }
+.simple-review-dock .simple-error { margin: 2px 0 6px; }
+.simple-review-dock + .composer-dock,
+.simple-review-dock + .simple-target + .composer-dock { border-top: 0; padding-top: 9px; }
 
 .req { min-width: 0; font-size: 12.5px; }
 .req-row { display: flex; align-items: center; gap: 7px; min-height: 28px; font-variant-numeric: tabular-nums; }
