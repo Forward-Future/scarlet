@@ -17,7 +17,7 @@ To disable reporting before the first launch, set `SCARLET_TELEMETRY_ENABLED=fal
 | `server.boot.heartbeat` | The engine starts | `projectCount` |
 | `feature.used` | A listed request succeeds | `feature` |
 | `task.requested` | A request is queued | `kind`, `agent`, `fast` |
-| `task.finished` | A request is done, failed or cancelled | `kind`, `agent`, `state`, `changeCount`, `interrupted`, `durationMs`, `failureReason` (failed only) |
+| `task.finished` | A request is done, failed or cancelled | `kind`, `agent`, `state`, `changeCount`, `interrupted`, `durationMs` (omitted if a queued transcription ended before starting), `failureReason` (failed only; clean pauses, project deletes and quits are reported as `cancelled` with `interrupted: true`) |
 | `edit.reviewed` | An editor explicitly keeps an applied edit or successfully submits a revision or Undo edit request about it | `decision` (keep, revise, undo), `editId` |
 | `render.finished` | An export is done, failed or cancelled | `kind`, `state`, `quality`, `failureReason` (failed only) |
 | `export.finished` | An export succeeds: a rendered video, a handoff folder, a timeline or captions | `route` (render, handoff, otio, srt, vtt), `firstExport` |

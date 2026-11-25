@@ -8,7 +8,7 @@
  * This module builds both command lines and the run's Codex home; `codexAppServer.ts` drives an App Server turn, and
  * `codexParse.ts` reads the events both report.
  */
-import { lstat, mkdir, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
+import { copyFile, link, lstat, mkdir, open, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -125,9 +125,42 @@ function codexServerArgs(opts: RunAgentOptions, executable: string | undefined):
     ...codexModelConfig({ effort: opts.effort })];
 }
 
+/**
+ * Share a Codex auth/lock file into the isolated CODEX_HOME.
+ * Uses a symlink where permitted; on standard Windows accounts (without symlink privilege / Developer Mode),
+ * falls back to an NTFS hard link so Codex still shares token refreshes and lock files without admin rights,
+ * and optionally copies for `codex exec` fallback when CODEX_HOME lives on a different drive.
+ */
+async function linkCodexAuthFile(from: string, to: string, createIfMissing: boolean, allowCopy: boolean): Promise<void> {
+  await rm(to, { force: true });
+  try {
+    await symlink(from, to, "file");
+    return;
+  } catch (err) {
+    if (process.platform !== "win32") throw err;
+  }
+  if (createIfMissing) {
+    try {
+      const fh = await open(from, "wx");
+      await fh.close();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
+  try {
+    await link(from, to);
+  } catch (err) {
+    if (allowCopy) {
+      await copyFile(from, to);
+      return;
+    }
+    throw err;
+  }
+}
+
 async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<{ home: string } | { reason: CodexFallbackReason }> {
   // App Server cannot skip the user's config, rules or MCP servers. Share only
-  // file-backed login, with a symlink so Codex can still refresh that login.
+  // file-backed login, linked so Codex can still refresh that login.
   if (hasApiKey("codex", env)) return { reason: "api_key" };
   const projectConfig = await lstat(join(cwd, ".codex")).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== "ENOENT") throw err;
@@ -148,9 +181,8 @@ async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<{
     }
     // Linked again on each run: the login may have moved since the last one. The store locks around refresh commits,
     // so the lock is the ordinary CLI's too.
-    for (const [from, name] of [[authFile, "auth.json"], [join(originalHome, "auth.lock"), "auth.lock"]] as const) {
-      await rm(join(home, name), { force: true });
-      await symlink(from, join(home, name), "file");
+    for (const [from, name, createIfMissing] of [[authFile, "auth.json", false], [join(originalHome, "auth.lock"), "auth.lock", true]] as const) {
+      await linkCodexAuthFile(from, join(home, name), createIfMissing, false);
     }
     return { home };
   } catch {
@@ -175,9 +207,8 @@ async function execCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<strin
   try {
     await privateDirectory(home);
     if (hasAuth && userHome && authFile) {
-      for (const [from, name] of [[authFile, "auth.json"], [join(userHome, "auth.lock"), "auth.lock"]] as const) {
-        await rm(join(home, name), { force: true });
-        await symlink(from, join(home, name), "file");
+      for (const [from, name, createIfMissing] of [[authFile, "auth.json", false], [join(userHome, "auth.lock"), "auth.lock", true]] as const) {
+        await linkCodexAuthFile(from, join(home, name), createIfMissing, true);
       }
     }
     return home;

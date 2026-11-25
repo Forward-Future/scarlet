@@ -17,15 +17,22 @@ export function recordTaskRequested(ctx: Recorder, task: Task): void {
 
 /** For a task that has just reached done, failed or cancelled. */
 export function recordTaskFinished(ctx: Recorder, task: Task): void {
-  const durationMs = Date.parse(task.finishedAt ?? "") - Date.parse(task.startedAt ?? task.createdAt ?? "");
+  const reason = task.state === "failed" ? taskFailureReason(task) : undefined;
+  // Normal interruptions (media pause, project trash, app quit/update) are stored as interrupted failed rows so
+  // Scarlet can resume them later, not because anything broke. Report them as cancelled with interrupted: true so
+  // `state: "failed"` reflects real errors only.
+  const state = task.state === "failed" && reason === "interrupted" ? "cancelled" : task.state;
+  // Transcriptions wait in the audio lane after creation; measure active work time rather than queue wait.
+  const startedAt = task.kind === "transcribe" ? task.startedAt : (task.startedAt ?? task.createdAt);
+  const durationMs = startedAt ? Date.parse(task.finishedAt ?? "") - Date.parse(startedAt) : Number.NaN;
   ctx.db.afterCommit(() => ctx.telemetry.record("task.finished", {
     kind: task.kind,
     agent: task.agent,
-    state: task.state,
+    state,
     changeCount: task.changeIds.length,
-    interrupted: task.interrupted === true,
+    interrupted: task.interrupted === true || reason === "interrupted",
     ...(Number.isNaN(durationMs) ? {} : { durationMs: Math.max(0, durationMs) }),
-    ...(task.state === "failed" ? { failureReason: taskFailureReason(task) } : {}),
+    ...(state === "failed" && reason ? { failureReason: reason } : {}),
   }));
 }
 

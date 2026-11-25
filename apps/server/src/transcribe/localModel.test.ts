@@ -10,7 +10,7 @@ vi.mock("@scarlet/render", async actual => {
   const render = await actual<typeof import("@scarlet/render")>();
   return { ...render, hashFile: (...args: Parameters<typeof render.hashFile>) => { hashing.count++; return render.hashFile(...args); } };
 });
-import { BUNDLED_WHISPER_CPP, LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, devWhisperCli, supportsWhisperAvx2 } from "./localModel.js";
+import { BUNDLED_WHISPER_CPP, LocalWhisperModel, bundledWhisperCli, bundledWhisperGpu, bundledWhisperModel, devWhisperCli, renameWithRetry, supportsWhisperAvx2 } from "./localModel.js";
 
 const bytes = Buffer.from("test model");
 const model = { name: "test.bin", url: "https://example.invalid/test.bin", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -170,17 +170,58 @@ it("logs why a download failed: the server's status, a file of the wrong size, o
     .mockResolvedValueOnce(new Response("Service Unavailable", { status: 503 }))
     .mockResolvedValueOnce(new Response(Buffer.concat([bytes, bytes])))
     .mockRejectedValueOnce(new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND example.invalid") })));
-  const cache = new LocalWhisperModel(dir, model, log);
+  const cache = new LocalWhisperModel(dir, model, log, { maxAttempts: 1 });
   await expect(cache.get(signal)).rejects.toThrow("Could not download the local model test.bin: HTTP 503. Retry transcription to try again.");
   await expect(cache.get(signal)).rejects.toThrow("model exceeds expected size");
   await expect(cache.get(signal)).rejects.toThrow("fetch failed");
   expect(await cache.status()).toEqual({ state: "failed" });
-  expect(said.filter(line => line.includes("failed"))).toEqual([
+  expect(said.filter(line => line.includes("download failed"))).toEqual([
     "[model] test.bin: download failed after <time>: HTTP 503",
     "[model] test.bin: download failed after <time>: model exceeds expected size",
     "[model] test.bin: download failed after <time>: fetch failed (getaddrinfo ENOTFOUND example.invalid)",
   ]);
   expect(await readdir(dir)).toEqual([]);
+});
+
+it("retries transient HTTP 5xx, network drops, truncated streams, and stalls automatically before failing", async () => {
+  const fetchModel = vi.fn()
+    .mockResolvedValueOnce(new Response("Service Unavailable", { status: 503 }))
+    .mockResolvedValueOnce(new Response(bytes.subarray(0, 3)))
+    .mockResolvedValueOnce(new Response(bytes));
+  vi.stubGlobal("fetch", fetchModel);
+  const cache = new LocalWhisperModel(dir, model, log, { maxAttempts: 3, retryDelayMs: 0 });
+  expect(await readFile(await cache.get(signal))).toEqual(bytes);
+  expect(fetchModel).toHaveBeenCalledTimes(3);
+  expect(await readdir(dir)).toEqual(["test.bin"]);
+
+  // A stalled stream aborts after the idle timeout and recovers on retry.
+  await rm(join(dir, model.name));
+  const stalledFetch = vi.fn()
+    .mockImplementationOnce(async (_url: string, init: RequestInit) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, 2));
+        init.signal!.addEventListener("abort", () => controller.error(init.signal!.reason));
+      },
+    })))
+    .mockResolvedValueOnce(new Response(bytes));
+  vi.stubGlobal("fetch", stalledFetch);
+  const stallCache = new LocalWhisperModel(dir, model, log, { maxAttempts: 2, retryDelayMs: 0, stallTimeoutMs: 40 });
+  expect(await readFile(await stallCache.get(signal))).toEqual(bytes);
+  expect(stalledFetch).toHaveBeenCalledTimes(2);
+});
+
+it("retries renaming a finished partial file on transient Windows file locks", async () => {
+  let calls = 0;
+  const flakyRename = vi.fn(async () => {
+    calls++;
+    if (calls < 3) {
+      const err = new Error("busy") as NodeJS.ErrnoException;
+      err.code = calls === 1 ? "EPERM" : "EBUSY";
+      throw err;
+    }
+  });
+  await renameWithRetry("a.part", "a.bin", signal, { retries: 4, delayMs: 0, renameFn: flakyRename as unknown as typeof import("node:fs/promises").rename });
+  expect(flakyRename).toHaveBeenCalledTimes(3);
 });
 
 it("removes the partial file of a download that fails on its first bytes, before the file has been created", async () => {

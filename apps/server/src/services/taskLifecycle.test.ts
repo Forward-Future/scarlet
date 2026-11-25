@@ -518,3 +518,22 @@ it("hands off silently when switching models on an answer or on resume-editing, 
   expect(app.ctx.repos.projects.header(project.id)!.editingPaused).toBe(true);
   expect((await api("POST", `/projects/${project.id}/resume-editing`, {})).status).toBe(200);
 });
+
+it("cancels and suppresses learning checks when the chosen assistant is broken or rate-limited", async () => {
+  // When an edit fails because the assistant itself is broken, its open learning_check is cancelled immediately.
+  const broken = await request("Always tighten the pauses");
+  const [firstCheck] = checksOf(broken, "learning_check");
+  expect(firstCheck?.state).toBe("queued");
+  await api("POST", `/tasks/${broken.id}/complete`, { state: "failed", error: "claude CLI not found on PATH", ifStartedAt: broken.startedAt });
+  expect(get(firstCheck!.id).state).toBe("cancelled");
+
+  // Another request on that broken assistant does not queue a doomed learning_check.
+  const second = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Never leave awkward silences", createdBy: editor });
+  expect(checksOf(second, "learning_check")).toHaveLength(0);
+
+  // Once a task on that assistant succeeds again, learning_check resumes normally.
+  const claimed = (await claim(second.id))!;
+  await api("POST", `/tasks/${second.id}/complete`, { state: "done", summary: "Done.", ifStartedAt: claimed.startedAt });
+  const recovered = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "Keep jump cuts tight", createdBy: editor });
+  expect(checksOf(recovered, "learning_check")).toHaveLength(1);
+});

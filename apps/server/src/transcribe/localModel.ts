@@ -113,6 +113,86 @@ export function bundledWhisperGpu(env: NodeJS.ProcessEnv): string | undefined {
   }
 }
 
+/** Tuning hooks for LocalWhisperModel download retries, stall timeouts, and Windows rename retries. */
+export interface LocalModelOptions {
+  /** Total download attempts before failing (default 3). */
+  maxAttempts?: number;
+  /** Base delay in ms before retrying a transient download failure; doubles on each retry (default 1500). */
+  retryDelayMs?: number;
+  /** Abort and retry a download attempt if no bytes arrive for this long (default 60_000 ms). */
+  stallTimeoutMs?: number;
+  /** Retries when renaming the finished .part file hits transient Windows AV/indexer locks (default 6). */
+  renameRetries?: number;
+  /** Base delay in ms between rename retries (default 250). */
+  renameDelayMs?: number;
+}
+
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAY_MS = 1_500;
+const DEFAULT_STALL_TIMEOUT_MS = 60_000;
+const DEFAULT_RENAME_RETRIES = 6;
+const DEFAULT_RENAME_DELAY_MS = 250;
+const RETRYABLE_HTTP_STATUSES = new Set([408, 429]);
+const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+const NON_RETRYABLE_FS_CODES = new Set(["ENOSPC", "EROFS", "EACCES", "EPERM"]);
+
+class DownloadError extends Error {
+  constructor(message: string, readonly retryable: boolean, options?: ErrorOptions) {
+    super(message, options);
+  }
+}
+
+function isRetryableDownloadError(error: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted) return false;
+  if (error instanceof DownloadError) return error.retryable;
+  const code = (error as NodeJS.ErrnoException)?.code ?? ((error as { cause?: NodeJS.ErrnoException })?.cause)?.code;
+  if (code && NON_RETRYABLE_FS_CODES.has(code)) return false;
+  return true;
+}
+
+function waitAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    signal.throwIfAborted();
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    timer.unref();
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Rename a finished partial model file, retrying briefly on Windows AV/indexer locks so 574 MB isn't discarded. */
+export async function renameWithRetry(
+  from: string,
+  to: string,
+  signal: AbortSignal,
+  options: { retries?: number; delayMs?: number; renameFn?: typeof rename } = {},
+): Promise<void> {
+  const retries = Math.max(1, options.retries ?? DEFAULT_RENAME_RETRIES);
+  const delayMs = Math.max(0, options.delayMs ?? DEFAULT_RENAME_DELAY_MS);
+  const doRename = options.renameFn ?? rename;
+  for (let attempt = 1; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      await doRename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (!code || !RETRYABLE_RENAME_CODES.has(code) || attempt >= retries) throw error;
+      await waitAbortable(delayMs * attempt, signal);
+    }
+  }
+}
+
 /** One verified model per library. Only a transcription request calls get(). */
 export class LocalWhisperModel {
   // Share an in-flight download until its last caller leaves. The on-disk
@@ -126,7 +206,8 @@ export class LocalWhisperModel {
 
   /** `log`: where a download's start and its end go. The engine's log is its console. */
   constructor(private readonly directory: string, private readonly model: PinnedModel = bundledWhisperModel,
-    private readonly log: (message: string) => void = message => console.log(message)) {}
+    private readonly log: (message: string) => void = message => console.log(message),
+    private readonly options: LocalModelOptions = {}) {}
 
   async status(): Promise<LocalModelStatus> {
     if (this.transfer) return this.transfer;
@@ -175,41 +256,94 @@ export class LocalWhisperModel {
     const started = Date.now();
     const megabytes = Math.max(1, Math.round(this.model.size / 1e6));
     this.log(`[model] ${this.model.name}: ${cached === "invalid" ? "the saved copy is damaged, " : ""}downloading ${megabytes} MB`);
-    const partial = `${file}.${randomUUID()}.part`;
-    let saving: WriteStream | undefined;
+    const maxAttempts = Math.max(1, this.options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+    const retryDelayMs = Math.max(0, this.options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
+    const stallTimeoutMs = Math.max(0, this.options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS);
     try {
       await mkdir(this.directory, { recursive: true });
-      signal.throwIfAborted();
-      const response = await fetch(this.model.url, { signal });
-      if (signal.aborted) {
-        await response.body?.cancel().catch(() => {});
+      for (let attempt = 1; ; attempt++) {
         signal.throwIfAborted();
-      }
-      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
-      const hash = createHash("sha256");
-      const expected = this.model.size;
-      // Wrap the Web stream so pipeline's abort signal cancels a stalled body instead of hanging on reader.read().
-      await pipeline(Readable.fromWeb(response.body as WebReadableStream<Uint8Array>), async function* (chunks) {
-        for await (const chunk of chunks) {
-          const bytes = chunk as Uint8Array;
-          progress.received += bytes.byteLength;
-          if (progress.received > expected) throw new Error("model exceeds expected size");
-          hash.update(bytes);
-          yield bytes;
+        progress.received = 0;
+        const partial = `${file}.${randomUUID()}.part`;
+        let saving: WriteStream | undefined;
+        let stalled = false;
+        let stallTimer: NodeJS.Timeout | undefined;
+        const attemptAbort = new AbortController();
+        const onParentAbort = () => attemptAbort.abort(signal.reason);
+        signal.addEventListener("abort", onParentAbort, { once: true });
+        const resetStallTimer = () => {
+          if (stallTimer) clearTimeout(stallTimer);
+          if (stallTimeoutMs <= 0) return;
+          stallTimer = setTimeout(() => {
+            stalled = true;
+            attemptAbort.abort(new DownloadError("download stalled", true));
+          }, stallTimeoutMs);
+          stallTimer.unref();
+        };
+        try {
+          resetStallTimer();
+          const response = await fetch(this.model.url, { signal: attemptAbort.signal });
+          if (signal.aborted) {
+            await response.body?.cancel().catch(() => {});
+            signal.throwIfAborted();
+          }
+          if (!response.ok || !response.body) {
+            await response.body?.cancel().catch(() => {});
+            const retryable = response.status >= 500 || RETRYABLE_HTTP_STATUSES.has(response.status);
+            throw new DownloadError(`HTTP ${response.status}`, retryable);
+          }
+          const hash = createHash("sha256");
+          const expected = this.model.size;
+          // Wrap the Web stream so pipeline's abort signal cancels a stalled body instead of hanging on reader.read().
+          await pipeline(Readable.fromWeb(response.body as WebReadableStream<Uint8Array>), async function* (chunks) {
+            for await (const chunk of chunks) {
+              resetStallTimer();
+              const bytes = chunk as Uint8Array;
+              progress.received += bytes.byteLength;
+              if (progress.received > expected) throw new DownloadError("model exceeds expected size", false);
+              hash.update(bytes);
+              yield bytes;
+            }
+          }, saving = createWriteStream(partial, { flags: "wx" }), { signal: attemptAbort.signal });
+          if (stallTimer) clearTimeout(stallTimer);
+          if (progress.received < expected) throw new DownloadError("model download ended early", true);
+          if (progress.received !== expected || hash.digest("hex") !== this.model.sha256) throw new DownloadError("model checksum mismatch", false);
+          signal.throwIfAborted();
+          await renameWithRetry(partial, file, signal, {
+            retries: this.options.renameRetries,
+            delayMs: this.options.renameDelayMs,
+          });
+          const info = await stat(file);
+          this.verifiedStamp = `${info.ino}/${info.ctimeMs}/${info.mtimeMs}`;
+          this.log(`[model] ${this.model.name}: downloaded in ${humanDuration(Date.now() - started)}`);
+          // The file this one replaces is never read again. Only the bundled model's own copy is removed: a model chosen in
+          // Settings is read from its own path and never fetched here.
+          for (const earlier of this.model.replaces ?? []) {
+            await rm(join(this.directory, earlier), { force: true }).catch(() => {});
+          }
+          return file;
+        } catch (error) {
+          if (stallTimer) clearTimeout(stallTimer);
+          const failure = !signal.aborted && stalled ? new DownloadError("download stalled", true) : error;
+          // A download that fails on its first bytes ends while its file is still being opened. Removed before the file
+          // was there, it stayed behind empty, so wait until the file is closed.
+          if (saving && !saving.closed) await new Promise<void>(resolve => saving!.once("close", () => resolve()));
+          await rm(partial, { force: true });
+          if (attempt < maxAttempts && isRetryableDownloadError(failure, signal)) {
+            const delay = retryDelayMs * 2 ** (attempt - 1);
+            const cause = (failure as Error).cause;
+            this.log(`[model] ${this.model.name}: attempt ${attempt}/${maxAttempts} failed (${(failure as Error).message}${cause instanceof Error ? ` (${cause.message})` : ""}); retrying`);
+            await waitAbortable(delay, signal);
+            continue;
+          }
+          throw failure;
+        } finally {
+          if (stallTimer) clearTimeout(stallTimer);
+          signal.removeEventListener("abort", onParentAbort);
+          if (saving && !saving.closed) await new Promise<void>(resolve => saving!.once("close", () => resolve()));
+          await rm(partial, { force: true });
         }
-      }, saving = createWriteStream(partial, { flags: "wx" }), { signal });
-      if (progress.received !== expected || hash.digest("hex") !== this.model.sha256) throw new Error("model checksum mismatch");
-      signal.throwIfAborted();
-      await rename(partial, file);
-      const info = await stat(file);
-      this.verifiedStamp = `${info.ino}/${info.ctimeMs}/${info.mtimeMs}`;
-      this.log(`[model] ${this.model.name}: downloaded in ${humanDuration(Date.now() - started)}`);
-      // The file this one replaces is never read again. Only the bundled model's own copy is removed: a model chosen in
-      // Settings is read from its own path and never fetched here.
-      for (const earlier of this.model.replaces ?? []) {
-        await rm(join(this.directory, earlier), { force: true }).catch(() => {});
       }
-      return file;
     } catch (error) {
       const after = humanDuration(Date.now() - started);
       if (signal.aborted) this.log(`[model] ${this.model.name}: download stopped after ${after}`);
@@ -218,11 +352,6 @@ export class LocalWhisperModel {
       const cause = (error as Error).cause;
       this.log(`[model] ${this.model.name}: download failed after ${after}: ${(error as Error).message}${cause instanceof Error ? ` (${cause.message})` : ""}`);
       throw new Error(`Could not download the local model ${this.model.name}: ${(error as Error).message}. Retry transcription to try again.`, { cause: error });
-    } finally {
-      // A download that fails on its first bytes ends while its file is still being opened. Removed before the file
-      // was there, it stayed behind empty, so wait until the file is closed.
-      if (saving && !saving.closed) await new Promise<void>(resolve => saving!.once("close", () => resolve()));
-      await rm(partial, { force: true });
     }
   }
 }

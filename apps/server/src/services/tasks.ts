@@ -27,6 +27,7 @@ import { now } from "../db.js";
 import { badRequest, conflict } from "../errors.js";
 import { clip, logId, since } from "../logText.js";
 import { recordTaskFinished, recordTaskRequested } from "../telemetry/events.js";
+import { taskFailureReason } from "../telemetry/failureReason.js";
 import { actorFor, agentName, logActivity, quote } from "./activity.js";
 import { applyChoicesWhenDone, applySettledCuts, retireStaleSaves } from "./changes.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
@@ -37,6 +38,17 @@ import { aboutStagedCut, followUpInstruction, RESUMABLE } from "./taskPrompts.js
 
 /** States a task never leaves. */
 export const FINISHED_TASK: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
+
+/** Failure categories where a sibling learning_check on the same assistant would only repeat the failure. */
+const ASSISTANT_FAILURE_CANCEL_LEARNING: ReadonlySet<string> = new Set([
+  "agent_not_installed",
+  "agent_not_signed_in",
+  "agent_incompatible",
+  "rate_limited",
+  "model_unavailable",
+  "provider_error",
+  "crashed",
+]);
 
 /** Requests that can edit a project's video. */
 export const PROJECT_EDIT_KINDS = `(${PROJECT_EDIT_TASK_KINDS.map(kind => `'${kind}'`).join(",")})`;
@@ -408,6 +420,11 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   });
   recordTaskFinished(ctx, saved);
   dropWaitingLooks(ctx, saved);
+  // If the request failed because the assistant/model itself is broken, unavailable or rate-limited,
+  // cancel its sibling learning check instead of letting it fail with the same error.
+  if (saved.state === "failed" && ASSISTANT_FAILURE_CANCEL_LEARNING.has(taskFailureReason(saved))) {
+    for (const check of openChecks(ctx, saved, "learning_check")) cancelTask(ctx, check);
+  }
   const ran = since(saved.startedAt, Date.parse(saved.finishedAt!));
   ctx.db.afterCommit(() => {
     ctx.log(`[task] ${saved.id} ${saved.state}${ran ? ` after ${ran}` : ""}${body.error ? `: ${clip(body.error, 400)}` : ""}` +
