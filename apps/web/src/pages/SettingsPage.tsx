@@ -376,10 +376,10 @@ export function SettingsPage() {
           </>
         )}
         {tab === "usage" && (
-          <>
-            <StorageSettings />
+          <div className="usage-page">
             <UsageSettings />
-          </>
+            <StorageSettings />
+          </div>
         )}
         {tab === "about" && <AboutSettings />}
         {tab === "advanced" && (
