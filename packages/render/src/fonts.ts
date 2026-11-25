@@ -37,6 +37,24 @@ const FALLBACKS = [
   "arial unicode.ttf",
 ];
 
+/** Fonts with Chinese, Japanese, Korean and Thai glyphs, for a caption in those scripts when its family isn't here. */
+const WIDE_FALLBACKS = [
+  "arial unicode.ttf",
+  "pingfang.ttc",
+  "hiragino sans gb.ttc",
+  "applesdgothicneo.ttc",
+  "msyh.ttc",
+  "msyh.ttf",
+  "yugothm.ttc",
+  "meiryo.ttc",
+  "malgun.ttf",
+  "notosanscjk-regular.ttc",
+  "notosanscjksc-regular.otf",
+  "wqy-microhei.ttc",
+  "droidsansfallbackfull.ttf",
+  "tahoma.ttf",
+];
+
 function defaultFontDirs(): string[] {
   const home = os.homedir();
   const dirs: string[] = [];
@@ -118,7 +136,7 @@ function candidates(family: string): string[] {
  * could be found, in which case callers should fall back to `font=` and hope
  * fontconfig is present.
  */
-export function resolveFontFile(family: string, opts: FontOptions = {}): ResolvedFont | undefined {
+export function resolveFontFile(family: string, opts: FontOptions = {}, wideScript = false): ResolvedFont | undefined {
   if (opts.fontFile) return { file: opts.fontFile, exact: true };
   const dirs = [...(opts.fontDirs ?? []), ...defaultFontDirs()].map((dir) => path.resolve(dir));
   // Timeline font paths may only select files in configured font directories.
@@ -130,7 +148,8 @@ export function resolveFontFile(family: string, opts: FontOptions = {}): Resolve
   }
   const exact = lookup(dirs, candidates(family));
   if (exact) return { file: exact, exact: true };
-  const fallback = lookup(dirs, FALLBACKS);
+  // A Latin fallback has no CJK or Thai glyphs, and drawtext can't borrow them from another font: they'd be boxes.
+  const fallback = (wideScript && lookup(dirs, WIDE_FALLBACKS)) || lookup(dirs, FALLBACKS);
   return fallback ? { file: fallback, exact: false } : undefined;
 }
 

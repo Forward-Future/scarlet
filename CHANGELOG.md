@@ -20,6 +20,10 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A recording being imported is no longer deleted when a second Scarlet starts on the same library.
 - If Scarlet quits while reading your decisions for a lasting rule, it reads them again when it reopens.
 - Gemini's file tools can no longer reach files outside their work folder through links, or change the folders FFmpeg lives in.
+- A message with an emoji in it no longer stops later requests or rule checks from starting.
+- Exported captions in Chinese, Japanese, Korean or Thai now wrap inside the frame and use a font that has their characters.
+- Transcript search in Hindi, Thai and similar languages no longer matches words that differ only by a vowel or tone mark.
+- Scarlet running on another computer keeps its edits going through a brief network drop, and shows as back online as soon as it returns.
 - In the default layout, For you, Working, Done, and edit lists now stay fixed at the bottom above the message box while new messages appear above them.
 - Exported Final Cut Pro XML files now include standard format names (such as 4K 30p and 1080p 29.97p) so Final Cut Pro imports them cleanly.
 - Voice dictation now ignores silence and quiet room tone so silent recordings no longer turn into phantom phrases like "thank you".

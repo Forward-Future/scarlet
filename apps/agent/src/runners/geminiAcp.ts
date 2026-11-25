@@ -194,7 +194,8 @@ function realPath(path: string): string | undefined {
   const rest: string[] = [];
   for (;;) {
     try { return join(realpathSync.native(head), ...rest); } catch { /* not there, or not reachable */ }
-    if (lstatSync(head, { throwIfNoEntry: false })) return undefined;
+    // There, but not reachable (no access, a loop, a name too long): it can't be made real, so it is refused.
+    try { if (lstatSync(head, { throwIfNoEntry: false })) return undefined; } catch { return undefined; }
     const up = dirname(head);
     if (up === head) return path;
     rest.unshift(basename(head));
@@ -242,7 +243,8 @@ export function workspacePermission(params: unknown, writeRoots: string[], readR
     const p = slash(found);
     if (!inside(p, within)) return false;
     if (!inside(p, writable)) return true;
-    const st = lstatSync(found, { throwIfNoEntry: false });
+    let st;
+    try { st = lstatSync(found, { throwIfNoEntry: false }); } catch { return false; }
     return !(st?.isFile() && st.nlink > 1);
   });
 }

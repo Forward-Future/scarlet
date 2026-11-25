@@ -1,6 +1,6 @@
 import type { Dispatch, MouseEvent, ReactNode, SetStateAction } from "react";
 import type { Change, CutAssessment, TimeRange, Timeline } from "@scarlet/timeline";
-import type { EditRef, Task, ThreadEdit } from "@scarlet/shared";
+import { cutText, type EditRef, type Task, type ThreadEdit } from "@scarlet/shared";
 import { clock as clockLabel, clockRange } from "../../lib/format";
 import { blurOnPointerClick } from "../../lib/hotkeys";
 import type { JoinClock } from "../../lib/joinClock";
@@ -229,7 +229,7 @@ export function changeForEdit(changes: readonly Change[], edit: ThreadEdit | und
 /** A request's words, short enough to lead a hover note: its first line, up to 32 characters. */
 export const shortTitle = (title: string) => {
   const line = title.split("\n")[0]!.trim();
-  return line.length > 32 ? `${line.slice(0, 31).trimEnd()}…` : line;
+  return line.length > 32 ? `${cutText(line, 31).trimEnd()}…` : line;
 };
 
 /** Scarlet is on a request now, as against one waiting its turn or for an answer. */

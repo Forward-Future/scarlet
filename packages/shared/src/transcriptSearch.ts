@@ -23,10 +23,12 @@ export function flattenWords(t: Transcript): TranscriptWord[] {
 }
 
 export function normalizeTranscriptToken(s: string): string {
+  // Marks stay: a Hindi vowel sign or a Thai tone mark makes another word (काम is not कम).
   return s
+    .normalize("NFC")
     .toLowerCase()
     .replace(/[’']/g, "")
-    .replace(/[^\p{L}\p{N}]+/gu, "");
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, "");
 }
 
 export interface TranscriptMatch {

@@ -568,8 +568,8 @@ export class ScarletClient extends ClientTransport {
   registerHost(body: { name: string; platform: string; agents: AgentHost["agents"] }) {
     return this.post<{ host: AgentHost }>("/hosts/register", body);
   }
-  heartbeat(hostId: string, agents: AgentHost["agents"], running?: string[]) {
-    return this.post<{ cancelled?: string[] }>(`/hosts/${hostId}/heartbeat`, { agents, running });
+  heartbeat(hostId: string, agents: AgentHost["agents"], running?: string[], signal?: AbortSignal) {
+    return this.request<{ cancelled?: string[] }>("POST", `/hosts/${hostId}/heartbeat`, { agents, running }, { signal });
   }
   postTaskEvent(taskId: string, event: TaskEvent, startedAt?: string) {
     return this.withResource("tasks", taskId, path => this.post<Record<string, never>>(path + "/events", { ...event, startedAt }));

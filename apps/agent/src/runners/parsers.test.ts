@@ -585,6 +585,18 @@ describe("gemini ACP parser", () => {
     expect(allow({ name: "write_file", kind: "edit", rawInput: { file_path: "/w/artifacts/page.html" } })).toBe(true);
     expect(allow({ name: "read_file", kind: "read", rawInput: { file_path: "/etc/passwd" } })).toBe(false);
   });
+
+  it("refuses a path it can't look at, rather than throwing and leaving agy without an answer", () => {
+    // A name longer than any file system takes, in a folder that is there: both looks at it fail with ENAMETOOLONG.
+    const task = mkdtempSync(join(tmpdir(), "scarlet-perm-"));
+    try {
+      const long = { toolCall: { name: "read_file", kind: "read", rawInput: { path: join(task, "a".repeat(300), "b.txt") } } };
+      expect(() => workspacePermission(long, [task])).not.toThrow();
+      expect(workspacePermission(long, [task])).toBe(false);
+    } finally {
+      rmSync(task, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("helpers", () => {

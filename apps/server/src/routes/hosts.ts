@@ -70,7 +70,8 @@ export function hostRoutes(ctx: Ctx) {
     const body = await jsonBody(c, z.object({ taskId: z.string().optional(), agents: z.array(z.string()).optional(),
       checkAgents: z.array(z.string()).optional(), desktopPid: z.number().int().positive().optional() }));
     const desktopPid = body.desktopPid === ctx.options.desktopPid ? body.desktopPid : undefined;
-    const fresh = ctx.repos.hosts.put({ ...host, lastSeenAt: now(), online: true });
+    // A host back from being away often claims before its next heartbeat: the window hears it is back from whichever comes first.
+    const fresh = save({ ...host, lastSeenAt: now(), online: true }, !withOnline(host).online);
     const waitSeconds = Math.min(60, Math.max(0, Number(c.req.query("wait") ?? 0) || 0));
     const deadline = Date.now() + waitSeconds * 1000;
     // A host that hung up can't receive a claim. Its task would sit claimed until recovery failed it.

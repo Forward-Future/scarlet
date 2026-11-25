@@ -144,6 +144,24 @@ async function checkPassAudio(taskId: string) {
   expect(result).toMatchObject({ version, heard: 0, remaining: 0 });
 }
 
+it("tells the window a host is back when its claim comes before its heartbeat", async () => {
+  const { host } = await (await api("POST", "/hosts/register", { name: "Away", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
+  // Not heard from for longer than the online window.
+  workspace.ctx.repos.hosts.put({ ...workspace.ctx.repos.hosts.get(host.id)!, lastSeenAt: new Date(Date.now() - 10 * 60_000).toISOString() });
+  const published = vi.fn();
+  workspace.ctx.bus.on("ws", published);
+  try {
+    await api("POST", `/hosts/${host.id}/claim`, {});
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({ type: "host.updated", host: expect.objectContaining({ id: host.id, online: true }) }));
+    published.mockClear();
+    // Back already, its next claim says nothing new.
+    await api("POST", `/hosts/${host.id}/claim`, {});
+    expect(published.mock.calls.filter(([e]) => e.type === "host.updated")).toEqual([]);
+  } finally {
+    workspace.ctx.bus.off("ws", published);
+  }
+});
+
 it("returns cancellations missed before a native host subscribed to a new project", async () => {
   const { host } = await (await api("POST", "/hosts/register", {
     name: "test desktop", platform: "test", agents: [{ id: "codex", installed: true }],

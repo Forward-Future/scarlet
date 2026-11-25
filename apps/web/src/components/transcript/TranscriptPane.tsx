@@ -3,6 +3,7 @@ import { TranscriptionStatus } from "../media/TranscriptionAction";
 import { clock, clockRange } from "../../lib/format";
 import { isComposing, mediaPlaying } from "../../lib/hotkeys";
 import { player } from "../../lib/player";
+import { cutText } from "@scarlet/shared";
 import type { MediaAsset, Timeline } from "@scarlet/timeline";
 import { cutWords, mapWords, sourceWords, selectionRange, indexWordTimes, type MappedWord } from "../../lib/transcriptMap";
 import { usePlayerStore } from "../../stores/player";
@@ -230,7 +231,7 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
     const clipIds = [...new Set(selection.flatMap(w => w.placements.flatMap(p => p.clipId ? [p.clipId] : [])))];
     // The cut's times are labelled with the version they were read on, which can lag the head while the video plays.
     const version = draft?.version ?? (source ? project.head : timeline?.version ?? project.head) ?? undefined;
-    const asked: AgentContext = { version, time: range.start, end: range.end, clipIds: source ? [] : clipIds, ...(source && { mediaId: source.id }), label: `“${selText.length > 40 ? `${selText.slice(0, 37)}…` : selText}”` };
+    const asked: AgentContext = { version, time: range.start, end: range.end, clipIds: source ? [] : clipIds, ...(source && { mediaId: source.id }), label: `“${selText.length > 40 ? `${cutText(selText, 37)}…` : selText}”` };
     setAgentContext(asked);
     // The page can aim the box further: words inside a call that's open are about that call.
     onAsk(asked);
