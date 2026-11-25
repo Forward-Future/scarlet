@@ -70,9 +70,12 @@ export type StyleGuideFromGraphicRequest = z.infer<typeof StyleGuideFromGraphicR
 
 /** Ask Scarlet to design or update a style guide in chat, optionally with files attached to the message. */
 export const EditStyleGuideRequest = RunChoice.extend({
-  prompt: z.string().trim().min(1).max(8000),
+  prompt: z.string().trim().max(8000).default(""),
   attachments: z.array(StyleGuideAsset.pick({ id: true, name: true, size: true, mime: true })).max(20).optional(),
-});
+}).refine(
+  body => body.prompt.length > 0 || (body.attachments?.length ?? 0) > 0,
+  { message: "Describe a look or attach a file.", path: ["prompt"] },
+);
 export type EditStyleGuideRequest = z.infer<typeof EditStyleGuideRequest>;
 
 /** What Scarlet saves to a style guide during a style_guide_edit task. */

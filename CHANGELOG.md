@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 25, 2026
+
+- Dropping a file into a style guide chat now lets you send it right away without typing a message, and the style guide page shows Scarlet's working status once in the chat instead of repeating it under the preview.
+
 ## November 24, 2026
 
 - Pressing ⌘Z right after rejecting a cut now brings back its Keep and Revise card instead of leaving it saying Rejected.

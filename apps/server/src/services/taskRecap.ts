@@ -94,7 +94,10 @@ export function recoveryInstruction(ctx: Ctx, task: Task, rootId?: string, curre
   const run = rootId && runAttempts(task.projectId, rootId);
   const attempts = run ? ctx.repos.tasks.select(run.where, run.params, "created_at, rowid").filter(t => t.id !== current) : [task];
   const events = attempts.flatMap(t => ctx.repos.taskEvents.list(t.id, rootId ? "conversation" : "questionsAndAnswers"));
-  const lines = [attempts[0]!.instruction];
+  const first = attempts[0]!;
+  const initial = first.instruction.trim()
+    || (first.context.attachments?.length ? `Attached ${first.context.attachments.map(a => a.name).join(", ")}.` : "");
+  const lines = [initial];
   for (const ev of events) {
     if (ev.type === "question") lines.push(`Agent asked: ${ev.text}`);
     if (ev.type === "answer") lines.push(`Editor answered: ${ev.text}`);
@@ -126,8 +129,11 @@ export function answerHandoffInstruction(ctx: Ctx, task: Task, before?: Task): s
     .filter(t => t.id !== task.id)
     .flatMap(t => ctx.repos.taskEvents.list(t.id, "questionsAndAnswers"));
   const work = workRecapLines(ctx, attempts, task, events);
-  if (!work.length && !priorQa.length && !task.resumeRootId) return task.instruction;
-  const lines = [attempts[0]!.instruction];
+  const first = attempts[0]!;
+  const initial = first.instruction.trim()
+    || (first.context.attachments?.length ? `Attached ${first.context.attachments.map(a => a.name).join(", ")}.` : "");
+  if (!work.length && !priorQa.length && !task.resumeRootId) return initial;
+  const lines = [initial];
   for (const ev of priorQa) {
     if (ev.type === "question") lines.push(`Agent asked: ${ev.text}`);
     if (ev.type === "answer") lines.push(`Editor answered: ${ev.text}`);
