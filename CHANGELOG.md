@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- Finishing an export now closes the Export window automatically and shows a quiet confirmation strip at the bottom with Show in folder.
 - A row you just kept or sent back no longer vanishes from Done or Working if you switch tabs while it fades, and ⌘Z during the fade brings it back in view.
 - Looking at Working or Done and coming back to For you leaves the low risk switch as it was.
 - A stretch marked on the ruler now stays when you open an edit from the timeline or step to one with ↑ ↓.

@@ -157,7 +157,16 @@ function sameTarget(now: ComposerDraft["agentContext"], sent: ComposerDraft["age
   }
 }
 
+export interface ExportNotice {
+  path: string;
+  format: "mp4" | "otio" | "srt" | "vtt" | "folder";
+}
+
 interface UiState {
+  exportNotice: ExportNotice | null;
+  showExportNotice(notice: ExportNotice): void;
+  dismissExportNotice(): void;
+
   exportStarNotice: "unseen" | "visible" | "seen";
   offerExportStar(): void;
   dismissExportStar(): void;
@@ -264,6 +273,10 @@ function loadDrafts(): Record<string, ComposerDraft> {
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
+  exportNotice: null,
+  showExportNotice: (exportNotice) => set({ exportNotice }),
+  dismissExportNotice: () => set({ exportNotice: null }),
+
   exportStarNotice: "unseen",
   offerExportStar: () => {
     if (get().exportStarNotice !== "unseen") return;

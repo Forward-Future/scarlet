@@ -40,7 +40,7 @@ beforeEach(() => {
   useProjectStore.setState({ current: project, status: "ready" });
   useExports.setState({ jobs: {} });
   localStorage.clear();
-  useUiStore.setState({ exportStarNotice: "unseen" });
+  useUiStore.setState({ exportNotice: null, exportStarNotice: "unseen" });
   lines = [];
   levels = [];
   startAppLog((batch, level) => { for (const line of batch) { lines.push(line.replace(/^(\[\w+\]) \S+ \S+ /, "$1 ")); levels.push(level); } });
@@ -65,7 +65,8 @@ it("saves a finished render to the place the editor picked and tells the engine 
   // The ticket was used up by the save: there is nothing left to discard, and nothing went wrong to log.
   expect(asked.discard).not.toHaveBeenCalled();
   expect(logged()).toEqual([ended("done")]);
-  // The first video saved offers the star, once.
+  // The first video saved offers the star, once, and records the completion notice.
+  expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "mp4" });
   expect(useUiStore.getState().exportStarNotice).toBe("visible");
 });
 
@@ -94,6 +95,7 @@ it("saves a timeline file straight from the engine, with no render", async () =>
   expect(asked.request).not.toHaveBeenCalled();
   expect(asked.save).toHaveBeenCalledExactlyOnceWith(12, api.otioUrl(PRJ, project.project.head!));
   expect(job()).toMatchObject({ phase: "done" });
+  expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "otio" });
   // Only a video export offers the star.
   expect(useUiStore.getState().exportStarNotice).toBe("unseen");
 });
@@ -104,6 +106,7 @@ it("saves caption files from the caption URL, with the range, and does not start
   expect(asked.request).not.toHaveBeenCalled();
   expect(asked.save).toHaveBeenCalledExactlyOnceWith(13, api.srtUrl(PRJ, project.project.head!, { trackId: "c1", start: 1, end: 6 }));
   expect(job()).toMatchObject({ phase: "done" });
+  expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "srt" });
   expect(useUiStore.getState().exportStarNotice).toBe("unseen");
 
   useExports.setState({ jobs: {} });
@@ -111,6 +114,7 @@ it("saves caption files from the caption URL, with the range, and does not start
   await exportFile(project, { name: "cut.vtt", format: "vtt", video: { kind: "full", quality: "delivery" } });
   expect(asked.request).not.toHaveBeenCalled();
   expect(asked.save).toHaveBeenLastCalledWith(14, api.vttUrl(PRJ, project.project.head!));
+  expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "vtt" });
 });
 
 it("saves a folder for another app: asks the engine what goes in it, linked where it will be, and has the app write it", async () => {
@@ -123,6 +127,7 @@ it("saves a folder for another app: asks the engine what goes in it, linked wher
   expect(handoff).toHaveBeenCalledExactlyOnceWith(PRJ, project.project.head!, "/Users/me/Exports/Interview");
   expect(write).toHaveBeenCalledExactlyOnceWith(14, files);
   expect(job()).toMatchObject({ phase: "done", path: "/Users/me/Exports/Interview" });
+  expect(useUiStore.getState().exportNotice).toEqual({ path: "/Users/me/Exports/Interview", format: "folder" });
   expect(useUiStore.getState().exportStarNotice).toBe("unseen");
 });
 
