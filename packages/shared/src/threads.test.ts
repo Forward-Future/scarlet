@@ -133,6 +133,11 @@ describe("buildThreads", () => {
     // A proposal that predates its first linked task, the editor's revision, keeps its own id and title.
     const legacy = only({ changes: [change("c", { createdAt: at(0) })], tasks: [task("rev", { kind: "revise", context: { changeId: "c" }, createdAt: at(2) })] });
     expect(legacy).toMatchObject({ id: "c", title: "Change c" });
+    // A follow-up change saved with threadId matching an earlier task's or change's id stays in that same thread.
+    const sameLegacy = only({ changes: [change("c", { state: "approved", createdAt: at(0) }), change("adj", { state: "approved", threadId: "c", createdAt: at(1) })] });
+    expect(sameLegacy.changes.map(c => c.id)).toEqual(["c", "adj"]);
+    const sameTask = only({ tasks: [task("t", { createdAt: at(0) })], changes: [change("c", { state: "approved", taskId: "t", createdAt: at(1) }), change("adj", { state: "approved", threadId: "t", createdAt: at(2) })] });
+    expect(sameTask.changes.map(c => c.id)).toEqual(["c", "adj"]);
   });
 
   it("says what a thread is waiting on", () => {

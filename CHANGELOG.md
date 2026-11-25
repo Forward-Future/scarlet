@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Hovering the left or right edge of an open cut or timed edit (captions, B-roll, graphics, overlays, zooms, reframes, music dips, and J/L split edits) on the timeline now reveals quiet handles you can drag to adjust timing right away, with a live frame and word readout, frame-by-frame close-up on hold, and ⌘Z undo.
 - Hovering over a kept edit now offers Unkeep in place of Kept, so you can move it back out of Done without opening it.
 - Settings › Shortcuts lets you customize keyboard shortcuts, switch in one click to classic video-editor J/K/L shuttle playback (moving Keep to A and speed to [ / ]), and move or pause the playhead while typing in chat with ⌘J, ⌘K, and ⌘L (Ctrl on Windows and Linux).
 - With low risk edits turned on in For you, Keep, Reject, and Revise now move straight to the next edit in the list instead of skipping ahead.

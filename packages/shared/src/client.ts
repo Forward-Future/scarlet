@@ -307,6 +307,18 @@ export class ScarletClient extends ClientTransport {
     edits: { changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean; marker?: boolean; at?: number; before?: { version: string; removed: TimeRange } }[] }) {
     return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/rejected-edits`, body);
   }
+  /** Adjust an applied cut's edges directly with no model. Refused (409) where another edit spans the join. */
+  adjustCut(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
+    cut: { changeId: string; spot: number; label: string; range: TimeRange; at: number; before: { version: string; removed: TimeRange } };
+    removed: TimeRange }) {
+    return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/adjusted-cut`, body);
+  }
+  /** Adjust a non-cut applied edit's start/end edges directly with no model (overlays, captions, zooms, dips, split edits). */
+  adjustEdit(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
+    edit: { changeId: string; spot: number; label: string; range: TimeRange; kind?: string };
+    nextRange: TimeRange }) {
+    return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/adjusted-edit`, body);
+  }
   checkout(projectId: string, version: string) {
     return this.post<{ project: Project }>(`/projects/${projectId}/versions/${version}/checkout`);
   }

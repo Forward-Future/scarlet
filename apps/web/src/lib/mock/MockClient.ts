@@ -31,8 +31,8 @@ import type {
   VersionSummary,
 } from "@scarlet/shared";
 import type { AudioTrackSelection, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
-import { diffTimelines, newId, timelineDuration, ASPECT_PRESETS } from "@scarlet/timeline";
-import type { ActivityEntry, ApproveResponse, HandoffResponse, TrashedProject } from "@scarlet/shared";
+import { adjustCut, adjustEdit, applyOps, diffTimelines, frameAligned, newId, putBackCut, timelineDuration, ASPECT_PRESETS } from "@scarlet/timeline";
+import type { ActivityEntry, ApproveResponse, HandoffResponse, StagedCutRevision, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
 import { bootBackgroundActivity } from "./background";
 import { reviewCuts } from "./cutReview";
@@ -329,6 +329,117 @@ export class MockClient implements ScarletApi {
     this.requireAuth();
     throw new ScarletApiError(409, "needs_scarlet", "This edit can’t be put back as it was.");
   }
+  async adjustCut(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
+    cut: { changeId: string; spot: number; label: string; range: TimeRange; at: number; before: { version: string; removed: TimeRange } };
+    removed: TimeRange }): Promise<{ project: Project; change: Change }> {
+    this.requireAuth();
+    const project = this.store.projectById(projectId);
+    if (!project.head || project.head !== body.expectedHead) throw new ScarletApiError(409, "cut_changed", "The video changed. Try again.");
+    const head = this.store.db.timelines[project.head];
+    if (!head) throw notFound("Timeline");
+    const fps = project.settings.fps;
+    const oldRemoved = body.cut.before.removed;
+    const oldLen = oldRemoved.end - oldRemoved.start;
+    const target = frameAligned(body.removed, fps);
+    const rejects = target.end - target.start <= 0.5 / fps;
+    const media = this.store.db.media[projectId] ?? project.media;
+    const dur = timelineDuration(head);
+    const fullDelta = body.cut.at <= 0.5 / fps
+      ? { ds: 0, de: -oldLen }
+      : dur > 0.5 / fps && Math.abs(body.cut.at - dur) <= 0.5 / fps
+        ? { ds: oldLen, de: 0 }
+        : { ds: target.start - oldRemoved.start, de: target.end - oldRemoved.end };
+    const next = rejects
+      ? (putBackCut(head, body.cut.at, oldLen, fps) ?? adjustCut(head, body.cut.at, oldLen, fullDelta.ds, fullDelta.de, fps, media))
+      : adjustCut(head, body.cut.at, oldLen, target.start - oldRemoved.start, target.end - oldRemoved.end, fps, media);
+    if (!next) throw new ScarletApiError(409, "needs_scarlet", "This cut can’t be adjusted directly. Use Revise instead.");
+    const version = newId("ver");
+    const createdAt = now();
+    const saved: Timeline = { ...next, version, parent: project.head, createdAt };
+    this.store.db.timelines[version] = saved;
+    const id = newId("chg");
+    const newJoinAt = Math.max(0, body.cut.at + (target.start - oldRemoved.start));
+    const description = rejects ? `Rejected · ${body.cut.label}` : `Adjusted · ${body.cut.label}`;
+    const change: Change = {
+      id, projectId, description, author: this.store.human(), decidedBy: this.store.human(), state: "approved", threadId: body.threadId,
+      ...(rejects && { rejects: true as const }),
+      fromVersion: project.head, toVersion: version, appliedOnto: project.head, appliedVersion: version,
+      timelineEdits: [{
+        label: body.cut.label,
+        range: rejects ? { start: body.cut.at, end: body.cut.at + oldLen } : { start: newJoinAt, end: newJoinAt },
+        replaces: { changeId: body.cut.changeId, spot: body.cut.spot },
+      }],
+      ...(!rejects && { leftOut: { version: body.cut.before.version, joins: [{ at: newJoinAt, removed: target }] } }),
+      noteIds: [], renders: [], ranges: diffTimelines(head, saved, fps).ranges, createdAt, updatedAt: createdAt,
+    };
+    this.store.db.changes.unshift(change);
+    project.head = version;
+    project.updatedAt = createdAt;
+    this.store.summary(projectId).head = version;
+    const versions = this.store.db.versions[projectId] ?? [];
+    for (const v of versions) v.isHead = false;
+    versions.push({ version, parent: change.fromVersion, name: saved.name, author: change.author, changeId: id, description, duration: timelineDuration(saved), isHead: true, createdAt });
+    this.store.db.versions[projectId] = versions;
+    this.store.emitChange(change);
+    this.store.emitProject(projectId);
+    return { project: { ...project }, change };
+  }
+  async adjustEdit(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
+    edit: { changeId: string; spot: number; label: string; range: TimeRange; kind?: string };
+    nextRange: TimeRange }): Promise<{ project: Project; change: Change }> {
+    this.requireAuth();
+    const project = this.store.projectById(projectId);
+    if (!project.head || project.head !== body.expectedHead) throw new ScarletApiError(409, "cut_changed", "The video changed. Try again.");
+    const head = this.store.db.timelines[project.head];
+    if (!head) throw notFound("Timeline");
+    const fps = project.settings.fps;
+    const prior = this.store.db.changes.find(c => c.id === body.edit.changeId);
+    const clipIds = prior?.ops?.flatMap(op => {
+      if (op.op === "addClip" && op.clip && typeof op.clip === "object" && typeof (op.clip as { id?: unknown }).id === "string") return [(op.clip as { id: string }).id];
+      if (op.op === "updateClip" && typeof op.clipId === "string") return [op.clipId];
+      return [];
+    });
+    const target = frameAligned(body.nextRange, fps);
+    const result = adjustEdit(head, body.edit.range, target, fps, this.store.db.media[projectId] ?? project.media, {
+      kind: body.edit.kind,
+      ...(clipIds?.length && { clipIds }),
+    });
+    if (!result) throw new ScarletApiError(409, "needs_scarlet", "This edit can’t be adjusted directly. Use Revise instead.");
+    const version = newId("ver");
+    const createdAt = now();
+    const saved: Timeline = { ...result.timeline, version, parent: project.head, createdAt };
+    this.store.db.timelines[version] = saved;
+    const id = newId("chg");
+    const rejects = !!result.removed;
+    const description = rejects ? `Rejected · ${body.edit.label}` : `Adjusted · ${body.edit.label}`;
+    const priorNamed = prior?.timelineEdits?.[body.edit.spot];
+    const change: Change = {
+      id, projectId, description, author: this.store.human(), decidedBy: this.store.human(), state: "approved", threadId: body.threadId,
+      ...(rejects && { rejects: true as const }),
+      fromVersion: project.head, toVersion: version, appliedOnto: project.head, appliedVersion: version,
+      ops: result.ops as unknown as Array<Record<string, unknown>>,
+      timelineEdits: [{
+        label: body.edit.label,
+        range: rejects ? body.edit.range : result.range,
+        ...(priorNamed?.reason && { reason: priorNamed.reason }),
+        ...(priorNamed?.summary && { summary: priorNamed.summary }),
+        ...(priorNamed?.check && { check: priorNamed.check }),
+        replaces: { changeId: body.edit.changeId, spot: body.edit.spot },
+      }],
+      noteIds: [], renders: [], ranges: diffTimelines(head, saved, fps).ranges, createdAt, updatedAt: createdAt,
+    };
+    this.store.db.changes.unshift(change);
+    project.head = version;
+    project.updatedAt = createdAt;
+    this.store.summary(projectId).head = version;
+    const versions = this.store.db.versions[projectId] ?? [];
+    for (const v of versions) v.isHead = false;
+    versions.push({ version, parent: change.fromVersion, name: saved.name, author: change.author, changeId: id, description, duration: timelineDuration(saved), isHead: true, createdAt });
+    this.store.db.versions[projectId] = versions;
+    this.store.emitChange(change);
+    this.store.emitProject(projectId);
+    return { project: { ...project }, change };
+  }
   async historyEdit(projectId: string, target: string, action: "revert" | "restore", expectedHead: string, branch: string) {
     this.requireAuth();
     return historyEdit(this.store, projectId, target, action, expectedHead, branch);
@@ -387,6 +498,42 @@ export class MockClient implements ScarletApi {
     if (body.applyWhenDone !== undefined) change.applyWhenDone = body.applyWhenDone ? { userId: "usr_mock", at: new Date().toISOString() } : undefined;
     this.store.emitChange(change);
     return { change: { ...change } };
+  }
+  async reviseStagedCut(changeId: string, index: number, body: StagedCutRevision): Promise<{ change: Change; replaced?: string; index?: number; carried?: true }> {
+    this.requireAuth();
+    const prior = this.store.changeById(changeId);
+    const project = this.store.projectById(prior.projectId);
+    const { review } = await this.cutReview(changeId);
+    if (!review?.cuts[index]) throw new ScarletApiError(400, "wrong_cut", "Choose a staged cut in this pass.");
+    const aligned = frameAligned({ start: body.start, end: body.end }, project.settings.fps);
+    const ranges = review.cuts.map((c, i) => i === index ? aligned : c.removed);
+    const ops = [...ranges].reverse().map(r => ({ op: "rippleDelete" as const, start: r.start, end: r.end }));
+    const base = this.store.db.timelines[prior.fromVersion];
+    if (!base) throw notFound("Timeline");
+    const version = newId("ver");
+    const createdAt = now();
+    const proposed: Timeline = { ...applyOps(base, ops), version, parent: prior.fromVersion, createdAt };
+    this.store.db.timelines[version] = proposed;
+    const id = newId("chg");
+    const cutAssessments = prior.cutAssessments?.map(a => a.index === index ? { ...a, start: aligned.start, end: aligned.end, reason: body.reason, ...(body.summary && { summary: body.summary }) } : a);
+    const revised: Change = {
+      ...prior,
+      id,
+      toVersion: version,
+      ops: ops as unknown as Array<Record<string, unknown>>,
+      cutAssessments,
+      cutChoices: prior.cutChoices?.filter(c => c.index !== index),
+      updatedAt: createdAt,
+    };
+    prior.state = "rejected";
+    prior.rejectedFrom = "ready";
+    prior.rejectReason = "Replaced by a newer revision of this pass.";
+    prior.replacedBy = id;
+    prior.updatedAt = createdAt;
+    this.store.db.changes.unshift(revised);
+    this.store.emitChange(prior);
+    this.store.emitChange(revised);
+    return { change: { ...revised }, replaced: prior.id, index };
   }
 
   async cutReviewDraft(changeId: string, restoredCuts: number[], ontoVersion?: string) {

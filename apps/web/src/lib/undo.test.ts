@@ -115,6 +115,22 @@ it("takes a call's Keep back through the page that holds its pass, not the Keep 
   expect(lastStep(useUndoStore.getState().steps, "other")).toMatchObject({ kind: "call", changeId: "pass_other" });
 });
 
+it("takes back a direct cut-edge adjustment on a waiting call by rejecting the new pass and reopening the prior pass", async () => {
+  recordUndo({ kind: "callAdjust", word: "Adjust", projectId: "prj", changeId: "pass_v2", replacedId: "pass", index: 1, name: "Cut at 0:09" });
+  const changes = [change("pass", "rejected", { replacedBy: "pass_v2" }), change("pass_v2", "ready")];
+  expect(await undoLast("prj", { changes, tasks: [] }, noRevert)).toMatchObject({ kind: "callAdjust", changeId: "pass_v2", replacedId: "pass", index: 1 });
+  expect(api.rejectChange).toHaveBeenCalledWith("pass_v2", "Taken back with Undo.");
+  expect(api.reopenChange).toHaveBeenCalledWith("pass");
+  // Once the adjusted pass has been applied, ⌘Z explains why and leaves the pass alone.
+  recordUndo({ kind: "callAdjust", word: "Adjust", projectId: "prj", changeId: "pass_v3", replacedId: "pass_v2", index: 1 });
+  expect(await undoLast("prj", { changes: [change("pass_v3", "approved")], tasks: [] }, noRevert)).toBeUndefined();
+  expect(useUndoStore.getState().error).toEqual({ projectId: "prj", text: "Couldn’t undo Adjust: its pass has been applied since." });
+  // forgetCalls drops pending callAdjust entries too.
+  recordUndo({ kind: "callAdjust", word: "Adjust", projectId: "prj", changeId: "pass_v4", replacedId: "pass_v3", index: 0 });
+  forgetCalls("prj");
+  expect(lastStep(useUndoStore.getState().steps, "prj")).toBeUndefined();
+});
+
 it("logs a ⌘Z that had nothing to take back, or came while another was still under way", async () => {
   const lines: string[] = [];
   startAppLog(batch => lines.push(...batch));
