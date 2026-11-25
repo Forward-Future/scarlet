@@ -225,6 +225,7 @@ describe("an editing prompt", () => {
     const prompt = buildSystemPrompt({ ...base, task: task({}) });
     expect(prompt).toContain("Always save why you made each edit, even when the editor asked for the exact change.");
     expect(prompt).toContain("Scarlet shows the short summary of what changed in the chat and the reason on the card above the timeline.");
+    expect(prompt).toContain("Keep them to at most three lines (about 160 characters)");
   });
 
   it("points a revision at the staged cut or the edit the editor chose", () => {

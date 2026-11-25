@@ -102,6 +102,8 @@
 [data-new-layout] .simple-pin > .unit > .unit-msg { padding-top: 8px; }
 [data-new-layout] .simple-pin:has(> .unit:not([hidden])) + .composer-dock { border-top: 0; padding-top: 9px; }
 [data-new-layout] .req-say.is-yours { width: fit-content; max-width: 86%; margin-left: auto; padding: 7px 12px; border-left: 0; border-radius: 12px; background: var(--bubble); color: var(--color-fg); }
+[data-new-layout] .req-say.said:not(.is-yours),
+[data-new-layout] .simple-msg.from-scarlet .said { -webkit-line-clamp: 3; }
 
 /* Numbered pass calls short list. */
 [data-new-layout] .simple-pass-list.is-short > li > .subunit { margin-left: 16px; padding-left: 16px; }

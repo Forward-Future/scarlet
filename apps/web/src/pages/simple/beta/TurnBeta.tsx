@@ -388,7 +388,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost, list: passLi
     const autoHeading = inside && isRecheck(task);
     mine.forEach((e, i) => {
       if (autoHeading && e.kind === "system" && e.text === RECHECK_WORDS) return;
-      // All of what Scarlet said: folded it keeps to two lines, and a click opens the rest.
+      // All of what Scarlet said: folded it keeps to three lines in the beta layout, and a click opens the rest.
       if (e.kind === "agent") { if (!quiet && !(e.onNote && closed)) { told = true; if (!listing) said.push(<Said key={i} className="req-say" text={e.fullText ?? e.text} />); } }
       // A question still waiting isn't in the chat: it sits on top of the message box, which answers it, and the band's
       // dot says it waits (the editor's choice, 2026-11-24). Once answered it stays, quiet, so the history still reads.
