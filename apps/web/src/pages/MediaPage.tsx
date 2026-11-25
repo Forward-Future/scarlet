@@ -198,7 +198,7 @@ export function MediaPage({ uploads, onPlay }: {
       const paths = await desktop.pickFiles();
       // The files are queued once handed over, so the picker is free again: waiting for them to be in would hold it for
       // as long as a link downloading ahead of them.
-      if (paths.length) void startPaths(paths);
+      if (paths.length) void startPaths(paths, { expand: false });
     } catch (e) {
       setPickerError(errorMessage(e));
     } finally {

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorMessage, IS_DESKTOP } from "../../lib/client";
 import { desktop } from "../../lib/desktop";
+import { emptyFolderMessage, expandDroppedPaths } from "../../lib/expandMediaPaths";
 import { matchFirstClip } from "../../lib/firstClipFormat";
 import { ACCEPTED_MEDIA, MEDIA_FORMAT_HINT } from "../../lib/upload";
 import { useProjectStore } from "../../stores/project";
@@ -47,8 +48,8 @@ const sourceKey = (source: ImportSource) => typeof source === "string" ? source 
 /** A project is named for its first video until the editor names it. */
 const nameFrom = (sources: ImportSource[]) => filename(sources[0]!).replace(/\.[^.]+$/, "") || "Untitled project";
 
-export function NewProjectModal({ initialFiles, empty, notice, local, onClose }: {
-  initialFiles: ImportSource[]; empty: boolean; notice: string; local?: boolean; onClose(): void;
+export function NewProjectModal({ initialFiles, initialError, empty, notice, local, onClose }: {
+  initialFiles: ImportSource[]; initialError?: string; empty: boolean; notice: string; local?: boolean; onClose(): void;
 }) {
   const createProject = useProjectStore((s) => s.createProject);
   const navigate = useNavigate();
@@ -56,12 +57,17 @@ export function NewProjectModal({ initialFiles, empty, notice, local, onClose }:
   const [name, setName] = useState(initialName);
   const [files, setFiles] = useState<ImportSource[]>(initialFiles);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(initialError ?? null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   // The name the first video last gave, so another selection renames a project the editor hasn't named themselves.
   const given = useRef(initialName);
 
   const selectFootage = (sources: ImportSource[]) => {
+    filesRef.current = sources;
     setFiles(sources);
     // Videos chosen in the dialog name the project as videos dropped on the library do. A name the editor typed stays.
     const was = given.current, next = sources.length ? nameFrom(sources) : "";
@@ -71,9 +77,24 @@ export function NewProjectModal({ initialFiles, empty, notice, local, onClose }:
 
   /** Videos chosen or dropped on the open dialog join the ones already there, once each. */
   const addFootage = (sources: ImportSource[]) => {
-    if (busy || !sources.length) return;
-    const has = new Set(files.map(sourceKey));
-    selectFootage([...files, ...sources.filter(source => !has.has(sourceKey(source)))]);
+    if (busyRef.current || !sources.length) return;
+    const current = filesRef.current;
+    const has = new Set(current.map(sourceKey));
+    selectFootage([...current, ...sources.filter(source => !has.has(sourceKey(source)))]);
+  };
+
+  const addDroppedPaths = async (paths: string[]) => {
+    if (busyRef.current || !paths.length) return;
+    setErr(null);
+    try {
+      const { files: resolved, emptyFolders } = await expandDroppedPaths(paths);
+      if (busyRef.current) return;
+      if (resolved.length) addFootage(resolved);
+      const emptyMsg = emptyFolderMessage(emptyFolders);
+      if (emptyMsg) setErr(emptyMsg);
+    } catch (e) {
+      if (!busyRef.current) setErr(errorMessage(e));
+    }
   };
 
   const removeFootage = (index: number) => {
@@ -124,7 +145,7 @@ export function NewProjectModal({ initialFiles, empty, notice, local, onClose }:
       }
     >
       <form id="new-project" onSubmit={e => { e.preventDefault(); void create(); }}>
-        <Dropzone onFiles={sources => addFootage(Array.from(sources))} onPaths={addFootage} label="Drop to add videos" notice={notice}>
+        <Dropzone onFiles={sources => addFootage(Array.from(sources))} onPaths={paths => { void addDroppedPaths(paths); }} label="Drop to add videos" notice={notice}>
           <Field label="Project name" htmlFor="np-name">
             <input id="np-name" className="field" value={name} required disabled={busy} onChange={e => setName(e.target.value)} placeholder="Enter a name" />
           </Field>
