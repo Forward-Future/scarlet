@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Hovering over a kept edit now offers Unkeep in place of Kept, so you can move it back out of Done without opening it.
 - With low risk edits turned on in For you, Keep, Reject, and Revise now move straight to the next edit in the list instead of skipping ahead.
 - A revised edit's card now describes what its latest version actually changed instead of the earlier version it replaced, and added clips show their readable label instead of raw camera or screen-recording file names.
 - Dropping a folder into Scarlet now detects the video files inside, imports them, and starts caching them automatically.

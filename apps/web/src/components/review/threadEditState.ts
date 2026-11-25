@@ -99,6 +99,16 @@ export function useReviewed(projectId: string, thread: Thread | undefined) {
   }, [kept, thread]);
 }
 
+/** Whether the editor can take back their Keep on an edit: kept directly, not permanently decided by an applied pass. */
+export function useCanUnkeep(projectId: string, thread: Thread | undefined) {
+  const kept = useKeptEdits(projectId, thread);
+  return useMemo(() => {
+    const decided = new Set(thread?.changes.filter(c => c.state === "approved" && (c.appliedReview || c.approvedSpots)).map(c => c.id));
+    return (edit: EditRef & { recheck?: string; reviewRef?: EditRef; marker?: boolean }) =>
+      !edit.marker && kept.has(reviewKey(edit)) && (!!edit.recheck || !!edit.reviewRef || !decided.has(edit.changeId));
+  }, [kept, thread]);
+}
+
 /**
  * Whether a request about an edit is queued or running: the editor asked Scarlet to revise or undo it, so the edit
  * no longer waits for them. Once the request finishes, its new version carries its own flag; if it fails, the edit

@@ -228,3 +228,27 @@ it("scrolls the selected edit row into view across stepping, tab switches, and r
     else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   }
 });
+
+it("offers Unkeep on kept edit rows and takes back Keep without opening the edit", async () => {
+  const { keepEdits } = await import("../../lib/keptEdits");
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const edits = threadEditList(thread) as ThreadEdit[];
+  const rejected: ThreadEdit[] = [{ ...edits[2]!, spot: 99, label: "removed cut", rejected: true, wasCheck: true }];
+  useProjectStore.setState({ current: data, status: "ready" });
+  vi.spyOn(api, "keepEdits").mockResolvedValue(undefined as never);
+  const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined as never);
+  const onPlay = vi.fn();
+  keepEdits(PRJ, thread.id, [edits[0]!]);
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} rejected={rejected} only={() => true} onPlay={onPlay} />));
+
+  // Only the kept edit row gets Unkeep, never an unkept or rejected row.
+  const buttons = [...container.querySelectorAll<HTMLButtonElement>(".simple-unkeep")];
+  expect(buttons).toHaveLength(1);
+  expect(buttons[0]!.textContent).toBe("Unkeep");
+  expect(buttons[0]!.closest("li")?.classList.contains("has-unkeep")).toBe(true);
+
+  await click(buttons[0]!);
+  expect(onPlay).not.toHaveBeenCalled();
+  expect(unkeep).toHaveBeenCalledWith(PRJ, { threadId: thread.id, edits: [{ changeId: edits[0]!.changeId, spot: edits[0]!.spot }] });
+  expect(container.querySelector(".simple-unkeep")).toBeNull();
+});
