@@ -14,6 +14,7 @@ import { useProjectStore } from "../../stores/project";
 import { Dropdown, MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
+import { ariaKeyShortcut, matchesShortcut, shortKeyLabel, useShortcutsStore } from "../../stores/shortcuts";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { useAgentAvailability } from "../agent/AgentChip";
 import type { AgentContext } from "../../stores/ui";
@@ -77,16 +78,18 @@ export function RejectEdit({ projectId, thread, target, edits, editsOn, onEngine
       setBusy(false);
     }
   }
-  // X rejects it, as it does a call: the same key on every card.
+  const rejectBinding = useShortcutsStore(s => s.bindings.reject);
+  const rejectLabel = shortKeyLabel(rejectBinding);
+  // Reject shortcut (X by default), as on a call: the same key on every card.
   useHotkeys(event => {
-    if (busy || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "x") return;
+    if (busy || event.repeat || !matchesShortcut(event, "reject")) return;
     event.preventDefault();
     void reject();
   });
   return <>
     {error && <span className="simple-error" role="alert">{error}</span>}
     <button type="button" className="edit-card-icon edit-card-reject" data-log-control="reject-edit" aria-label="Reject edit" aria-busy={busy || undefined}
-      aria-keyshortcuts="X" title={busy ? "Rejecting…" : "Reject edit (X)"} disabled={busy} onClick={e => { blurOnPointerClick(e); void reject(); }}><Icon name="x" size={12} /></button>
+      aria-keyshortcuts={ariaKeyShortcut(rejectBinding)} title={busy ? "Rejecting…" : rejectLabel ? `Reject edit (${rejectLabel})` : "Reject edit"} disabled={busy} onClick={e => { blurOnPointerClick(e); void reject(); }}><Icon name="x" size={12} /></button>
   </>;
 }
 

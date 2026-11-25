@@ -17,6 +17,7 @@ import { Link, Navigate, Outlet, useBlocker, useLocation, useMatch, useNavigate 
 import { ListeningSettings } from "../components/shell/ListeningSettings";
 import { ModelSettings } from "../components/shell/ModelSettings";
 import { ProviderSettings } from "../components/shell/ProviderSettings";
+import { ShortcutsSettings } from "../components/shell/ShortcutsSettings";
 import { TaskModelsSettings } from "../components/shell/TaskModelsSettings";
 import { DesktopAgents, DesktopDiagnostics, ExportLogs } from "../components/shell/DesktopSettings";
 import { FfmpegSetupCard } from "../components/shell/FfmpegSetup";
@@ -313,6 +314,7 @@ const tabs = [
   { id: "models", label: "Models", to: "/settings#models" },
   { id: "tools", label: "Tools & skills", to: "/settings/skills" },
   { id: "style-guides", label: "Style guides", to: "/settings/style-guides" },
+  { id: "shortcuts", label: "Shortcuts", to: "/settings#shortcuts" },
   { id: "usage", label: "Usage", to: "/settings#usage" },
   { id: "advanced", label: "Advanced", to: "/settings#advanced" },
   { id: "about", label: "About", to: "/settings#about" },
@@ -383,6 +385,7 @@ export function SettingsPage() {
           </>
         )}
         {tab === "style-guides" && <Outlet />}
+        {tab === "shortcuts" && <ShortcutsSettings />}
         {tab === "usage" && (
           <div className="usage-page">
             <UsageSettings />

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { TimeRange } from "@scarlet/timeline";
 import { lengthLabel, playbackClock, preciseRange } from "../../lib/format";
 import { appLog } from "../../lib/appLog";
-import { isAltClearRangeKey } from "../../lib/hotkeys";
+import { matchesClearRangeKey } from "../../lib/hotkeys";
 import type { ScrubRelease } from "../../lib/player";
 import { DimMs, Icon } from "../ui/primitives";
 import { QueuedImg } from "./QueuedImg";
@@ -273,7 +273,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
   const lit = useUiStore(s => s.aimLit);
   const nudge = (edge: "start" | "end", e: KeyboardEvent<HTMLButtonElement>) => {
     if (!range) return;
-    if (isAltClearRangeKey(e)) {
+    if (matchesClearRangeKey(e)) {
       e.preventDefault(); e.stopPropagation();
       appLog("timeline", "range-cleared", { via: "key", key: "alt+x" });
       onRange(undefined);

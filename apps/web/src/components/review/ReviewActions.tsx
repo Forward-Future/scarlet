@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
+import { ariaKeyShortcut, matchesBinding, shortKeyLabel, useShortcutsStore } from "../../stores/shortcuts";
 
 /**
  * The same decisions and shortcuts for every edit: Revise (R), and Apply (A), Keep (K), or Done (D).
@@ -9,19 +10,25 @@ export function ReviewActions({ lead, approve, revise, disabled, approvalDisable
   lead?: ReactNode; approve?: () => void; revise?: () => void; disabled?: boolean; approvalDisabled?: boolean;
   approveLabel?: string; approveKey?: string; reviseLabel?: string; reviseKey?: string;
 }) {
+  const keepBinding = useShortcutsStore(s => s.bindings.keep);
+  const reviseBinding = useShortcutsStore(s => s.bindings.revise);
+  const effectiveApprove = approveLabel === "Keep" ? keepBinding : approveKey;
+  const effectiveRevise = reviseLabel === "Revise" ? reviseBinding : reviseKey;
+  const shownApprove = shortKeyLabel(effectiveApprove);
+  const shownRevise = shortKeyLabel(effectiveRevise);
   useHotkeys(event => {
-    if (disabled || event.repeat || event.shiftKey) return;
-    const key = event.key.toLowerCase();
-    const action = key === reviseKey.toLowerCase() ? revise : key === approveKey.toLowerCase() && !approvalDisabled ? approve : undefined;
+    if (disabled || event.repeat) return;
+    const action = matchesBinding(event, effectiveRevise) ? revise
+      : matchesBinding(event, effectiveApprove) && !approvalDisabled ? approve : undefined;
     if (action) { event.preventDefault(); action(); }
   });
   return <div className="review-actions">
     {lead}
-    {revise && <button type="button" className="btn-ghost" data-key={reviseKey} data-log-control="revise-edit" aria-keyshortcuts={reviseKey} title={`${reviseLabel} (${reviseKey})`} disabled={disabled} onClick={e => {
-      if (reviseKey !== "R") blurOnPointerClick(e);
+    {revise && <button type="button" className="btn-ghost" data-key={shownRevise || undefined} data-log-control="revise-edit" aria-keyshortcuts={ariaKeyShortcut(effectiveRevise)} title={shownRevise ? `${reviseLabel} (${shownRevise})` : reviseLabel} disabled={disabled} onClick={e => {
+      if (reviseLabel !== "Revise") blurOnPointerClick(e);
       revise();
     }}>{reviseLabel}</button>}
-    {approve && <button type="button" className="btn-primary" data-key={approveKey} data-log-control={approveKey === "K" ? "keep-edit" : approveKey === "D" ? "mark-done" : "apply-edit"} aria-keyshortcuts={approveKey} title={`${approveLabel} (${approveKey})`}
+    {approve && <button type="button" className="btn-primary" data-key={shownApprove || undefined} data-log-control={approveLabel === "Keep" ? "keep-edit" : approveLabel === "Done" ? "mark-done" : "apply-edit"} aria-keyshortcuts={ariaKeyShortcut(effectiveApprove)} title={shownApprove ? `${approveLabel} (${shownApprove})` : approveLabel}
       disabled={disabled || approvalDisabled} onClick={e => {
         // The button stays for the next edit. Clicked, it lets go of the focus (WebView2 leaves it there), or Space
         // would press it again while the video is paused. Pressed by keyboard, it keeps it.

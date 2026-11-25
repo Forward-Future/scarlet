@@ -4,7 +4,8 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { ThreadEdit } from "@scarlet/shared";
 import { isPlayableMedia, timelineDuration, type Change, type MediaAsset, type TimeRange, type Timeline } from "@scarlet/timeline";
-import { arrowSeekTime, blurOnPointerClick, handleCutArrow, isComposing, useHotkeys } from "../lib/hotkeys";
+import { arrowSeekTime, blurOnPointerClick, handleCutArrow, isComposing, isInEditableElement, useHotkeys } from "../lib/hotkeys";
+import { matchesShortcut } from "../stores/shortcuts";
 import { canPlayOriginal, isPreparingMedia } from "../lib/upload";
 import { useImportCount } from "../components/media/UploadDropzone";
 import { pauseForScrub, player, type ScrubRelease } from "../lib/player";
@@ -515,26 +516,42 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   useHotkeys((e) => {
     if (!active || useUiStore.getState().notePopover) return;
     if (cutReview && handleCutArrow(e, stepCut)) return;
-    if (e.key === " ") {
+    if (matchesShortcut(e, "playPause")) {
       if (playingBefore) return;
       e.preventDefault();
       // Held down, Space is one press: its repeats would flutter between play and pause.
       if (playable && !e.repeat) player.toggle();
-    } else if (e.key.toLowerCase() === "l") {
+    } else if (matchesShortcut(e, "shuttleBack")) {
+      if (playingBefore || !playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) player.shuttleReverse();
+    } else if (matchesShortcut(e, "shuttleStop")) {
+      if (playingBefore || !playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) player.shuttleStop();
+    } else if (matchesShortcut(e, "shuttleForward")) {
+      if (playingBefore || !playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) player.shuttleForward();
+    } else if (matchesShortcut(e, "speedDown")) {
       if (!playable || isComposing(e)) return;
       e.preventDefault();
-      if (e.shiftKey) stepPlaybackRate(-1, true);
-      else if (!e.repeat) toggleFastPlaybackRate();
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      stepPlaybackRate(-1, true);
+    } else if (matchesShortcut(e, "speedUp")) {
+      if (!playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) toggleFastPlaybackRate();
+    } else if (matchesShortcut(e, "stepBack", { allowShift: true }) || matchesShortcut(e, "stepForward", { allowShift: true })) {
       e.preventDefault();
       if (!playable || duration <= 0) return;
-      const target = Math.max(0, Math.min(lastFrame, arrowSeekTime(usePlayerStore.getState().time, e.key, e.shiftKey, fps)));
+      const dir = matchesShortcut(e, "stepBack", { allowShift: true }) ? "ArrowLeft" : "ArrowRight";
+      const target = Math.max(0, Math.min(lastFrame, arrowSeekTime(usePlayerStore.getState().time, dir, e.shiftKey, fps)));
       seekFull(target);
       selectTime(target);
-    } else if (e.key.toLowerCase() === "m" && simple.onPick && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    } else if (matchesShortcut(e, "markFrame") && simple.onPick) {
       e.preventDefault();
       if (!e.repeat) markFrame();
-    } else if (e.key.toLowerCase() === "n") {
+    } else if (matchesShortcut(e, "aimChat")) {
       e.preventDefault();
       // Held down, N is one press too: it has already picked the moment and asked for the cursor.
       if (e.repeat) return;
@@ -543,6 +560,30 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       useUiStore.getState().focusComposer();
     }
   });
+  // Playhead shortcuts usable while typing in the chat box (⌘J / ⌘K / ⌘L by default, Ctrl on Windows/Linux).
+  useEffect(() => {
+    if (!active) return;
+    const onChatKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isComposing(e) || playingBefore || !playable || useUiStore.getState().notePopover) return;
+      if (!isInEditableElement(e.target) || !e.target.closest(".composer-box")) return;
+      if (document.querySelector('dialog[open], [role="dialog"], [role="menu"]')) return;
+      if (matchesShortcut(e, "chatBack")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) player.shuttleReverse();
+      } else if (matchesShortcut(e, "chatPause")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) player.toggle();
+      } else if (matchesShortcut(e, "chatForward")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) player.shuttleForward();
+      }
+    };
+    window.addEventListener("keydown", onChatKey, true);
+    return () => window.removeEventListener("keydown", onChatKey, true);
+  }, [active, playable, playingBefore]);
   // A pause the editor makes aims an empty message box at that moment in its tag, without writing into the box.
   const pickOnPause = useRef(() => {});
   pickOnPause.current = () => {
