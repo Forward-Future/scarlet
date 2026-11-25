@@ -124,8 +124,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => {});
     expect(container.querySelector("[data-new-layout]")).not.toBeNull();
     expect(container.querySelector(".review-rail")).not.toBeNull();
-    expect(container.querySelector(".review-tier-sep")?.textContent).toContain("Confident edits");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 1 confident");
+    expect(container.querySelector(".review-tier-sep")?.textContent).toContain("Safe edits");
+    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 1 safe edit");
     expect([...container.querySelectorAll(".review-filter-chip")].map(b => b.textContent)).toEqual(["All 3", "Needs you 2"]);
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
@@ -753,8 +753,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
     await act(async () => {});
 
-    // One unified <ol> inside Confident edits, ordered newest request first (0:18, 1:02, 1:59), with add + move combined into one row.
-    const lowBody = container.querySelector<HTMLElement>('.review-low-body[aria-label="Confident edits"]')!;
+    // One unified <ol> inside Safe edits, ordered newest request first (0:18, 1:02, 1:59), with add + move combined into one row.
+    const lowBody = container.querySelector<HTMLElement>('.review-low-body[aria-label="Safe edits"]')!;
     expect(lowBody.querySelectorAll("ol")).toHaveLength(1);
     const lowRows = [...lowBody.querySelectorAll<HTMLButtonElement>("ol > li > button")];
     expect(lowRows.map(r => [
@@ -767,7 +767,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       ["1:59", "Haiku 5.5 title", "Graphic"],
     ]);
     expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("3");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 confident");
+    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
 
     // Keeping the combined row keeps BOTH underlying thread edits together and moves one combined row into Done.
     await act(async () => lowRows[0]!.click());

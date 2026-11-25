@@ -19,8 +19,8 @@ import { letGo, type HoveredReviewRow } from "./types";
 export const REVIEW_RAIL_MIN = 220;
 /** Default width of the edits column before the user drags its right divider. */
 const reviewRailWidth = (available: number) => available <= 1100 ? 232 : Math.max(260, Math.min(320, available * 0.22));
-/** What Keep confident says it does, on hover and to screen readers. */
-const doneLabel = (count: number) => count === 1 ? "Keep the confident edit" : `Keep all ${count} confident edits`;
+/** What Keep safe edits says it does, on hover and to screen readers. */
+const doneLabel = (count: number) => count === 1 ? "Keep the safe edit" : `Keep all ${count} safe edits`;
 
 const ROW_SELECTOR = "button.simple-edit, .simple-pass-list > li > button";
 const TIP_DELAY_MS = 180;
@@ -28,7 +28,7 @@ const TIP_WARM_MS = 250;
 
 const SECTION_LABELS: Record<RailSection, string> = {
   you: "Edits that need you",
-  low: "Confident edits",
+  low: "Safe edits",
   working: "With Scarlet",
   done: "Decided",
 };
@@ -334,7 +334,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
             : <span className="review-rail-total">{optional}</span>)}
       </h2>
       {onDoneLow && optional > 0 && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onDoneLow)}>Keep {optional} confident</button>}
+        onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
     </header>
     {need > 0 && optional > 0 && onFilter && <div className="review-filter-bar" role="group" aria-label="Filter edits">
       <button type="button" className="review-filter-chip" aria-pressed={effectiveFilter === "all"}
@@ -345,8 +345,8 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     <div className="review-rail-scroll">
       <div className="review-rail-list" role="group" aria-label="For you">
         {renderSectionList("you")}
-        {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Confident edits ({optional})</span></div>}
-        <div className="review-low-body" role="group" aria-label="Confident edits" hidden={!showConfident}>{renderSectionList("low")}</div>
+        {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Safe edits ({optional})</span></div>}
+        <div className="review-low-body" role="group" aria-label="Safe edits" hidden={!showConfident}>{renderSectionList("low")}</div>
         {forYouRows === 0 && !showConfident && <p className="simple-review-empty">Nothing waits on you.</p>}
       </div>
     </div>
