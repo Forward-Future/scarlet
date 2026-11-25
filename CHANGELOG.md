@@ -6,6 +6,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Hovering over a kept edit now offers Unkeep in place of Kept, so you can move it back out of Done without opening it.
+- Settings › Shortcuts lets you customize keyboard shortcuts, switch in one click to classic video-editor J/K/L shuttle playback (moving Keep to A and speed to [ / ]), and move or pause the playhead while typing in chat with ⌘J, ⌘K, and ⌘L (Ctrl on Windows and Linux).
+- With low risk edits turned on in For you, Keep, Reject, and Revise now move straight to the next edit in the list instead of skipping ahead.
 - A revised edit's card now describes what its latest version actually changed instead of the earlier version it replaced, and added clips show their readable label instead of raw camera or screen-recording file names.
 - Dropping a folder into Scarlet now detects the video files inside, imports them, and starts caching them automatically.
 - Dropping a file into a style guide chat now lets you send it right away without typing a message, and the style guide page shows Scarlet's working status once in the chat instead of repeating it under the preview.

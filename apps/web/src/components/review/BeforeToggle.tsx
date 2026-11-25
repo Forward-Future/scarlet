@@ -1,5 +1,6 @@
 import { useRef } from "react";
-import { COMPARE_KEY, useComparisonShortcut } from "../../lib/hotkeys";
+import { useComparisonShortcut } from "../../lib/hotkeys";
+import { ariaKeyShortcut, shortKeyLabel, useShortcutsStore } from "../../stores/shortcuts";
 
 interface BeforeToggleProps {
   on: boolean;
@@ -15,6 +16,8 @@ interface BeforeToggleProps {
  */
 export function BeforeToggle({ on, toggle, shortcutActive, disabled, flash }: BeforeToggleProps) {
   const button = useRef<HTMLButtonElement>(null);
+  const compareBinding = useShortcutsStore(s => s.bindings.compare);
+  const keyLabel = shortKeyLabel(compareBinding);
   useComparisonShortcut(shortcutActive && !disabled, toggle, button);
 
   return (
@@ -25,8 +28,8 @@ export function BeforeToggle({ on, toggle, shortcutActive, disabled, flash }: Be
       data-log-control="toggle-before"
       aria-label="Before"
       aria-pressed={on}
-      aria-keyshortcuts={COMPARE_KEY}
-      title={on ? `Back to After (${COMPARE_KEY})` : `Play Before (${COMPARE_KEY})`}
+      aria-keyshortcuts={ariaKeyShortcut(compareBinding)}
+      title={on ? (keyLabel ? `Back to After (${keyLabel})` : "Back to After") : (keyLabel ? `Play Before (${keyLabel})` : "Play Before")}
       disabled={disabled}
       onClick={e => {
         // Give Space back to the player after a pointer click. Inside a dialog, keep shortcuts in that dialog.
@@ -36,7 +39,7 @@ export function BeforeToggle({ on, toggle, shortcutActive, disabled, flash }: Be
     >
       <span className={on ? "edit-card-side-word is-on" : "edit-card-side-word"} aria-hidden>Before</span>
       <span className={on ? "edit-card-side-word" : "edit-card-side-word is-on"} aria-hidden>After</span>
-      <kbd aria-hidden>{COMPARE_KEY}</kbd>
+      {keyLabel && <kbd aria-hidden>{keyLabel}</kbd>}
     </button>
   );
 }

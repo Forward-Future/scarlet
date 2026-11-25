@@ -3,6 +3,7 @@ import { ScarletApiError, type TrashedProject } from "@scarlet/shared";
 import { Link, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, errorMessage } from "../../lib/client";
 import { useHotkeys } from "../../lib/hotkeys";
+import { matchesShortcut, matchesShortcutRelease } from "../../stores/shortcuts";
 import { player } from "../../lib/player";
 import { leaveProject } from "../../lib/realtime";
 import { rememberPlace, rememberProject } from "../../lib/updatePlace";
@@ -128,17 +129,17 @@ export function ProjectLayout() {
     useUiStore.setState({ notePopover: null, agentSetupOpen: false, projectSettingsOpen: false });
   }, [id]);
 
-  // Hold V: push-to-talk. Whoever owns the voice (composer or the item in focus) listens.
+  // Hold V (customizable): push-to-talk. Whoever owns the voice (composer or the item in focus) listens.
   useHotkeys(
     (e) => {
       const ui = useUiStore.getState();
-      if (e.key === "v" || e.key === "V") {
+      if (matchesShortcut(e, "voiceHold")) {
         if (!e.repeat) ui.setVoiceHold(true);
         e.preventDefault();
       }
     },
     (e) => {
-      if (e.key === "v" || e.key === "V") useUiStore.getState().setVoiceHold(false);
+      if (matchesShortcutRelease(e, "voiceHold")) useUiStore.getState().setVoiceHold(false);
     },
   );
 

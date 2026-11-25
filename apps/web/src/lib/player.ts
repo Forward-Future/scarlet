@@ -97,7 +97,38 @@ const editorPauses = new Set<() => void>();
  * on as it was by itself.
  */
 let handover: { at: number; el?: HTMLVideoElement } | undefined;
-const isPlaying = () => !!pendingPlay || !!handover || (!!video && !video.paused && !video.ended);
+/** Active muted reverse-shuttle timer (J key), used across macOS, Windows and Linux where negative playbackRate isn't supported. */
+let reverseTimer: ReturnType<typeof setInterval> | null = null;
+let reverseLastTick = 0;
+let reverseSeekInFlight = false;
+/** Normal playback speed saved before forward shuttle temporarily accelerates `video.playbackRate`. */
+let savedPreShuttleRate: number | undefined;
+const REVERSE_TICK_MS = 60;
+const isPlaying = () => reverseTimer !== null || !!pendingPlay || !!handover || (!!video && !video.paused && !video.ended);
+
+function stopReverseTimer() {
+  if (reverseTimer === null) return false;
+  clearInterval(reverseTimer);
+  reverseTimer = null;
+  return true;
+}
+
+function clearShuttle(restoreRate = true) {
+  const wasReversing = stopReverseTimer();
+  if (restoreRate && savedPreShuttleRate !== undefined) {
+    const rate = savedPreShuttleRate;
+    savedPreShuttleRate = undefined;
+    if (video) {
+      video.defaultPlaybackRate = rate;
+      video.playbackRate = rate;
+    }
+  } else if (!restoreRate) {
+    savedPreShuttleRate = undefined;
+  }
+  const st = usePlayerStore.getState();
+  if (st.shuttleRate !== 0) st.setShuttleRate(0);
+  return wasReversing;
+}
 function cancelPendingPlay() {
   if (!pendingPlay) return;
   pendingPlay.abort();
@@ -251,15 +282,16 @@ export const player = {
       if (raf === null) raf = requestAnimationFrame(tick);
     };
     const onPause = () => {
-      // Pausing the previous listen queues a native event. A newer, buffering listen owns Play now.
-      if (pendingPlay) return;
+      // Pausing the previous listen queues a native event. A newer, buffering listen or reverse shuttle owns Play now.
+      if (pendingPlay || reverseTimer !== null) return;
+      if (usePlayerStore.getState().shuttleRate > 0) clearShuttle(true);
       st.setPlaying(false);
       readClock(el);
     };
     const onMeta = () => st.setDuration(mediaDuration(el));
     const onRate = () => {
       const current = usePlayerStore.getState();
-      if (el.playbackRate !== current.rate) current.setRate(el.playbackRate);
+      if (current.shuttleRate === 0 && el.playbackRate !== current.rate) current.setRate(el.playbackRate);
     };
     const onSeek = () => readClock(el);
     const refreshReadiness = () => {
@@ -302,6 +334,7 @@ export const player = {
     const given = handover;
     // React puts the next element up in the same commit. Once that is over, nothing is coming.
     if (given) queueMicrotask(() => { if (handover === given && !given.el) handover = undefined; });
+    clearShuttle(false);
     cancelPendingPlay();
     detachFn?.();
     detachFn = null;
@@ -374,6 +407,10 @@ export const player = {
     };
   },
   seek(t: number, previewFrame = false) {
+    if (!reverseSeekInFlight && reverseTimer !== null) {
+      stopReverseTimer();
+      usePlayerStore.setState({ shuttleRate: 0, playing: false });
+    }
     const resume = !!pendingPlay;
     cancelPendingPlay();
     const st = usePlayerStore.getState();
@@ -494,6 +531,7 @@ export const player = {
   pause(resetRate = false) {
     const was = isPlaying();
     if (was) playbackLog("transport pause", { at: usePlayerStore.getState().time, by: calledBy() });
+    const wasReversing = clearShuttle(true);
     carry = false;
     // A passage or listen let go between one element and the next pauses nothing that's up. It keeps the handover,
     // and takes it as its own `carry`.
@@ -501,6 +539,7 @@ export const player = {
     cancelPendingPlay();
     stream?.pause?.();
     video?.pause();
+    if (wasReversing) usePlayerStore.getState().setPlaying(false);
     // Whatever stops the video stops what is on screen: a clip playing over the monitor too.
     borrower?.pause();
     if (resetRate && was) this.resetRateOnPause();
@@ -529,7 +568,7 @@ export const player = {
   /** The editor's own play or pause: Space, the play button or a click on the picture. */
   toggle() {
     if (!video) return;
-    if (!pendingPlay && (video.paused || video.ended)) this.play();
+    if (reverseTimer === null && !pendingPlay && (video.paused || video.ended)) this.play();
     else {
       this.pause(true);
       // The clock is published a few times a second while playing: read the frame it stopped on before telling
@@ -544,11 +583,78 @@ export const player = {
     return () => { editorPauses.delete(heard); };
   },
   setRate(rate: number) {
+    clearShuttle(false);
     if (video) {
       video.defaultPlaybackRate = rate;
       video.playbackRate = rate;
     }
     usePlayerStore.getState().setRate(rate);
+  },
+  /** J/K/L forward shuttle: plays at 1×, then steps to 2× and 4× on repeated presses. */
+  shuttleForward() {
+    if (!video) return;
+    stopReverseTimer();
+    const st = usePlayerStore.getState();
+    const cur = st.shuttleRate;
+    const next = cur <= 0 ? 1 : cur === 1 ? 2 : 4;
+    if (savedPreShuttleRate === undefined) savedPreShuttleRate = st.rate || 1;
+    st.setShuttleRate(next);
+    video.playbackRate = next;
+    if (video.paused || video.ended) this.play();
+  },
+  /** J/K/L reverse shuttle: muted backward visual stepping at −1×, −2× and −4× across macOS, Windows and Linux. */
+  shuttleReverse() {
+    if (!video) return;
+    const st = usePlayerStore.getState();
+    const cur = st.shuttleRate;
+    const next = cur >= 0 ? -1 : cur === -1 ? -2 : -4;
+    if (savedPreShuttleRate !== undefined) {
+      const rate = savedPreShuttleRate;
+      savedPreShuttleRate = undefined;
+      video.defaultPlaybackRate = rate;
+      video.playbackRate = rate;
+    }
+    carry = false;
+    handover = undefined;
+    cancelPendingPlay();
+    stream?.pause?.();
+    video.pause();
+    borrower?.pause();
+    usePlayerStore.setState({ shuttleRate: next, playing: true });
+    reverseLastTick = performance.now();
+    if (reverseTimer === null) {
+      reverseTimer = setInterval(() => {
+        const now = performance.now();
+        const dt = Math.min(0.25, Math.max(0.01, (now - reverseLastTick) / 1000));
+        reverseLastTick = now;
+        const speed = usePlayerStore.getState().shuttleRate;
+        if (speed >= 0 || !video) {
+          stopReverseTimer();
+          return;
+        }
+        const curTime = usePlayerStore.getState().time;
+        const target = Math.max(0, curTime + speed * dt);
+        reverseSeekInFlight = true;
+        try {
+          this.seek(target, true);
+        } finally {
+          reverseSeekInFlight = false;
+        }
+        if (target <= 0) {
+          clearShuttle(true);
+          usePlayerStore.getState().setPlaying(false);
+        }
+      }, REVERSE_TICK_MS);
+    }
+  },
+  /** J/K/L stop: halts playback or reverse shuttle, restores speed to normal, and notifies pause listeners. */
+  shuttleStop() {
+    const wasMoving = isPlaying() || usePlayerStore.getState().shuttleRate !== 0;
+    this.pause();
+    if (video) readClock(video);
+    if (wasMoving) {
+      for (const heard of editorPauses) heard();
+    }
   },
   element() {
     return video;

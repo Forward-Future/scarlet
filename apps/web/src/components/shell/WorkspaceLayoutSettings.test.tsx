@@ -349,6 +349,19 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(sections[0]!.getAttribute("aria-expanded")).toBe("false");
     expect(sections[1]!.disabled).toBe(false);
     expect(sections[1]!.classList.contains("is-none")).toBe(false);
+
+    // Expanding Done shows the kept edit with Unkeep, which moves it back to For you without opening it.
+    const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined as never);
+    await act(async () => sections[1]!.click());
+    await act(async () => {});
+    const unkeepBtn = container.querySelector<HTMLButtonElement>('.review-sec-body[aria-label="Done"] .simple-unkeep')!;
+    expect(unkeepBtn).not.toBeNull();
+    expect(unkeepBtn.textContent).toBe("Unkeep");
+    await act(async () => unkeepBtn.click());
+    await act(async () => {});
+    expect(unkeep).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".review-rail-head .review-rail-count")?.textContent).toBe("1");
+    expect(container.querySelector('.review-sec-body[aria-label="Done"] .simple-unkeep')).toBeNull();
   });
 
   it("lets the middle edits column resize from its right edge, keeps rows single-line, and shows a full-line UI tooltip on hover", async () => {

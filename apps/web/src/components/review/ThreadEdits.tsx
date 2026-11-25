@@ -4,15 +4,17 @@ import { AimRow } from "./AimRow";
 import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { asksEditor, editGroups, listPlaces, noEdits, revisionWord, useAdding, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
+import { asksEditor, editGroups, listPlaces, noEdits, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
 import { clock as clockLabel, editRemovedLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
-import { editKey, keepEdits } from "../../lib/keptEdits";
+import { editKey, keepEdits, unkeepEdits } from "../../lib/keptEdits";
 import { isWorkingTask } from "../../lib/taskRun";
+import { recordUndo } from "../../lib/undo";
 import { useProjectStore } from "../../stores/project";
 import { Dropdown, MenuItem } from "../shell/WorkspaceNavigation";
 import { Icon } from "../ui/primitives";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
+import { ariaKeyShortcut, matchesShortcut, shortKeyLabel, useShortcutsStore } from "../../stores/shortcuts";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { useAgentAvailability } from "../agent/AgentChip";
 import type { AgentContext } from "../../stores/ui";
@@ -76,16 +78,18 @@ export function RejectEdit({ projectId, thread, target, edits, editsOn, onEngine
       setBusy(false);
     }
   }
-  // X rejects it, as it does a call: the same key on every card.
+  const rejectBinding = useShortcutsStore(s => s.bindings.reject);
+  const rejectLabel = shortKeyLabel(rejectBinding);
+  // Reject shortcut (X by default), as on a call: the same key on every card.
   useHotkeys(event => {
-    if (busy || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "x") return;
+    if (busy || event.repeat || !matchesShortcut(event, "reject")) return;
     event.preventDefault();
     void reject();
   });
   return <>
     {error && <span className="simple-error" role="alert">{error}</span>}
     <button type="button" className="edit-card-icon edit-card-reject" data-log-control="reject-edit" aria-label="Reject edit" aria-busy={busy || undefined}
-      aria-keyshortcuts="X" title={busy ? "Rejecting…" : "Reject edit (X)"} disabled={busy} onClick={e => { blurOnPointerClick(e); void reject(); }}><Icon name="x" size={12} /></button>
+      aria-keyshortcuts={ariaKeyShortcut(rejectBinding)} title={busy ? "Rejecting…" : rejectLabel ? `Reject edit (${rejectLabel})` : "Reject edit"} disabled={busy} onClick={e => { blurOnPointerClick(e); void reject(); }}><Icon name="x" size={12} /></button>
   </>;
 }
 
@@ -180,6 +184,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   askingKey?: string;
 }) {
   const reviewed = useReviewed(projectId, thread);
+  const canUnkeep = useCanUnkeep(projectId, thread);
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
   const adding = useAdding(thread);
@@ -196,6 +201,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
     const relevant = only ? members.filter(m => only(m.edit)) : members;
     const shown = members.find(m => m.i === open) ?? members.find(asking) ?? members.find(waiting) ?? relevant[0] ?? members[0]!;
     return { ...shown, first: members[0]!.i, places: members.length, needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
+      unkeepRefs: relevant.filter(m => canUnkeep(m.edit)).map(m => m.edit),
       nested: under ? members.flatMap(m => under(m.edit)) : [], took: spent ? members.flatMap(m => spent(m.edit) ?? [])[0] : undefined };
   });
   // A rejected edit keeps its place in the video's order, in the list of every edit and in Done.
@@ -243,7 +249,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   });
   return <ol ref={list} className="simple-edits" aria-label={label ?? (only ? "Edits that need you" : "Edits in this thread")}>
     {goneAfter(-1, firstOf(0))}
-    {rows.map(({ edit, i, places, needs, allKept, nested, took }, at) => {
+    {rows.map(({ edit, i, places, needs, allKept, unkeepRefs, nested, took }, at) => {
       const on = i === open;
       const isKept = places > 1 ? allKept : reviewed(edit);
       // A revision on its way takes the edit off the editor's list until it comes back. Its row says so whether or not
@@ -272,7 +278,10 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       // Every row leads with its time, amber while it asks for a look, as a pass's row does: once kept it asks no more.
       const lead = <span className={asks || (check && !isKept) ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
       const checkTitle = revised || edit.reason ? undefined : edit.check;
-      return <Fragment key={editKey(edit)}><li className={leaving?.(edit) ? "is-leaving" : undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
+      const isLeaving = !!leaving?.(edit);
+      const showUnkeep = decided && !edit.marker && !isLeaving && unkeepRefs.length > 0;
+      const unkeepTip = edit.check ? "Move back to For you" : only ? "Move back to low risk" : "Unkeep";
+      return <Fragment key={editKey(edit)}><li className={[isLeaving && "is-leaving", showUnkeep && "has-unkeep"].filter(Boolean).join(" ") || undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
         className={["simple-edit", on && "is-on", asks && "is-asking", isAskingCurrent && "is-asking-current", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
@@ -293,6 +302,17 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         {statusWord ? <span className={asks ? "simple-edit-check" : busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>
           : revised && <span className="simple-edit-check" title={took}>{edit.check}</span>}
       </button>
+        {showUnkeep && <span className="simple-row-unkeep"
+          onPointerEnter={() => onHover?.(edit)} onPointerLeave={() => onHover?.()}>
+          <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
+            aria-label={`Unkeep ${title}`} title={unkeepTip}
+            onClick={e => {
+              blurOnPointerClick(e);
+              onHover?.();
+              unkeepEdits(projectId, thread.id, unkeepRefs);
+              recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepRefs, name: title });
+            }}>Unkeep</button>
+        </span>}
         <AimRow on={on}>{lead}<span className="composer-aim-words">{title}</span></AimRow>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
     })}
   </ol>;

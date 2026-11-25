@@ -72,6 +72,8 @@ export interface OpenPass {
    *  the name they go by, at their time ("Cut at 0:11"). */
   editNumbers: ReadonlyMap<string, { n: number; name: string }>;
   openCall(index: number): void;
+  /** Take back Keep on a decided call while the pass still waits on the editor. */
+  unkeepCall?(index: number): void;
   running: boolean;
   /** Scarlet is still on the pass and has checked none of its staged cuts, so there is nothing yet to apply or schedule. */
   unchecked: boolean;

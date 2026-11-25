@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { inListOrder, LINGER_FADE_MS, LINGER_MS, ReviewLinger, reviewStops, rowAfter, rowBeside, rowPlace, rowsOfTab, stopsShown, tabShown, type RowPlace } from "./reviewTabs";
+import { inListOrder, LINGER_FADE_MS, LINGER_MS, ReviewLinger, reviewStops, rowAfter, rowBeside, rowNext, rowPlace, rowsOfTab, stopsShown, tabShown, type RowPlace } from "./reviewTabs";
 
 const is = { waits: (e: string) => e === "waits", sent: (e: string) => e === "sent", kept: (e: string) => e === "kept" };
 const row = (key: string, place: RowPlace, at: number, num?: number) => ({ key, place, at, num });
@@ -55,11 +55,16 @@ it("moves Keep on to the next row that waits, wrapping to the earlier ones, and 
   expect(rowAfter(list, list[0], list[0]!, undefined)?.key).toBe("b");
   expect(rowAfter(list, list[2], list[2]!, undefined)?.key).toBe("a");
   expect(rowAfter([list[0]!], list[0], list[0]!, undefined)).toBeUndefined();
+  // Without wrapping, rowNext steps down the list and stops at its end.
+  expect(rowNext(list, list[0], list[0]!, undefined)?.key).toBe("b");
+  expect(rowNext(list, list[2], list[2]!, undefined)).toBeUndefined();
   // The row just kept is no longer among the ones that wait: Keep goes to the one after where it was, or wraps.
   const kept = row("kept", "done", 6);
   expect(rowAfter(list, kept, kept, undefined)?.key).toBe("c");
+  expect(rowNext(list, kept, kept, undefined)?.key).toBe("c");
   const last = row("last", "done", 20);
   expect(rowAfter(list, last, last, undefined)?.key).toBe("a");
+  expect(rowNext(list, last, last, undefined)).toBeUndefined();
   expect(rowAfter([], kept, kept, undefined)).toBeUndefined();
 });
 

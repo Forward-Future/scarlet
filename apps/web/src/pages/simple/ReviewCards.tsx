@@ -14,6 +14,7 @@ import { useHostsStore } from "../../stores/hosts";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
+import { ariaKeyShortcut, matchesShortcut, shortKeyLabel, useShortcutsStore } from "../../stores/shortcuts";
 import { editKey } from "../../lib/keptEdits";
 import type { Call, CutChoice, Revision } from "../../lib/passCalls";
 import { isRecheck, type Thread } from "../../lib/threads";
@@ -62,21 +63,26 @@ function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
  */
 function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { choice?: CutChoice; proposes?: CutChoice; disabled: boolean; decide(choice: CutChoice): void; revise(): void }) {
   const skips: CutChoice = proposes === "cut" ? "keep" : "cut";
+  const keepBinding = useShortcutsStore(s => s.bindings.keep);
+  const reviseBinding = useShortcutsStore(s => s.bindings.revise);
+  const rejectBinding = useShortcutsStore(s => s.bindings.reject);
+  const keepLabel = shortKeyLabel(keepBinding);
+  const reviseLabel = shortKeyLabel(reviseBinding);
+  const rejectLabel = shortKeyLabel(rejectBinding);
   useHotkeys(event => {
-    if (disabled || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-    const key = event.key.toLowerCase();
-    if (key === "r") { event.preventDefault(); revise(); return; }
-    const chosen = key === "k" ? proposes : key === "x" ? skips : undefined;
+    if (disabled || event.repeat) return;
+    if (matchesShortcut(event, "revise")) { event.preventDefault(); revise(); return; }
+    const chosen = matchesShortcut(event, "keep") ? proposes : matchesShortcut(event, "reject") ? skips : undefined;
     if (chosen) { event.preventDefault(); decide(chosen); }
   });
   // The decisions stay on the card for the next call. Clicked, one lets go of the focus (WebView2 leaves it there), or
   // Space would press it again on the next call while the video is paused. Pressed by keyboard, it keeps it.
   return <div className="review-actions">
-    <button type="button" className="btn-ghost" data-key="R" data-log-control="revise-call" aria-keyshortcuts="R" title="Revise (R)" disabled={disabled} onClick={revise}>Revise</button>
-    <button type="button" className="btn-primary" data-key="K" data-log-control="approve-call" aria-keyshortcuts="K" title="Keep (K)" aria-pressed={choice === proposes} disabled={disabled}
+    <button type="button" className="btn-ghost" data-key={reviseLabel || undefined} data-log-control="revise-call" aria-keyshortcuts={ariaKeyShortcut(reviseBinding)} title={reviseLabel ? `Revise (${reviseLabel})` : "Revise"} disabled={disabled} onClick={revise}>Revise</button>
+    <button type="button" className="btn-primary" data-key={keepLabel || undefined} data-log-control="approve-call" aria-keyshortcuts={ariaKeyShortcut(keepBinding)} title={keepLabel ? `Keep (${keepLabel})` : "Keep"} aria-pressed={choice === proposes} disabled={disabled}
       onClick={letGo(() => decide(proposes))}>Keep</button>
     {/* Reject edit is a small × after the decision, named on hover, as on an applied edit's card, so the row's one button is Keep. */}
-    <button type="button" className="edit-card-icon edit-card-skip" data-log-control="skip-call" aria-label="Reject edit" aria-keyshortcuts="X" title="Reject edit (X)" aria-pressed={choice === skips}
+    <button type="button" className="edit-card-icon edit-card-skip" data-log-control="skip-call" aria-label="Reject edit" aria-keyshortcuts={ariaKeyShortcut(rejectBinding)} title={rejectLabel ? `Reject edit (${rejectLabel})` : "Reject edit"} aria-pressed={choice === skips}
       disabled={disabled} onClick={letGo(() => decide(skips))}><Icon name="x" size={12} /></button>
   </div>;
 }
