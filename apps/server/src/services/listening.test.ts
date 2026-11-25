@@ -57,6 +57,21 @@ it("leaves out a model that isn't signed in or a host that has gone quiet", () =
   expect(listenerFor(ctx, claude)).toBeUndefined();
 });
 
+// Work handed to another model goes by the request's own rule: a model that hears listens for it when one is signed
+// in, and with none there is no listening.
+it("picks a listener for work handed to a model that can't hear, and none when no model that hears is signed in", () => {
+  const claude = request("gemini");
+  const handOff = createTask(ctx, { projectId: claude.projectId, kind: "hand_off", agent: "claude", instruction: "Cut the dialogue",
+    context: { checksTaskId: claude.id, handOff: { typeId: "cutting", name: "Cutting", brief: "Cut the dialogue" } }, createdBy: by });
+  expect(listenerFor(ctx, handOff)).toBeUndefined();
+  hostWith([{ id: "claude", installed: true }, { id: "gemini", installed: true }]);
+  expect(listenerFor(ctx, handOff)).toEqual({ agent: "gemini" });
+  // Handed to a model that hears, it plays the recording itself.
+  const hears = createTask(ctx, { projectId: claude.projectId, kind: "hand_off", agent: "gemini", instruction: "Cut the dialogue",
+    context: { checksTaskId: claude.id, handOff: { typeId: "cutting", name: "Cutting", brief: "Cut the dialogue" } }, createdBy: by });
+  expect(listenerFor(ctx, hears)).toBeUndefined();
+});
+
 it("says plainly when no model can hear, and starts nothing", async () => {
   const claude = request("claude");
   expect(await listenFor(ctx, claude.id, ask, 0)).toEqual({ state: "unavailable", reason: "No model that can hear is signed in on this computer." });

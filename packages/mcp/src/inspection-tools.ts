@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod/v3";
 import {
   CutReviewOptions,
+  isHandOff,
   isProjectEditTask,
   ScarletApiError,
   SheetOptions,
@@ -258,7 +259,7 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
 
   // A request whose model can't hear has another model listen for it, when one that can is signed in.
   const listenerName = listener && (listener.agent === "gemini" ? "Gemini" : listener.model ?? listener.agent);
-  if (!listen && listener && taskId && task && isProjectEditTask(task)) tool("listen",
+  if (!listen && listener && taskId && task && (isProjectEditTask(task) || isHandOff(task))) tool("listen",
     `Have ${listenerName}, a model that can hear, listen to up to ${SOURCE_AUDIO_MOST} seconds of an original microphone or video for you, in source seconds, and answer your question about it in words. You can't hear, and a transcript misses what an editor hears: a false start that reads as a finished line, a word cut off or slurred, a repeated word the transcript tidied away, a hum or a click. Ask what you need to decide, such as where a restart's abandoned attempt ends and the kept line begins, or whether a word sounds whole; for a restart, give it the stretch from before the first try to the line said through, since the join alone sounds fine. It answers from the sound, with times in source seconds, and says what it is unsure of. A listen takes a minute or so, and several can run at once; asked again with the same passage and question, it returns the answer already given.`,
     { ...SourceAudioOptions, question: z.string().trim().min(1).max(2000).describe("What to listen for, in plain words") },
     async ({ mediaId, from, to, voice, question }) => {

@@ -1,4 +1,4 @@
-import { agentCapabilities, canHear, isProjectEditTask, chooseListener, workspaceCapabilities, type AgentId, type Listener, type ListenResult, type Task } from "@scarlet/shared";
+import { agentCapabilities, canHear, isHandOff, isProjectEditTask, chooseListener, workspaceCapabilities, type AgentId, type Listener, type ListenResult, type Task } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest } from "../errors.js";
 import { FINISHED_TASK, createTask } from "./tasks.js";
@@ -18,9 +18,10 @@ export interface ListenAsk {
 /**
  * The model that listens for this request, when the request's own model can't hear and a host the editor has online
  * has one signed in that can. None for a request whose model hears itself: it plays the recording with its own tools.
+ * Work handed to another model goes by the same rule, on the model it was handed to.
  */
 export function listenerFor(ctx: Ctx, task: Task): Listener | undefined {
-  if (!isProjectEditTask(task)) return undefined;
+  if (!isProjectEditTask(task) && !isHandOff(task)) return undefined;
   const env = (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS;
   if (canHear(workspaceCapabilities(agentCapabilities(task.agent, env, task.model)))) return undefined;
   const online = ctx.repos.hosts.select().filter(h => h.lastSeenAt && Date.now() - Date.parse(h.lastSeenAt) < HOST_ONLINE_MS);
@@ -38,7 +39,7 @@ const sameAsk = (a: ListenAsk, b: ListenAsk) => a.mediaId === b.mediaId && Math.
  */
 export async function listenFor(ctx: Ctx, askerId: string, ask: ListenAsk, waitMs: number): Promise<ListenResult> {
   const asker = ctx.repos.tasks.get(askerId);
-  if (!asker || !isProjectEditTask(asker)) throw badRequest("invalid_task", "Only a request that edits the video can ask for a passage to be heard.");
+  if (!asker || (!isProjectEditTask(asker) && !isHandOff(asker))) throw badRequest("invalid_task", "Only a request that edits the video can ask for a passage to be heard.");
   const media = ctx.repos.projects.getMedia(ask.mediaId);
   if (!media || media.projectId !== asker.projectId) throw badRequest("invalid_media", `Media ${ask.mediaId} is not in this project.`);
   if (media.hasAudio === false) throw badRequest("no_audio", `Media ${ask.mediaId} has no sound.`);

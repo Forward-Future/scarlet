@@ -872,6 +872,19 @@ describe("listen", () => {
       expect(agyThirdParty).not.toContain("source_audio");
     } finally { await Promise.all(sessions.map(c => c.close())); }
   });
+  it("is offered to work handed to a model that can't hear, by the same rule: only with a listener signed in", async () => {
+    const handOff = Task.parse({ ...base, id: "hand-off-task", kind: "hand_off", instruction: "Cut the dialogue",
+      context: { checksTaskId: edit.id, handOff: { typeId: "cutting", name: "Cutting", brief: "Cut the dialogue" } } });
+    const sessions = [
+      await connect({ taskId: handOff.id, task: handOff, listener: { agent: "gemini" } }),
+      await connect({ taskId: handOff.id, task: handOff }),
+    ];
+    try {
+      const [withListener, none] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      expect(withListener).toContain("listen");
+      expect(none).not.toContain("listen");
+    } finally { await Promise.all(sessions.map(c => c.close())); }
+  });
   it("gives the run that listens the passage as a file and nothing else", async () => {
     const check = Task.parse({ ...base, id: "listen-task", agent: "gemini", kind: "listen_check", instruction: "Hear m2",
       context: { checksTaskId: "edit-task", listenCheck: { mediaId: "m2", from: 1074.5, to: 1089.75, question: "Where does the first try end?" } } });

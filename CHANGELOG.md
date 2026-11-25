@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 24, 2026
 
+- A request's token count in the chat now includes the tokens of work it handed to another model.
+- Work handed to a model that can't hear can now have a model that hears listen for it, when one is signed in.
 - Finishing an export now closes the Export window automatically and shows a quiet confirmation strip at the bottom with Show in folder.
 - A row you just kept or sent back no longer vanishes from Done or Working if you switch tabs while it fades, and ⌘Z during the fade brings it back in view.
 - Looking at Working or Done and coming back to For you leaves the low risk switch as it was.

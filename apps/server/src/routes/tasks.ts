@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { checkAttachments } from "../services/graphics.js";
 import { findStyleGuideAsset } from "../services/styleGuides.js";
 import { z } from "zod/v3";
-import { CompleteTaskRequest, CreateTaskRequest, QuestionChoices, questionChoicesOf, EDITING_TOOL_GROUPS, isStyleGuideEdit, PictureMarks, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskAttachment, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
+import { CompleteTaskRequest, CreateTaskRequest, QuestionChoices, questionChoicesOf, EDITING_TOOL_GROUPS, isHandOff, isStyleGuideEdit, PictureMarks, queueWaits, RecordTaskUsageRequest, RepeatAuditRequest, RewordTaskRequest, RunChoice, TaskAttachment, TaskEvent, TaskState, UsageGroupBy, type Task } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict } from "../errors.js";
@@ -315,6 +315,9 @@ export function taskRoutes(ctx: Ctx) {
     ctx.log(`[task] usage task=${task.id} model=${usage.model ?? "unknown"} input=${usage.inputTokens} cacheRead=${usage.cacheReadTokens} ` +
       `cacheWrite=${usage.cacheWriteTokens} output=${usage.outputTokens} reasoning=${usage.reasoningTokens}`);
     ctx.bus.publish({ type: "task.usage", projectId: task.projectId, taskId: task.id, usage: ctx.repos.usage.taskTotals(task.id) });
+    // A hand-off's tokens count on the request that handed it the work, which is the one the chat shows.
+    const asker = isHandOff(task) ? task.context.checksTaskId : undefined;
+    if (asker) ctx.bus.publish({ type: "task.usage", projectId: task.projectId, taskId: asker, usage: ctx.repos.usage.taskTotals(asker) });
     return c.json({});
   });
 
