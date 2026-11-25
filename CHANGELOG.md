@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 25, 2026
 
 - With low risk edits turned on in For you, Keep, Reject, and Revise now move straight to the next edit in the list instead of skipping ahead.
+- Dropping a file into a style guide chat now lets you send it right away without typing a message, and the style guide page shows Scarlet's working status once in the chat instead of repeating it under the preview.
 
 ## November 24, 2026
 

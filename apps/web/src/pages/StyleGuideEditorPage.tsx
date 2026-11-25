@@ -175,8 +175,7 @@ export function StyleGuideEditorPage() {
   };
   useEscapeToLeave(() => {
     if (lightboxOpen) { setLightboxOpen(false); return; }
-    if (ask.trim()) { land(sendButton.current ?? boxRef.current); return; }
-    if (stagedFiles.length > 0) { land(boxRef.current); return; }
+    if (ask.trim() || stagedFiles.length > 0) { land(sendButton.current ?? boxRef.current); return; }
     navigate("/settings/style-guides");
   }, 'dialog[open], [role="menu"], [data-shortcut-overlay]');
 
@@ -251,7 +250,7 @@ export function StyleGuideEditorPage() {
 
   const send = async (overrideText?: string) => {
     const text = (overrideText ?? ask).trim();
-    if (!text || sending || boxOff) return;
+    if ((!text && stagedFiles.length === 0) || sending || boxOff) return;
     setAskErr(null);
     if (!question && !effective) {
       setAskErr(unavailableReason);
@@ -262,7 +261,10 @@ export function StyleGuideEditorPage() {
       let targetGuide = guide;
       if (!targetGuide) {
         const requestedSlug = slugifyStyleGuideName(name);
-        const derived = requestedSlug || uniqueSlug(text.split(/\s+/).slice(0, 3).join("-"), library);
+        const fallbackSeed = text
+          ? text.split(/\s+/).slice(0, 3).join("-")
+          : (stagedFiles[0]?.name.replace(/\.[^.]+$/, "") ?? "").slice(0, 48);
+        const derived = requestedSlug || uniqueSlug(fallbackSeed, library);
         targetGuide = await create({ name: derived, isDefault });
         createdHere.current = targetGuide.id;
         setLoaded(targetGuide);
@@ -342,7 +344,7 @@ export function StyleGuideEditorPage() {
   if (!isNew && !guide) return <Loading label="Loading style guide…" />;
 
   const previewUrl = guide?.preview ? api.styleGuidePreviewUrl(guide.id, guide.preview.updatedAt) : undefined;
-  const typed = !!ask.trim();
+  const canSend = Boolean(ask.trim() || stagedFiles.length > 0);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -418,9 +420,9 @@ export function StyleGuideEditorPage() {
                   <div className="unit-msg">
                     <span className="simple-who">You</span>
                     <div className="min-w-0 flex-1">
-                      <Said text={e.instruction}>{e.instruction}</Said>
+                      {e.instruction.trim() && <Said text={e.instruction}>{e.instruction}</Said>}
                       {files.length > 0 && (
-                        <div className="style-guide-msg-files">
+                        <div className={e.instruction.trim() ? "style-guide-msg-files" : "style-guide-msg-files is-only"}>
                           {files.map(f => (
                             <span key={f.id} className="style-guide-msg-file">
                               <Icon name="file" size={11} /> {f.name}
@@ -548,7 +550,7 @@ export function StyleGuideEditorPage() {
                     onSubmit={() => void send()}
                   />
                   {sending && <Spinner className="size-3.5 shrink-0" />}
-                  {typed && (
+                  {canSend && (
                     <button
                       ref={sendButton}
                       type="button"
@@ -587,13 +589,7 @@ export function StyleGuideEditorPage() {
                 </span>
               </div>
             )}
-            {working && (
-              <div className="style-guide-preview-status" role="status">
-                <Spinner className="size-3" />
-                <span>{liveActivity}</span>
-              </div>
-            )}
-            {!working && guide?.description && (
+            {guide?.description && (
               <p className="style-guide-preview-caption">{guide.description}</p>
             )}
           </div>
