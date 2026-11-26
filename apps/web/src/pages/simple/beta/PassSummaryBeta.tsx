@@ -670,6 +670,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     const { row, members: entryMembers, more, moment: momentKey, unfolded: momentOpen, place } = entry;
     const isCall = row.n > 0;
     const singleEdit = !isCall && !row.rejected && !row.onlyForYou && !momentKey ? editByKey.get(row.key) : undefined;
+    const singleChange = singleEdit ? changeForEdit(thread, singleEdit.changeId) : undefined;
     const momentEdits = momentKey ? moments.find(m => m.key === momentKey)?.edits : undefined;
     const rowEdits = momentEdits ?? (singleEdit ? [singleEdit] : []);
     const railMembers: RailEditMember[] = rowEdits.map(e => ({
@@ -724,6 +725,12 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
       countsAsNeed,
       hasNeedNest,
       isCall,
+      isDialoguePass: true,
+      batchTitle: singleChange?.batchTitle?.trim() || undefined,
+      batchContext: singleChange?.description?.trim() || undefined,
+      requestText: thread.title?.trim() || undefined,
+      reason: singleEdit?.reason?.trim() || undefined,
+      threadWorking: !!working,
       isMarker: !!singleEdit?.marker,
       on: row.on,
       version: row.version,
@@ -831,9 +838,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const seeProps = { thread, actions, single, rows: totalRows + rejected.length, count: totalRows, soFar, list: listState, reveal, column: !!rail };
   const seeEvery = rail
     ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
-      : !soFar && canSeeAll && actions.showThread
-        ? <button type="button" className="simple-pass-toggle" title="Show these edits in Needs review" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
-        : null)
+      : null)
     : !tabbed && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const tabs = tabbed && <ReviewListTabs need={need} working={inPlace("working").length} done={inPlace("done").length} list={listState} reveal={reveal} showNeeded={showNeeded} />;
@@ -1021,9 +1026,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const seeProps = { thread, actions, single, rows: groups.length + gone.length, count: groups.length, soFar: working && !made, list, reveal, column: !!rail };
   const seeEvery = rail
     ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
-      : !(working && !made) && canSeeAll && actions.showThread
-        ? <button type="button" className="simple-pass-toggle" title="Show these edits in Needs review" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
-        : null)
+      : null)
     : !tabbed && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const showNeeded = () => {
@@ -1116,6 +1119,11 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         place: rowTabPlace,
         label,
         rawLabel: shown.label,
+        batchTitle: shownChange?.batchTitle?.trim() || undefined,
+        batchContext: shownChange?.description?.trim() || undefined,
+        requestText: thread.title?.trim() || undefined,
+        reason: shown.reason?.trim() || undefined,
+        threadWorking: !!working,
         editKind: shown.kind,
         stretch,
         clipIds: allClipIds.size ? [...allClipIds] : undefined,

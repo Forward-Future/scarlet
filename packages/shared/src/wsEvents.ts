@@ -38,6 +38,7 @@ export const WsEvent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("style_guide.updated"), styleGuide: StyleGuideRecord }),
   z.object({ type: z.literal("style_guide.deleted"), styleGuideId: Id }),
   z.object({ type: z.literal("learning.updated"), projectId: Id, learning: Learning }),
+  z.object({ type: z.literal("batch_summary.updated"), projectId: Id, key: z.string(), title: z.string() }),
   z.object({ type: z.literal("activity.added"), projectId: Id.nullable(), entry: ActivityEntry }),
   z.object({
     type: z.literal("notification"),

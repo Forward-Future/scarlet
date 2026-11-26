@@ -88,6 +88,8 @@ export const Change = z.object({
   toVersion: Id,
   firstCut: z.boolean().optional(),
   description: z.string(),
+  /** Short AI-authored group title summarizing multiple similar edits in this save for the edits list. */
+  batchTitle: z.string().trim().min(1).max(80).optional(),
   /** Editorial reason for the change as a whole or a change without named edits. */
   reason: EditReason.optional(),
   author: Author,

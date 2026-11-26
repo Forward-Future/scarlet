@@ -427,3 +427,21 @@ it("shows a visible Cancel button during active dictation that discards the reco
   await act(async () => host.unmount());
   el.remove();
 });
+
+it("names the red button for review when what was said waits in the box, and still hands over the recording on a press", async () => {
+  const now = vi.spyOn(performance, "now").mockReturnValue(1000);
+  const el = document.createElement("div");
+  document.body.append(el);
+  const host = createRoot(el);
+  await act(async () => host.render(<MicButton review onResult={result} label="Talk to Scarlet" />));
+  const button = () => el.querySelector<HTMLButtonElement>("button[aria-pressed]")!;
+  await act(async () => { button().click(); });
+  await act(async () => { grant(stream); });
+  expect([button().title, button().getAttribute("aria-label")]).toEqual(["Stop and review (Esc to discard)", "Stop and review (Esc to discard)"]);
+  now.mockReturnValue(3000);
+  await act(async () => { button().click(); });
+  expect(result).toHaveBeenCalledOnce();
+  expect(button().title).toBe("Talk to Scarlet");
+  await act(async () => host.unmount());
+  el.remove();
+});

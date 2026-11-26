@@ -9,6 +9,8 @@ import { appliedReviewChange } from "@scarlet/timeline";
 import type { ApproveLearningRequest, EditSkillRequest, Learning, RunChoice, UsageGroupBy, UsageResponse } from "@scarlet/shared";
 import type {
   AgentHost,
+  BatchSummariesRequest,
+  BatchSummariesResponse,
   CreateNoteRequest,
   ReviseRequest,
   CreateTaskRequest,
@@ -155,6 +157,39 @@ export class MockClient implements ScarletApi {
     const head = project.head && this.store.db.timelines[project.head];
     return { version: project.head, edits: head ? threadTimeline(thread, head, this.store.db.versions[id] ?? [],
       version => this.store.db.timelines[version], project.settings.fps, this.store.db.media[id]) : [] };
+  }
+
+  async summarizeBatches(id: string, body: BatchSummariesRequest): Promise<BatchSummariesResponse> {
+    this.requireAuth();
+    this.store.projectById(id);
+    const summaries: Record<string, string> = {};
+    for (const batch of body.batches) {
+      const labels = batch.samples.map(s => s.label.toLowerCase());
+      const desc = (batch.descriptions ?? []).join(" ").toLowerCase();
+      if (batch.isDialoguePass) {
+        const parts = Object.entries(batch.breakdown ?? {}).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 2);
+        summaries[batch.key] = parts.length
+          ? `${batch.count} dialogue cuts: ${parts.join(" & ")}`
+          : `${batch.count} dialogue cuts: pauses & retakes`;
+      } else if (labels.includes("music bed") && labels.includes("wrap")) {
+        summaries[batch.key] = "Tightened wrap & music bed";
+      } else if (desc.includes("false start") && desc.includes("tangent")) {
+        summaries[batch.key] = "Cut false start & 14 s tangent";
+      } else {
+        const names = [...new Set(batch.samples.map(s => s.label.trim()).filter(Boolean))];
+        const kindNoun: Record<string, string> = {
+          cut: "cuts", graphic: "graphics", zoom: "zooms", reframe: "reframes",
+          broll: "B-roll shots", overlay: "overlays", text: "text edits", audio: "audio edits",
+          dip: "music dips", voice: "voice cleanups", transition: "transitions",
+          speed: "speed changes", split: "split edits", restore: "restored passages", insert: "inserts",
+        };
+        const noun = (batch.kind && kindNoun[batch.kind]) ?? "edits";
+        summaries[batch.key] = names.length >= 2 && names.length <= 2
+          ? `${batch.count} ${noun}: ${names.join(" & ")}`.slice(0, 52)
+          : `${batch.count} ${noun}`;
+      }
+    }
+    return this.latency({ summaries, pending: [] }, 60);
   }
 
   async setThreadDone(id: string, threadId: string, done: boolean, revision: string) {

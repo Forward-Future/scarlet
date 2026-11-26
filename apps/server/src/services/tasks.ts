@@ -2,6 +2,7 @@ import {
   AgentId,
   dialogueCommand,
   isAsideTask,
+  isBatchSummary,
   isHandOff,
   isLearningCheck,
   isProjectEditTask,
@@ -30,6 +31,7 @@ import { recordTaskFinished, recordTaskRequested } from "../telemetry/events.js"
 import { taskFailureReason } from "../telemetry/failureReason.js";
 import { actorFor, agentName, logActivity, quote } from "./activity.js";
 import { applyChoicesWhenDone, applySettledCuts, retireStaleSaves } from "./changes.js";
+import { finishBatchSummaryTask } from "./batchSummaries.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
 import { notify } from "./notify.js";
 import { restoreUnreplacedProposal } from "./revisionState.js";
@@ -437,8 +439,8 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   // it did and its brief, so the request reads as finished once.
   const handOff = isHandOff(saved);
   const did = handOff ? `${saved.context.handOff?.name ?? "a hand-off"}: ${quote(saved.instruction)}` : quote(asked);
-  // A learning check is Scarlet's own reading of a request. What it offers is in Learnings; the run itself is no one's news.
-  if (!isLearningCheck(saved)) logActivity(ctx, {
+  // A learning check or batch summary is Scarlet's own reading. Neither needs an entry in the activity log.
+  if (!isLearningCheck(saved) && !isBatchSummary(saved)) logActivity(ctx, {
     projectId: isSkillEdit(saved) || isStyleGuideEdit(saved) ? null : saved.projectId,
     actor: { type: "agent", id: saved.agent, name: saved.agent, model: saved.model },
     type: `${handOff ? "hand_off" : "request"}.${body.state}`,
@@ -452,6 +454,8 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   });
   // A rule the editor approved is saved now, or goes back to them, and the skill's next one starts.
   skillEditEnded(ctx, saved);
+  // A silent batch summary finishes by caching its title and updating the edits rail live.
+  if (isBatchSummary(saved)) finishBatchSummaryTask(ctx, saved);
   // A follow-up queued behind this task in its thread can start now.
   ctx.bus.taskQueued({ taskId: saved.id, projectId: saved.projectId });
   // A skill's page says how its own request went, and a learning check says nothing.
