@@ -4465,6 +4465,29 @@ it("shows the cuts already in the video around an open call as grey gaps, After 
   expect(seek.mock.lastCall?.[0]).toBeCloseTo(8.04, 2);
 });
 
+it("keeps an open call card open when Esc cancels a timeline edge drag, and closes it on the next Esc", async () => {
+  appliedPart();
+  await show();
+  await act(async () => {});
+  await openCall("Breath before the price.");
+  await act(async () => {});
+  const handle = container.querySelector<HTMLElement>("[data-cut-handle]")!;
+  expect(handle).not.toBeNull();
+  await act(async () => {
+    handle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 7, button: 0, isPrimary: true, clientX: 400, bubbles: true }));
+  });
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 7, clientX: 460, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  expect(handle.classList.contains("is-held")).toBe(true);
+  await press("Escape");
+  expect(call()).not.toBeNull();
+  expect(handle.classList.contains("is-held")).toBe(false);
+  await press("Escape");
+  expect(call()).toBeNull();
+});
+
 it("keeps a call on the working cut, with no gaps, when the version that has the footage around it can't be read", async () => {
   appliedPart(true);
   const listen = vi.spyOn(player, "audition");

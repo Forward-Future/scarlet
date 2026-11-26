@@ -203,6 +203,7 @@ export function useCutTrim({
     g.stop = () => {
       if (gesture.current !== g) return;
       gesture.current = undefined;
+      el.removeAttribute("data-escape-owner");
       clearTimeout(g.hold);
       clearTimeout(g.still);
       if (g.paint !== undefined) cancelAnimationFrame(g.paint);
@@ -219,6 +220,8 @@ export function useCutTrim({
     const held = { id: -2, start: from, span, x: e.clientX, lifetime, finish: undefined };
     drag.current = held;
     gesture.current = g;
+    // Claim Esc for the whole gesture so earlier card/page capture listeners don't close the card before `key` runs.
+    el.setAttribute("data-escape-owner", "");
     document.addEventListener("pointermove", move, true);
     document.addEventListener("pointerup", up, true);
     document.addEventListener("pointercancel", up, true);
