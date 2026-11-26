@@ -166,8 +166,22 @@ const ease = (kind: TransformKeyframe["ease"], p: number) =>
   kind === "easeIn" ? p * p : kind === "easeOut" ? 1 - (1 - p) ** 2 : kind === "easeInOut" ? p * p * (3 - 2 * p) : p;
 
 /** A clip's scale and offsets at `local` seconds from its start, as the renderer reads its keyframes. */
+/**
+ * A clip's transform with its defaults filled in, read once per transform: brief pictures read every clip at each edge
+ * near it, and parsing the same transform again for each was most of their time on a long edit. Timelines are copied,
+ * never changed in place, so a transform read once reads the same after.
+ */
+const parsedTransforms = new WeakMap<object, Transform>();
+let noTransform: Transform | undefined;
+function baseTransform(transform: MediaClip["transform"]): Transform {
+  if (!transform) return noTransform ??= Transform.parse({});
+  let parsed = parsedTransforms.get(transform);
+  if (!parsed) parsedTransforms.set(transform, parsed = Transform.parse(transform));
+  return parsed;
+}
+
 function motionAt(clip: Pick<MediaClip, "transform" | "keyframes">, local: number) {
-  const base = Transform.parse(clip.transform ?? {});
+  const base = baseTransform(clip.transform);
   const keys = (clip.keyframes ?? []).slice().sort((a, b) => a.time - b.time);
   const value = (prop: "x" | "y" | "scale") => {
     if (!keys.length) return base[prop];
