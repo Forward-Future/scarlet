@@ -93,7 +93,7 @@ async fn exchange(app: &AppHandle, operation: &'static str, message: String) -> 
         socket.take(65).read_to_string(&mut response).await.map_err(|e| ("read", e))?;
         Ok(response.trim_end().to_owned())
     };
-    match tokio::time::timeout(Duration::from_secs(2), reply).await {
+    match tokio::time::timeout(Duration::from_secs(5), reply).await {
         Err(_) => update_fault(operation, "timeout", 0),
         Ok(Err(("connect", error))) if operation != "restart" && error.kind() == std::io::ErrorKind::NotFound => {},
         Ok(Err((stage, error))) => update_fault(operation, stage, error.raw_os_error().unwrap_or(0)),
@@ -259,7 +259,9 @@ pub async fn update_changelog(app: AppHandle, revision: String) -> Result<String
 #[tauri::command]
 pub async fn restart_for_update(app: AppHandle, revision: String) -> Result<(), String> {
     if app.try_state::<Source>().is_some_and(|source| *source == Source::Release) {
+        log::info!("restart requested via update restart ({revision})");
         if !crate::quit::confirm_if_busy(&app, crate::quit::Leaving::Restart).await {
+            log::info!("restart for update {revision} postponed: the editor chose Cancel");
             return Err("Update postponed.".into());
         }
         return tauri::async_runtime::spawn_blocking(move || crate::release_updates::restart(&app, &revision)).await

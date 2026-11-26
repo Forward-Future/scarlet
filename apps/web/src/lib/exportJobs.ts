@@ -96,7 +96,11 @@ export async function resumeExports() {
 
 async function run(projectId: string, file: ExportFile, context: string, version: string, project?: ProjectData, resumed?: Render) {
   const prior = useExports.getState().jobs[projectId];
-  if (prior && "cancel" in prior) return;
+  // How it ended, without where it went: the project, the kind of file, a left-over one, and how long it took.
+  const began = performance.now();
+  const said = (event: string, level?: "warn") =>
+    appLog("export", event, { project: projectId, format: file.format, resumed: resumed ? true : undefined, ms: Math.round(performance.now() - began) }, { level });
+  if (prior && "cancel" in prior) { said("ignored"); return; }
   let result: ExportResult | undefined;
   let ticket: number | null = resumed?.export?.ticket ?? null;
   const wait = new AbortController();
@@ -128,6 +132,7 @@ async function run(projectId: string, file: ExportFile, context: string, version
     if (chosen !== null) await desktop.discardVideoExport(chosen).catch(() => undefined);
   }
   function cancel() {
+    said("cancelled");
     cancelled = true;
     wait.abort();
     if (ownedId) void api.releaseRender(ownedId, owner).catch(() => {});
@@ -140,7 +145,7 @@ async function run(projectId: string, file: ExportFile, context: string, version
     if (!resumed) {
       // The native Save dialog asks for the file's name and its folder. The ticket is the app's permission to write it.
       const choice = await desktop.chooseVideoExport(file.name);
-      if (!choice) return;
+      if (!choice) { said("dialog-cancelled"); return; }
       ticket = choice.ticket;
       path = choice.path;
       file = { ...file, name: path.split(/[\\/]/).pop() || file.name };
@@ -152,6 +157,8 @@ async function run(projectId: string, file: ExportFile, context: string, version
       }
     }
     if (ticket === null) throw new Error("Export destination expired");
+    // A new export is under way, so clear any earlier completion strip until this one finishes.
+    useUiStore.getState().dismissExportNotice();
     if (file.format === "folder") {
       update({ phase: "saving" });
       // The timeline files link the copies where the folder will be, so the engine is told where that is.
@@ -230,12 +237,13 @@ async function run(projectId: string, file: ExportFile, context: string, version
     const message = errorMessage(err);
     // Another window is saving the file: it resumed this export, whichever window started it, and it settles it.
     keepPending = message === "Export is already saving in another Scarlet window.";
-    if (keepPending) return;
+    if (keepPending) { said("other-window"); return; }
     // The app couldn't read its record of where exports go. The failure is shown, so the export is let go even if
     // the engine can't hear: a later launch must never save it over whatever the editor has put there since.
     unrecorded = message === "Export destinations could not be saved or read.";
     // A resumed export whose destination is gone was already saved or discarded before the restart.
     const settled = resumed && message === "Export destination expired";
+    if (settled && !cancelled) said("expired");
     if (!cancelled && !settled) {
       result = { phase: "failed", error: message, file, context: job.context };
       // Where it stopped and why. Never the file's name or where it was going (the editor typed those), nor the
@@ -248,8 +256,12 @@ async function run(projectId: string, file: ExportFile, context: string, version
       appLog("error", "export", { phase: job.phase, format: file.format, resumed: resumed ? true : undefined, error }, { level: "warn" });
     }
   } finally {
+    if (result?.phase === "done") said("done");
     finish(result);
-    if (result?.phase === "done" && file.format === "mp4") useUiStore.getState().offerExportStar();
+    if (result?.phase === "done") {
+      useUiStore.getState().showExportNotice({ path: result.path, format: file.format });
+      if (file.format === "mp4") useUiStore.getState().offerExportStar();
+    }
     // Tell the engine the export is settled. If it can't hear, leave the destination for the next launch to finish.
     if (!keepPending) {
       const released = !ownedId || cancelled || await api.releaseRender(ownedId, owner).then(() => true, () => false);

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
@@ -165,6 +165,22 @@ it.skipIf(process.platform === "win32")("sweeps ordinary temporary files and ski
   expect(existsSync(kept)).toBe(true);
   expect(existsSync(join(outside, working[0]!))).toBe(true);
   expect(() => paths.ensureRoot()).toThrow();
+});
+
+it("keeps an original just copied in with its source's old times while its import is still being added", () => {
+  const paths = new Paths(join(sandbox, "library"));
+  paths.ensureRoot();
+  paths.ensureProject("prj_sample");
+  const copy = join(paths.media("prj_sample"), "med_abc123.mov");
+  writeFileSync(copy, "fixture");
+  // The copy keeps the recording's times, a month old, and its row isn't written yet.
+  const monthAgo = (Date.now() - 30 * 86_400_000) / 1000;
+  utimesSync(copy, monthAgo, monthAgo);
+  const ctx = { paths, db: { prepare: () => ({ get: () => undefined }) }, log: () => {} } as unknown as Ctx;
+  expect(sweepLeftovers(ctx)).toBe(0);
+  expect(existsSync(copy)).toBe(true);
+  expect(sweepLeftovers(ctx, Date.now() + 2 * 86_400_000)).toBe(1);
+  expect(existsSync(copy)).toBe(false);
 });
 
 it("seeds regular skill files and skips symbolic and hard links", async () => {

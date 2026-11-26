@@ -119,7 +119,7 @@ export function planTransitions(timeline: Timeline, media: ReadonlyMap<string, T
         if (outgoing && down > 0) move(outgoing.id, { start: at - down, end: at, type: "dip", direction, color, role: "out" });
         if (up > 0) move(clip.id, { start: at, end: at + up, type: "dip", direction, color, role: "in" });
         joins.push({ ...join, start: at - down, end: at + up,
-          note: !outgoing ? "Nothing comes before it on its track, so it only fades up from the colour." :
+          note: !outgoing ? "Nothing comes before it on its track, so it only fades up from the color." :
             down + up < t.duration - 1e-6 ? `A clip either side is shorter than half the dip, so it runs ${seconds(down + up)}.` : undefined });
         continue;
       }

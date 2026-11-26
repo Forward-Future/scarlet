@@ -114,6 +114,8 @@ Rerun the enable command after changing the helper script so the installed copy 
 | macOS | `~/Library/Logs/com.forwardfuture.scarlet/scarlet-desktop.log` |
 | Windows | `%LOCALAPPDATA%\com.forwardfuture.scarlet\logs\scarlet-desktop.log` |
 
+Each copy of Scarlet (the regular app, a review or test build, the demo, a development build) writes its own log under its own identifier, and its first line names the copy, its build, data and log folders. Every copy also writes to `scarlet-copies.log` beside the regular app's log: when it started and stopped, and each `[request]` line from its window. When a message seems to have gone nowhere, look there first to see which copy it was typed in.
+
 Times are in UTC. Scarlet rotates the log at 5 MB and keeps the five previous files. Search for a `tsk_…` task ID to follow an edit or for `request=` and its ID to follow an API request through the renderer, engine and file transfer. The `task_events` table in `scarlet.db` records the edit's tool calls, progress and errors in order.
 
 | Log tag | Where to look |
@@ -123,6 +125,8 @@ Times are in UTC. Scarlet rotates the log at 5 MB and keeps the five previous fi
 | `[engine] [transcribe]`, `[engine] [audio]` | Transcript progress, audio work and queue delays. **Finish when ready** resumes a paused edit once its transcripts are saved. |
 | `[engine] [edit]`, `[project]`, `[render]`, `[media]`, `[activity]` | Applied changes and versions, render warnings, footage and project history. |
 | `[ui] [action]`, `[ui] [nav]` | The control or shortcut used and the page it opened. |
+| `[ui] [request]` | What became of each message: the draft starting and emptying (its length, never its words), each press of send and what it did (`send`, `send-ignored reason=…`, `send-refused`, `send-failed`), and the request the engine made of it (`created task=…`, `answered`, `revision-created`, `note-created`). |
+| `[ui] [voice]`, `[ui] [marks]`, `[ui] [timeline]`, `[ui] [export]` | Recordings started and stopped and why, marks on a frame, ranges set and cleared, and each export's outcome. |
 | `[ui] [api]`, `[engine] [http]` | The window’s request, the engine’s response, failures and slow calls. |
 | `[engine] [transfer]`, `[export]` | File reads and native saves. The engine logs bytes read from disk and the desktop logs bytes received and where the save stopped. |
 | `[ui] [realtime]`, `[engine] [ws]` | Events that changed the interface and connections that dropped or recovered. |

@@ -60,12 +60,14 @@ export function useHoverFrames(projectId: string, poster: ProjectSummary["poster
     if (!hovering || !hasVideo || reduceMotion?.matches) return;
     let live = true, timer = 0, shown = -1;
     const loaded: boolean[] = [];
+    const images: HTMLImageElement[] = [];
     const rest = window.setTimeout(() => void framesFor(projectId, posterMedia).then(urls => {
       if (!live || !urls.length) return;
       urls.forEach((url, i) => {
         const image = new Image();
         image.onload = () => { loaded[i] = true; };
         image.src = url;
+        images.push(image);
       });
       timer = window.setInterval(() => {
         // The next frame that has loaded, after the one showing.
@@ -83,6 +85,9 @@ export function useHoverFrames(projectId: string, poster: ProjectSummary["poster
       live = false;
       window.clearTimeout(rest);
       window.clearInterval(timer);
+      // Frames still on their way when the pointer leaves are let go: each holds a decode the project the editor
+      // opens next would wait behind.
+      images.forEach((image, i) => { if (!loaded[i]) { image.onload = null; image.removeAttribute("src"); } });
       setFrame(undefined);
     };
   }, [hovering, hasVideo, projectId, posterMedia]);

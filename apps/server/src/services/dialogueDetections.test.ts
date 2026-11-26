@@ -545,7 +545,7 @@ it("starts the editor's transcript of a scanned source once per pass", async () 
   }
 });
 
-it("scans for a request sent about a point and for a revision as it does for a whole edit, and for no other task", async () => {
+it("scans for a request sent about a point, a revision, and a hand-off as it does for a whole edit, and for no other task", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scarlet-dialogue-kinds-"));
   const app = createApp({ dataDir: dir, skillsSeedDir: dir, env: {}, log: () => {} });
   try {
@@ -564,17 +564,24 @@ it("scans for a request sent about a point and for a revision as it does for a w
       method: "POST", headers: { Authorization: `Bearer ${accessToken(ctx)}`, "Content-Type": "application/json" },
       body: JSON.stringify({ taskId, mediaId: media.id, from: 0, to: 60 }),
     });
-    const running = (kind: "note" | "revise" | "skill_edit" | "skill_from_change") => createTask(ctx, { projectId: project.id, kind, agent: "api",
-      instruction: "Tighten the pauses here", state: "running", createdBy: { type: "scarlet", name: "Scarlet" } });
+    const running = (kind: "edit" | "note" | "revise" | "hand_off" | "skill_edit" | "skill_from_change", context?: Parameters<typeof createTask>[1]["context"]) =>
+      createTask(ctx, { projectId: project.id, kind, agent: "api", instruction: "Tighten the pauses here", state: "running",
+        ...(context && { context }), createdBy: { type: "scarlet", name: "Scarlet" } });
 
-    // The message box sends a request about a point as a note, and a call sent back is a revision.
-    for (const kind of ["note", "revise"] as const) {
-      const task = running(kind);
-      expect((await post("dialogue-scan", task.id)).status, kind).toBe(200);
-      expect((await post("dialogue-detections", task.id)).status, kind).toBe(200);
+    // The message box sends a request about a point as a note, a call sent back is a revision, and a hand-off does a request's cutting.
+    const pass = running("edit");
+    for (const make of [
+      () => running("note"),
+      () => running("revise"),
+      () => running("hand_off", { checksTaskId: pass.id, handOff: { typeId: "cutting", name: "Cutting", brief: "Tighten the pauses here" } }),
+    ]) {
+      const task = make();
+      expect((await post("dialogue-scan", task.id)).status, task.kind).toBe(200);
+      expect((await post("dialogue-detections", task.id)).status, task.kind).toBe(200);
       cancelTask(ctx, task);
       await Promise.all([...ctx.pending]);
     }
+    cancelTask(ctx, pass);
     // A task that edits no video has no scan: one that writes a skill from an approved edit, or revises a skill.
     for (const kind of ["skill_from_change", "skill_edit"] as const) {
       const task = running(kind);
@@ -629,6 +636,38 @@ it("keeps pages the bundled Whisper read through an update that installs it agai
   expect(await (await request("checkpoints", 0, 120)).json()).toEqual([]);
 });
 
+it("keys scan checkpoints by file stamp when using a dev fallback whisper-cli", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-dialogue-dev-fallback-"));
+  onTestFinished(async () => { vi.restoreAllMocks(); await rm(dir, { recursive: true, force: true }); });
+  const name = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  const dataDir = join(dir, "data"), placeholder = join(dir, "placeholder"), fallbackDir = join(dir, "fallback");
+  const fallbackCli = join(fallbackDir, name);
+  await mkdir(placeholder, { recursive: true });
+  await mkdir(fallbackDir, { recursive: true });
+  await writeFile(join(placeholder, name), "");
+  await writeFile(fallbackCli, "homebrew whisper build", { mode: 0o755 });
+  const app = createApp({ dataDir, skillsSeedDir: join(dir, "empty-seed"), env: { SCARLET_BIN_DIR: placeholder, PATH: fallbackDir }, log: () => {} });
+  onTestFinished(() => app.ctx.close());
+  vi.spyOn(WhisperCppProvider.prototype, "transcribeWav").mockResolvedValue({ language: "en", segments: [] });
+  vi.spyOn(UhmDetector.prototype, "detect").mockResolvedValue([]);
+  expect(app.ctx.whisperCli).toBe(fallbackCli);
+  expect(app.ctx.whisperCliBundled).toBe(false);
+  const project = app.ctx.repos.projects.insert(createProject("Dev fallback test"));
+  app.ctx.paths.ensureProject(project.id);
+  const media = app.ctx.repos.projects.putMedia(project.id, { id: "mic", name: "Mic", kind: "audio", path: "mic.wav", duration: 120 }, "ready");
+  await writeFile(join(app.ctx.paths.media(project.id), media.path), "recording");
+  vi.spyOn(app.ctx.speakers, "turns").mockResolvedValue([{ start: 0, end: 60, speaker: 1 }]);
+  const request = (route: string, from: number, to: number) => app.app.request(`/api/projects/${project.id}/dialogue-${route}`, {
+    method: "POST", headers: { Authorization: `Bearer ${accessToken(app.ctx)}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ mediaId: media.id, from, to }),
+  });
+  expect((await request("detections", 0, 60)).ok).toBe(true);
+  expect(await (await request("checkpoints", 0, 120)).json()).toEqual([{ start: 0, end: 60 }]);
+  // Replacing the external dev binary invalidates checkpoints instead of pretending it matches BUNDLED_WHISPER_CPP.
+  await writeFile(fallbackCli, "newer homebrew whisper build", { mode: 0o755 });
+  expect(await (await request("checkpoints", 0, 120)).json()).toEqual([]);
+});
+
 it("reads the words of overlapping saved pages once each, handing over at a word both pages read", () => {
   const w = (text: string, start: number) => ({ text, start, end: start + .3 });
   // Two pages that overlap from 58 s to 60 s read the words there twice, and a short re-read of 70-80 s sits less far
@@ -663,4 +702,26 @@ it("reads a pass's pages from the track the editor chose, and keeps them under i
   // Heard on Track 1 the recording has read no page yet.
   ctx.repos.projects.putMedia(project.id, tracks, "ready");
   expect(await saved()).toEqual([]);
+});
+
+it("returns empty detections without invoking transcription when the window starts past the decoded audio end", async () => {
+  const { request } = await cloudScanFixture();
+  // Write a real 1-second 16 kHz mono WAV (16,000 samples) while media.duration is 180 s.
+  vi.spyOn(ffmpeg, "extractWav").mockImplementationOnce(async (_file, target) => {
+    const pcmBytes = SAMPLE_RATE * 2;
+    const wav = Buffer.alloc(44 + pcmBytes);
+    wav.write("RIFF", 0); wav.writeUInt32LE(36 + pcmBytes, 4); wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(SAMPLE_RATE, 24); wav.writeUInt32LE(SAMPLE_RATE * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write("data", 36); wav.writeUInt32LE(pcmBytes, 40);
+    await writeFile(target, wav);
+  });
+  const upload = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected upload"));
+  const kept = await request("detections", 2, undefined, { to: 4, keptSide: {} });
+  expect(kept.status).toBe(200);
+  expect(await kept.json()).toEqual({ acoustic: [], segments: [] });
+  const page = await request("detections", 2, undefined, { to: 62 } as never);
+  expect(page.status).toBe(200);
+  expect(await page.json()).toMatchObject({ acoustic: [], segments: [], speechActivity: [] });
+  expect(upload).not.toHaveBeenCalled();
 });

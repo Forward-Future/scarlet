@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createProject, makeMediaClip, type Project, type Timeline } from "@scarlet/timeline";
 import { execFile } from "node:child_process";
 import { ChromeNotFound, chromeCandidates, findChrome, graphicCoverage, graphicOver, hasChrome, pdfPageCount, pdfPages, renderPdfDocument, probeMedia, renderGraphic, renderGraphicStill, renderTimelineFrame, runCapture } from "./index.js";
+import { resolveFfmpeg, resolveFfprobe } from "./exec.js";
 
 let dir: string;
 
@@ -21,7 +22,7 @@ html,body{margin:0;width:100%;height:100%;background:transparent}
 
 /** RGB of one pixel of a picture ffmpeg can read. */
 async function pixel(file: string, x: number, y: number): Promise<[number, number, number]> {
-  const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-i", file, "-vf", `crop=2:2:${x}:${y}`, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]);
+  const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", file, "-vf", `crop=2:2:${x}:${y}`, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]);
   return [stdout[0]!, stdout[1]!, stdout[2]!];
 }
 
@@ -63,13 +64,13 @@ describe.skipIf(!hasChrome())("drawing a graphic", () => {
     await fs.writeFile(html, "<!doctype html><html><body style=\"margin:0;background:#ff0000\"></body></html>");
     const output = path.join(dir, "red.mov");
     await renderGraphic({ htmlFile: html, width: 64, height: 64, fps: 30, duration: 1 / 30, output });
-    const { stdout: tags } = await runCapture("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_space,color_primaries,color_transfer,color_range", "-of", "csv=p=0", output]);
+    const { stdout: tags } = await runCapture(resolveFfprobe(), ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_space,color_primaries,color_transfer,color_range", "-of", "csv=p=0", output]);
     // Some ffmpeg builds don't write the range into a ProRes movie; unknown reads as limited range, as tv does.
     const [range, ...matrix] = tags.toString().trim().split(",");
     expect(["tv", "unknown"]).toContain(range);
     expect(matrix).toEqual(["bt709", "bt709", "bt709"]);
     // Read as BT.709 video, as the footage it is laid over is, the red is still red.
-    const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-i", output, "-vf", "scale=in_color_matrix=bt709:in_range=tv,format=rgb24", "-frames:v", "1", "-f", "rawvideo", "pipe:1"]);
+    const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", output, "-vf", "scale=in_color_matrix=bt709:in_range=tv,format=rgb24", "-frames:v", "1", "-f", "rawvideo", "pipe:1"]);
     const [r, g, b] = [stdout[32 * 64 * 3 + 96]!, stdout[32 * 64 * 3 + 97]!, stdout[32 * 64 * 3 + 98]!];
     expect(r).toBeGreaterThan(245);
     expect(Math.max(g, b)).toBeLessThan(10);
@@ -101,7 +102,7 @@ describe.skipIf(!hasChrome())("drawing a graphic", () => {
 
     // Laid over a blue picture in the render graph, the bar is red and the rest of the frame stays blue.
     const blue = path.join(dir, "blue.mp4");
-    await runCapture("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=320x180:d=2:r=10", "-c:v", "libx264", "-pix_fmt", "yuv420p", blue]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=320x180:d=2:r=10", "-c:v", "libx264", "-pix_fmt", "yuv420p", blue]);
     const project: Project = createProject("Graphic", { width: 320, height: 180, fps: 10, aspect: "custom" });
     project.media.push(
       { id: "bg", kind: "video", name: "blue.mp4", path: "blue.mp4", duration: 2, fps: 10, width: 320, height: 180, hasAudio: false, hasAlpha: false },
@@ -156,7 +157,7 @@ describe.skipIf(!hasChrome())("drawing a graphic", () => {
     await fs.writeFile(file, png);
     expect(png.readUInt32BE(16)).toBe(160);
     expect(png.readUInt32BE(20)).toBe(90);
-    const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-i", file, "-vf", "crop=1:1:150:10", "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
+    const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", file, "-vf", "crop=1:1:150:10", "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"]);
     expect(stdout[3]).toBe(0);
   });
 
@@ -192,7 +193,7 @@ describe.skipIf(!hasChrome())("drawing a graphic", () => {
     const first = path.join(dir, "page1.jpg");
     await fs.writeFile(first, pages[1]!.jpeg);
     // The heading's red is drawn on the first page.
-    const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-i", first, "-vf", "format=rgb24", "-f", "rawvideo", "pipe:1"]);
+    const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", first, "-vf", "format=rgb24", "-f", "rawvideo", "pipe:1"]);
     expect([...Array(stdout.length / 3).keys()].some(i => stdout[i * 3]! > 180 && stdout[i * 3 + 1]! < 80 && stdout[i * 3 + 2]! < 80)).toBe(true);
   });
 

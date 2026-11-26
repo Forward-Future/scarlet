@@ -92,3 +92,23 @@ it("goes on to the other stretches of a recording whose first look found a windo
     expect(state.areas.map(a => a.holds.length)).toEqual(state.areas.map(() => 1));
   } finally { await answers.stop(); }
 }, 60_000);
+
+it("starts no look when the asking model can't see images, and still asks for one that can", async () => {
+  const { ctx } = workspace, screen = recordings.screen!;
+  const queued = () => ctx.repos.tasks.select("project_id = ? AND kind = 'area_check' AND state = 'queued'", [projectId])
+    .filter(t => t.context.areaCheck?.mediaId === screen.id);
+  await showArea(ctx, screen, { waitMs: 60_000 });
+  try {
+    for (const { agent, model } of [{ agent: "ollama", model: "qwen3:30b" }, { agent: "openrouter", model: "x-ai/grok-4" }] as const) {
+      const task = createTask(ctx, { projectId, kind: "edit", agent, model, instruction: "Frame the demo", createdBy: { type: "human", name: "Editor" } });
+      expect(await askAreas(ctx, screen, { seconds: [200], taskId: task.id, waitMs: 500, again: true })).toEqual({ asked: 0, answered: 0, waiting: 0 });
+      expect(queued()).toEqual([]);
+    }
+    const vision = createTask(ctx, { projectId, kind: "edit", agent: "openrouter", model: "anthropic/claude-sonnet-4", instruction: "Frame the demo", createdBy: { type: "human", name: "Editor" } });
+    const result = await askAreas(ctx, screen, { seconds: [200], taskId: vision.id, waitMs: 500, again: true });
+    expect(result.asked).toBeGreaterThanOrEqual(1);
+    expect(queued()).toEqual([expect.objectContaining({ agent: "openrouter", model: "anthropic/claude-sonnet-4" })]);
+  } finally {
+    for (const task of queued()) ctx.repos.tasks.put({ ...task, state: "cancelled", finishedAt: new Date().toISOString() });
+  }
+}, 60_000);

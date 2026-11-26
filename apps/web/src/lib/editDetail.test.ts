@@ -20,6 +20,42 @@ describe("editDetail", () => {
     expect(editDetail(change(ops), { kind: "overlay", range: at }, { timeline, media })).toBe("city-skyline");
   });
 
+  it("prefers a clip's label over a raw recording filename, and omits unhelpful camera/date filenames", () => {
+    const rawMedia = [
+      { id: "med_board", name: "2026-11-24 10-26-50.mp4" },
+      { id: "med_cam", name: "2026-11-24 10-26-49.mp4" },
+      { id: "med_phone", name: "IMG_4821.MOV" },
+      { id: "med_screen", name: "Screen Recording 2026-11-24 at 10.26.50 AM.mov" },
+      { id: "med_named", name: "2026-11-24 keynote intro.mp4" },
+    ];
+    const labeledOps = [
+      { op: "addClip", trackId: "trk_v2", clip: { id: "b1", kind: "media", mediaId: "med_board", label: "Tier board", timelineIn: 10, sourceIn: 0, sourceOut: 4, speed: 1 } },
+      { op: "addClip", trackId: "trk_v2", clip: { id: "i1", kind: "media", mediaId: "med_cam", label: "Matt at the tier board", timelineIn: 10, sourceIn: 0, sourceOut: 4, speed: 1 } },
+    ];
+    expect(editDetail(change(labeledOps), { kind: "overlay", range: at }, { timeline, media: rawMedia }))
+      .toBe("Tier board · Matt at the tier board");
+
+    const unlabeledRawOps = [
+      { op: "addClip", trackId: "trk_v2", clip: { id: "b2", kind: "media", mediaId: "med_board", timelineIn: 10, sourceIn: 0, sourceOut: 4, speed: 1 } },
+      { op: "addClip", trackId: "trk_v2", clip: { id: "p1", kind: "media", mediaId: "med_phone", timelineIn: 10, sourceIn: 0, sourceOut: 4, speed: 1 } },
+      { op: "addClip", trackId: "trk_v2", clip: { id: "s1", kind: "media", mediaId: "med_screen", timelineIn: 10, sourceIn: 0, sourceOut: 4, speed: 1 } },
+    ];
+    expect(editDetail(change(unlabeledRawOps), { kind: "overlay", range: at }, { timeline, media: rawMedia })).toBeUndefined();
+
+    // A date followed by real words stays readable.
+    expect(editDetail(change([{ op: "addClip", trackId: "trk_v2", clip: { id: "k1", kind: "media", mediaId: "med_named", timelineIn: 10, sourceIn: 0, sourceOut: 4, speed: 1 } }]),
+      { kind: "overlay", range: at }, { timeline, media: rawMedia })).toBe("2026-11-24 keynote intro");
+
+    // Audio updates on a raw recording fall back to plain "Sound" phrasing instead of printing the timestamp filename.
+    const rawTimeline = { ...timeline, tracks: [
+      { id: "trk_v1", kind: "video", name: "Main", clips: [{ id: "clp_raw", kind: "media", mediaId: "med_cam", timelineIn: 0, sourceIn: 0, sourceOut: 60, speed: 1 }] },
+    ] } as unknown as Timeline;
+    expect(editDetail(change([{ op: "updateClip", clipId: "clp_raw", patch: { volume: 0.5 } }]), { kind: "audio", range: at }, { timeline: rawTimeline, media: rawMedia }))
+      .toBe("Sound −6 dB");
+    expect(editDetail(change([{ op: "updateClip", clipId: "clp_raw", patch: { effects: [{ type: "voiceCleanup", params: {}, enabled: true }] } }]),
+      { kind: "voice", range: at }, { timeline: rawTimeline, media: rawMedia })).toBe("Voice cleanup");
+  });
+
   it("quotes a caption's words and counts the rest of a run", () => {
     const caption = (id: string, text: string, t: number) => ({ op: "addClip", trackId: "trk_c", clip: { id, kind: "caption", timelineIn: t, timelineOut: t + 1, text } });
     const ops = [caption("a", "Welcome back", 10), caption("b", "to the  show", 11), caption("c", "today", 12), caption("d", "far away", 40)];

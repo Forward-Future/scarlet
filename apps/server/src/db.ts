@@ -50,6 +50,13 @@ export class Db {
 
   constructor(path: string) {
     this.raw = new DatabaseSync(path);
+    // SQLite's own `'localtime'` on Windows calls Win32 and ignores `TZ`, while V8's `Date` reads both the OS clock and `TZ`.
+    this.raw.function("local_day", (at) => {
+      if (typeof at !== "string") return null;
+      const d = new Date(at);
+      if (Number.isNaN(d.getTime())) return null;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    });
   }
   prepare(sql: string): Statement {
     let s = this.cache.get(sql);
@@ -163,6 +170,10 @@ export function openDb(path: string): Db {
   db.exec(`CREATE TABLE IF NOT EXISTS show_areas (
     media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE, at REAL NOT NULL, json TEXT NOT NULL, created_at TEXT NOT NULL,
     PRIMARY KEY (media_id, at)
+  );
+  CREATE TABLE IF NOT EXISTS batch_summaries (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, batch_key TEXT NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, batch_key)
   );`);
   ensureProjectRowRevision(db);
   ensureColumn(db, "projects", "editing_paused", "ALTER TABLE projects ADD COLUMN editing_paused INTEGER NOT NULL DEFAULT 0;");

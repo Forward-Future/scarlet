@@ -4,7 +4,7 @@
  * be run over stdio (see cli.ts) or embedded in-process.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod/v3";
@@ -54,7 +54,7 @@ import {
   unmeasuredLine,
   type ToolResult,
 } from "./tool-result.js";
-import { readArtifact, writeArtifact } from "./workspace-files.js";
+import { readArtifact, removeSessionFiles, writeArtifact } from "./workspace-files.js";
 
 export { SCARLET_TOOL_NAMES, type ScarletToolName } from "@scarlet/shared";
 export { doubledSoundText, validateOps } from "./timeline-validation.js";
@@ -63,6 +63,14 @@ export { transcriptionNote } from "./media-state.js";
 const SKILL_FROM_CHANGE_TOOLS: ReadonlySet<string> = new Set(["task_log", "task_question", "change_get", "timeline_get", "skill_save_from_change"]);
 const IMAGE_TOOLS: ReadonlySet<string> = new Set(["frame_contact_sheet", "frame_contact_sheet_batch", "media_frame", "sound_picture"]);
 const SKILL_EDIT_TOOLS: ReadonlySet<string> = new Set(["task_log", "task_question", "skills_list", "skill_save_edit"]);
+const STYLE_GUIDE_EDIT_TOOLS: ReadonlySet<string> = new Set([
+  "task_log",
+  "task_question",
+  "attachment_read",
+  "style_guide_update",
+  "style_guide_preview_render",
+  "style_guide_preview_get",
+]);
 /** A learning check reads one request for a standing rule. It can read the editor's skills and offer a rule, and nothing else. */
 const LEARNING_CHECK_TOOLS: ReadonlySet<string> = new Set(["skills_list", "learning_suggest"]);
 /** An area check looks at one frame and says what of it viewers may see, and nothing else. */
@@ -77,7 +85,7 @@ const LISTEN_CHECK_TOOLS: ReadonlySet<string> = new Set(["source_audio"]);
  * tools briefly (Gemini's) gets the same tools whole, and the rest through `tool_call` (`brief-tools.ts`).
  */
 export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["project_get", "timeline_get", "task_log", "task_question"]);
-const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "listen_check", "learning_check", "skill_edit", "skill_from_change"]);
+const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "listen_check", "learning_check", "batch_summary", "skill_edit", "style_guide_edit", "skill_from_change"]);
 /** Tools a request that only tightens local pauses refuses: it saves classified pauses with dialogue_apply_cuts. */
 const NOT_FOR_LOCAL_PAUSES: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "dialogue_check_repeats"]);
 const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
@@ -157,12 +165,16 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         ? "Scarlet exposes the approved change and timeline version, communication with the editor, and saving the requested skill."
         : ctx.task?.kind === "skill_edit"
         ? "Scarlet exposes the tools for revising one of the editor’s skills; an empty MCP resource list is normal."
+        : ctx.task?.kind === "style_guide_edit"
+        ? "Scarlet exposes the tools for designing a style guide and rendering its live 16:9 preview; an empty MCP resource list is normal."
         : ctx.task?.kind === "learning_check"
         ? "Scarlet exposes the tools for reading the editor’s skills and offering a rule for one; an empty MCP resource list is normal."
         : ctx.task?.kind === "area_check"
         ? "Scarlet exposes the tools for looking at one frame of a recording and saving what of it viewers may see; an empty MCP resource list is normal."
         : ctx.task?.kind === "listen_check"
         ? "Scarlet exposes the tool for playing one passage of a recording; an empty MCP resource list is normal."
+        : ctx.task?.kind === "batch_summary"
+        ? "Reply with one short plain-English title summarizing the batch of edits in your prompt. Call no tools."
         : "Scarlet exposes project context and editing operations as tools; an empty MCP resource list is normal. project_get returns the current edit and the editor’s selection. Transcript and waveform tools prepare missing data on demand.",
     },
   );
@@ -170,6 +182,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const fetchImpl = ctx.fetch ?? globalThis.fetch.bind(globalThis);
   let tempDir: Promise<string> | undefined;
   const artifactDir = () => ctx.workDir ?? (tempDir ??= mkdtemp(join(tmpdir(), "scarlet-mcp-")));
+  /** Files `export_otio` wrote in the session's own temporary folder. The editor was given their paths, so they outlast the session. */
+  const keptExports = new Set<string>();
 
   const errors = createSessionErrorHelpers();
 
@@ -260,6 +274,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     if (!caps.images && IMAGE_TOOLS.has(name)) return false;
     // A request to revise a skill edits no video. It gets the tools for talking to the editor and for the skill.
     if (ctx.task?.kind === "skill_edit" && !SKILL_EDIT_TOOLS.has(name)) return false;
+    // A request to design or update a style guide edits no video. It gets chat, file reading, and preview rendering tools.
+    if (ctx.task?.kind === "style_guide_edit" && !STYLE_GUIDE_EDIT_TOOLS.has(name)) return false;
     // A rule approved in Learnings is saved with no one to answer a question: what the save can't settle goes back to
     // the editor beside the rule, in its closing words.
     if (name === "task_question" && ctx.task?.kind === "skill_edit" && ctx.task.context.learningId) return false;
@@ -268,6 +284,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     if (ctx.task?.kind === "learning_check" ? !LEARNING_CHECK_TOOLS.has(name) : name === "learning_suggest") return false;
     if (ctx.task?.kind === "area_check" && !AREA_CHECK_TOOLS.has(name)) return false;
     if (ctx.task?.kind === "listen_check" && !LISTEN_CHECK_TOOLS.has(name)) return false;
+    if (ctx.task?.kind === "batch_summary") return false;
     // A hand-off does one piece of a request's work for the model running it. Nobody waits on its questions: what it
     // can't settle goes back in its closing words.
     if (ctx.task?.kind === "hand_off" && (name === "task_question" || name === "hand_off")) return false;
@@ -377,9 +394,10 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   // The only close handler: a second assignment would replace this one.
   server.server.onclose = () => {
     diagnosticSessionClosed = true; inspection.close(); reviewTools.close();
-    // The folder made for this session's files when the harness gave none (listening copies, exports, downloaded
-    // videos) is this session's alone: it goes with it. A folder the harness gave is left as it is.
-    if (tempDir) void tempDir.then(dir => rm(dir, { recursive: true, force: true })).catch(err => console.error("[scarlet-mcp] removing the session's temporary files:", err));
+    // The folder made for this session's files when the harness gave none (listening copies, downloaded videos) is
+    // this session's alone: it goes with it, all but a timeline exported for the editor, who was told where it is to
+    // import it in Resolve. A folder the harness gave is left as it is.
+    if (tempDir) void tempDir.then(dir => removeSessionFiles(dir, keptExports)).catch(err => console.error("[scarlet-mcp] removing the session's temporary files:", err));
   };
 
   const perception = registerPerception({
@@ -409,7 +427,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   });
 
   registerGraphics({
-    tool, client, projectId: ctx.projectId, task: ctx.task, author: ctx.author, caps,
+    tool, client, projectId: ctx.projectId, taskId: ctx.taskId, agent: ctx.agent, task: ctx.task, author: ctx.author, caps,
     readArtifact: async path => readArtifact(await artifactDir(), path),
     writeArtifact: async (path, data) => writeArtifact(await artifactDir(), path, data),
   });
@@ -417,6 +435,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   registerExportAndTaskTools({
     tool, client, projectId: ctx.projectId, taskId: ctx.taskId, startedAt, task: ctx.task,
     agent: ctx.agent, getHeader: session.getHeader, artifactDir, postEvent, taskModels: ctx.taskModels, waitLeft,
+    exported: path => { if (!ctx.workDir) keptExports.add(path); },
   });
 
   watchRefusedArguments(server, async (name, args, began, result) => {

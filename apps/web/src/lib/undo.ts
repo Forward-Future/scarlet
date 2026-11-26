@@ -3,7 +3,7 @@ import type { EditRef, Task } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { appLog, errorName } from "./appLog";
 import { api, errorMessage } from "./client";
-import { unkeepEdits, type KeptRef } from "./keptEdits";
+import { keepEdits, unkeepEdits, type KeptRef } from "./keptEdits";
 import { lastAttempt } from "./requestRuns";
 import { isActiveTask } from "./taskRun";
 
@@ -22,15 +22,17 @@ export type UndoStep = {
   word: "Keep" | "Done";
   threadId: string;
   refs: KeptRef[];
+  /** Additional threads' edits kept together when a unified beta row combines edits across requests. */
+  extraParts?: { threadId: string; refs: KeptRef[] }[];
   /** The edit the card was on, opened again once its Keep is taken back. */
   edit: EditRef & { single?: boolean };
 } | {
   kind: "revision";
-  /** "Reject" for a Reject edit, which asks Scarlet to put the edit back as a revision does; "Add" for a to-do's Add. */
-  word?: "Reject" | "Add";
+  /** "Reject" for a Reject edit, "Add" for a to-do's Add, "Adjust" for a direct cut-edge drag on the timeline. */
+  word?: "Reject" | "Add" | "Adjust";
   /** The request the revision went out as. */
   taskId?: string;
-  /** The version a rejection made when the engine put the cut back itself, with no request: ⌘Z takes that version out. */
+  /** The version a rejection or direct cut adjustment made with no request: ⌘Z takes that version out. */
   version?: string;
   /** The edit the card went on from (Reject edit moves on as Keep does), opened again once it is taken back. */
   threadId?: string;
@@ -41,14 +43,30 @@ export type UndoStep = {
   word: "Mark all done" | "Keep all";
   parts: { threadId: string; refs: KeptRef[] }[];
 } | {
-  /** Keep or Reject edit on a call of a pass that waits on the editor. */
+  /** Taking back a Keep from a kept row's hover control: ⌘Z keeps it again. */
+  kind: "unkeep";
+  word: "Unkeep";
+  threadId: string;
+  refs: KeptRef[];
+  /** Additional threads' edits unkept together when a unified beta row combines edits across requests. */
+  extraParts?: { threadId: string; refs: KeptRef[] }[];
+} | {
+  /** Keep, Reject edit, or Unkeep on a call of a pass that waits on the editor. */
   kind: "call";
-  word: "Keep" | "Reject";
+  word: "Keep" | "Reject" | "Unkeep";
   /** The pass the call was made on, and which of its cuts. */
   changeId: string;
   index: number;
   /** What the call was decided as before, when this changed a decision already made: taken back, it is that again. */
   was?: "keep" | "cut";
+} | {
+  /** Direct edge drag on a call of a pass that waits on the editor. */
+  kind: "callAdjust";
+  word: "Adjust";
+  /** The replacement pass made by the drag, the prior pass it replaced, and the cut's index. */
+  changeId: string;
+  replacedId: string;
+  index: number;
 });
 
 /** A call's step, as the page that holds the pass takes it back. */
@@ -85,7 +103,7 @@ export function recordUndo(step: NewStep) {
  * be taken back. ⌘Z says so once, and goes on to what came before them.
  */
 export function forgetCalls(projectId: string) {
-  useUndoStore.setState(s => ({ steps: s.steps.filter(step => step.projectId !== projectId || step.kind !== "call") }));
+  useUndoStore.setState(s => ({ steps: s.steps.filter(step => step.projectId !== projectId || (step.kind !== "call" && step.kind !== "callAdjust")) }));
 }
 
 /** The step the next ⌘Z takes back in this project. */
@@ -93,7 +111,7 @@ export function lastStep(steps: readonly UndoStep[], projectId: string) {
   return steps.findLast(step => step.projectId === projectId);
 }
 
-const stepWord = (step: UndoStep) => step.kind === "keep" || step.kind === "keepAll" ? step.word : step.word ?? "revision";
+const stepWord = (step: UndoStep) => step.kind === "keep" || step.kind === "keepAll" || step.kind === "unkeep" ? step.word : step.word ?? "revision";
 
 /**
  * Take back the newest step in this project. A Keep is taken back here and on the engine, and the edit waits on the
@@ -106,20 +124,37 @@ const stepWord = (step: UndoStep) => step.kind === "keep" || step.kind === "keep
 export async function undoLast(projectId: string, project: { changes: readonly Change[]; tasks: readonly Task[] },
   revert: (version: string) => Promise<void>, uncall?: (step: CallStep) => void): Promise<UndoStep | undefined> {
   const state = useUndoStore.getState();
-  if (state.undoing !== undefined) return;
+  if (state.undoing !== undefined) { appLog("action", "undo-skipped", { project: projectId, reason: "busy" }); return; }
   const step = lastStep(state.steps, projectId);
-  if (!step) return;
+  if (!step) { appLog("action", "undo-skipped", { project: projectId, reason: "empty" }); return; }
   useUndoStore.setState({ undoing: step.id, error: undefined });
   try {
-    if (step.kind === "keep") unkeepEdits(projectId, step.threadId, step.refs);
+    if (step.kind === "keep") {
+      if (step.refs.length) unkeepEdits(projectId, step.threadId, step.refs);
+      for (const part of step.extraParts ?? []) if (part.refs.length) unkeepEdits(projectId, part.threadId, part.refs);
+    }
+    else if (step.kind === "unkeep") {
+      if (step.refs.length) keepEdits(projectId, step.threadId, step.refs);
+      for (const part of step.extraParts ?? []) if (part.refs.length) keepEdits(projectId, part.threadId, part.refs);
+    }
     else if (step.kind === "keepAll") for (const part of step.parts) unkeepEdits(projectId, part.threadId, part.refs);
     else if (step.kind === "call") {
       if (!uncall) throw new Error("its pass isn’t open here.");
       uncall(step);
     }
+    else if (step.kind === "callAdjust") {
+      const made = project.changes.find(c => c.id === step.changeId);
+      if (made?.state === "approved") throw new Error("its pass has been applied since.");
+      if (made && (made.state === "ready" || made.state === "revising" || made.state === "failed")) {
+        await api.rejectChange(made.id, "Taken back with Undo.");
+      }
+      const prior = project.changes.find(c => c.id === step.replacedId);
+      if (prior?.state === "rejected") await api.reopenChange(prior.id);
+    }
     else if (step.version) await revert(step.version);
     else if (step.taskId) await undoRevision(step.taskId, project, revert);
     appLog("action", "undo", { project: projectId, kind: step.kind, ...(step.kind === "keep" && { change: step.edit.changeId }),
+      ...(step.kind === "unkeep" && { count: step.refs.length + (step.extraParts?.reduce((n, part) => n + part.refs.length, 0) ?? 0) }),
       ...(step.kind === "keepAll" && { count: step.parts.reduce((n, part) => n + part.refs.length, 0) }) });
     useUndoStore.setState(s => ({ steps: s.steps.filter(other => other.id !== step.id) }));
     return step;
@@ -127,7 +162,7 @@ export async function undoLast(projectId: string, project: { changes: readonly C
     appLog("action", "undo-failed", { project: projectId, kind: step.kind, name: errorName(error) }, { level: "warn" });
     // It goes from the list all the same: pressed again, ⌘Z goes on to the step before it rather than failing again.
     useUndoStore.setState(s => ({ steps: s.steps.filter(other => other.id !== step.id),
-      error: { projectId, text: `Couldn’t undo ${step.kind === "keep" || step.kind === "keepAll" || step.word ? stepWord(step) : "the revision"}: ${reason(error)}` } }));
+      error: { projectId, text: `Couldn’t undo ${step.kind === "keep" || step.kind === "keepAll" || step.kind === "unkeep" || step.word ? stepWord(step) : "the revision"}: ${reason(error)}` } }));
   } finally {
     useUndoStore.setState(s => s.undoing === step.id ? { undoing: undefined } : s);
   }

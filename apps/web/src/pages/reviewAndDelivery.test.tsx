@@ -66,7 +66,7 @@ beforeEach(() => {
     current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined),
   });
   localStorage.removeItem("scarlet.exportStarShown");
-  useUiStore.setState({ exportStarNotice: "unseen" });
+  useUiStore.setState({ exportNotice: null, exportStarNotice: "unseen" });
   useExports.setState({ jobs: {} });
   vi.spyOn(desktop, "keepVideoExport").mockResolvedValue();
   vi.spyOn(api, "releaseRender").mockResolvedValue();
@@ -519,13 +519,14 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } }));
   const seek = vi.fn(), opened: number[] = [];
-  const edit = (time: number, n: number) => ({ time, n, title: `Edit ${n} of 6 · ${time}s`, summary: `Summary ${n}`, open: () => { opened.push(n); } });
-  // 100 s across 1000 px. Edits 1 to 4 sit a second apart, so their circles would touch. Edit 5 has room.
+  const edit = (time: number, n: number) => ({ time, title: `Edit at ${time}s`, summary: `Summary ${n}`, open: () => { opened.push(n); } });
+  // 100 s across 1000 px. Edits 1 to 4 sit a second apart, so their dots would touch. Edit 5 has room.
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={seek}
     marks={[edit(10, 1), edit(11, 2), edit(12, 3), edit(13, 4), edit(60, 5)]} />);
   const markers = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
-  expect(markers().map(m => m.textContent)).toEqual(["1–4", "5"]);
-  expect(markers().every(m => m.classList.contains("is-numbered") && m.dataset.state === undefined)).toBe(true);
+  // Neither says a number or a time: one is a pill, the other a dot.
+  expect(markers().map(m => [m.textContent, m.classList.contains("is-pill")])).toEqual([["", true], ["", false]]);
+  expect(markers().every(m => m.classList.contains("is-dot") && m.dataset.state === undefined)).toBe(true);
   const strip = () => container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   const point = (type: string, clientX: number) => act(() => strip().dispatchEvent(new PointerEvent(type, { pointerId: 1, isPrimary: true, button: 0, clientX, bubbles: true })));
@@ -533,11 +534,11 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   await point("pointermove", 115);
   expect(strip().classList.contains("is-aimed")).toBe(true);
   expect(container.querySelector(".simple-timeline-need, .simple-timeline-tip")).toBeNull();
-  // A press zooms to its run, where each edit has its own number, and opens nothing.
+  // A press zooms to its run, where each edit has its own dot, and opens nothing.
   await point("pointerdown", 115);
   expect(opened).toEqual([]);
   expect(seek).not.toHaveBeenCalled();
-  expect(markers().map(m => m.textContent)).toEqual(["1", "2", "3", "4"]);
+  expect(markers().map(m => m.classList.contains("is-pill"))).toEqual([false, false, false, false]);
   // Back on the whole video, a press on a dot opens its edit; beside a marker a press scrubs as before.
   await fitBySlider();
   vi.spyOn(strip(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
@@ -550,41 +551,41 @@ it("draws crowded edits as one pill that zooms to its run on a press, and a dot 
   expect(opened).toEqual([5]);
 });
 
-it("zooms a pill when another group's circle is under the pointer too", async () => {
+it("zooms a pill when another group's dot is under the pointer too", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   vi.spyOn(window, "matchMedia").mockReturnValue(Object.create(reduced, { matches: { value: true } }));
   const openOther = vi.fn(), openCall = vi.fn(), seek = vi.fn();
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={seek} marks={[
-    { time: 11.1, n: 13, title: "Edit 13", open: openOther },
-    { time: 10.25, n: 12, title: "Cut 12", group: "call", open: openCall },
-    { time: 11.75, n: 14, title: "Cut 14", group: "call", open: openCall },
+    { time: 11.1, title: "Edit at 0:11", open: openOther },
+    { time: 10.5, title: "Cut at 0:10", group: "call", open: openCall },
+    { time: 11.5, title: "Cut at 0:11", group: "call", open: openCall },
   ]} />);
   const pill = container.querySelector<HTMLElement>(".simple-timeline-mark.is-pill")!;
-  expect([pill.textContent, pill.style.left]).toEqual(["12+", "11%"]);
+  expect([pill.textContent, pill.style.left]).toEqual(["", "11%"]);
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   await act(() => strip.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, isPrimary: true, button: 0, clientX: 111, bubbles: true })));
   expect(openOther).not.toHaveBeenCalled();
   expect(openCall).not.toHaveBeenCalled();
   expect(seek).not.toHaveBeenCalled();
-  expect([...container.querySelectorAll(".simple-timeline-mark")].map(mark => mark.textContent)).toEqual(["12", "13", "14"]);
+  expect([...container.querySelectorAll(".simple-timeline-mark")].map(mark => mark.classList.contains("is-pill"))).toEqual([false, false, false]);
 });
 
 it("names what waits on the editor in one amber line under the frame", async () => {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(1000);
-  const dot = (time: number, n: number, waits = false) => ({ time, n, title: `Cut ${n} of 6`, open: () => {},
-    ...waits && { state: "check" as const, need: `Cut ${n}` } });
+  const dot = (time: number, waits = false) => ({ time, title: `Cut at ${time}`, open: () => {},
+    ...waits && { state: "check" as const, need: `Cut at 0:${time}` } });
   // 100 s across 1000 px: cuts 1 to 3 share a pill, and the second of them waits on the editor.
   await show(<TimelineScrubber duration={100} playhead={0} frameAt={() => undefined} onSeek={() => {}}
-    marks={[dot(10, 1), dot(11, 2, true), dot(12, 3), dot(60, 4)]} />);
+    marks={[dot(10), dot(11, true), dot(12), dot(60)]} />);
   const pill = container.querySelector<HTMLElement>(".simple-timeline-mark")!;
-  expect([pill.textContent, pill.dataset.state]).toEqual(["1–3", "check"]);
+  expect([pill.textContent, pill.dataset.state]).toEqual(["", "check"]);
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
   vi.spyOn(strip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 24));
   const point = (clientX: number) => act(() => strip.dispatchEvent(new PointerEvent("pointermove", { pointerId: 1, isPrimary: true, button: 0, clientX, bubbles: true })));
   await point(108);
-  expect(container.querySelector(".simple-timeline-need")?.textContent).toBe("Cut 2 needs you");
+  expect(container.querySelector(".simple-timeline-need")?.textContent).toBe("Cut at 0:11 needs you");
   // A marker with nothing waiting writes nothing under the frame.
   await point(600);
   expect(container.querySelector(".simple-timeline-need")).toBeNull();
@@ -1258,7 +1259,7 @@ it("labels a saved file from an earlier edit and still exports the current video
   vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
   vi.spyOn(desktop, "finishVideoExport").mockResolvedValue("/chosen/cut.mp4");
   const reveal = vi.spyOn(desktop, "revealPath").mockResolvedValue();
-  const earlierEdit = () => container.querySelector('[role="status"]')?.textContent?.includes("Earlier edit");
+  const earlierEdit = () => container.querySelector('[role="status"]')?.textContent?.includes("Earlier version");
   const request = vi.spyOn(api, "requestRender").mockImplementation(async (_id, body) => ({ render: {
     ...data.renders[0]!, id: "final", version: body.version!, kind: "full", quality: "delivery", range: null, state: "done" } }));
   await show(<ExportSheet hasCut onClose={() => {}} />);
@@ -1345,7 +1346,7 @@ it("offers a folder for another app under For Resolve, Final Cut or Premiere, sa
   // The video's own settings go; the folder's contents come instead.
   expect(container.querySelector("#export-range")).toBeNull();
   expect(container.querySelector("details")).toBeNull();
-  expect(container.textContent).toContain("A folder for finishing the edit in DaVinci Resolve, Final Cut Pro or Premiere Pro.");
+  expect(container.textContent).toContain("A folder for finishing the video in DaVinci Resolve, Final Cut Pro or Premiere Pro.");
   expect(container.textContent).toContain("A copy of the footage");
   expect(buttonByText("Back")).toBeTruthy();
   await click(exportButton()!);
@@ -1354,6 +1355,129 @@ it("offers a folder for another app under For Resolve, Final Cut or Premiere, sa
   expect(save).toHaveBeenCalledExactlyOnceWith(7, [{ path: "Interview.fcpxml", text: "<fcpxml/>" }]);
   expect(container.textContent).toContain("Interview");
   expect(buttonByText("Show in folder")).toBeTruthy();
+});
+
+it("closes Export automatically when a folder, video, or caption export finishes, shows a single completion notice, and keeps the last file on reopen", async () => {
+  const choose = vi.spyOn(desktop, "chooseVideoExport");
+  const handoff = vi.spyOn(api, "handoff").mockResolvedValue({ files: [{ path: "Interview.fcpxml", text: "<fcpxml/>" }], mediaBytes: 0 });
+  const saveFolder = vi.spyOn(desktop, "finishFolderExport").mockResolvedValue("/Users/me/Exports/Interview");
+  const saveFile = vi.spyOn(desktop, "finishVideoExport");
+  const reveal = vi.spyOn(desktop, "revealPath").mockResolvedValue();
+  const render: Render = { ...data.renders[0]!, id: "final", version: data.project.head!, kind: "full", quality: "delivery", range: null, state: "done" };
+  vi.spyOn(api, "requestRender").mockResolvedValue({ render });
+  vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
+
+  let open = true;
+  const onClose = vi.fn(() => { open = false; });
+  const draw = () => show(<>{open && <ExportSheet hasCut onClose={onClose} />}<ExportStarNotice /></>);
+
+  // 1. Resolve / Final Cut / Premiere folder export closes the dialog and shows the completion notice.
+  choose.mockResolvedValueOnce({ ticket: 7, path: "/Users/me/Exports/Interview" });
+  await draw();
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
+  await click(exportButton()!);
+  expect(handoff).toHaveBeenCalledTimes(1);
+  expect(saveFolder).toHaveBeenCalledTimes(1);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await draw();
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  const notices = () => container.querySelectorAll('aside[aria-label="Export complete"]');
+  expect(notices()).toHaveLength(1);
+  expect(notices()[0]!.textContent).toContain("Exported for Resolve, Final Cut or Premiere");
+  expect(notices()[0]!.textContent).toContain("Interview");
+  expect(button("Star on GitHub")).toBeUndefined();
+  await click(buttonByText("Show in folder")!);
+  expect(reveal).toHaveBeenCalledWith("/Users/me/Exports/Interview");
+  await click(labeled("Dismiss export notice"));
+  expect(notices()).toHaveLength(0);
+
+  // Re-opening Export later keeps it open and still shows the last exported folder (and Earlier edit after changes).
+  open = true;
+  onClose.mockClear();
+  await draw();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.querySelector("dialog[open]")?.textContent).toContain("Interview");
+  expect(buttonByText("Show in folder")).toBeTruthy();
+
+  // 2. MP4 export closes the dialog and combines completion + Star on GitHub into a single notice strip.
+  choose.mockResolvedValueOnce({ ticket: 8, path: "/Users/me/Movies/Interview.mp4" });
+  saveFile.mockResolvedValueOnce("/Users/me/Movies/Interview.mp4");
+  await click(exportButton()!);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await draw();
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  expect(notices()).toHaveLength(1);
+  expect(notices()[0]!.textContent).toContain("Video exported");
+  expect(notices()[0]!.textContent).toContain("Interview.mp4");
+  expect(buttonByText("Show in folder")).toBeTruthy();
+  expect(button("Star on GitHub")).toBeDefined();
+  reveal.mockRejectedValueOnce(new Error("Folder moved"));
+  await click(buttonByText("Show in folder")!);
+  expect(notices()[0]!.textContent).toContain("Folder moved");
+  await click(labeled("Dismiss GitHub invitation"));
+  expect(notices()).toHaveLength(0);
+
+  // 3. Caption export closes the dialog and shows the captions completion notice.
+  open = true;
+  onClose.mockClear();
+  await draw();
+  choose.mockResolvedValueOnce({ ticket: 9, path: "/Users/me/Captions/Interview.srt" });
+  saveFile.mockResolvedValueOnce("/Users/me/Captions/Interview.srt");
+  await selectOption(container.querySelector<HTMLButtonElement>("#export-format")!, /Captions \(\.srt\)/);
+  await click(exportButton()!);
+  expect(onClose).toHaveBeenCalledTimes(1);
+  await draw();
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  expect(notices()).toHaveLength(1);
+  expect(notices()[0]!.textContent).toContain("Captions exported");
+  expect(notices()[0]!.textContent).toContain("Interview.srt");
+  expect(buttonByText("Show in folder")).toBeTruthy();
+  expect(button("Star on GitHub")).toBeUndefined();
+});
+
+it("keeps Export open when an export fails, the save dialog is cancelled, or a running export is cancelled", async () => {
+  const choose = vi.spyOn(desktop, "chooseVideoExport");
+  const discard = vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
+  const render: Render = { ...data.renders[0]!, id: "stay-open", version: data.project.head!, kind: "full", quality: "delivery", range: null, state: "done" };
+  const request = vi.spyOn(api, "requestRender").mockResolvedValue({ render });
+  const save = vi.spyOn(desktop, "finishVideoExport");
+  const onClose = vi.fn();
+
+  await show(<><ExportSheet hasCut onClose={onClose} /><ExportStarNotice /></>);
+  // Cancelling the Save dialog keeps the sheet open and shows no completion notice.
+  choose.mockResolvedValueOnce(null);
+  await click(exportButton()!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.querySelector('aside[aria-label="Export complete"]')).toBeNull();
+
+  // Failure keeps the sheet open so the editor sees the error and Retry.
+  choose.mockResolvedValueOnce({ ticket: 10, path: "/chosen/cut.mp4" });
+  save.mockRejectedValueOnce(new Error("Disk full"));
+  await click(exportButton()!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Disk full");
+  expect(button("Retry")).toBeDefined();
+  expect(container.querySelector('aside[aria-label="Export complete"]')).toBeNull();
+
+  // Even when a prior completed export exists on reopen, cancelling the Save dialog or cancelling a render stays open.
+  useExports.setState({ jobs: { [PRJ]: { phase: "done", path: "/chosen/prior.mp4", context: fullRenderContext(data.project) } } });
+  await show(null);
+  onClose.mockClear();
+  await show(<><ExportSheet hasCut onClose={onClose} /><ExportStarNotice /></>);
+  expect(onClose).not.toHaveBeenCalled();
+
+  choose.mockResolvedValueOnce(null);
+  await click(exportButton()!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("prior.mp4");
+
+  choose.mockResolvedValueOnce({ ticket: 11, path: "/chosen/next.mp4" });
+  request.mockResolvedValueOnce({ render: { ...render, state: "running", progress: 0.25 } });
+  await click(exportButton()!);
+  await click(button("Cancel export")!);
+  expect(onClose).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("prior.mp4");
+  expect(discard).toHaveBeenCalled();
 });
 
 it("goes back from the folder for Resolve, Final Cut or Premiere to the video's settings", async () => {

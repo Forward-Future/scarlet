@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { appLog } from "../../lib/appLog";
 import { MAX_RECORD_SECONDS, useRecorder, type RecorderResult } from "../../lib/recorder";
 import { isComposing } from "../../lib/hotkeys";
 import { useUiStore } from "../../stores/ui";
@@ -6,6 +7,8 @@ import { Icon } from "../ui/primitives";
 
 /** What the red button is named while it records: a press sends what was said, and Esc throws it away. */
 export const SEND_RECORDING = "Send (Esc to discard)";
+/** Its name when what was said waits in the message box to be read first (Settings → General → Review dictation before sending). */
+export const REVIEW_RECORDING = "Stop and review (Esc to discard)";
 
 /**
  * The recordings Esc throws away. That press is the recording's alone: it closes no card, clears no tag and leaves a
@@ -18,6 +21,8 @@ if (typeof window !== "undefined") {
     if (e.key !== "Escape" || !discards.size || e.metaKey || e.ctrlKey || e.altKey || isComposing(e)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
+    // This Esc goes no further, so nothing after it hears or logs it: it is said here.
+    appLog("voice", "discard-key", { recordings: discards.size });
     for (const discard of [...discards]) discard();
   }, true);
 }
@@ -26,10 +31,11 @@ if (typeof window !== "undefined") {
  * Mic toggle. Click toggles recording; holding V (uiStore.voiceHold) records
  * push-to-talk style when `followHold` is set. Shows a red dot and elapsed
  * time while recording and auto-stops at the 2 minute cap. A press on the red
- * button, letting go of V and the cap all send what was said. Esc throws the
+ * button, letting go of V and the cap all send what was said, or with `review`
+ * stop it so the words wait in the message box. Esc throws the
  * recording away instead, and that press does nothing else.
  */
-export function MicButton({ onResult, onStart, onRecording, onError, disabled, disabledReason, followHold = false, label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; onError?(message: string): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; label?: string }) {
+export function MicButton({ onResult, onStart, onRecording, onError, disabled, disabledReason, followHold = false, review = false, label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; onError?(message: string): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; review?: boolean; label?: string }) {
   const rec = useRecorder(onResult);
   useEffect(() => { if (rec.error) onError?.(rec.error); }, [onError, rec.error]);
   const hold = useUiStore((s) => s.voiceHold);
@@ -99,16 +105,24 @@ export function MicButton({ onResult, onStart, onRecording, onError, disabled, d
     return () => { discards.delete(discard); };
   }, [recording, stop]);
 
+  const discard = () => {
+    heldRef.current = false;
+    useUiStore.getState().setVoiceHold(false);
+    appLog("voice", "discard-button");
+    stop(true);
+  };
+
   const unsupported = rec.state === "unsupported";
   const isDisabled = disabled || unsupported;
-  const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? SEND_RECORDING : followHold ? `${label} (hold V)` : label;
+  const stopLabel = review ? REVIEW_RECORDING : SEND_RECORDING;
+  const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? stopLabel : followHold ? `${label} (hold V)` : label;
 
   return (
     <div className="flex items-center gap-2">
       <button
         ref={button}
         type="button"
-        aria-label={rec.recording ? SEND_RECORDING : label}
+        aria-label={rec.recording ? stopLabel : label}
         aria-pressed={rec.recording}
         title={title}
         disabled={isDisabled}
@@ -118,11 +132,22 @@ export function MicButton({ onResult, onStart, onRecording, onError, disabled, d
         <Icon name={rec.recording ? "stop" : "mic"} size={15} />
       </button>
       {rec.recording && (
-        <span className="inline-flex items-center gap-1.5 text-[12px] tnum" aria-live="polite">
-          <span className="size-2 rounded-full bg-bad pulse" aria-hidden />
-          {Math.floor(rec.elapsed / 60)}:{String(Math.floor(rec.elapsed % 60)).padStart(2, "0")}
-          <span className="text-dim">/ {MAX_RECORD_SECONDS / 60}:00</span>
-        </span>
+        <>
+          <span className="inline-flex items-center gap-1.5 text-[12px] tnum" aria-live="polite">
+            <span className="size-2 rounded-full bg-bad pulse" aria-hidden />
+            {Math.floor(rec.elapsed / 60)}:{String(Math.floor(rec.elapsed % 60)).padStart(2, "0")}
+            <span className="text-dim">/ {MAX_RECORD_SECONDS / 60}:00</span>
+          </span>
+          <button
+            type="button"
+            aria-label="Cancel recording"
+            title="Discard recording (Esc)"
+            onClick={discard}
+            className="btn-quiet shrink-0 text-[12px] text-muted hover:text-fg"
+          >
+            Cancel
+          </button>
+        </>
       )}
       {rec.state === "requesting" && <span className="text-[12px] text-muted">Waiting for microphone…</span>}
       {rec.error && !rec.recording && !onError && (

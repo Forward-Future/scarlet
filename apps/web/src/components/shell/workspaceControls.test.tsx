@@ -10,6 +10,7 @@ import * as realtime from "../../lib/realtime";
 import { invalidateStorageScan } from "../../lib/storage";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useUiStore } from "../../stores/ui";
+import { usePlayerStore } from "../../stores/player";
 import { useAuthStore } from "../../stores/auth";
 import { useHostsStore } from "../../stores/hosts";
 import { useSkillsStore } from "../../stores/skills";
@@ -26,6 +27,7 @@ let el: HTMLDivElement;
 let root: Root;
 const resets = [
   () => useUiStore.setState(useUiStore.getInitialState()),
+  () => usePlayerStore.setState(usePlayerStore.getInitialState()),
   () => useSkillsStore.setState(useSkillsStore.getInitialState()),
   () => useProjectStore.setState(useProjectStore.getInitialState()),
   () => useAuthStore.setState(useAuthStore.getInitialState()),
@@ -111,6 +113,13 @@ it("lists Settings once, with the key of the computer it is on, and the keys of 
   expect(keysFor("Clear the marked range (also Esc or Delete)")).toEqual(["⌥ X"]);
   // No row is for another computer.
   expect(el.querySelector("dialog")!.textContent).not.toMatch(/macOS|Ctrl/);
+
+  // The L row stays read-only (no inline picker) and reflects the chosen speed-up rate.
+  expect(el.querySelector('dialog [role="combobox"]')).toBeNull();
+  expect(keysFor("Speed up playback to 1.5× (again for 1×, Shift slower)")).toEqual(["L"]);
+  await act(async () => usePlayerStore.getState().setSpeedUpRate(2));
+  expect(keysFor("Speed up playback to 2× (again for 1×, Shift slower)")).toEqual(["L"]);
+  await act(async () => usePlayerStore.getState().setSpeedUpRate(1.5));
 });
 
 it("searches skills across projects and agents even from an old project-filtered link", async () => {

@@ -156,7 +156,7 @@ it("gives each step the time until the next one starts, so the steps add up to t
 
 it("sums up a run in a few words", () => {
   expect(runSummary(task, pass)).toBe("Suggested 1:12 in 2 cuts");
-  expect(runSummary(task, { ...pass, state: "approved" } as Change)).toBe("Took out 1:12 in 2 cuts");
+  expect(runSummary(task, { ...pass, state: "approved" } as Change)).toBe("Cut 1:12 in 2 cuts");
   // It reads as a cut's own length does: to a tenth under ten seconds, and what rounds up to a minute as one, never "60 s".
   const removing = (seconds: number) => runSummary(task, { ...pass, cutReasons: [{ ...pass.cutReasons![0]!, start: 10, end: 10 + seconds }] } as Change);
   expect(removing(0.2)).toBe("Suggested 0.2 s in 1 cut");

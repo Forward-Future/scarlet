@@ -22,10 +22,11 @@ export function hostRoutes(ctx: Ctx) {
 
   const requireHost = (hostId: string) => requireScoped(ctx.repos.hosts, "host", hostId);
 
-  function save(host: AgentHost): AgentHost {
+  /** `announce`: tell the window. A check-in that changes nothing it shows is saved without a word. */
+  function save(host: AgentHost, announce = true): AgentHost {
     const saved = ctx.repos.hosts.put(host);
     const out = withOnline(saved);
-    ctx.bus.publish({ type: "host.updated", host: out });
+    if (announce) ctx.bus.publish({ type: "host.updated", host: out });
     return out;
   }
 
@@ -48,7 +49,10 @@ export function hostRoutes(ctx: Ctx) {
   r.post("/hosts/:hostId/heartbeat", async (c) => {
     const host = requireHost(c.req.param("hostId"));
     const body = await jsonBody(c, z.object({ agents: z.array(AgentAvailability).optional(), running: z.array(z.string()).optional() }));
-    save({ ...host, agents: body.agents ?? host.agents, lastSeenAt: now(), online: true });
+    const agents = body.agents ?? host.agents;
+    // The window reads a host's assistants and whether it is online. A heartbeat every 30 s that changes neither
+    // was half of everything the socket sent it (5,238 of 10,937 events over two days, 2026-11-25).
+    save({ ...host, agents, lastSeenAt: now(), online: true }, !withOnline(host).online || JSON.stringify(agents) !== JSON.stringify(host.agents));
     // An older host only reports its presence. Current hosts renew exactly the jobs they own.
     const running = body.running ? JSON.stringify(body.running) : null;
     ctx.db.prepare(`UPDATE tasks SET worker_seen_at = ? WHERE host_id = ? AND state IN ('claimed','running')
@@ -66,7 +70,8 @@ export function hostRoutes(ctx: Ctx) {
     const body = await jsonBody(c, z.object({ taskId: z.string().optional(), agents: z.array(z.string()).optional(),
       checkAgents: z.array(z.string()).optional(), desktopPid: z.number().int().positive().optional() }));
     const desktopPid = body.desktopPid === ctx.options.desktopPid ? body.desktopPid : undefined;
-    const fresh = ctx.repos.hosts.put({ ...host, lastSeenAt: now(), online: true });
+    // A host back from being away often claims before its next heartbeat: the window hears it is back from whichever comes first.
+    const fresh = save({ ...host, lastSeenAt: now(), online: true }, !withOnline(host).online);
     const waitSeconds = Math.min(60, Math.max(0, Number(c.req.query("wait") ?? 0) || 0));
     const deadline = Date.now() + waitSeconds * 1000;
     // A host that hung up can't receive a claim. Its task would sit claimed until recovery failed it.

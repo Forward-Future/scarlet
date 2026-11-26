@@ -8,7 +8,7 @@ import type { JoinFades, Transcript } from "@scarlet/timeline";
 import { openDb, type Db } from "./db.js";
 import { startWalCheckpointer } from "./walCheckpointer.js";
 import { Bus } from "./events.js";
-import { humanDuration } from "./logText.js";
+import { humanDuration, logId } from "./logText.js";
 import { Paths } from "./paths.js";
 import { createRepos, type Repos } from "./repo/index.js";
 import type { RenderAdapter, WaveformCache } from "./render/adapter.js";
@@ -18,7 +18,7 @@ import { execFile } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import { createTelemetry, type Telemetry } from "./telemetry/analytics.js";
 import { telemetryConfig } from "./telemetry/config.js";
-import { bundledWhisperCli, bundledWhisperGpu, LocalWhisperModel } from "./transcribe/localModel.js";
+import { bundledWhisperCli, bundledWhisperGpu, devWhisperCli, LocalWhisperModel } from "./transcribe/localModel.js";
 import { hasCrisperWhisper } from "./transcribe/localRuntime.js";
 import { ModelPrices } from "./repo/modelPrices.js";
 
@@ -187,6 +187,8 @@ export interface Ctx {
   /** The adapter shipped with this desktop release, used with an existing CrisperWhisper installation. */
   crisperAdapter?: string;
   whisperCli?: string;
+  /** False when `whisperCli` came from a dev fallback outside Scarlet's own bundle. */
+  whisperCliBundled?: boolean;
   /** The bundled GPU build, tried before `whisperCli` when the bundled runtime is in use. */
   whisperGpu?: string;
   whisperModel: LocalWhisperModel;
@@ -205,7 +207,9 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
   paths.ensureRoot();
   const db = openDb(paths.db);
   const env = options.env ?? process.env;
-  const whisperCli = bundledWhisperCli(env);
+  const bundledWhisper = bundledWhisperCli(env);
+  const whisperCli = bundledWhisper ?? devWhisperCli(env);
+  const whisperCliBundled = whisperCli ? !!bundledWhisper : undefined;
   // The audio helper is one per engine process. Its notes on where each model runs go to this engine's log.
   audioWorker.log = options.log ?? (m => console.log(m));
   editorFirst.log = audioWorker.log;
@@ -219,8 +223,10 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
   const projectWork = new Map<string, number>();
   const shutdown = new AbortController();
   const log = options.log ?? ((m: string) => console.log(m));
-  if (whisperCli && process.platform === "linux") {
-    log(`[whisper] Bundled CPU runtime: ${basename(dirname(whisperCli)) === "whisper-cpu" ? "AVX2" : "baseline"}`);
+  if (bundledWhisper && process.platform === "linux") {
+    log(`[whisper] Bundled CPU runtime: ${basename(dirname(bundledWhisper)) === "whisper-cpu" ? "AVX2" : "baseline"}`);
+  } else if (!bundledWhisper && whisperCli) {
+    log(`[whisper] Using development runtime: ${whisperCli}`);
   }
   const checkpointer = options.backgroundCheckpoints ? startWalCheckpointer(db, paths.db, log) : undefined;
   const projectControllers = new Map<string, AbortController>();
@@ -275,7 +281,8 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
     waveformReads: new AnalysisCache(w => (w.peaks.length + (w.rms?.length ?? 0)) * (w.peaks instanceof Float32Array ? 4 : 8)),
     crisperAdapter: env.SCARLET_CRISPER_ADAPTER,
     whisperCli,
-    whisperGpu: whisperCli ? bundledWhisperGpu(env) : undefined,
+    whisperCliBundled,
+    whisperGpu: bundledWhisper ? bundledWhisperGpu(env) : undefined,
     speakers: new RecordingSpeakers(paths.root),
     spotChecks: new AnalysisCache(owners => (owners?.length ?? 0) * 8, 1024 * 1024, 1),
     reviewDrafts: new Map(),
@@ -323,6 +330,15 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
       const usage = repos.usage.taskTotals(r.task_id);
       if (usage.estimatedApiCostUsd != null) ctx.bus.publish({ type: "task.usage", projectId: r.project_id, taskId: r.task_id, usage });
     }
+  };
+  // One line for each request added and each step it takes (queued, claimed, running, waiting, done, failed, cancelled),
+  // written once the step is committed: ids, kind and state only, never what was asked.
+  repos.tasks.onStateChange = (task, from) => {
+    const ids = `id=${logId(task.id)} kind=${task.kind} project=${logId(task.projectId)}`;
+    const line = from === null
+      ? `[task] created ${ids} thread=${logId(task.context.threadId ?? task.id)} state=${task.state}`
+      : `[task] state ${ids} from=${from} to=${task.state}${task.hostId ? ` host=${logId(task.hostId)}` : ""}`;
+    db.afterCommit(() => ctx.log(line));
   };
   // Reads ctx.log when it happens, so a log set after startup still gets it.
   db.onEffectError = error => ctx.log(`[error] after-commit listener failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);

@@ -91,7 +91,7 @@ function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index
 }
 
 /**
- * The waiting call the editor reaches after deciding `decided`, as Keep moves on For you: the next by number, else
+ * The waiting call the editor reaches after deciding `decided`, as Keep moves on Needs review: the next by number, else
  * the first by number. A call they have decided, or sent back to Scarlet, isn't waiting.
  */
 function nextWaitingCall(change: Change, decided?: number, sentBack: ReadonlySet<number> = new Set()): number | undefined {
@@ -305,7 +305,7 @@ function forwardChoicesToLivePass(ctx: Ctx, user: User, change: Change, body: Sa
     return saveCutChoices(ctx, user, live, { fromVersion: live.fromVersion, toVersion: live.toVersion,
       choices: [...choices].map(([index, choice]) => ({ index, choice })), applyWhenDone: schedule });
   }
-  throw conflict("cut_review_moved", "This pass has changed since. Open the call again from For you.");
+  throw conflict("cut_review_moved", "This pass has changed since. Open the call again from Needs review.");
 }
 
 /**
@@ -435,7 +435,7 @@ export function saveCutAssessments(ctx: Ctx, change: Change, task: Task | undefi
       + "Give each its own: the words this cut takes out or keeps, and what to listen for at its join.");
   }
   // Each new ask is numbered after every ask before it: in the order Scarlet makes them, and within one save in
-  // timeline order. The editor's number for a call goes by it. A pass whose asks aren't numbered yet, as one saved
+  // timeline order. The calls keep that order. A pass whose asks aren't numbered yet, as one saved
   // before the engine numbered them, numbers the asks it already has first, in timeline order, so none of the calls
   // the editor has seen moves. Once a pass numbers its asks, one left without a number is a cut no one checked that
   // the editor sent back, and it stays with those.

@@ -129,11 +129,20 @@ async fn deliver(to: &Destination, body: &serde_json::Value) -> Result<(), Strin
     if status.is_success() { Ok(()) } else { Err(format!("The report service answered {}.", status.as_u16())) }
 }
 
-/// What the window says once a report is sent.
+/// What the window says once a report is sent, and the id details added later are tied to.
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SentReport {
+    id: String,
     reference: String,
+}
+
+/// What the editor added to a report already sent with one click.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportDetails {
+    report_id: String,
+    description: String,
 }
 
 /// Send a problem report now. Fails with a plain reason when it can't go, and the window offers to save it instead.
@@ -162,13 +171,58 @@ async fn send(state: &AppState, to: &Destination, words: ReportWords) -> Result<
     match deliver(to, &payload(to, &report, token.as_deref())).await {
         Ok(()) => {
             log::info!("problem report {reference} sent");
-            Ok(SentReport { reference })
+            Ok(SentReport { id: report.id.to_string(), reference })
         }
         Err(e) => {
             log::warn!("problem report {reference} couldn't be sent: {e}");
             Err(e)
         }
     }
+}
+
+fn details_payload(to: &Destination, report: &uuid::Uuid, description: &str, install: Option<String>, token: Option<&str>) -> serde_json::Value {
+    let id = report.to_string();
+    serde_json::json!({
+        "api_key": to.key,
+        "batch": [{
+            "uuid": uuid::Uuid::new_v4().to_string(),
+            "event": "bug.details",
+            "distinct_id": install.clone().unwrap_or_else(|| format!("report-{id}")),
+            "timestamp": crate::util::now_iso(),
+            "properties": {
+                "reportId": id,
+                "reference": reference(report),
+                "description": redact(&clip(description.trim(), super::DESCRIPTION_CHARS), token),
+                "installId": install,
+                "platform": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "scarletVersion": env!("CARGO_PKG_VERSION"),
+                "channel": to.channel,
+                "$process_person_profile": false,
+                "$geoip_disable": true,
+            },
+        }],
+    })
+}
+
+/// Send what the editor added to a report already sent, tied to it by its id.
+#[tauri::command]
+pub async fn send_problem_details(state: State<'_, AppState>, details: ReportDetails) -> Result<(), String> {
+    let to = destination(|name| std::env::var(name).ok(), option_env!("SCARLET_RELEASE_CHANNEL").is_some_and(|c| !c.is_empty()));
+    let report = uuid::Uuid::parse_str(&details.report_id).map_err(|_| "That report can't be found.".to_string())?;
+    if details.description.trim().is_empty() {
+        return Err("Write what happened first.".into());
+    }
+    let token = state.engine.status().token;
+    let install = install_id(&state.paths.data_dir);
+    let reference = reference(&report);
+    log::info!("sending details for problem report {reference} ({} characters written)", details.description.trim().chars().count());
+    let sent = deliver(&to, &details_payload(&to, &report, &details.description, install, token.as_deref())).await;
+    match &sent {
+        Ok(()) => log::info!("details for problem report {reference} sent"),
+        Err(e) => log::warn!("details for problem report {reference} couldn't be sent: {e}"),
+    }
+    sent
 }
 
 #[cfg(test)]
@@ -265,6 +319,22 @@ mod tests {
         let mut alone = report(&words);
         alone.install = None;
         assert_eq!(payload(&to, &alone, None)["batch"][0]["distinct_id"], "report-3f2a91bc-0000-4000-8000-000000000000");
+    }
+
+    #[test]
+    fn details_are_tied_to_the_report_they_add_to() {
+        let to = destination(|_| None, false);
+        let id = uuid::Uuid::parse_str("3f2a91bc-0000-4000-8000-000000000000").unwrap();
+        let body = details_payload(&to, &id, "  I pressed Export twice. key sk-ant-api03-AbCdEfGh1234 ", None, None);
+        let event = &body["batch"][0];
+        assert_eq!(event["event"], "bug.details");
+        assert_ne!(event["uuid"], "3f2a91bc-0000-4000-8000-000000000000");
+        assert_eq!(event["distinct_id"], "report-3f2a91bc-0000-4000-8000-000000000000");
+        let p = &event["properties"];
+        assert_eq!(p["reportId"], "3f2a91bc-0000-4000-8000-000000000000");
+        assert_eq!(p["reference"], "3F2A-91BC");
+        assert_eq!(p["description"], "I pressed Export twice. key [redacted]");
+        assert_eq!(p["channel"], "dev");
     }
 
     #[tokio::test]

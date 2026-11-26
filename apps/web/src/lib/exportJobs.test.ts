@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fullRenderContext, ScarletApiError, type Render } from "@scarlet/shared";
-import { startAppLog, stopAppLog } from "./appLog";
+import { flushAppLog, startAppLog, stopAppLog } from "./appLog";
 import { api } from "./client";
 import { desktop } from "./desktop";
 import { exportCounting, exportFailureSeen, exportFile, resumeExports, useExports, type ExportFile, type ExportJob } from "./exportJobs";
@@ -16,6 +16,10 @@ let project: ProjectData;
 let render: Render;
 let lines: string[], levels: string[];
 const job = () => useExports.getState().jobs[PRJ];
+/** What has been logged, the routine lines waiting to be written too. */
+const logged = () => { flushAppLog(); return lines; };
+/** The line saying how an export ended, which says nothing of where the file went. */
+const ended = (event: string, more = "") => expect.stringMatching(new RegExp(`^\\[export\\] ${event} project=${PRJ} format=mp4${more} ms=\\d+$`));
 const video: ExportFile = { name: NAME, format: "mp4", video: { kind: "export", quality: "delivery" } };
 /** Everything the desktop and the engine are asked while an export runs. */
 const answers = () => ({
@@ -36,7 +40,7 @@ beforeEach(() => {
   useProjectStore.setState({ current: project, status: "ready" });
   useExports.setState({ jobs: {} });
   localStorage.clear();
-  useUiStore.setState({ exportStarNotice: "unseen" });
+  useUiStore.setState({ exportNotice: null, exportStarNotice: "unseen" });
   lines = [];
   levels = [];
   startAppLog((batch, level) => { for (const line of batch) { lines.push(line.replace(/^(\[\w+\]) \S+ \S+ /, "$1 ")); levels.push(level); } });
@@ -60,8 +64,9 @@ it("saves a finished render to the place the editor picked and tells the engine 
   expect(asked.release).toHaveBeenCalledExactlyOnceWith("rnd_export", asked.request.mock.calls[0]![1].owner);
   // The ticket was used up by the save: there is nothing left to discard, and nothing went wrong to log.
   expect(asked.discard).not.toHaveBeenCalled();
-  expect(lines).toEqual([]);
-  // The first video saved offers the star, once.
+  expect(logged()).toEqual([ended("done")]);
+  // The first video saved offers the star, once, and records the completion notice.
+  expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "mp4" });
   expect(useUiStore.getState().exportStarNotice).toBe("visible");
 });
 
@@ -81,7 +86,7 @@ it("does nothing for a project with no edit yet, or when the editor closes the s
   await exportFile(project, video);
   expect(job()).toBeUndefined();
   expect(asked.request).not.toHaveBeenCalled();
-  expect(lines).toEqual([]);
+  expect(logged()).toEqual([ended("dialog-cancelled")]);
 });
 
 it("saves a timeline file straight from the engine, with no render", async () => {
@@ -90,6 +95,7 @@ it("saves a timeline file straight from the engine, with no render", async () =>
   expect(asked.request).not.toHaveBeenCalled();
   expect(asked.save).toHaveBeenCalledExactlyOnceWith(12, api.otioUrl(PRJ, project.project.head!));
   expect(job()).toMatchObject({ phase: "done" });
+  expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "otio" });
   // Only a video export offers the star.
   expect(useUiStore.getState().exportStarNotice).toBe("unseen");
 });
@@ -100,6 +106,7 @@ it("saves caption files from the caption URL, with the range, and does not start
   expect(asked.request).not.toHaveBeenCalled();
   expect(asked.save).toHaveBeenCalledExactlyOnceWith(13, api.srtUrl(PRJ, project.project.head!, { trackId: "c1", start: 1, end: 6 }));
   expect(job()).toMatchObject({ phase: "done" });
+  expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "srt" });
   expect(useUiStore.getState().exportStarNotice).toBe("unseen");
 
   useExports.setState({ jobs: {} });
@@ -107,6 +114,7 @@ it("saves caption files from the caption URL, with the range, and does not start
   await exportFile(project, { name: "cut.vtt", format: "vtt", video: { kind: "full", quality: "delivery" } });
   expect(asked.request).not.toHaveBeenCalled();
   expect(asked.save).toHaveBeenLastCalledWith(14, api.vttUrl(PRJ, project.project.head!));
+  expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "vtt" });
 });
 
 it("saves a folder for another app: asks the engine what goes in it, linked where it will be, and has the app write it", async () => {
@@ -119,6 +127,7 @@ it("saves a folder for another app: asks the engine what goes in it, linked wher
   expect(handoff).toHaveBeenCalledExactlyOnceWith(PRJ, project.project.head!, "/Users/me/Exports/Interview");
   expect(write).toHaveBeenCalledExactlyOnceWith(14, files);
   expect(job()).toMatchObject({ phase: "done", path: "/Users/me/Exports/Interview" });
+  expect(useUiStore.getState().exportNotice).toEqual({ path: "/Users/me/Exports/Interview", format: "folder" });
   expect(useUiStore.getState().exportStarNotice).toBe("unseen");
 });
 
@@ -134,7 +143,7 @@ it.each([
   // The picked place is let go once the engine knows.
   expect(asked.release).toHaveBeenCalledTimes(1);
   expect(asked.discard).toHaveBeenCalledExactlyOnceWith(4);
-  expect(lines).toEqual([`[error] export phase=rendering format=mp4 error=${JSON.stringify(shown)}`]);
+  expect(logged()).toEqual([`[error] export phase=rendering format=mp4 error=${JSON.stringify(shown)}`]);
   expect(levels).toEqual(["warn"]);
 });
 
@@ -147,7 +156,7 @@ it("fails when the edit changed while the save dialog was open, before anything 
   expect(job()).toMatchObject({ phase: "failed", error: "The video changed. Export again to use the latest version." });
   expect(asked.request).not.toHaveBeenCalled();
   expect(asked.discard).toHaveBeenCalledExactlyOnceWith(4);
-  expect(lines).toEqual(['[error] export phase=choosing format=mp4 error="The video changed. Export again to use the latest version."']);
+  expect(logged()).toEqual(['[error] export phase=choosing format=mp4 error="The video changed. Export again to use the latest version."']);
 });
 
 it("fails when the engine hands back a render for something other than what was asked", async () => {
@@ -162,7 +171,7 @@ it("keeps the file's name and its folder out of the log when the save fails", as
   asked.save.mockRejectedValue(new Error(`Could not write ${DESTINATION.path}: disk full`));
   await exportFile(project, video);
   expect(job()).toMatchObject({ phase: "failed", error: `Could not write ${DESTINATION.path}: disk full` });
-  expect(lines).toEqual(['[error] export phase=saving format=mp4 error="Could not write …: disk full"']);
+  expect(logged()).toEqual(['[error] export phase=saving format=mp4 error="Could not write …: disk full"']);
   // The save's ticket was not used up, so it is discarded.
   expect(asked.discard).toHaveBeenCalledExactlyOnceWith(4);
 });
@@ -178,7 +187,7 @@ it("keeps a place picked in the save dialog out of the log too: the name the edi
   useExports.setState({ jobs: {} });
   asked.save.mockRejectedValue(`Permission denied (os error 13) at path /Users/me/Client work/.tmpAbC123 from http://127.0.0.1:4100/api/renders/rnd_export/file?token=s3cret ${"x".repeat(400)}`);
   await exportFile(project, video);
-  expect(lines).toEqual([
+  expect(logged()).toEqual([
     '[error] export phase=saving format=mp4 error="Could not write …: disk full"',
     expect.stringMatching(/^\[error\] export phase=saving format=mp4 error="Permission denied \(os error 13\) at path …\/\.tmpAbC123 from … x+…"$/),
   ]);
@@ -191,7 +200,7 @@ it("keeps a left-over export's place out of the log when its save fails", async 
   asked.save.mockRejectedValue("Could not write /Users/me/Client work/Renamed secret.mp4: disk full");
   await resumeExports();
   await vi.waitFor(() => expect(asked.release).toHaveBeenCalledTimes(1));
-  expect(lines).toEqual(['[error] export phase=saving format=mp4 resumed=true error="Could not write …: disk full"']);
+  expect(logged()).toEqual(['[error] export phase=saving format=mp4 resumed=true error="Could not write …: disk full"']);
 });
 
 it("leaves the picked place for the next launch when the engine can't be told the export is settled", async () => {
@@ -229,7 +238,7 @@ it("stops quietly when the editor cancels: the render is released, the place let
     expect(asked.discard).toHaveBeenCalledExactlyOnceWith(4);
     expect(asked.save).not.toHaveBeenCalled();
     expect(job()).toBeUndefined();
-    expect(lines).toEqual([]);
+    expect(logged()).toEqual([ended("cancelled")]);
   } finally {
     vi.useRealTimers();
   }
@@ -306,7 +315,7 @@ it("picks up an export left over from the last session, and tells the editor how
   expect(desktop.chooseVideoExport).not.toHaveBeenCalled();
   expect(asked.request).not.toHaveBeenCalled();
   await vi.waitFor(() => expect(asked.release).toHaveBeenCalledExactlyOnceWith("rnd_kept", owner));
-  expect(lines).toEqual(['[error] export phase=rendering format=mp4 resumed=true error="The encoder crashed"']);
+  expect(logged()).toEqual(['[error] export phase=rendering format=mp4 resumed=true error="The encoder crashed"']);
 });
 
 it("treats a left-over export whose destination is gone as already settled, without a failure", async () => {
@@ -316,7 +325,7 @@ it("treats a left-over export whose destination is gone as already settled, with
   await resumeExports();
   await vi.waitFor(() => expect(asked.release).toHaveBeenCalledTimes(1));
   expect(job()).toBeUndefined();
-  expect(lines).toEqual([]);
+  expect(logged()).toEqual([ended("expired", " resumed=true")]);
 });
 
 it("leaves settlement to the other Scarlet window when it already has the resumed export", async () => {
@@ -328,7 +337,7 @@ it("leaves settlement to the other Scarlet window when it already has the resume
   expect(asked.save).toHaveBeenCalledTimes(1);
   expect(asked.release).not.toHaveBeenCalled();
   expect(asked.discard).not.toHaveBeenCalled();
-  expect(lines).toEqual([]);
+  expect(logged()).toEqual([ended("other-window", " resumed=true")]);
 });
 
 it("leaves settlement to another Scarlet window that resumed an export this window started", async () => {
@@ -339,7 +348,7 @@ it("leaves settlement to another Scarlet window that resumed an export this wind
   expect(job()).toBeUndefined();
   expect(asked.release).not.toHaveBeenCalled();
   expect(asked.discard).not.toHaveBeenCalled();
-  expect(lines).toEqual([]);
+  expect(logged()).toEqual([ended("other-window")]);
 });
 
 it.each([["a new export", false], ["a resumed export", true]])("lets go of %s whose destination record can't be read, so a failure shown never saves later", async (_, resumed) => {
@@ -395,7 +404,7 @@ it("saves the file again when the engine went away under the save, and shows a f
   expect(there).toHaveBeenCalledTimes(2);
   expect(asked.save).toHaveBeenCalledTimes(2);
   expect(job()).toEqual({ phase: "done", path: DESTINATION.path, context: fullRenderContext(project.project) });
-  expect(lines).toEqual([]);
+  expect(logged()).toEqual([ended("done")]);
 
   // A folder that can't be written is the editor's to see, at once and with the engine there throughout.
   useExports.setState({ jobs: {} });

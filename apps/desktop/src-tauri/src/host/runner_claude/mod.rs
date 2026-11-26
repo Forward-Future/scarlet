@@ -7,16 +7,34 @@ mod plan;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use super::runner::{cut_short, exit_error, report_usage, write_files, RunOptions};
 use super::spawn::spawn_lines;
 use super::usage::{add_usage, AgentUsage};
 use super::types::{tail_summary, RunResult, CONTROL_DIR};
-use command::{build_claude_command, can_run_bare, with_tool_timeout};
+use command::{build_claude_command, can_run_bare, strip_compat_flag, unsupported_compat_flag, with_tool_timeout, COMPAT_FLAGS};
 use events::parse_claude_line;
 use plan::ClaudePlan;
+
+/// Identity of a Claude CLI binary on disk so cached flag fallbacks reset as soon as the user updates the CLI.
+type BinStamp = (String, u64, u128);
+
+fn bin_stamp(bin: &str) -> BinStamp {
+    let meta = std::fs::metadata(bin).ok();
+    let len = meta.as_ref().map_or(0, |m| m.len());
+    let modified = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    (bin.to_string(), len, modified)
+}
+
+fn unsupported_flags_cache() -> &'static Mutex<HashMap<BinStamp, Vec<&'static str>>> {
+    static CACHE: OnceLock<Mutex<HashMap<BinStamp, Vec<&'static str>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct ClaudeState {
@@ -70,56 +88,79 @@ pub async fn run_claude(opts: RunOptions) -> RunResult {
         return RunResult::failed(format!("{e:#}"));
     }
 
-    let st = Arc::new(Mutex::new(ClaudeState::default()));
-    let st2 = st.clone();
-    let on_event = opts.on_event.clone();
-    let on_usage = opts.on_usage.clone();
-    let mut sent_usage = None;
-    let model = opts.model.clone();
-    let resuming = opts.resume_session.is_some();
-    let handler = Box::new(move |line: &str| -> bool {
-        let mut s = st2.lock().unwrap();
-        for ev in parse_claude_line(line, &mut s) {
-            // A resume that finds no session falls back to a fresh run. Keep its error out of the task log.
-            if resuming && !s.started && ev.kind == "error" {
-                continue;
-            }
-            on_event(ev);
+    let stamp = bin_stamp(&cmd.file);
+    if let Some(known) = unsupported_flags_cache().lock().unwrap().get(&stamp).cloned() {
+        for flag in known {
+            strip_compat_flag(&mut cmd.args, flag);
         }
-        report_usage(&on_usage, &mut sent_usage, claude_run_usage(&s, model.as_deref()));
-        // The question is posted, or there are no tools: stop the agent instead of letting it ramble.
-        std::mem::take(&mut s.should_stop)
-    });
-    let mut spawn = opts.spawn_options(cmd.stdin);
-    spawn.env = with_tool_timeout(&opts.env);
-    let outcome = match spawn_lines(&cmd.file, &cmd.args, spawn, handler).await {
-        Ok(o) => o,
-        Err(e) => return RunResult::failed(format!("{e:#}")),
-    };
-
-    let s = st.lock().unwrap().clone();
-    let session = RunResult {
-        session_id: s.session_id.clone().or_else(|| opts.resume_session.clone().filter(|_| s.started)),
-        usage: claude_run_usage(&s, opts.model.as_deref()),
-        ..Default::default()
-    };
-    if let Some(result) = cut_short(&s.texts, s.question.as_ref(), s.question_posted, &outcome, &session) {
-        return result;
     }
-    let mcp_failed = s.mcp_status.as_deref() == Some("failed");
-    let ok = !mcp_failed && !s.result_is_error && (outcome.code == Some(0) || s.result.is_some());
-    let summary = match s.result.as_deref() {
-        Some(r) if !r.is_empty() => r.to_string(),
-        _ => tail_summary(&s.texts),
-    };
-    let error = if ok {
-        None
-    } else if mcp_failed {
-        Some(MCP_FAILED.into())
-    } else if s.result_is_error {
-        s.result.clone()
-    } else {
-        Some(exit_error("claude", &outcome))
-    };
-    RunResult { ok, summary, error, exit_code: outcome.code, resume_failed: !ok && opts.resume_session.is_some() && !s.started, ..session }
+
+    for _ in 0..=COMPAT_FLAGS.len() {
+        let st = Arc::new(Mutex::new(ClaudeState::default()));
+        let st2 = st.clone();
+        let on_event = opts.on_event.clone();
+        let on_usage = opts.on_usage.clone();
+        let mut sent_usage = None;
+        let model = opts.model.clone();
+        let resuming = opts.resume_session.is_some();
+        let handler = Box::new(move |line: &str| -> bool {
+            let mut s = st2.lock().unwrap();
+            for ev in parse_claude_line(line, &mut s) {
+                // A resume that finds no session falls back to a fresh run. Keep its error out of the task log.
+                if resuming && !s.started && ev.kind == "error" {
+                    continue;
+                }
+                on_event(ev);
+            }
+            report_usage(&on_usage, &mut sent_usage, claude_run_usage(&s, model.as_deref()));
+            // The question is posted, or there are no tools: stop the agent instead of letting it ramble.
+            std::mem::take(&mut s.should_stop)
+        });
+        let mut spawn = opts.spawn_options(cmd.stdin.clone());
+        spawn.env = with_tool_timeout(&opts.env);
+        let outcome = match spawn_lines(&cmd.file, &cmd.args, spawn, handler).await {
+            Ok(o) => o,
+            Err(e) => return RunResult::failed(format!("{e:#}")),
+        };
+
+        let s = st.lock().unwrap().clone();
+        let session = RunResult {
+            session_id: s.session_id.clone().or_else(|| opts.resume_session.clone().filter(|_| s.started)),
+            usage: claude_run_usage(&s, opts.model.as_deref()),
+            ..Default::default()
+        };
+        if let Some(result) = cut_short(&s.texts, s.question.as_ref(), s.question_posted, &outcome, &session) {
+            return result;
+        }
+        let mcp_failed = s.mcp_status.as_deref() == Some("failed");
+        let ok = !mcp_failed && !s.result_is_error && (outcome.code == Some(0) || s.result.is_some());
+        if !ok && !s.started && !mcp_failed && !s.result_is_error {
+            if let Some(flag) = unsupported_compat_flag(&outcome.stderr) {
+                if strip_compat_flag(&mut cmd.args, flag) {
+                    let mut cache = unsupported_flags_cache().lock().unwrap();
+                    let entry = cache.entry(stamp.clone()).or_default();
+                    if !entry.contains(&flag) {
+                        entry.push(flag);
+                    }
+                    log::warn!("claude CLI rejected {flag}; retrying without it");
+                    continue;
+                }
+            }
+        }
+        let summary = match s.result.as_deref() {
+            Some(r) if !r.is_empty() => r.to_string(),
+            _ => tail_summary(&s.texts),
+        };
+        let error = if ok {
+            None
+        } else if mcp_failed {
+            Some(MCP_FAILED.into())
+        } else if s.result_is_error {
+            s.result.clone()
+        } else {
+            Some(exit_error("claude", &outcome))
+        };
+        return RunResult { ok, summary, error, exit_code: outcome.code, resume_failed: !ok && opts.resume_session.is_some() && !s.started, ..session };
+    }
+    RunResult::failed("claude exited before starting")
 }

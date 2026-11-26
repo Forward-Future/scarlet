@@ -94,6 +94,27 @@ it("prices each run at its model's API rates and tells open windows the new tota
   ]);
 });
 
+// The chat shows the request alone, so what a hand-off used is in the request's count, as it is in the thread's.
+it("counts the tokens of work handed to another model on the request that handed it over", async () => {
+  const project = (await api.createProject({ name: "Handed" })).project.id;
+  const { task } = await api.createTask(project, { instruction: "Add a title", kind: "edit", agent: "claude" });
+  const handOff = workspace.ctx.repos.tasks.put({ ...workspace.ctx.repos.tasks.get(task.id)!, id: "task_handed_off", kind: "hand_off", agent: "gemini",
+    context: { checksTaskId: task.id, threadId: task.context.threadId ?? task.id, handOff: { typeId: "motion-graphics", name: "Motion graphics", brief: "A title" } } });
+  const seen: WsEvent[] = [];
+  const listen = (event: WsEvent) => void seen.push(event);
+  workspace.ctx.bus.on("ws", listen);
+  try {
+    await api.recordTaskUsage(task.id, { inputTokens: 100, startedAt: claimAt(task.id, "2026-11-24T10:00:00.000Z") });
+    await api.recordTaskUsage(handOff.id, { inputTokens: 40, startedAt: claimAt(handOff.id, "2026-11-24T10:01:00.000Z") });
+  } finally {
+    workspace.ctx.bus.off("ws", listen);
+  }
+  expect((await api.projectUsage(project, "task")).groups).toEqual([expect.objectContaining({ key: task.id, totalTokens: 140, runs: 2 })]);
+  expect((await api.projectUsage(project, "thread")).total.totalTokens).toBe(140);
+  const told = seen.filter(e => e.type === "task.usage").map(e => [e.taskId, e.usage.totalTokens]);
+  expect(told).toEqual([[task.id, 100], [handOff.id, 40], [task.id, 140]]);
+});
+
 it("prices a run at the speed its edit was asked at, and names a speed it has no price for", async () => {
   const project = (await api.createProject({ name: "Speeds" })).project.id;
   const fast = (await api.createTask(project, { instruction: "x", kind: "edit", agent: "codex", model: "gpt-6.2-sol", serviceTier: "priority" })).task;

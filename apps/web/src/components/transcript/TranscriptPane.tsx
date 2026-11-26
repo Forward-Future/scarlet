@@ -3,6 +3,7 @@ import { TranscriptionStatus } from "../media/TranscriptionAction";
 import { clock, clockRange } from "../../lib/format";
 import { isComposing, mediaPlaying } from "../../lib/hotkeys";
 import { player } from "../../lib/player";
+import { cutText } from "@scarlet/shared";
 import type { MediaAsset, Timeline } from "@scarlet/timeline";
 import { cutWords, mapWords, sourceWords, selectionRange, indexWordTimes, type MappedWord } from "../../lib/transcriptMap";
 import { usePlayerStore } from "../../stores/player";
@@ -228,7 +229,9 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
     const selection = words.slice(selectedFrom, selectedTo + 1);
     const selText = selection.map(w => w.word.text).join(" ");
     const clipIds = [...new Set(selection.flatMap(w => w.placements.flatMap(p => p.clipId ? [p.clipId] : [])))];
-    const asked: AgentContext = { version: draft?.version ?? project.head ?? undefined, time: range.start, end: range.end, clipIds: source ? [] : clipIds, ...(source && { mediaId: source.id }), label: `“${selText.length > 40 ? `${selText.slice(0, 37)}…` : selText}”` };
+    // The cut's times are labelled with the version they were read on, which can lag the head while the video plays.
+    const version = draft?.version ?? (source ? project.head : timeline?.version ?? project.head) ?? undefined;
+    const asked: AgentContext = { version, time: range.start, end: range.end, clipIds: source ? [] : clipIds, ...(source && { mediaId: source.id }), label: `“${selText.length > 40 ? `${cutText(selText, 37)}…` : selText}”` };
     setAgentContext(asked);
     // The page can aim the box further: words inside a call that's open are about that call.
     onAsk(asked);
@@ -245,6 +248,8 @@ export function TranscriptPane({ source, draft, onAsk }: { draft?: Timeline; sou
           <input ref={searchInputRef} type="search" value={query} placeholder="Search the transcript" aria-label="Search the transcript"
             onChange={e => { setQuery(e.target.value); setHit(0); placed.current = false; }}
             onKeyDown={e => {
+              // While an input method composes, Enter and Esc are its own.
+              if (isComposing(e)) return;
               if (e.key === "Enter") { e.preventDefault(); goToHit(e.shiftKey ? -1 : 1); }
               else if (e.key === "Escape" && query) { e.preventDefault(); e.stopPropagation(); setQuery(""); }
               // With nothing to clear, Esc isn't the field's to keep. The field lets go and hands the page an Esc as one

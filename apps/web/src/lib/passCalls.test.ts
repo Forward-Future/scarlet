@@ -13,7 +13,7 @@ const edit = (spot: number, at: number, label = `edit ${spot}`): ThreadEdit => (
   check: "Check this.",
 });
 
-it("orders For you items by publication number when asks are numbered, else by timeline position", () => {
+it("orders Needs review items by publication number when asks are numbered, else by timeline position", () => {
   const eLate = edit(0, 15, "late edit");
   const eEarly = edit(1, 4, "early edit");
   // Publication numbers: Call A (#1 at 12s), Edit late (#2 at 15s), Call B (#3 at 6s), Edit early (#4 at 4s).
@@ -77,7 +77,7 @@ it("maps approved pass calls to their applied edit keys and keeps skipped calls 
   // The call left out sits where its footage is now: a second earlier, by the cut the pass applied ahead of it.
   expect(decidedCallRows).toEqual([{ key: "choice/chg_pass/1", changeId: "chg_pass", index: 1, at: 9, length: 1, label: "Aside", note: "Aside.", approved: false }]);
   // A press on its row opens it as a rejected edit's row does. It made no edit, so it stands in as one that isn't in
-  // the video, under a spot no edit has: where its footage plays now, with Scarlet's note, and For you's to step from.
+  // the video, under a spot no edit has: where its footage plays now, with Scarlet's note, and Needs review's to step from.
   const calls = rejectedCallEdits(thread, [applied]);
   expect(calls).toEqual([{ changeId: "chg_pass", spot: -2, label: "Aside", range: { start: 9, end: 10 }, previous: [], rejected: true, wasCheck: true, reason: "Aside." }]);
   expect([rejectedCallRef("chg_pass", 1), rejectedCallIndex(calls[0]!), rejectedCallIndex(applied)]).toEqual([{ changeId: "chg_pass", spot: -2 }, 1, undefined]);

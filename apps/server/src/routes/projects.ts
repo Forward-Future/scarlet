@@ -13,6 +13,7 @@ import { createProject, hasInitialTimeline } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { resolveTimeline } from "../services/timeline.js";
+import { createSampleProject } from "../services/sampleProject.js";
 import { jsonBody, requireProject, requireProjectHeader } from "./util.js";
 import { actorFor, logActivity, quote } from "../services/activity.js";
 
@@ -37,6 +38,11 @@ export function projectRoutes(ctx: Ctx) {
     const project = ctx.repos.projects.insert(createProject(body.name, body.settings ?? {}), !!body.settings && Object.keys(body.settings).length > 0);
     ctx.paths.ensureProject(project.id);
     ctx.bus.publish({ type: "project.updated", projectId: project.id, project });
+    return c.json({ project }, 201);
+  });
+
+  r.post("/projects/sample", async (c) => {
+    const project = await createSampleProject(ctx, c.get("user"));
     return c.json({ project }, 201);
   });
 
@@ -122,7 +128,7 @@ export function projectRoutes(ctx: Ctx) {
       const project = requireProjectHeader(ctx, c.req.param("id"));
       const thread = projectThread(project.id, c.req.param("threadId"));
       if (threadRevision(thread) !== revision || (done && (thread.active || thread.question || thread.status === "working")))
-        throw conflict("thread_changed", "This thread is still changing. Try again when its agent finishes.");
+        throw conflict("thread_changed", "This thread is still changing. Try again when Scarlet finishes.");
       const completed = { ...project.completedThreads };
       if (done) completed[thread.id] = revision;
       else delete completed[thread.id];
@@ -181,12 +187,12 @@ export function projectRoutes(ctx: Ctx) {
         ctx.stopMedia(project.id, true);
         ctx.renders.stopProject(project.id);
       });
-      // The project's own requests that haven't started wait for Restore. A skill's edit only borrows the project to run
-      // in, and no host takes a request in the trash: left waiting there, it would hold its skill until the project came back.
+      // The project's own requests that haven't started wait for Restore. A skill's edit, or a style guide's, only borrows the project to run
+      // in, and no host takes a request in the trash: left waiting there, it would hold its skill or guide until the project came back.
       // A transcription isn't cancelled: that would be final, keeping rough word times or no transcript at all. The
       // project's signal stops it as interrupted instead, and it starts again from its saved chunks after Restore.
       for (const task of ctx.repos.tasks.select(`project_id = ? AND ((state IN ('claimed','running') AND kind <> 'transcribe')
-          OR (kind = 'skill_edit' AND state IN ('queued','waiting_for_user')))`, [project.id])) {
+          OR (kind IN ('skill_edit','style_guide_edit') AND state IN ('queued','waiting_for_user')))`, [project.id])) {
         cancelTask(ctx, task);
       }
       logActivity(ctx, { projectId: project.id, actor: actorFor(c.var.user), type: "project.deleted", summary: `${c.var.user.name} moved the project to the trash` });

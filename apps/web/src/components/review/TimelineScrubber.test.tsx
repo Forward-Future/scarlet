@@ -123,6 +123,48 @@ it("follows a drag across the stretch it began in", async () => {
   expect(picks).toEqual([1500]);
 });
 
+it("lands on the video's first or last moment when a drag goes past the end of a zoomed-in timeline, and shows it there (#681)", async () => {
+  // Zoomed to 1:40–1:50: before, the far left of the timeline was as far back as a drag could go.
+  await show({ start: 100, end: 110 });
+  await zoomed();
+  await pointer("pointerdown", 500);
+  await pointer("pointermove", -20);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(seeks).toEqual([105, 0]);
+  await pointer("pointerup", -20);
+  expect(picks).toEqual([0]);
+  // The view turned to the start at the same scale: the same press now reads 0:05, not 1:45.
+  await pointer("pointerdown", 500);
+  await pointer("pointerup", 500);
+  expect(picks).toEqual([0, 5]);
+  // And past the right end, the last moment, with the view at the end.
+  await pointer("pointerdown", 500);
+  await pointer("pointerup", 1040);
+  expect(picks).toEqual([0, 5, 3000]);
+  await pointer("pointerdown", 500);
+  await pointer("pointerup", 500);
+  expect(picks.at(-1)).toBe(2995);
+});
+
+it("carries frame-by-frame scrubbing on from the first frame once it is pulled past the start (#681)", async () => {
+  const fps = 25;
+  await act(async () => root.render(<TimelineScrubber start={0} duration={20} playhead={8} fps={fps} frameAt={() => undefined}
+    onScrubStart={() => released} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)} />));
+  await pointer("pointerdown", 400, 80);
+  await pointer("pointermove", 400, 40);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(container.querySelector<HTMLElement>(".scrub-loupe")?.dataset.frame).toBe("200");
+  await pointer("pointermove", -5, 40);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(seeks.at(-1)).toBe(0);
+  // Back inside, it steps on a frame each 10 px from the first frame, not from where the jog began.
+  await pointer("pointermove", 15, 40);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(seeks.at(-1)).toBe(2 / fps);
+  await pointer("pointerup", 15, 40);
+  expect(picks).toEqual([2 / fps]);
+});
+
 it("reveals a typed timestamp outside the zoomed window without seeking the player", async () => {
   const render = (times: number[]) => act(async () => root.render(
     <TimelineScrubber duration={3000} playhead={100} frameAt={() => undefined} onSeek={t => seeks.push(t)}
@@ -186,4 +228,173 @@ it("keeps the final partial frame inside the clip and drops the loupe if capture
   expect(picks).toEqual([]);
   expect(released).toHaveBeenCalledOnce();
   expect(container.querySelector(".scrub-loupe")).toBeNull();
+});
+
+it("lets hover-only edge handles drag an open cut's start or end edge, shows live word readout, cancels on Esc, and nudges with arrow keys", async () => {
+  const onCommit = vi.fn();
+  const onBand = vi.fn();
+  await act(async () => root.render(
+    <TimelineScrubber start={0} duration={20} playhead={5} fps={30} frameAt={() => undefined}
+      onSeek={t => seeks.push(t)} onScrubStart={() => released} onBand={onBand}
+      highlight={{ key: "cut-1", view: { start: 0, end: 10 }, band: { start: 2, end: 4 }, bandLabel: "Cut · 2.0 s" }}
+      cutAdjust={{
+        bounds: { minStart: 1, maxStart: 4, minEnd: 2, maxEnd: 6 },
+        tone: "cut",
+        bandPrefix: "Cut",
+        describeEdge: (edge, oldTime, newTime) => ({
+          text: edge === "start" && newTime > oldTime ? "Put back “really”" : "Cut “and”",
+          tone: newTime > oldTime ? "put-back" : "take-out",
+          delta: `${newTime > oldTime ? "+" : "−"}${Math.abs(newTime - oldTime).toFixed(2)} s`,
+        }),
+        onCommit,
+      }} />));
+  await zoomed();
+
+  const startHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="start"]');
+  const endHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="end"]');
+  expect(startHandle).not.toBeNull();
+  expect(endHandle).not.toBeNull();
+  expect(startHandle!.style.left).toBe("20%");
+  expect(endHandle!.style.left).toBe("40%");
+
+  // Clicking the middle of the band still plays Before footage via onBand, without touching cutAdjust.
+  await act(async () => {
+    container.querySelector(".simple-timeline-band")!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, button: 0, isPrimary: true, clientX: 300, bubbles: true }));
+  });
+  expect(onBand).toHaveBeenCalledWith(3);
+  expect(onCommit).not.toHaveBeenCalled();
+
+  // Drag the start handle right from 2.0 s (200 px) to 2.5 s (250 px).
+  await act(async () => {
+    startHandle!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 2, button: 0, isPrimary: true, clientX: 200, bubbles: true }));
+  });
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 2, clientX: 250, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  const readout = container.querySelector(".timeline-cut-readout");
+  expect(readout?.textContent).toContain("Put back “really”");
+  expect(readout?.textContent).toContain("+0.50 s");
+  expect(container.querySelector(".timeline-cut-origin")).not.toBeNull();
+  expect(seeks.at(-1)).toBeCloseTo(2.5, 5);
+
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointerup", { pointerId: 2, clientX: 250, bubbles: true }));
+  });
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(onCommit.mock.calls[0]![0]).toEqual({ start: 2.5, end: 4 });
+  expect(container.querySelector(".timeline-cut-readout")).toBeNull();
+
+  // Pressing Esc during a drag cancels cleanly without committing.
+  await act(async () => {
+    endHandle!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 3, button: 0, isPrimary: true, clientX: 400, bubbles: true }));
+  });
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 3, clientX: 460, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  expect(container.querySelector(".timeline-cut-readout")).not.toBeNull();
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(onCommit).toHaveBeenCalledTimes(1);
+  expect(container.querySelector(".timeline-cut-readout")).toBeNull();
+
+  // Keyboard arrow keys nudge one frame (or 10 frames with Shift).
+  await act(async () => {
+    startHandle!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  });
+  expect(onCommit).toHaveBeenCalledTimes(2);
+  expect(onCommit.mock.calls[1]![0].start).toBeCloseTo(2 + 1 / 30, 5);
+  expect(onCommit.mock.calls[1]![0].end).toBe(4);
+});
+
+it("renders edit-toned edge handles with custom removeLabel when pulling a timed edit closed", async () => {
+  const onCommit = vi.fn();
+  await act(async () => root.render(
+    <TimelineScrubber start={0} duration={20} playhead={1} fps={30} frameAt={() => undefined}
+      onSeek={t => seeks.push(t)} onScrubStart={() => released}
+      highlight={{ key: "edit-1", view: { start: 0, end: 10 }, band: { start: 1, end: 3 }, bandLabel: "Text · 2.0 s", tone: "kept" }}
+      cutAdjust={{
+        bounds: { minStart: 0, maxStart: 3, minEnd: 1, maxEnd: 8 },
+        tone: "edit",
+        bandPrefix: "Text",
+        removeLabel: "Remove",
+        describeEdge: (_edge, oldTime, newTime, next) => ({
+          text: next.end <= next.start ? "Remove text" : newTime > oldTime ? "Ends later" : "Ends earlier",
+          tone: next.end <= next.start ? "take-out" : "neutral",
+          delta: `${newTime > oldTime ? "+" : "−"}${Math.abs(newTime - oldTime).toFixed(2)} s`,
+        }),
+        onCommit,
+      }} />));
+  await zoomed();
+
+  const startHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="start"]');
+  const endHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="end"]');
+  expect(startHandle?.classList.contains("is-edit")).toBe(true);
+  expect(endHandle?.classList.contains("is-edit")).toBe(true);
+  expect(startHandle?.getAttribute("aria-label")).toContain("Adjust start of edit");
+  expect(endHandle?.getAttribute("aria-label")).toContain("Adjust end of edit");
+
+  // Dragging the end edge shorter updates the band label, and pulling it all the way back to start collapses to the cut line with removeLabel.
+  await act(async () => {
+    endHandle!.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 7, button: 0, isPrimary: true, clientX: 300, bubbles: true }));
+  });
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 7, clientX: 200, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Text · 1.0 s");
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 7, clientX: 100, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  expect(container.querySelector(".simple-timeline-cut")?.textContent).toBe("Remove");
+  expect(container.querySelector(".timeline-cut-readout")?.textContent).toContain("Remove text");
+
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointerup", { pointerId: 7, clientX: 100, bubbles: true }));
+  });
+  expect(onCommit).toHaveBeenCalledWith({ start: 1, end: 1 });
+});
+
+/** An open cut's band, at `start` for a second, zoomed to as `focusAround` does: five seconds either side. */
+const openCut = (start: number, duration = 3000, playhead = start - 2) => act(async () => root.render(
+  <TimelineScrubber start={0} duration={duration} playhead={playhead} frameAt={() => undefined} onSeek={t => seeks.push(t)} onScrubStart={() => released}
+    highlight={{ key: "cut-1", view: { start: start - 5, end: start + 6 }, band: { start, end: start + 1 }, bandLabel: "Cut · 1.0 s" }} />));
+const band = () => container.querySelector<HTMLElement>(".simple-timeline-band");
+const bandLeft = () => Math.round(parseFloat(band()!.style.left) * 100) / 100;
+
+it("zooms to an open cut's band again when the timeline is built again for a version where the cut sits elsewhere (#686)", async () => {
+  // The cut opens at 1:40 on the version before it, zoomed to 1:35–1:46.
+  await openCut(100);
+  await zoomed();
+  expect(bandLeft()).toBeCloseTo(45.45, 1);
+  // The version it is shown on changes under it (a pass saves its next batch, a call goes onto the version that still
+  // has the footage round it): the timeline is built again, and the same cut now sits at 5:00. The zoom it carried
+  // over showed 1:35–1:46, where the band isn't, and the cut on the card had nothing on the timeline.
+  await openCut(300, 3100);
+  await zoomed();
+  expect(band()).not.toBeNull();
+  expect(bandLeft()).toBeCloseTo(45.45, 1);
+});
+
+it("zooms to an open cut's band again when it moves out of view on the same timeline (#686)", async () => {
+  await openCut(100);
+  await zoomed();
+  // The same cut, placed again on the same version (its one-cut preview arrived, or its revision landed elsewhere),
+  // before its listen has moved the playhead there.
+  await openCut(300, 3000, 98);
+  await zoomed();
+  expect(band()).not.toBeNull();
+  expect(bandLeft()).toBeCloseTo(45.45, 1);
+});
+
+it("keeps the zoom it had when the timeline is built again and the open cut's band is still in view", async () => {
+  await openCut(100);
+  await zoomed();
+  // A new version under the same cut, which moved a little: the zoom stays as the editor had it, and the band moves in it.
+  await openCut(101, 3100);
+  await zoomed();
+  expect(bandLeft()).toBeCloseTo(54.55, 1);
 });

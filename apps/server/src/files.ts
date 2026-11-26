@@ -90,7 +90,7 @@ export function originalPlaybackType(path: string, kind: string, videoCodec?: st
 }
 
 /** Original uploads are untrusted even after a successful media probe. */
-export function serveOriginal(req: Request, path: string, opts: { contentType?: string; cacheControl?: string } = {}): Response {
+export function serveOriginal(req: Request, path: string, opts: { contentType?: string; cacheControl?: string; downloadName?: string } = {}): Response {
   const type = opts.contentType ?? contentTypeFor(path);
   const passive = type.startsWith("audio/") || type.startsWith("video/") ||
     ["image/jpeg", "image/png", "image/gif", "image/webp", "image/x-icon"].includes(type);
@@ -100,8 +100,16 @@ export function serveOriginal(req: Request, path: string, opts: { contentType?: 
   });
   response.headers.set("Content-Security-Policy", "sandbox; default-src 'none'");
   response.headers.set("X-Content-Type-Options", "nosniff");
-  if (!passive) response.headers.set("Content-Disposition", "attachment");
+  if (!passive) response.headers.set("Content-Disposition", attachment(opts.downloadName));
   return response;
+}
+
+/** `attachment`, with the file's own name when there is one (plain ASCII fallback, then the exact UTF-8 name). */
+function attachment(name?: string): string {
+  if (!name) return "attachment";
+  const plain = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\/]/g, "_");
+  const exact = encodeURIComponent(name).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${plain}"; filename*=UTF-8''${exact}`;
 }
 
 interface ServeOptions {

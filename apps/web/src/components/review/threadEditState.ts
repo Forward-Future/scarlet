@@ -11,7 +11,8 @@ export type ListedEdit = Omit<ThreadEdit, "at">;
 
 /**
  * A thread's edits as the timeline numbers them: the engine's list for the working cut, which leaves out
- * undone work, and the thread's own saved list until that arrives. With no thread, none.
+ * undone, superseded, and no-op work. The thread's raw saved list only stands in when there is no working cut yet
+ * or the engine read failed — never while the first engine read is still in flight. With no thread, none.
  *
  * `needed`: whether the list is read again when the working cut moves. Every request in the chat lists its edits, and
  * each new working cut would read them all again. One out of view keeps the list it last read, and reads it again
@@ -23,7 +24,6 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   // Located on the working cut on screen, which holds while the video plays: the engine's list for a newer one waits.
   const head = useShownCutStore(s => s.head);
   const media = useProjectStore(s => s.current?.media);
-  const saved = useMemo(() => thread ? threadEditList(thread, media) : [], [thread, media]);
   // An edit another request made counts here once this request flagged it.
   const applied = !!thread?.changes.some(c => c.state === "approved") || !!thread?.flagged?.length;
   const key = useThreadEditKey(projectId, head, thread);
@@ -54,13 +54,19 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   const previous = loaded && loaded.threadId === thread?.id && shown.current?.key === loaded.key ? shown.current.edits : undefined;
   // Out of view, the engine's last list stands even when it arrived after the working cut had moved on.
   const kept = !needed && loaded?.threadId === thread?.id ? loaded?.edits : undefined;
-  const edits = (current ? loaded.edits : previous ?? kept) ?? saved;
+  const resolved = current ? loaded.edits : previous ?? kept;
+  // Only fall back to the raw saved list when there is no working cut yet or the engine read failed. While the
+  // initial engine read is still in flight, stay empty so stale/undone/no-op edits never flash and disappear.
+  const failed = !!thread && loaded?.threadId === thread.id && loaded.edits === undefined;
+  const fallback = !head || failed;
+  const saved = useMemo(() => thread && !resolved && fallback ? threadEditList(thread, media) : noEdits, [thread, media, resolved, fallback]);
+  const edits = resolved ?? (fallback ? saved : noEdits);
   useEffect(() => { if (current && loaded.edits) shown.current = { key, edits }; }, [current, loaded, key, edits]);
   // An edit the editor rejected is out of the video: it is no edit to open, count or mark, only a row that says so.
   const live = useMemo(() => edits.filter(e => !e.rejected), [edits]);
   const rejected = useMemo(() => edits.filter(e => e.rejected), [edits]);
   const located = useMemo(() => applied && current ? loaded.edits?.filter(e => !e.rejected) : undefined, [applied, current, loaded]);
-  return { listed: applied ? live : noEdits, rejected: applied ? rejected : noEdits, located, head };
+  return { listed: applied ? live : noEdits, rejected: applied ? rejected : noEdits, located, settled: !applied || !head || current, head };
 }
 
 export const noEdits: ListedEdit[] = [];
@@ -96,6 +102,16 @@ export function useReviewed(projectId: string, thread: Thread | undefined) {
     // nor what a later save asks of a cut it moved.
     return (edit: EditRef & { recheck?: string; reviewRef?: EditRef }) =>
       kept.has(reviewKey(edit)) || (!edit.recheck && !edit.reviewRef && decided.has(edit.changeId));
+  }, [kept, thread]);
+}
+
+/** Whether the editor can take back their Keep on an edit: kept directly, not permanently decided by an applied pass. */
+export function useCanUnkeep(projectId: string, thread: Thread | undefined) {
+  const kept = useKeptEdits(projectId, thread);
+  return useMemo(() => {
+    const decided = new Set(thread?.changes.filter(c => c.state === "approved" && (c.appliedReview || c.approvedSpots)).map(c => c.id));
+    return (edit: EditRef & { recheck?: string; reviewRef?: EditRef; marker?: boolean }) =>
+      !edit.marker && kept.has(reviewKey(edit)) && (!!edit.recheck || !!edit.reviewRef || !decided.has(edit.changeId));
   }, [kept, thread]);
 }
 
@@ -170,22 +186,22 @@ export function listPlaces<T extends ListedEdit>(thread: Pick<Thread, "changes">
 type WaitsOn<T> = { reviewed(edit: T): boolean; revising(edit: T): { state: Task["state"] } | undefined };
 
 /**
- * How many rows of a request's For you list wait on the editor: the number on its For you tab, and on its band while
+ * How many rows of a request's Needs review list wait on the editor: the number on its Needs review tab, and on its band while
  * the request is folded. A flagged edit waits until it is kept or sent back, and again while the request it was sent
  * back with has stopped to ask the editor something. An edit made in several places is one row.
  */
 export function waitingRows<T extends ListedEdit>(edits: readonly T[], { reviewed, revising }: WaitsOn<T>): number {
-  return editGroups(edits).filter(group => group.members.some(({ edit }) => !!edit.check && (asksEditor(revising(edit)) || (!reviewed(edit) && !revising(edit))))).length;
+  return editGroups(edits).filter(group => group.members.some(({ edit }) => asksEditor(revising(edit)) || (!!edit.check && !reviewed(edit) && !revising(edit)))).length;
 }
 
 /**
- * The same for a dialogue pass, whose For you list has a row for each call and each edit: the calls still open, the
- * flagged edits that wait, and any call or For you edit (`forYou`) whose request has stopped to ask the editor something.
+ * The same for a dialogue pass, whose Needs review list has a row for each call and each edit: the calls still open, the
+ * flagged edits that wait, and any call or edit whose request has stopped to ask the editor something.
  */
 export function waitingPassRows<T extends ListedEdit>(calls: readonly { state: string; run?: { state: Task["state"] } }[] | undefined, edits: readonly T[],
-  forYou: (edit: T) => boolean, { reviewed, revising }: WaitsOn<T>): number {
+  _forYou: (edit: T) => boolean, { reviewed, revising }: WaitsOn<T>): number {
   return (calls?.filter(call => call.state === "open" || (call.state === "revising" && asksEditor(call.run))).length ?? 0)
-    + edits.filter(edit => (!!edit.check && !reviewed(edit) && !revising(edit)) || (forYou(edit) && asksEditor(revising(edit)))).length;
+    + edits.filter(edit => (!!edit.check && !reviewed(edit) && !revising(edit)) || asksEditor(revising(edit))).length;
 }
 
 /**

@@ -385,6 +385,50 @@ mod tests {
     }
 
     #[test]
+    fn includes_sanitized_shared_copies_logs_in_the_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        let copies_raw = concat!(
+            "2026-11-25T01:23:42.365Z id=com.forwardfuture.scarlet.review pid=1428890 start version=0.1.500 build=release exe=\"/Users/me/Applications/Scarlet.app/Contents/MacOS/scarlet\" data=\"/Users/me/Movies/private data\" log=\"/Users/me/Library/Logs/com.forwardfuture.scarlet.review\"\n",
+            "2026-11-25T01:23:42.365Z id=com.forwardfuture.scarlet.review pid=1428891 start version=0.1.501 build=debug exe=\"/Users/me/Scarlet\" count=4\n",
+            "2026-11-25T01:23:42.365Z id=com.forwardfuture.scarlet.review pid=1428890 [request] 00:13:26.908 +0ms send how=typed dest=new-edit chars=4 aim=whole project=prj_123456789abc error=\"Someone's private words\"\n",
+            "2026-11-25T01:23:42.365Z id=com.forwardfuture.scarlet.review pid=1428890 [request] private words\n",
+            "2026-11-25T01:23:42.365Z id=com.forwardfuture.scarlet.review pid=1428890 exit\n",
+            "2026-11-25T01:23:42.365Z id=com.example.me pid=1428890 start version=0.1.500 build=release\n",
+            "2026-11-25T01:23:42.365Z id=com.forwardfuture.scarlet.review pid=1428890 note private words\n",
+        );
+        let rotated_raw = concat!(
+            "2026-11-24T22:10:00.000Z id=com.forwardfuture.scarlet pid=99 start version=0.1.499 build=demo exe=\"/Users/me/Applications/Scarlet.app\" data=\"/Users/me/Movies/private\" log=\"/Users/me/Library/Logs/scarlet\"\n",
+            "2026-11-24T22:15:00.000Z id=com.forwardfuture.scarlet pid=99 exit\n",
+        );
+        std::fs::write(dir.path().join("scarlet-copies.log"), copies_raw).unwrap();
+        std::fs::write(dir.path().join("scarlet-copies.1.log"), rotated_raw).unwrap();
+
+        let bytes = build_bundle(dir.path(), &serde_json::json!({ "version": "test" }), None, None).unwrap().bytes;
+        let copies = entry(&bytes, "logs/scarlet-copies.log");
+        assert!(!copies.is_empty(), "scarlet-copies.log entry should not be empty");
+        for expected in [
+            "[2026-11-25][01:23:42][INFO] [copy] id=com.forwardfuture.scarlet.review pid=1428890 start version=0.1.500 build=release",
+            "[2026-11-25][01:23:42][INFO] [copy] id=com.forwardfuture.scarlet.review pid=1428891 start version=0.1.501 build=debug",
+            "[2026-11-25][01:23:42][INFO] [copy] id=com.forwardfuture.scarlet.review pid=1428890 [ui] [request] 00:13:26.908 +0ms send how=typed dest=new-edit chars=4 aim=whole project=prj_123456789abc",
+            "[2026-11-25][01:23:42][INFO] [copy] id=com.forwardfuture.scarlet.review pid=1428890 exit",
+        ] {
+            assert!(copies.contains(expected), "missing {expected:?} in {copies}");
+        }
+        assert_eq!(copies.matches(" exit").count(), 1, "{copies}");
+        for forbidden in ["/Users/me", "exe=", "data=", "log=", "count=", "private", "Someone", "com.example", "note"] {
+            assert!(!copies.contains(forbidden), "unexpected {forbidden:?} in {copies}");
+        }
+
+        let rotated = entry(&bytes, "logs/scarlet-copies.1.log");
+        assert!(!rotated.is_empty(), "scarlet-copies.1.log entry should not be empty");
+        assert!(rotated.contains("[2026-11-24][22:10:00][INFO] [copy] id=com.forwardfuture.scarlet pid=99 start version=0.1.499 build=demo"), "{rotated}");
+        assert!(rotated.contains("[2026-11-24][22:15:00][INFO] [copy] id=com.forwardfuture.scarlet pid=99 exit"), "{rotated}");
+        for forbidden in ["/Users/me", "exe=", "data=", "log=", "private"] {
+            assert!(!rotated.contains(forbidden), "unexpected {forbidden:?} in {rotated}");
+        }
+    }
+
+    #[test]
     fn suggests_a_dated_file_name() {
         let name = suggested_name();
         let shape = regex::Regex::new(r"^scarlet-logs-20\d\d-[01]\d-[0-3]\d-[0-2]\d[0-5]\d\.zip$").unwrap();

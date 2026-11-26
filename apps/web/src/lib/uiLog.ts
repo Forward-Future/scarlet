@@ -173,7 +173,9 @@ export function startUiLog() {
   on(document, "click", onClick);
   on(document, "dblclick", onClick);
   on(document, "contextmenu", onClick);
-  on(document, "keydown", onKey);
+  // On the window, in capture, so it hears a key before any control does: a few (the mic's Esc, marking a frame, a
+  // picker's Esc) stop the key where they catch it, which would hide it from a listener on the document.
+  on(window, "keydown", onKey);
   on(document, "submit", onSubmit);
   on(document, "change", onChange);
   on(window, "error", onResourceError);

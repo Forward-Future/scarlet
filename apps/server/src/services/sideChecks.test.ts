@@ -60,6 +60,20 @@ it("counts a learning check as a side check, and a skill edit as a request", () 
   expect(claimTask(ctx, host, undefined, ["gemini"], undefined, [])?.id).toBe(asker.id);
 });
 
+it("runs learning checks one at a time while still allowing other side checks beside them", () => {
+  const asker = edit(project("Interview"));
+  expect(claimTask(ctx, host, asker.id)?.state).toBe("claimed");
+  const first = learningCheck(asker);
+  const second = learningCheck(asker);
+  const look = areaCheck(asker, 120);
+  // First claim takes the area check (its asker is running) or first learning check; only one learning check runs at a time.
+  expect(claimTask(ctx, host, undefined, [], undefined, ["gemini"])?.id).toBe(look.id);
+  expect(claimTask(ctx, host, undefined, [], undefined, ["gemini"])?.id).toBe(first.id);
+  expect(claimTask(ctx, host, undefined, [], undefined, ["gemini"])).toBeNull();
+  ctx.repos.tasks.put({ ...ctx.repos.tasks.get(first.id)!, state: "done" });
+  expect(claimTask(ctx, host, undefined, [], undefined, ["gemini"])?.id).toBe(second.id);
+});
+
 it("claims every kind from a host that sends no check slots, as before, with a running request's area checks first", () => {
   const older = edit(project("Interview"));
   const queuedAsker = edit(project("Podcast"));

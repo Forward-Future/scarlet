@@ -5,10 +5,16 @@ import { errorMessage, IS_MOCK } from "../../lib/client";
 import { InlineError, Spinner } from "../ui/primitives";
 
 /**
- * One install for the whole app: the Projects banner and the card in Settings show the same one, so an install started
- * on one page is still "Installing…" on the other, and can't be started twice.
+ * One install for the whole app: the Projects banner, the card in Settings and the sample project button share it,
+ * so an install started on one page is still "Installing…" on the other, and can't be started twice.
  */
 const useFfmpeg = create<{ status: FfmpegStatus | null; installing: boolean; error: string }>(() => ({ status: null, installing: false, error: "" }));
+
+/** FFmpeg is missing on this desktop, as far as Scarlet has checked. False before the check and off the desktop. */
+export function useFfmpegMissing(): boolean {
+  const status = useFfmpeg(s => s.status);
+  return isDesktop() && !IS_MOCK && !!status && !status.installed;
+}
 
 function useFfmpegSetup() {
   const active = isDesktop() && !IS_MOCK;

@@ -10,17 +10,40 @@ import { fnum } from "./exec.js";
 import { resolveFontFile, type FontOptions } from "./fonts.js";
 import { FRAME_SLACK, clipPlacement, ffColor, holdsFrame } from "./graphTransform.js";
 
-/** Greedy word wrap; drawtext does not wrap on its own. */
+/** Characters about a full em wide (Chinese, Japanese, Korean, full-width forms, emoji); others count half. */
+const WIDE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\u3000-\u303F\uFF01-\uFF60\uFFE0-\uFFE6]|\p{Extended_Pictographic}/u;
+/** Scripts the fallback Latin fonts have no glyphs for. */
+export const NEEDS_WIDE_FONT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}]/u;
+const graphemes = (s: string) => Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(s), g => g.segment);
+/** A run's width in half-em units: a character as the eye sees it, an emoji or a CJK character two. */
+const units = (s: string) => graphemes(s).reduce((n, g) => n + (WIDE.test(g) ? 2 : 1), 0);
+
+/**
+ * Greedy word wrap; drawtext does not wrap on its own. Widths are counted per character as seen, a wide one double,
+ * and a word too long for a line (as Chinese, Japanese and Thai are written, without spaces) breaks between
+ * characters, never inside one.
+ */
 export function wrapText(text: string, maxChars: number): string {
   const lines: string[] = [];
   for (const para of text.split(/\r?\n/)) {
     let cur = "";
+    let width = 0;
     for (const word of para.split(/\s+/).filter(Boolean)) {
-      if (cur && cur.length + 1 + word.length > maxChars) {
+      const w = units(word);
+      if (w > maxChars) {
+        if (cur) lines.push(cur);
+        cur = ""; width = 0;
+        for (const g of graphemes(word)) {
+          const gw = units(g);
+          if (cur && width + gw > maxChars) { lines.push(cur); cur = ""; width = 0; }
+          cur += g; width += gw;
+        }
+      } else if (cur && width + 1 + w > maxChars) {
         lines.push(cur);
-        cur = word;
+        cur = word; width = w;
       } else {
         cur = cur ? `${cur} ${word}` : word;
+        width += (width ? 1 : 0) + w;
       }
     }
     lines.push(cur);
@@ -72,7 +95,9 @@ export async function buildCaptionDrawtexts(opts: CaptionDrawOptions): Promise<s
       await fs.writeFile(textFile, wrapText(text, maxChars), "utf8");
 
       const o: string[] = [];
-      const font = resolveFontFile(style.fontFamily, fontOpts);
+      const font = resolveFontFile(style.fontFamily, fontOpts, NEEDS_WIDE_FONT.test(text));
+      // drawtext draws in one font and in one colour: an emoji comes out as a box or blank in the export.
+      if (/\p{Extended_Pictographic}/u.test(text)) warn("a caption has emoji, which exported captions draw as boxes or leave out");
       if (font) {
         o.push(`fontfile=${escapeFilterPath(font.file)}`);
         if (!font.exact) warn(`font "${style.fontFamily}" not found; using ${path.basename(font.file)}`);

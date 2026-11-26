@@ -142,7 +142,7 @@ export function wordsOnSound(segments: TranscriptSegment[], levels: GapLevels): 
  */
 const UNHEARD_BELOW_LINES_DB = 11;
 /** Under this a segment wasn't said, whatever the recording's level: a silent track's lines all sit far below it. */
-const UNHEARD_DBFS = -60;
+export const UNHEARD_DBFS = -60;
 /** A recording needs this many segments for its median line to say what its speech sounds like. */
 const LINES_FOR_LEVEL = 5;
 /** Read this much either side of a segment's words: a word's edge can sit a step inside its sound. */
@@ -164,9 +164,13 @@ export function withoutUnheardSegments(segments: TranscriptSegment[], levels: Ga
   if (!step) return { segments, dropped: [] };
   const peakOf = (seg: TranscriptSegment) => {
     const words = seg.words.filter(w => !label(w.text) && normalizeTranscriptToken(w.text));
-    if (!words.length) return undefined;
-    const from = Math.max(0, Math.floor((Math.min(...words.map(w => w.start)) - LINE_PAD - levels.from) / step));
-    const to = Math.min(levels.rms.length, Math.ceil((Math.max(...words.map(w => w.end)) + LINE_PAD - levels.from) / step));
+    const spanStart = words.length ? Math.min(...words.map(w => w.start))
+      : !label(seg.text) && normalizeTranscriptToken(seg.text) ? seg.start : undefined;
+    const spanEnd = words.length ? Math.max(...words.map(w => w.end))
+      : spanStart !== undefined ? seg.end : undefined;
+    if (spanStart === undefined || spanEnd === undefined) return undefined;
+    const from = Math.max(0, Math.floor((spanStart - LINE_PAD - levels.from) / step));
+    const to = Math.min(levels.rms.length, Math.ceil((spanEnd + LINE_PAD - levels.from) / step));
     if (to <= from) return undefined;
     let peak = 0;
     for (let i = from; i < to; i++) peak = Math.max(peak, levels.rms[i]!);
@@ -308,7 +312,7 @@ export async function fillTranscriptHoles(input: { wav: string; segments: Transc
   const levels = await wavLevels(wav, signal);
   const heardOnly = withoutUnheardSegments(input.segments, levels, word => alignerHeard.get(word));
   if (heardOnly.dropped.length) {
-    const lines = heardOnly.dropped.map(s => `“${s.text.trim()}” at ${s.words[0]!.start.toFixed(1)} s`);
+    const lines = heardOnly.dropped.map(s => `“${s.text.trim()}” at ${(s.words[0]?.start ?? s.start).toFixed(1)} s`);
     input.log(`[transcribe] took out ${lines.length} ${lines.length === 1 ? "line" : "lines"} Whisper wrote over quiet: ${lines.slice(0, 6).join(", ")}${lines.length > 6 ? ", …" : ""}`);
   }
   // Placed on the sound first: a word stretched over a wait would hide the stretch the holes are looked for in.

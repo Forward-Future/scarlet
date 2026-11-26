@@ -1,21 +1,38 @@
 /**
- * The report form's state, opened from anywhere: a Report beside an error, the Help menu, Settings, a crash. And the
- * errors the window showed lately, so a report says what was on screen even when it was opened from the menu.
+ * The report form's state, opened from the Help menu or Settings, or to add details to a report a Report beside an
+ * error already sent in one click. And the errors the window showed lately, so a report says what was on screen.
  */
 import { create } from "zustand";
+import { logPath } from "./appLog";
+import type { ProblemReportWords } from "./desktop";
+
+/** A report already sent, that the editor can add what happened to. */
+export interface SentReport { id: string; reference: string; about?: string }
 
 export const useProblemReport = create<{
   open: boolean;
-  /** The error on screen the report is about, in the words shown there. */
-  about?: string;
-  show(about?: string): void;
+  /** Set when the form adds details to a report already sent. */
+  follows?: SentReport;
+  /** Reports the editor added details to, by id. */
+  detailed: string[];
+  show(): void;
+  addDetails(report: SentReport): void;
+  markDetailed(id: string): void;
   hide(): void;
 }>((set) => ({
   open: false,
-  about: undefined,
-  show: (about) => set({ open: true, about: about?.trim() || undefined }),
-  hide: () => set({ open: false, about: undefined }),
+  follows: undefined,
+  detailed: [],
+  show: () => set({ open: true, follows: undefined }),
+  addDetails: (follows) => set({ open: true, follows }),
+  markDetailed: (id) => set(s => ({ detailed: [...s.detailed, id] })),
+  hide: () => set({ open: false, follows: undefined }),
 }));
+
+/** What a report says beside the logs Scarlet adds: the editor's words, the error on screen, the page, what was shown. */
+export function reportWords(description: string, about?: string): ProblemReportWords {
+  return { description, about: about?.trim() || undefined, page: logPath(location.href), onScreen: recentOnScreenErrors() };
+}
 
 /** How many recent errors are kept, and for how long they count as recent. */
 const KEPT = 8;

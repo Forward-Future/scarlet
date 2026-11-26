@@ -36,8 +36,8 @@ use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Paths;
-use crate::util::{engine_env, hide_console, lossy_lines};
-use launch::{bundled_chrome, engine_line_level, newest_mtime, set_chrome_env};
+use crate::util::{engine_env, env_remove_ci, hide_console, lossy_lines};
+use launch::{bundled_chrome, dev_whisper_cli, engine_line_level, newest_mtime, set_chrome_env, set_dev_whisper_env};
 
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -370,11 +370,7 @@ impl EngineManager {
             let delay = Duration::from_millis((1000u64 * 2u64.pow(attempt.min(5))).min(30_000));
             log::warn!("engine exited; restarting in {delay:?} (attempt {attempt})");
             self.update(|s| restarting(s, failed_starts));
-            // A dev rebuild (e.g. fixing the crash) cuts the wait short.
-            tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = self.reload_now.notified() => { self.reload.store(false, Ordering::SeqCst); }
-            }
+            backoff(&self.reload, &self.reload_now, delay).await;
         }
     }
 
@@ -400,6 +396,8 @@ impl EngineManager {
                     env.entry("SCARLET_BIN_DIR".into()).or_insert_with(|| dir.to_string_lossy().into_owned());
                 }
             }
+            // Fresh dev worktrees carry a zero-byte whisper-cli placeholder; reuse the main checkout's or installed app's.
+            set_dev_whisper_env(&mut env, || dev_whisper_cli(&dev_repo_root(), env!("SCARLET_BUILD_TARGET"), &self.paths.home));
         }
         if launch.kind == "dev" {
             let skills = dev_repo_root().join("skills");
@@ -411,10 +409,7 @@ impl EngineManager {
         env.insert("SCARLET_DATA".into(), self.paths.data_dir.to_string_lossy().to_string());
         // Only the public packages are built for a release feed. The engine reports usage under the `release` channel
         // only with it, so source, local-main and review builds count as `dev` (docs/telemetry.md).
-        match option_env!("SCARLET_RELEASE_CHANNEL").filter(|channel| !channel.is_empty()) {
-            Some(channel) => { env.insert("SCARLET_RELEASE_CHANNEL".into(), channel.into()); }
-            None => { env.remove("SCARLET_RELEASE_CHANNEL"); }
-        }
+        apply_release_channel(&mut env, option_env!("SCARLET_RELEASE_CHANNEL"));
         env
     }
 
@@ -549,6 +544,15 @@ impl EngineManager {
     }
 }
 
+/// Set or strip `SCARLET_RELEASE_CHANNEL` case-insensitively so Windows environment maps cannot keep a differently
+/// cased inherited entry beside it.
+fn apply_release_channel(env: &mut HashMap<String, String>, channel: Option<&str>) {
+    env_remove_ci(env, &["SCARLET_RELEASE_CHANNEL"]);
+    if let Some(channel) = channel.map(str::trim).filter(|channel| !channel.is_empty()) {
+        env.insert("SCARLET_RELEASE_CHANNEL".into(), channel.into());
+    }
+}
+
 /// Log each line the engine writes to stderr.
 fn log_stderr(stderr: ChildStderr, pid: u32) {
     tokio::spawn(async move {
@@ -596,11 +600,48 @@ fn read_stdout(stdout: ChildStdout, pid: u32, ready_tx: tokio::sync::oneshot::Se
     })
 }
 
+/// The wait before a crashed engine starts again. A dev rebuild (e.g. fixing the crash) cuts it short, but only one
+/// that set `reload`: the permit an earlier rebuild left on `notify` while the engine ran doesn't skip the wait.
+async fn backoff(reload: &AtomicBool, notify: &Notify, delay: Duration) {
+    let deadline = tokio::time::Instant::now() + delay;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => break,
+            _ = notify.notified() => if reload.swap(false, Ordering::SeqCst) { break },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(unix)]
     use tokio::io::{AsyncBufReadExt, BufReader};
+
+    #[tokio::test]
+    async fn a_rebuild_signal_left_over_from_a_healthy_run_does_not_skip_the_crash_backoff() {
+        let (reload, notify) = (AtomicBool::new(false), Notify::new());
+        // A rebuild while the engine ran: its reload was handled through the flag, its permit is still stored.
+        notify.notify_one();
+        let started = Instant::now();
+        backoff(&reload, &notify, Duration::from_millis(300)).await;
+        assert!(started.elapsed() >= Duration::from_millis(300));
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_during_the_crash_backoff_cuts_it_short() {
+        let state = Arc::new((AtomicBool::new(false), Notify::new()));
+        let rebuild = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            rebuild.0.store(true, Ordering::SeqCst);
+            rebuild.1.notify_one();
+        });
+        let started = Instant::now();
+        backoff(&state.0, &state.1, Duration::from_secs(10)).await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(!state.0.load(Ordering::SeqCst));
+    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -724,5 +765,17 @@ mod tests {
             assert_eq!(failing.state, state, "after {failed} failed starts in a row");
         }
         assert_eq!((failing.restarts, failing.error.as_deref()), (5, Some("engine exited before reporting ready")));
+    }
+
+    #[test]
+    fn sets_or_clears_release_channel_case_insensitively() {
+        let mut env = HashMap::from([("scarlet_release_channel".to_string(), "".to_string())]);
+        apply_release_channel(&mut env, Some("stable"));
+        assert_eq!(env.len(), 1);
+        assert_eq!(env.get("SCARLET_RELEASE_CHANNEL").map(String::as_str), Some("stable"));
+
+        let mut dev_env = HashMap::from([("Scarlet_Release_Channel".to_string(), "stable".to_string())]);
+        apply_release_channel(&mut dev_env, None);
+        assert!(dev_env.is_empty());
     }
 }

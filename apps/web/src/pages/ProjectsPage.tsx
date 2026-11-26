@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import type { ProjectSummary } from "@scarlet/shared";
 import { errorMessage, IS_MOCK } from "../lib/client";
 import { isDesktop } from "../lib/desktop";
+import { emptyFolderMessage, expandDroppedPaths } from "../lib/expandMediaPaths";
 import { plural } from "../lib/format";
 import { isEditableTarget } from "../lib/hotkeys";
 import { useProjectStore } from "../stores/project";
@@ -11,7 +13,7 @@ import { Dropzone, type ImportSource } from "../components/media/UploadDropzone"
 import { useImportTranscription } from "../components/media/TranscriptionAction";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { TrashButton } from "../components/shell/TrashButton";
-import { FfmpegSetupBanner } from "../components/shell/FfmpegSetup";
+import { FfmpegSetupBanner, useFfmpegMissing } from "../components/shell/FfmpegSetup";
 import { ConfirmDialog, EmptyState, ErrorState, Icon, InlineError, Loading, Modal, Spinner } from "../components/ui/primitives";
 import { ProjectCard } from "./projects/ProjectCard";
 import { FirstEditGuide, NewProjectModal } from "./projects/NewProjectModal";
@@ -178,14 +180,29 @@ export function ProjectsPage() {
     setView(next);
     try { localStorage.setItem("scarlet.projectView", next); } catch { /* Storage is optional. */ }
   };
-  const [dialog, setDialog] = useState<{ kind: "guide" } | { kind: "create"; sources: ImportSource[] } | null>(null);
+  const [dialog, setDialog] = useState<{ kind: "guide" } | { kind: "create"; sources: ImportSource[]; error?: string } | null>(null);
+  const [dropError, setDropError] = useState("");
   const { notice, local } = useImportTranscription();
   // Where the grid puts what the list has in its heading row: the box that selects every project beside the layout
   // switch, and what is selected over the title.
   const [selectAllSlot, setSelectAllSlot] = useState<HTMLElement | null>(null);
   const [selectionSlot, setSelectionSlot] = useState<HTMLElement | null>(null);
 
-  const begin = (sources: ImportSource[]) => setDialog({ kind: "create", sources });
+  const begin = (sources: ImportSource[]) => {
+    setDropError("");
+    setDialog({ kind: "create", sources });
+  };
+  const beginPaths = async (paths: string[]) => {
+    setDropError("");
+    try {
+      const { files, emptyFolders } = await expandDroppedPaths(paths);
+      const noticeError = emptyFolderMessage(emptyFolders);
+      if (files.length) setDialog({ kind: "create", sources: files, ...(noticeError && { error: noticeError }) });
+      else if (noticeError) setDropError(noticeError);
+    } catch (e) {
+      setDropError(errorMessage(e));
+    }
+  };
 
   const empty = !list.length && !archived && status === "ready";
   // Nothing can be edited without a model, so while none is ready the first screen is signing in to one.
@@ -213,8 +230,31 @@ export function ProjectsPage() {
     setSignInAsked(null);
   };
 
+  const navigate = useNavigate();
+  const createSampleProject = useProjectStore(s => s.createSampleProject);
+  const [creatingSample, setCreatingSample] = useState(false);
+  const [sampleError, setSampleError] = useState("");
+  // The sample clip is made with FFmpeg: until it is installed, the banner above asks for it and the button waits.
+  const ffmpegMissing = useFfmpegMissing();
+  const openSampleProject = async () => {
+    if (creatingSample) return;
+    setCreatingSample(true);
+    setSampleError("");
+    try {
+      const project = await createSampleProject();
+      navigate(`/p/${project.id}`);
+    } catch (e) {
+      setSampleError(errorMessage(e));
+    } finally {
+      setCreatingSample(false);
+    }
+  };
+
   const newProject = <button type="button" className="btn-primary" onClick={() => begin([])}>
     <Icon name="plus" size={15} /> New project
+  </button>;
+  const sampleProject = <button type="button" className="btn-ghost" disabled={creatingSample} onClick={() => void openSampleProject()}>
+    {creatingSample ? <><Spinner /> Creating sample…</> : "Try a sample project"}
   </button>;
   const quickStart = <button type="button" className="btn-quiet" aria-haspopup="dialog" onClick={() => setDialog({ kind: "guide" })}>
     Quick start {empty && <Icon name="arrow" size={14} />}
@@ -222,7 +262,7 @@ export function ProjectsPage() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <Dropzone onFiles={sources => begin(Array.from(sources))} onPaths={begin} label="Create a project from these files" notice={notice} className="min-h-full">
+      <Dropzone onFiles={sources => begin(Array.from(sources))} onPaths={paths => { void beginPaths(paths); }} label="Create a project from these files" notice={notice} className="min-h-full">
         <main className={empty || signIn ? "library-page library-welcome" : "library-page"}>
           <header className="library-heading">
             <h1>{signIn ? "Scarlet" : "Projects"}</h1>
@@ -243,6 +283,7 @@ export function ProjectsPage() {
             <WindowActions />
           </header>
           <FfmpegSetupBanner />
+          <InlineError>{dropError}</InlineError>
           {signIn ? (
             <FirstSignIn adding={adding} later={lookAround} laterLabel={adding ? "Done" : empty ? "Look around first" : "Back to projects"} />
           ) : ((status === "loading" || status === "idle") && !list.length) || (empty && needsSignIn && !hostsKnown && !signInLater) ? (
@@ -260,7 +301,8 @@ export function ProjectsPage() {
               <p>Drop your footage here, then tell Scarlet what you’d like to change.</p>
               {signedIn.some(id => SIGN_IN_ORDER.includes(id)) && <p className="first-signed-in">✓ Signed in with {providerList(signedIn)}
                 {canAddPlan && <> · <button type="button" className="first-edit-link" onClick={() => askSignIn("add")}>Add another</button></>}</p>}
-              <div className="first-edit-actions">{newProject}{quickStart}</div>
+              <div className="first-edit-actions">{newProject}{!ffmpegMissing && sampleProject}{quickStart}</div>
+              {sampleError && <InlineError>{sampleError}</InlineError>}
             </section>
           ) : (
             <ProjectCollection key={String(archived)} projects={projects} view={view} archived={archived} notice={notice}
@@ -273,7 +315,7 @@ export function ProjectsPage() {
         <FirstEditGuide onSignIn={needsSignIn ? () => askSignIn("first") : undefined} />
       </Modal>
       {dialog?.kind === "create" && (
-        <NewProjectModal initialFiles={dialog.sources} empty={empty} notice={notice} local={local} onClose={() => setDialog(null)} />
+        <NewProjectModal initialFiles={dialog.sources} initialError={dialog.error} empty={empty} notice={notice} local={local} onClose={() => setDialog(null)} />
       )}
     </div>
   );

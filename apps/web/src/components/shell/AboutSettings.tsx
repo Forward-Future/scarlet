@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { FEATURE_NAMES, type TelemetryUnavailable } from "@scarlet/shared";
 import appIcon from "../../../../desktop/src-tauri/icons/128x128@2x.png";
-import { api, errorMessage } from "../../lib/client";
-import { desktop } from "../../lib/desktop";
+import { api, errorMessage, IS_MOCK } from "../../lib/client";
+import { desktop, isDesktop } from "../../lib/desktop";
+import { fileBaseName } from "../../lib/format";
 import { Icon, InlineError, Loading, Toggle } from "../ui/primitives";
 import { Changelog } from "./Changelog";
+import { ReportProblemCard } from "./ReportProblem";
 import { UpdateSettings } from "./UpdateSettings";
 
 export function AboutSettings() {
@@ -27,7 +29,8 @@ export function AboutSettings() {
       </div>
       <div className="about-content">
         <Changelog />
-        <div>
+        <div className="about-sidebar">
+          <ReportProblemCard />
           <section className="card about-telemetry" aria-labelledby="telemetry-heading">
             <h2 id="telemetry-heading">Usage telemetry</h2>
             <TelemetrySwitch />

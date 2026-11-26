@@ -26,6 +26,7 @@ import { api, errorMessage } from "../lib/client";
 import { parseTimestamp } from "../lib/format";
 import { subscribeProject } from "../lib/realtime";
 import { mergeTaskEvents } from "../lib/taskActivity";
+import { failure, requestLog } from "../lib/requestLog";
 import { createHeldProjectController, mergeSinceLoad, READ_AGAIN_AFTER_MS, sameVersion, upsert, upsertAnswered, upsertEditingTasks } from "./projectHelpers";
 
 type Status = "idle" | "loading" | "ready" | "error";
@@ -39,6 +40,8 @@ export interface ProjectData {
   notes: Note[];
   /** Rules Scarlet picked up from requests here, each until the editor has approved or declined it and it is saved. */
   learnings?: Learning[];
+  /** AI-generated short titles for collapsed edit batches in the beta edits column, keyed by batch hash. */
+  batchSummaries?: Record<string, string>;
   renders: Render[];
   fullRenderKeys?: FullRenderKeys;
   renderSettingsRevision?: number;
@@ -74,6 +77,7 @@ interface ProjectState {
   /** `retry` is the editor asking again after a failure, which shows as loading. A refresh never does. */
   loadList(retry?: boolean): Promise<void>;
   createProject(body: { name: string; settings?: Partial<Project["settings"]> }): Promise<Project>;
+  createSampleProject(): Promise<Project>;
   deleteProject(id: string): Promise<void>;
 
   current: ProjectData | null;
@@ -85,6 +89,7 @@ interface ProjectState {
   refreshHead(projectId?: string): Promise<void>;
   loadVersions(): Promise<void>;
   applyEvent(ev: WsEvent): void;
+  mergeBatchSummaries(projectId: string, summaries: Record<string, string>): void;
 
   setThreadDone(threadId: string, done: boolean, revision: string): Promise<void>;
   updateProject(body: { mediaPaused?: boolean; name?: string; archived?: boolean; settings?: Partial<Project["settings"]>; expectedFormat?: Pick<Project, "head" | "settings"> }, projectId?: string): Promise<void>;
@@ -93,6 +98,12 @@ interface ProjectState {
   historyEdit(version: string, action: "revert" | "restore"): Promise<void>;
   /** Put back what applied edits the editor rejected changed, on the engine. Answers with the version it made. */
   rejectEdits(threadId: string, head: string, edits: Parameters<typeof api.rejectEdits>[1]["edits"]): Promise<string>;
+  /** Adjust an applied cut's edges directly on the engine. Answers with the version it made and whether the cut was removed whole. */
+  adjustCut(threadId: string, head: string, cut: Parameters<typeof api.adjustCut>[1]["cut"], removed: Parameters<typeof api.adjustCut>[1]["removed"]): Promise<{ version: string; rejected: boolean }>;
+  /** Adjust a non-cut applied edit's start/end edges directly on the engine (captions, overlays, zooms, dips, split edits). */
+  adjustEdit(threadId: string, head: string, edit: Parameters<typeof api.adjustEdit>[1]["edit"], nextRange: Parameters<typeof api.adjustEdit>[1]["nextRange"]): Promise<{ version: string; rejected: boolean }>;
+  /** Move one staged cut of a waiting dialogue pass directly, carrying over all other cuts and editor choices. */
+  reviseStagedCut(changeId: string, index: number, body: Parameters<typeof api.reviseStagedCut>[2]): Promise<{ change: Change; index: number }>;
   revise(changeId: string, body: Parameters<typeof api.reviseChange>[1]): Promise<Task | undefined>;
 
   requestRender(body: Partial<RenderRequest>): Promise<Render>;
@@ -210,14 +221,28 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     return { changes, versions: undefined, historyRevision: (d.historyRevision ?? 0) + 1 };
   });
   /** Keep the task a request about it answers with, unless the socket already has it further on. */
-  const taskAnswered = async (request: Promise<{ task: Task }>) => {
-    const { task } = await request;
+  const taskAnswered = async (request: Promise<{ task: Task }>, event = "answered", fields?: Record<string, unknown>) => {
+    const { task } = await logged(event, request, fields ?? {});
     patch(task.projectId, (d) => ({ tasks: upsertAnswered(d.tasks, task) }));
   };
   /** Keep a new note and the request it started. */
   const noteCreated = (projectId: string, res: { note: Note; task?: Task }) => {
     patch(projectId, (d) => ({ notes: upsert(d.notes, res.note), tasks: res.task ? upsertAnswered(d.tasks, res.task) : d.tasks }));
     return res;
+  };
+  /**
+   * A call to the engine about a request, in the app log as what it made (`created task=…`) or why it failed. The
+   * `[api]` line names the route; this one names the request, so the two read together.
+   */
+  const logged = async <T extends { task?: { id: string } }>(event: string, call: Promise<T>, fields: Record<string, unknown>) => {
+    try {
+      const result = await call;
+      requestLog(event, { ...fields, task: result.task?.id ?? fields.task });
+      return result;
+    } catch (error) {
+      requestLog(`${event}-failed`, { ...fields, ...failure(error) }, "warn");
+      throw error;
+    }
   };
   /** Show the working cut an edit of the history made. The list of versions it changed is read again when next asked for. */
   const showRewritten = (projectId: string, project: Project) => patch(projectId, d => {
@@ -322,6 +347,14 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       listRevision++;
       const summary: ProjectSummary = { id: project.id, name: project.name, settings: project.settings, head: project.head, mediaPaused: project.mediaPaused,
         createdAt: project.createdAt, updatedAt: project.updatedAt, mediaCount: 0, poster: null, pendingChanges: 0, openNotes: 0 };
+      set({ list: [summary, ...get().list.filter(p => p.id !== project.id)], listStatus: "ready" });
+      return project;
+    },
+    async createSampleProject() {
+      const { project } = await api.createSampleProject();
+      listRevision++;
+      const summary: ProjectSummary = { id: project.id, name: project.name, settings: project.settings, head: project.head, mediaPaused: project.mediaPaused,
+        createdAt: project.createdAt, updatedAt: project.updatedAt, mediaCount: project.media.length, poster: null, pendingChanges: 0, openNotes: 0 };
       set({ list: [summary, ...get().list.filter(p => p.id !== project.id)], listStatus: "ready" });
       return project;
     },
@@ -526,6 +559,11 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
         case "learning.updated":
           patch(cur.id, (d) => ({ learnings: upsert(d.learnings ?? [], ev.learning) }));
           break;
+        case "batch_summary.updated":
+          patch(cur.id, (d) => (d.batchSummaries?.[ev.key] === ev.title
+            ? {}
+            : { batchSummaries: { ...d.batchSummaries, [ev.key]: ev.title } }));
+          break;
         case "render.updated":
           // The stream loads its own fragments. Their encoder progress has no project UI.
           if (ev.render.kind === "playback") break;
@@ -556,6 +594,16 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
         default:
           break;
       }
+    },
+
+    mergeBatchSummaries(projectId, summaries) {
+      const entries = Object.entries(summaries);
+      if (!entries.length) return;
+      patch(projectId, (d) => {
+        const prev = d.batchSummaries;
+        if (prev && entries.every(([k, v]) => prev[k] === v)) return {};
+        return { batchSummaries: { ...prev, ...summaries } };
+      });
     },
 
     async setThreadDone(threadId, done, revision) {
@@ -667,8 +715,39 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return change.appliedVersion ?? change.toVersion;
     },
+    async adjustCut(threadId, head, cut, removed) {
+      const cur = get().current;
+      if (!cur) throw new Error("No project is open.");
+      const { project, change } = await api.adjustCut(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, cut, removed });
+      replaceChange(change);
+      showRewritten(cur.id, project);
+      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      return { version: change.appliedVersion ?? change.toVersion, rejected: !!change.rejects };
+    },
+    async adjustEdit(threadId, head, edit, nextRange) {
+      const cur = get().current;
+      if (!cur) throw new Error("No project is open.");
+      const { project, change } = await api.adjustEdit(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edit, nextRange });
+      replaceChange(change);
+      showRewritten(cur.id, project);
+      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      return { version: change.appliedVersion ?? change.toVersion, rejected: !!change.rejects };
+    },
+    async reviseStagedCut(changeId, index, body) {
+      const res = await api.reviseStagedCut(changeId, index, body);
+      const cur = get().current;
+      if (cur && cur.id === res.change.projectId) {
+        patch(cur.id, d => ({
+          changes: upsert(d.changes.map(c => c.id === changeId && c.state === "ready" ? { ...c, state: "rejected" as const, replacedBy: res.change.id } : c), res.change),
+        }));
+      } else {
+        replaceChange(res.change);
+      }
+      return { change: res.change, index: res.index ?? index };
+    },
     async revise(changeId, body) {
-      const res = await api.reviseChange(changeId, body);
+      const res = await logged("revision-created", api.reviseChange(changeId, body),
+        { change: changeId, chars: body.text?.length, voice: body.voiceTranscript ? true : undefined });
       replaceChange(res.change);
       noteCreated(res.change.projectId, res);
       return res.task;
@@ -726,10 +805,10 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     },
 
     async createNote(projectId, body) {
-      return noteCreated(projectId, await api.createNote(projectId, body));
+      return noteCreated(projectId, await logged("note-created", api.createNote(projectId, body), { project: projectId, chars: body.text?.length }));
     },
     async createVoiceNote(projectId, blob, fields) {
-      return noteCreated(projectId, await api.createVoiceNote(projectId, blob, fields));
+      return noteCreated(projectId, await logged("voice-note-created", api.createVoiceNote(projectId, blob, fields), { project: projectId, bytes: blob.size }));
     },
 
     async approveLearning(learningId, skillId, runWith) {
@@ -747,13 +826,18 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     },
 
     async createTask(projectId, body) {
-      const { task } = await api.createTask(projectId, body);
+      const context = body.context as { threadId?: string; changeId?: string; attachments?: unknown[]; time?: number } | undefined;
+      const { task } = await logged("created", api.createTask(projectId, body), {
+        project: projectId, kind: body.kind ?? "edit", agent: body.agent, model: body.model, chars: body.instruction.length,
+        thread: context?.threadId, change: context?.changeId, files: context?.attachments?.length || undefined,
+        at: context?.time, voice: body.voiceTranscript ? true : undefined,
+      });
       // A project switch or a newer worker event can precede the creation response.
       patch(projectId, d => ({ tasks: d.tasks.some(t => t.id === task.id) ? d.tasks : [...d.tasks, task] }));
       return task;
     },
     async cancelTask(taskId, queuedOnly) {
-      const { task } = await api.cancelTask(taskId, queuedOnly);
+      const { task } = await logged("cancelled", api.cancelTask(taskId, queuedOnly), { task: taskId, queuedOnly: queuedOnly || undefined });
       patch(task.projectId, (d) => ({ tasks: upsert(d.tasks, task) }));
       refreshListActivity(task.projectId);
     },
@@ -764,7 +848,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       return changeEditing(projectId, () => runWith ? api.resumeEditing(projectId, runWith) : api.resumeEditing(projectId));
     },
     async retryTask(taskId, runWith) {
-      const { task } = await api.retryTask(taskId, runWith);
+      const { task } = await logged("retried", api.retryTask(taskId, runWith), { retryOf: taskId, agent: runWith?.agent, model: runWith?.model });
       const current = get().current;
       if (current?.id !== task.projectId) return;
       // The new attempt can already have been claimed by the time the HTTP request returns.
@@ -777,19 +861,20 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
     },
     async answerTask(taskId, text, skillIds, runWith, files) {
       // Files attached to the answer go with it. Without any, the call is as it always was.
-      if (files) return taskAnswered(api.answerTask(taskId, text, skillIds, runWith, files));
-      return taskAnswered(runWith ? api.answerTask(taskId, text, skillIds, runWith) : api.answerTask(taskId, text, skillIds));
+      const fields = { task: taskId, chars: text.length, files: files?.attachments.length || undefined, agent: runWith?.agent, model: runWith?.model };
+      if (files) return taskAnswered(api.answerTask(taskId, text, skillIds, runWith, files), "answered", fields);
+      return taskAnswered(runWith ? api.answerTask(taskId, text, skillIds, runWith) : api.answerTask(taskId, text, skillIds), "answered", fields);
     },
     async holdForRewording(taskId, on) {
       // Letting go of a hold lets Scarlet start the request, and so does saving its new words. The socket may have it
       // claimed before this answer says "queued": that answer must not put a running request back in the tray.
-      return taskAnswered(api.holdForRewording(taskId, on));
+      return taskAnswered(api.holdForRewording(taskId, on), on ? "held-for-rewording" : "released-from-rewording", { task: taskId });
     },
     async startBeforeCalls(taskId) {
-      return taskAnswered(api.startBeforeCalls(taskId));
+      return taskAnswered(api.startBeforeCalls(taskId), "started-before-calls", { task: taskId });
     },
     async rewordTask(taskId, text, skillIds) {
-      return taskAnswered(api.rewordTask(taskId, text, skillIds));
+      return taskAnswered(api.rewordTask(taskId, text, skillIds), "reworded", { task: taskId, chars: text.length });
     },
     async loadTaskEvents(taskId, scope = "all") {
       const cur = get().current;

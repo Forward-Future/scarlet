@@ -178,16 +178,30 @@ export function openCutStream(video: HTMLVideoElement, segments: TimeRange[], st
       // Removing buffered media during a seek can strand WebKit at a cut even after the next section arrives.
       // Keep appending the destination and let seeked resume eviction in both directions.
       if (seekState === "landed" && !video.seeking) {
-        for (const index of ready) {
-          if ((index >= current - 1 && index <= current + ahead) || (loop && index === 0)) continue;
-          ready.delete(index);
-          const range = ranges[index]!;
-          playbackLog("stream evict", { id, section: index, at: current, t: position() });
-          // Removing through either seam can erase the next keyframe or trim the end of the
-          // preceding section. Keep its last samples when that section stays in the buffer.
-          const margin = Math.min(SECTION_EDGE, (range.end - range.start) / 3);
-          const keepPrevious = ready.has(index - 1);
-          buffer.remove(range.start + (keepPrevious ? margin : 0), range.end - margin);
+        const keep = (i: number) => (i >= current - 1 && i <= current + ahead) || (!!loop && i === 0);
+        const evict = [...ready].filter(i => !keep(i)).sort((a, b) => a - b);
+        if (evict.length) {
+          const kept = [...ready].filter(keep).sort((a, b) => a - b);
+          const first = evict[0]!;
+          let prevKept: number | undefined;
+          let nextKept: number | undefined;
+          for (const i of kept) {
+            if (i < first) prevKept = i;
+            else if (nextKept === undefined) nextKept = i;
+          }
+          const group = nextKept === undefined ? evict : evict.filter(i => i < nextKept);
+          for (const i of group) ready.delete(i);
+          // Removing through a kept seam can erase the next keyframe or trim the preceding section's tail.
+          // Sweep all the way from the prior kept seam (or 0) to the next kept seam (or end) so 1 ms
+          // margins left behind on earlier evictions never accumulate into orphaned ranges during playback.
+          const leftMargin = prevKept === undefined ? 0
+            : Math.min(SECTION_EDGE, (ranges[prevKept + 1]!.end - ranges[prevKept + 1]!.start) / 3);
+          const rightMargin = nextKept === undefined ? 0
+            : Math.min(SECTION_EDGE, (ranges[nextKept - 1]!.end - ranges[nextKept - 1]!.start) / 3);
+          const from = prevKept === undefined ? 0 : ranges[prevKept]!.end + leftMargin;
+          const to = nextKept === undefined ? ranges.at(-1)!.end : ranges[nextKept]!.start - rightMargin;
+          playbackLog("stream evict", { id, sections: group, from, to, at: current, t: position() });
+          buffer.remove(from, to);
           return;
         }
       }

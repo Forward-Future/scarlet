@@ -31,7 +31,7 @@ import {
   type TimelineOp,
   type TranscriptWord,
 } from "@scarlet/timeline";
-import { round3, summarizeTimelinePage } from "./analysis.js";
+import { FULL_TIMELINE_DEFAULTS, fullTimelinePage, round3, summarizeTimelinePage } from "./analysis.js";
 import { joinAudio } from "./dialogue-join.js";
 import { editReasonInput, makeIntentInput, timelineEditsInput } from "./mcp-schema.js";
 import { EDGES_IN_SOUND, type MediaSession, type SoundingEdge } from "./media-session.js";
@@ -77,11 +77,11 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
 
   tool(
     "timeline_get",
-    (authoring ? "Read the timeline version approved for the requested skill." : "Read a timeline version (default head).") + " summary: per track, each clip with id, label, timeline in–out (timecode), source range, speed, volume and fades, plus markers. Pass optional from/to (TIMELINE seconds) to read one stretch; long summaries page automatically with a from cursor. full: the complete Timeline JSON with every clip property (transforms, effects, caption styles). Clip ids are what ops reference. A media clip lasts (sourceOut - sourceIn) / speed on the timeline.",
+    (authoring ? "Read the timeline version approved for the requested skill." : "Read a timeline version (default head).") + ` summary: per track, each clip with id, label, timeline in–out (timecode), source range, speed, volume, fades, framing (scale, x, y, crops), effects and transition in, plus markers. Pass optional from/to (TIMELINE seconds) to read one stretch; long summaries page automatically with a from cursor. full: the Timeline JSON with every clip property (transforms, keyframes, effects, caption styles), taking from/to and paging the same way; ${FULL_TIMELINE_DEFAULTS} Read one stretch in full rather than the whole timeline. Clip ids are what ops reference. A media clip lasts (sourceOut - sourceIn) / speed on the timeline.`,
     { version: z.string().optional().describe(authoring ? "Defaults to the approved version" : "Version id; default head"),
       format: z.enum(["summary", "full"]).default("summary"),
-      from: z.number().finite().nonnegative().optional().describe("Optional start in TIMELINE seconds for summary format"),
-      to: z.number().finite().positive().optional().describe("Optional exclusive end in TIMELINE seconds for summary format") },
+      from: z.number().finite().nonnegative().optional().describe("Optional start in TIMELINE seconds"),
+      to: z.number().finite().positive().optional().describe("Optional exclusive end in TIMELINE seconds") },
     async ({ version, format, from, to }) => {
       if (authoring) {
         if (!authoring.changeId || (version && version !== authoring.version)) throw new Error("This skill reads only the approved timeline version.");
@@ -89,7 +89,7 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
       }
       if (from !== undefined && to !== undefined && to <= from) throw new Error("to must be greater than from.");
       const tl = await getTimeline(authoring?.version ?? version);
-      if (format === "full") return json(tl);
+      if (format === "full") return text(fullTimelinePage(tl, { from, to, maxChars: caps.resultChars ?? DEFAULT_RESULT_CHARS }));
       const project = await getHeader();
       return text(summarizeTimelinePage(tl, project.project.settings.fps, {
         from,
@@ -157,10 +157,11 @@ ${OPS_DOC}`,
       ops: z.array(z.record(z.unknown())).optional().describe("Operations to apply to the current head (see op types)"),
       timeline: z.record(z.unknown()).optional().describe("Full replacement Timeline JSON (use for initial assemblies); omit when using ops"),
       description: z.string().min(1).describe("One short sentence for the chat about what the editor will see or hear"),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("When this save makes several similar edits of the same kind (such as multiple cuts, graphics, zooms, or audio fixes), give a short plain-English group title summarizing them together for the edits list (e.g. '3 model title cards', '4 zooms on key moments', '2 cuts: false start & tangent'). Omit for a single edit or unrelated edits."),
       reason: editReasonInput.describe("Why you proposed the whole change. Give this for an unnamed edit or when several edits share one suggestion card."),
       noteIds: z.array(z.string()).optional().describe("Review note ids this change responds to"),
       fromVersion: z.string().optional().describe("Version the ops apply to. Defaults to the version you last read with timeline_get or timeline_at; leave it out unless you mean another version."),
-      range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive() }).optional().describe("Timeline range on the base version for synchronized ripple removals across all tracks, including local pauses."),
+      range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive() }).optional().describe("Only when every op in ops is rippleDelete across all tracks (without trackIds or pictureLayout): timeline range on the base version for synchronized ripple removals, including local pauses. Omit range for all other ops (addTrack, addClip, trim, overlays, framing); use timelineEdits to mark where non-ripple edits apply."),
       pictureLayout: z.union([z.object({ screenClipId: z.string(), cameraClipId: z.string(),
         presenter: InsetPresenter.optional(),
         framing: InsetFraming.optional(),
@@ -173,7 +174,7 @@ ${OPS_DOC}`,
       withdraws: z.array(z.string()).max(20).optional().describe("Change IDs of this request's own suggestions or alternatives, still waiting for the editor, that this one replaces, such as a draft or a test. They leave the editor's review when this one is saved."),
       layeredSound: z.boolean().optional().describe("The editor asked to hear the same moment of a recording on two clips at once. Leave it out otherwise"),
     },
-    async ({ ops, timeline, description, reason, noteIds, fromVersion, intent, autoApprove, timelineEdits, skipRender, range, pictureLayout, withdraws, layeredSound }) => {
+    async ({ ops, timeline, description, batchTitle, reason, noteIds, fromVersion, intent, autoApprove, timelineEdits, skipRender, range, pictureLayout, withdraws, layeredSound }) => {
       // Every clip edge the edit makes is measured on its recording, however the edit makes it: a ripple, a clip added
       // or trimmed, a whole new timeline. One pass built its video from added clips, which nothing measured, and began
       // a clip inside the end of an “uh”; the revision the editor then asked for trimmed that join by one frame, into
@@ -200,7 +201,7 @@ ${OPS_DOC}`,
       const before = fromVersion ? await peekTimeline(fromVersion) : await headTimelineOrNull();
       if (range && (typeof pictureLayout === "object" || !before || !ops || ops.some(o => o.op !== "rippleDelete" || o.trackIds)))
         throw new Error("A bounded ripple edit takes only rippleDelete ops across all tracks on the existing timeline.");
-      const body: ProposeChangeRequest = { description, reason, noteIds, intent, autoApprove: !taskId && autoApprove === true ? true : undefined, timelineEdits, skipRender,
+      const body: ProposeChangeRequest = { description, ...(batchTitle && { batchTitle }), reason, noteIds, intent, autoApprove: !taskId && autoApprove === true ? true : undefined, timelineEdits, skipRender,
         ...(withdraws?.length && { withdraws }) };
       const frameChanges: FrameAdjustment[] = [];
       let splitJoins: SplitJoinPlaced[] = [];
@@ -337,14 +338,15 @@ ${OPS_DOC}`,
       joins: z.array(z.object({ leftClipId: z.string(), rightClipId: z.string() })).min(1),
       duration: z.number().finite().positive().optional().describe("Total overlap in seconds"),
       description: z.string().min(1).default("Smooth the selected dialogue joins"),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("Short plain-English group title for the edits list when smoothing multiple joins (e.g. '6 smoothed dialogue joins')"),
       reason: editReasonInput,
       noteIds: z.array(z.string()).optional(),
     },
-    async ({ intent, joins, duration, description, reason, noteIds }) => {
+    async ({ intent, joins, duration, description, batchTitle, reason, noteIds }) => {
       const { project } = await getProject();
       const before = await baseTimeline();
       const ops = audioCrossfadeOps(before, project.media, joins, duration ?? 2 / project.settings.fps);
-      return propose({ intent, ops, description, reason, noteIds }, before);
+      return propose({ intent, ops, description, ...(batchTitle && { batchTitle }), reason, noteIds }, before);
     },
   );
 
@@ -360,10 +362,11 @@ ${OPS_DOC}`,
       color: z.string().optional().describe("dip: the colour it passes through, default black"),
       none: z.boolean().optional().describe("Take the transition off: the join is a straight cut again"),
       description: z.string().min(1).default("Transition between clips"),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("Short plain-English group title for the edits list when adding transitions to multiple joins (e.g. '4 cross dissolves between sections')"),
       reason: editReasonInput,
       noteIds: z.array(z.string()).optional(),
     },
-    async ({ intent, joins, type, duration, direction, color, none, description, reason, noteIds }) => {
+    async ({ intent, joins, type, duration, direction, color, none, description, batchTitle, reason, noteIds }) => {
       const { project } = await getProject();
       const before = await baseTimeline();
       let style: Transition | null = null;
@@ -372,7 +375,7 @@ ${OPS_DOC}`,
         style = Transition.parse({ type, duration: duration ?? 0.5, ...(direction && { direction }), ...(color && { color }) });
       }
       const { ops, report } = transitionOps(before, project.media, project.settings.fps, joins, style);
-      const result = await propose({ intent, ops, description, reason, noteIds }, before);
+      const result = await propose({ intent, ops, description, ...(batchTitle && { batchTitle }), reason, noteIds }, before);
       return { ...result, content: [...result.content, { type: "text" as const, text: `Joins:\n${report.join("\n")}` }] };
     },
   );

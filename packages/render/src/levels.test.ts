@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createProject, emptyTimeline, makeMediaClip, type Effect, type Project, type Timeline, type VolumeKeyframe } from "@scarlet/timeline";
 import { audioEffectDelay, effectFilters } from "./effects.js";
-import { runCapture, runFfmpeg } from "./exec.js";
+import { runCapture, runFfmpeg, resolveFfmpeg } from "./exec.js";
 import { buildFilterGraph, levelFilters } from "./graph.js";
 import { voiceModelFile, voiceModelText } from "./voiceModel.js";
 import { VOICE_MODEL_SHA256 } from "./voiceModelData.js";
@@ -46,7 +46,7 @@ describe("eq bands", () => {
     const ctx = { mediaRoot: os.tmpdir(), warn: () => {} };
     const filters = effectFilters([{ type: "eq", params: { bands: [{ frequency: -120, gain: 3 }, { frequency: 2_000_000, gain: -3 }] }, enabled: true }], "audio", ctx);
     expect(filters).toEqual(["equalizer=f=1:t=q:w=1:g=3", "equalizer=f=20000:t=q:w=1:g=-3"]);
-    await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=d=0.1:sample_rate=48000", "-af", filters.join(","), "-f", "null", "-"]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "sine=d=0.1:sample_rate=48000", "-af", filters.join(","), "-f", "null", "-"]);
   });
 });
 
@@ -63,7 +63,7 @@ describe("rendering moving levels and a cleaned voice", () => {
     try {
       await runFfmpeg(["-y", ...graph.args, "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "1", out]);
     } finally { await graph.cleanup(); }
-    const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-i", out, "-f", "s16le", "-ac", "1", "-ar", "48000", "-"]);
+    const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", out, "-f", "s16le", "-ac", "1", "-ar", "48000", "-"]);
     return new Int16Array(stdout.buffer, stdout.byteOffset, stdout.byteLength / 2);
   }
   const rms = (s: Int16Array, from: number, to: number) => {
@@ -75,7 +75,7 @@ describe("rendering moving levels and a cleaned voice", () => {
 
   it("dips a music bed by the keys' depth where they hold it down, and leaves it as it was either side", async () => {
     const music = path.join(dir, "music.wav");
-    await runCapture("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000:d=8", "-ac", "1", music]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000:d=8", "-ac", "1", music]);
     const project = createProject("Levels");
     project.media.push({ id: "music", kind: "audio", name: "music.wav", path: music, duration: 8, hasAudio: true });
     const timeline = emptyTimeline(project.id);
@@ -92,7 +92,7 @@ describe("rendering moving levels and a cleaned voice", () => {
   it("cleans the room out of the pauses of a voice and keeps it where the picture has it", async () => {
     // A voice-like buzz from 1 s to 2 s over steady noise.
     const voice = path.join(dir, "voice.wav");
-    await runCapture("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.03:r=48000:d=3:seed=7",
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=color=pink:amplitude=0.03:r=48000:d=3:seed=7",
       "-f", "lavfi", "-i", "aevalsrc='0.5*between(t,1,2)*sin(2*PI*140*t)*(1+0.6*sin(2*PI*5*t))*(0.6+0.4*sin(2*PI*700*t))':s=48000:d=3",
       "-filter_complex", "amix=inputs=2:normalize=0", "-ac", "1", voice]);
     const project = createProject("Voice");
@@ -115,7 +115,7 @@ describe("rendering moving levels and a cleaned voice", () => {
 
   it("plays a cleaned voice to the end of a cut that stops partway through its recording", async () => {
     const tone = path.join(dir, "tone.wav");
-    await runCapture("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:d=4", "-ac", "1", tone]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:d=4", "-ac", "1", tone]);
     const project = createProject("Tail");
     project.media.push({ id: "tone", kind: "audio", name: "tone.wav", path: tone, duration: 4, hasAudio: true });
     const plain = emptyTimeline(project.id);

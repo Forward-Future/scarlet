@@ -1,5 +1,5 @@
 import type { User } from "@scarlet/shared";
-import { diffTimelines, HistoryConflict, makeTimeMap, newId, planRevert, putBackCut, putBackLooks, putBackMarkers, putBackSplit, timelineDuration, type Change, type TimeRange } from "@scarlet/timeline";
+import { adjustCut, adjustEdit, diffTimelines, frameAligned, HistoryConflict, makeTimeMap, newId, planRevert, putBackCut, putBackLooks, putBackMarkers, putBackSplit, timelineDuration, type Change, type TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
@@ -202,6 +202,225 @@ export function rejectEdits(ctx: Ctx, user: User, projectId: string, threadId: s
         from: head, version: saved.version, branch,
         durationBefore: timelineDuration(timeline), durationAfter: timelineDuration(saved),
       } });
+    return { project: updated, change };
+  }, "immediate")();
+}
+
+/** An applied cut whose edges the editor dragged directly on the timeline. */
+export interface AdjustedCutTarget {
+  changeId: string;
+  spot: number;
+  label: string;
+  range: TimeRange;
+  at: number;
+  before: { version: string; removed: TimeRange };
+}
+
+/**
+ * Adjust an applied cut's edges directly with no model, moving only the clips meeting at its join and shifting
+ * everything after it. If both edges are pulled together to zero, delegates to `rejectEdits` to put the cut back whole.
+ * Refuses (`needs_scarlet`) when another edit spans the join or the footage no longer matches cleanly.
+ */
+export function adjustAppliedCut(ctx: Ctx, user: User, projectId: string, threadId: string, cut: AdjustedCutTarget,
+  nextRemoved: TimeRange, expectedHead: string, branch: string) {
+  return ctx.db.transaction(() => {
+    const project = ensureProjectHead(ctx, projectId);
+    const { head } = project, timeline = resolveTimeline(ctx, project);
+    if (head !== expectedHead || project.branch !== branch) throw conflict("cut_changed", "The video changed. Try again.");
+    const rate = project.settings.fps;
+    const unclear = () => conflict("needs_scarlet", "This cut can’t be adjusted directly. Use Revise instead.");
+    const before = ctx.repos.versions.get(projectId, cut.before.version)?.timeline;
+    if (!before) throw unclear();
+    const oldRemoved = cut.before.removed;
+    const oldLength = oldRemoved.end - oldRemoved.start;
+    if (oldLength <= 0.5 / rate) throw unclear();
+    const target = frameAligned(nextRemoved, rate);
+    const pullsToZero = target.end - target.start <= 0.5 / rate;
+    const deltaStart = target.start - oldRemoved.start;
+    const deltaEnd = target.end - oldRemoved.end;
+    if (!pullsToZero && Math.abs(deltaStart) < 0.5 / rate && Math.abs(deltaEnd) < 0.5 / rate) throw conflict("unchanged", "Cut edges did not move.");
+    const media = ctx.repos.projects.get(projectId)?.media;
+    const dur = timelineDuration(timeline);
+    const fullDelta = cut.at <= 0.5 / rate
+      ? { ds: 0, de: -oldLength }
+      : dur > 0.5 / rate && Math.abs(cut.at - dur) <= 0.5 / rate
+        ? { ds: oldLength, de: 0 }
+        : { ds: deltaStart, de: deltaEnd };
+    const result = pullsToZero
+      ? (putBackCut(timeline, cut.at, oldLength, rate) ?? adjustCut(timeline, cut.at, oldLength, fullDelta.ds, fullDelta.de, rate, media))
+      : adjustCut(timeline, cut.at, oldLength, deltaStart, deltaEnd, rate, media);
+    if (!result) throw unclear();
+    const newJoinAt = Math.max(0, cut.at + deltaStart);
+    const newLength = pullsToZero ? 0 : target.end - target.start;
+    const expectedDuration = timelineDuration(timeline) + (oldLength - newLength);
+    if (Math.abs(timelineDuration(result) - expectedDuration) > 1 / rate) throw unclear();
+    if (!pullsToZero) {
+      // Verify the footage still plays cleanly right up to the adjusted join on `before`'s clock.
+      const back = makeTimeMap(result, before, rate);
+      const leftEdge = newJoinAt > 0.5 / rate ? back(newJoinAt, "left") : 0;
+      const rightEdge = newJoinAt < timelineDuration(result) - 0.5 / rate ? back(newJoinAt, "right") : timelineDuration(before);
+      if (leftEdge === null || rightEdge === null || Math.abs(leftEdge - target.start) > 1.5 / rate || Math.abs(rightEdge - target.end) > 1.5 / rate) {
+        throw unclear();
+      }
+    }
+    const prior = ctx.repos.changes.get(cut.changeId);
+    const priorNamed = prior?.timelineEdits?.[cut.spot];
+    const author = actorFor(user);
+    const id = newId("chg");
+    const description = pullsToZero ? `Rejected · ${cut.label}` : `Adjusted · ${cut.label}`;
+    const saved = storeVersion(ctx, projectId, result, { parent: head, author, description, changeId: id });
+    const change: Change = {
+      id,
+      projectId,
+      description,
+      author,
+      decidedBy: author,
+      state: "approved",
+      threadId,
+      ...(pullsToZero && { rejects: true as const }),
+      fromVersion: head,
+      toVersion: saved.version,
+      appliedOnto: head,
+      appliedVersion: saved.version,
+      timelineEdits: [{
+        label: cut.label.slice(0, 180),
+        range: pullsToZero ? { start: cut.at, end: cut.at + oldLength } : { start: newJoinAt, end: newJoinAt },
+        ...(priorNamed?.reason && { reason: priorNamed.reason }),
+        ...(priorNamed?.summary && { summary: priorNamed.summary }),
+        ...(priorNamed?.check && { check: priorNamed.check }),
+        replaces: { changeId: cut.changeId, spot: cut.spot },
+      }],
+      ...(!pullsToZero && { leftOut: { version: cut.before.version, joins: [{ at: newJoinAt, removed: { start: target.start, end: target.end } }] } }),
+      noteIds: [],
+      renders: [],
+      ranges: diffTimelines(timeline, saved, rate).ranges,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    ctx.repos.changes.put(change);
+    const updated = ctx.repos.projects.update(projectId, { head: saved.version });
+    ctx.bus.publish({ type: "change.updated", projectId, change });
+    ctx.bus.publish({ type: "project.updated", projectId, project: updated });
+    logActivity(ctx, {
+      projectId,
+      actor: author,
+      type: pullsToZero ? "change.undone" : "change.adjusted",
+      summary: description,
+      data: {
+        changeId: id,
+        threadId,
+        replaces: { changeId: cut.changeId, spot: cut.spot },
+        from: head,
+        version: saved.version,
+        branch,
+        removedBefore: oldRemoved,
+        removedAfter: target,
+        durationBefore: timelineDuration(timeline),
+        durationAfter: timelineDuration(saved),
+      },
+    });
+    return { project: updated, change };
+  }, "immediate")();
+}
+
+/** A non-cut applied edit whose start/end edges the editor dragged directly on the timeline. */
+export interface AdjustedEditTarget {
+  changeId: string;
+  spot: number;
+  label: string;
+  range: TimeRange;
+  kind?: string;
+}
+
+function changeClipIds(change: Change | null | undefined): string[] | undefined {
+  if (!change?.ops?.length) return undefined;
+  const ids = new Set<string>();
+  for (const op of change.ops) {
+    if (op.op === "addClip" && op.clip && typeof op.clip === "object" && typeof (op.clip as { id?: unknown }).id === "string") {
+      ids.add((op.clip as { id: string }).id);
+    } else if (op.op === "updateClip" && typeof op.clipId === "string") {
+      ids.add(op.clipId);
+    }
+  }
+  return ids.size ? [...ids] : undefined;
+}
+
+/**
+ * Adjust any non-cut applied edit's start/end edges directly with no model: captions, B-roll, graphics, overlays,
+ * added audio clips, split-clip zooms/reframes/voice edits, music dips, and J/L split edits.
+ * Refuses (`needs_scarlet`) where the edit cannot be adjusted cleanly without Scarlet.
+ */
+export function adjustAppliedEdit(ctx: Ctx, user: User, projectId: string, threadId: string, edit: AdjustedEditTarget,
+  nextRange: TimeRange, expectedHead: string, branch: string) {
+  return ctx.db.transaction(() => {
+    const project = ensureProjectHead(ctx, projectId);
+    const { head } = project, timeline = resolveTimeline(ctx, project);
+    if (head !== expectedHead || project.branch !== branch) throw conflict("cut_changed", "The video changed. Try again.");
+    const rate = project.settings.fps;
+    const unclear = () => conflict("needs_scarlet", "This edit can’t be adjusted directly. Use Revise instead.");
+    const target = frameAligned(nextRange, rate);
+    const media = ctx.repos.projects.get(projectId)?.media;
+    const prior = ctx.repos.changes.get(edit.changeId);
+    const priorNamed = prior?.timelineEdits?.[edit.spot];
+    const clipIds = changeClipIds(prior);
+    const result = adjustEdit(timeline, edit.range, target, rate, media, { kind: edit.kind, clipIds });
+    if (!result) throw unclear();
+
+    const author = actorFor(user);
+    const id = newId("chg");
+    const rejected = !!result.removed;
+    const description = rejected ? `Rejected · ${edit.label}` : `Adjusted · ${edit.label}`;
+    const saved = storeVersion(ctx, projectId, result.timeline, { parent: head, author, description, changeId: id });
+    const change: Change = {
+      id,
+      projectId,
+      description,
+      author,
+      decidedBy: author,
+      state: "approved",
+      threadId,
+      ...(rejected && { rejects: true as const }),
+      fromVersion: head,
+      toVersion: saved.version,
+      appliedOnto: head,
+      appliedVersion: saved.version,
+      ops: result.ops as unknown as Array<Record<string, unknown>>,
+      timelineEdits: [{
+        label: edit.label.slice(0, 180),
+        range: rejected ? edit.range : result.range,
+        ...(priorNamed?.reason && { reason: priorNamed.reason }),
+        ...(priorNamed?.summary && { summary: priorNamed.summary }),
+        ...(priorNamed?.check && { check: priorNamed.check }),
+        replaces: { changeId: edit.changeId, spot: edit.spot },
+      }],
+      noteIds: [],
+      renders: [],
+      ranges: diffTimelines(timeline, saved, rate).ranges,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    ctx.repos.changes.put(change);
+    const updated = ctx.repos.projects.update(projectId, { head: saved.version });
+    ctx.bus.publish({ type: "change.updated", projectId, change });
+    ctx.bus.publish({ type: "project.updated", projectId, project: updated });
+    logActivity(ctx, {
+      projectId,
+      actor: author,
+      type: rejected ? "change.undone" : "change.adjusted",
+      summary: description,
+      data: {
+        changeId: id,
+        threadId,
+        replaces: { changeId: edit.changeId, spot: edit.spot },
+        from: head,
+        version: saved.version,
+        branch,
+        rangeBefore: edit.range,
+        rangeAfter: result.range,
+        durationBefore: timelineDuration(timeline),
+        durationAfter: timelineDuration(saved),
+      },
+    });
     return { project: updated, change };
   }, "immediate")();
 }

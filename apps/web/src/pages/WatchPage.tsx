@@ -4,7 +4,8 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { ThreadEdit } from "@scarlet/shared";
 import { isPlayableMedia, timelineDuration, type Change, type MediaAsset, type TimeRange, type Timeline } from "@scarlet/timeline";
-import { arrowSeekTime, blurOnPointerClick, handleCutArrow, isComposing, useHotkeys } from "../lib/hotkeys";
+import { arrowSeekTime, blurOnPointerClick, handleCutArrow, isComposing, isInEditableElement, useHotkeys } from "../lib/hotkeys";
+import { matchesShortcut } from "../stores/shortcuts";
 import { canPlayOriginal, isPreparingMedia } from "../lib/upload";
 import { useImportCount } from "../components/media/UploadDropzone";
 import { pauseForScrub, player, type ScrubRelease } from "../lib/player";
@@ -30,7 +31,7 @@ import { AmbientLight } from "../components/player/AmbientLight";
 import { cutFrameUrl, interactiveFrameUrl, scrubFrameUrl } from "../components/review/thumbs";
 import { EditBeforePreview, useEditBefore, type BeforePlayback } from "../components/review/EditBeforePreview";
 import { useApprovalComparison } from "../components/review/SideBySideComparison";
-import { PlayerTimeline, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
+import { PlayerTimeline, type CutAdjustOptions, type TimelineDot, type TimelineGap } from "../components/review/TimelineScrubber";
 import { BeforeToggle } from "../components/review/BeforeToggle";
 import type { CutPlaybackWindow, PreparedCut } from "../components/review/usePrepareNextCut";
 import { FramingPreview } from "../components/review/FramingPreview";
@@ -40,7 +41,7 @@ import { editFocus } from "../lib/editKind";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
 import { momentRange } from "../lib/editMoments";
 import { editKey } from "../lib/keptEdits";
-import { MAX_RATE, MIN_RATE, PlaybackSpeed, RATE_STEP, stepPlaybackRate } from "./watch/PlaybackSpeed";
+import { MAX_RATE, MIN_RATE, PlaybackSpeed, RATE_STEP, stepPlaybackRate, toggleFastPlaybackRate } from "./watch/PlaybackSpeed";
 import { ImportPreview } from "./watch/ImportPreview";
 import { CutSide, SelectedCutFrame } from "./watch/SelectedCutFrame";
 
@@ -114,6 +115,8 @@ interface PreviewProps {
     passageSkips?: TimeRange[];
     /** A click inside the shaded passage, when the playing side steps over it. */
     onBand?(time: number): void;
+    /** Hover-only edge drag on an open cut's band. */
+    cutAdjust?: CutAdjustOptions;
     /** Timeline navigation offers the point to the composer. N attaches it explicitly. */
     onPick?(point: AgentContext, how: "seek" | "n" | "pause" | "add"): void;
     /** Shift + click inserts a time and Shift + drag marks a stretch anywhere on the timeline (beta layout). */
@@ -515,33 +518,74 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   useHotkeys((e) => {
     if (!active || useUiStore.getState().notePopover) return;
     if (cutReview && handleCutArrow(e, stepCut)) return;
-    if (e.key === " ") {
+    if (matchesShortcut(e, "playPause")) {
       if (playingBefore) return;
       e.preventDefault();
       // Held down, Space is one press: its repeats would flutter between play and pause.
       if (playable && !e.repeat) player.toggle();
-    } else if (e.key.toLowerCase() === "l") {
+    } else if (matchesShortcut(e, "shuttleBack")) {
+      if (playingBefore || !playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) player.shuttleReverse();
+    } else if (matchesShortcut(e, "shuttleStop")) {
+      if (playingBefore || !playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) player.shuttleStop();
+    } else if (matchesShortcut(e, "shuttleForward")) {
+      if (playingBefore || !playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) player.shuttleForward();
+    } else if (matchesShortcut(e, "speedDown")) {
       if (!playable || isComposing(e)) return;
       e.preventDefault();
-      stepPlaybackRate(e.shiftKey ? -1 : 1, true);
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      stepPlaybackRate(-1, true);
+    } else if (matchesShortcut(e, "speedUp")) {
+      if (!playable || isComposing(e)) return;
+      e.preventDefault();
+      if (!e.repeat) toggleFastPlaybackRate();
+    } else if (matchesShortcut(e, "stepBack", { allowShift: true }) || matchesShortcut(e, "stepForward", { allowShift: true })) {
       e.preventDefault();
       if (!playable || duration <= 0) return;
-      const target = Math.max(0, Math.min(lastFrame, arrowSeekTime(usePlayerStore.getState().time, e.key, e.shiftKey, fps)));
+      const dir = matchesShortcut(e, "stepBack", { allowShift: true }) ? "ArrowLeft" : "ArrowRight";
+      const target = Math.max(0, Math.min(lastFrame, arrowSeekTime(usePlayerStore.getState().time, dir, e.shiftKey, fps)));
       seekFull(target);
       selectTime(target);
-    } else if (e.key.toLowerCase() === "m" && simple.onPick && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    } else if (matchesShortcut(e, "markFrame") && simple.onPick) {
       e.preventDefault();
       if (!e.repeat) markFrame();
-    } else if (e.key.toLowerCase() === "n") {
+    } else if (matchesShortcut(e, "aimChat")) {
       e.preventDefault();
       // Held down, N is one press too: it has already picked the moment and asked for the cursor.
       if (e.repeat) return;
-      player.pause();
+      player.pause(true);
       if (playable && duration > 0) selectTime(usePlayerStore.getState().time, "n");
       useUiStore.getState().focusComposer();
     }
   });
+  // Playhead shortcuts usable while typing in the chat box (⌘J / ⌘K / ⌘L by default, Ctrl on Windows/Linux).
+  useEffect(() => {
+    if (!active) return;
+    const onChatKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || isComposing(e) || playingBefore || !playable || useUiStore.getState().notePopover) return;
+      if (!isInEditableElement(e.target) || !e.target.closest(".composer-box")) return;
+      if (document.querySelector('dialog[open], [role="dialog"], [role="menu"]')) return;
+      if (matchesShortcut(e, "chatBack")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) player.shuttleReverse();
+      } else if (matchesShortcut(e, "chatPause")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) player.toggle();
+      } else if (matchesShortcut(e, "chatForward")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!e.repeat) player.shuttleForward();
+      }
+    };
+    window.addEventListener("keydown", onChatKey, true);
+    return () => window.removeEventListener("keydown", onChatKey, true);
+  }, [active, playable, playingBefore]);
   // A pause the editor makes aims an empty message box at that moment in its tag, without writing into the box.
   const pickOnPause = useRef(() => {});
   pickOnPause.current = () => {
@@ -587,7 +631,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       try { await stage.current.requestFullscreen(); } catch { setExpanded(true); }
     } else setExpanded(true);
   }
-  const view = draftVersion ? "Proposed edit" : source ? "Source preview" : hasCut ? "Working edit" : "Footage";
+  const view = draftVersion ? "Suggested video" : source ? "Source preview" : hasCut ? "The video" : "Footage";
   const resolveLeadIn = useCallback(() => {
     const rawTime = openingJoin && reviewCut ? reviewCut.start : usePlayerStore.getState().time;
     const targetTime = Math.max(0, Math.min(rawTime, lastFrame));
@@ -619,12 +663,12 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
               {before && (showBefore || allowStandby) && <div key={`before ${key}`} className="absolute inset-0" inert={!showBefore} data-parked={!showBefore || undefined}
                 style={{ zIndex: showBefore ? 1 : 0, ...!showBefore && { opacity: 0, pointerEvents: "none" } }} aria-hidden={!showBefore || undefined}>
                 <CutSide project={current.project} timeline={before} url={beforeUrl} window={beforeWindow}
-                  label={draftVersion ? "Proposed draft" : "The video"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
+                  label={draftVersion ? "Suggested video" : "The video"} fps={settings.fps} active={active} parkedAt={!showBefore ? leadIn : undefined} />
               </div>}
               {edited && (showAfter || allowStandby) && <div key="after" className="absolute inset-0" inert={!showAfter} data-parked={!showAfter || undefined}
                 style={{ zIndex: showAfter ? 1 : 0, ...!showAfter && { opacity: 0, pointerEvents: "none" } }} aria-hidden={!showAfter || undefined}>
                 <CutSide key={edited.joined.version} project={current.project} timeline={edited.joined.timeline} url={edited.url} window={afterWindow}
-                  joins={edited.joined.clock} label={edited.url ? "The video" : "Proposed draft"} fps={settings.fps} active={active}
+                  joins={edited.joined.clock} label={edited.url ? "The video" : "Suggested video"} fps={settings.fps} active={active}
                   parkedAt={!showAfter ? edited.joined.clock.toMedia(leadIn) : undefined} />
               </div>}
             </div>;
@@ -632,7 +676,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           {!paired && (openingJoin || (draftVersion && !draft && !fullVideoUrl && !joined) ? <div className="absolute inset-0 grid place-content-center gap-2 text-sm text-muted" role="status">
             {draftFailed ? <>Couldn’t open this version.<button className="btn-ghost" onClick={onRetryDraft}>Retry</button></>
               : !openingJoin && "Opening the suggestion…"}
-          </div> : fullVideoUrl ? <CachedVideo key={fullVideoUrl} url={fullVideoUrl} label={source?.name ?? (draftVersion ? "Proposed draft" : "The video")}
+          </div> : fullVideoUrl ? <CachedVideo key={fullVideoUrl} url={fullVideoUrl} label={source?.name ?? (draftVersion ? "Suggested video" : "The video")}
             hidden={false} active={active} autoPlay={!!source && autoPlaySource} joins={joined?.clock} />
           : joined ? <div className="absolute inset-0">
             <CutStream key={joined.version} project={current.project} timeline={joined.timeline} version={joined.version} joins={joined.clock} proposed onStart={noop} />
@@ -691,7 +735,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? laneTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             onAddTime={simple.shiftTimes && simple.onPick ? time => { seekFull(time); selectTime(time, "add"); } : undefined}
             range={simple.onRange ? shownRange : undefined} onRange={simple.onRange ? markRange : undefined} fps={fps}
-            typedTimes={simple.typedTimes} marks={simple.marks} fit={simple.fit} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand}
+            typedTimes={simple.typedTimes} marks={simple.marks} fit={simple.fit} gaps={simple.gaps} skippedRanges={simple.skippedRanges} onGap={simple.onGap} onBand={simple.onBand} cutAdjust={simple.cutAdjust}
             highlight={simple.focus ?? (selectedEdit ? editFocus(selectedEdit, duration) : undefined)} />
         </div>
       </div>}

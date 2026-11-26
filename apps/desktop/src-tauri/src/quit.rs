@@ -95,15 +95,22 @@ fn quit_now(app: &AppHandle) {
 
 /// Return the editor's choice if ending this session would stop work.
 pub async fn confirm_if_busy(app: &AppHandle, leaving: Leaving) -> bool {
-    let Some(state) = app.try_state::<AppState>() else { return true };
+    let doing = if leaving == Leaving::Quit { "quitting" } else { "restarting" };
+    let Some(state) = app.try_state::<AppState>() else {
+        log::info!("{doing} at once: Scarlet has not finished starting, so nothing is under way");
+        return true;
+    };
     let engine = state.engine.status();
     let said = match (engine.url.as_deref(), engine.token.as_deref()) {
         (Some(url), Some(token)) => under_way(url, token).await,
         _ => None,
     };
     let running_here = state.host.status().await.running.len();
-    let Some(asked) = warning(&what_would_stop(said, running_here), leaving) else { return true };
-    log::info!("asking before {}: {asked}", if leaving == Leaving::Quit { "quitting" } else { "restarting" });
+    let Some(asked) = warning(&what_would_stop(said, running_here), leaving) else {
+        log::info!("{doing} at once: nothing under way");
+        return true;
+    };
+    log::info!("asking before {doing}: {asked}");
     let (title, yes) = if leaving == Leaving::Quit { ("Quit Scarlet?", "Quit") } else { ("Restart Scarlet?", "Restart") };
     let dialog = app.dialog().message(asked).title(title)
         .kind(MessageDialogKind::Warning)
@@ -115,21 +122,28 @@ pub async fn confirm_if_busy(app: &AppHandle, leaving: Leaving) -> bool {
     };
     let (answer, received) = tokio::sync::oneshot::channel();
     dialog.show(move |yes| { let _ = answer.send(yes); });
-    received.await.unwrap_or(false)
+    let yes_answered = received.await.unwrap_or(false);
+    log::info!("asked before {doing}: the editor chose {}", if yes_answered { yes } else { "Cancel" });
+    yes_answered
 }
 
-/// Close the window or quit: ask first when that would stop work, and quit at once when it wouldn't.
-pub fn ask_before_quitting(app: &AppHandle) {
+/// Close the window or quit: ask first when that would stop work, and quit at once when it wouldn't. `via` says what
+/// asked to quit (the window or the menu), for the log.
+pub fn ask_before_quitting(app: &AppHandle, via: &'static str) {
     static ASKING: AtomicBool = AtomicBool::new(false);
     // Another ⌘W while Scarlet asks gets the same question.
     if ASKING.swap(true, Ordering::SeqCst) {
+        log::info!("quit requested via {via} while Scarlet is already asking; left to that question");
         return;
     }
+    log::info!("quit requested via {via}");
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if confirm_if_busy(&app, Leaving::Quit).await {
+            log::info!("quitting (requested via {via})");
             quit_now(&app);
         } else {
+            log::info!("quit cancelled; Scarlet stays open");
             ASKING.store(false, Ordering::SeqCst);
         }
     });

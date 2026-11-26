@@ -240,10 +240,12 @@ impl HostRuntime {
 
     #[cfg(test)]
     pub async fn run_task(&self, task: Task, cancel: CancellationToken) {
-        self.run_task_attempt(task, cancel, None, None).await
+        let _ = self.run_task_attempt(task, cancel, None, None).await;
     }
 
-    pub(super) async fn run_task_attempt(&self, task: Task, cancel: CancellationToken, run: Option<Arc<RunningTask>>, on_quota: Option<runner::QuotaSink>) {
+    /// Returns `true` when the attempt failed because the requested model is unavailable, so the host can refresh
+    /// the agent's model catalog in the background.
+    pub(super) async fn run_task_attempt(&self, task: Task, cancel: CancellationToken, run: Option<Arc<RunningTask>>, on_quota: Option<runner::QuotaSink>) -> bool {
         log::info!(
             "task {} ({}, {}{})",
             task.id,
@@ -252,14 +254,16 @@ impl HostRuntime {
             task.model.as_ref().map(|m| format!("/{m}")).unwrap_or_default()
         );
         if cancel.is_cancelled() {
-            return self.complete_attempt(&task, "cancelled", None, Some("host shutting down".into()), run.as_ref()).await;
+            self.complete_attempt(&task, "cancelled", None, Some("host shutting down".into()), run.as_ref()).await;
+            return false;
         }
 
         let prepared = match self.prepare(&task, false).await {
             Ok(p) => p,
             Err(e) => {
                 self.post_event(&task, "error", format!("Could not prepare task: {e}"), None).await;
-                return self.complete_attempt(&task, "failed", None, Some(e.to_string()), run.as_ref()).await;
+                self.complete_attempt(&task, "failed", None, Some(e.to_string()), run.as_ref()).await;
+                return false;
             }
         };
 
@@ -271,7 +275,8 @@ impl HostRuntime {
         // Persist the start before the CLI can have side effects. A dead desktop's unstarted claim can be resumed.
         let start = TaskEvent { task_id: Some(task.id.clone()), at: Some(now_iso()), kind: "log".into(), text: "Starting the editing agent.".into(), data: None };
         if let Err(e) = self.api.post_task_event(&task.id, task.started_at.as_deref(), &start).await {
-            return self.complete_attempt(&task, "failed", None, Some(e.to_string()), run.as_ref()).await;
+            self.complete_attempt(&task, "failed", None, Some(e.to_string()), run.as_ref()).await;
+            return false;
         }
         // Tokens so far, sent to the engine while the agent works, for the count beside Stop.
         let live = LiveUsage::start(self.api.clone(), task.id.clone(), task.started_at.clone());
@@ -317,7 +322,8 @@ impl HostRuntime {
                     live.stop().await;
                     self.record_usage(&task, usage.as_ref()).await;
                     self.post_event(&task, "error", format!("Could not prepare task: {e}"), None).await;
-                    return self.complete_attempt(&task, "failed", None, Some(e.to_string()), run.as_ref()).await;
+                    self.complete_attempt(&task, "failed", None, Some(e.to_string()), run.as_ref()).await;
+                    return false;
                 }
             }
             usage = usage::add_usage(usage, result.usage.clone());
@@ -331,12 +337,23 @@ impl HostRuntime {
         self.record_usage(&task, usage.as_ref()).await;
 
         match outcome(&result, cancel.is_cancelled(), self.timeout, self.stall) {
-            Outcome::Cancelled { summary } => self.complete_attempt(&task, "cancelled", summary, Some("cancelled".into()), run.as_ref()).await,
-            Outcome::Question(q) => self.ask_editor(&task, &q, result.session_id.as_deref(), &cancel, run.as_ref()).await,
-            Outcome::Done { summary } => self.complete_attempt(&task, "done", Some(summary), None, run.as_ref()).await,
+            Outcome::Cancelled { summary } => {
+                self.complete_attempt(&task, "cancelled", summary, Some("cancelled".into()), run.as_ref()).await;
+                false
+            }
+            Outcome::Question(q) => {
+                self.ask_editor(&task, &q, result.session_id.as_deref(), &cancel, run.as_ref()).await;
+                false
+            }
+            Outcome::Done { summary } => {
+                self.complete_attempt(&task, "done", Some(summary), None, run.as_ref()).await;
+                false
+            }
             Outcome::Failed { error, summary, stopped } => {
+                let model_unavailable = is_model_unavailable_error(&error);
                 self.post_event(&task, "error", error.clone(), None).await;
-                self.finish_attempt(&task, "failed", summary, Some(error), stopped, run.as_ref()).await
+                self.finish_attempt(&task, "failed", summary, Some(error), stopped, run.as_ref()).await;
+                model_unavailable
             }
         }
     }
@@ -397,6 +414,21 @@ fn log_question(task: &Task, outcome: &str) {
     let level = if outcome == "undelivered" { log::Level::Warn } else { log::Level::Info };
     let attempt = task.started_at.as_deref().unwrap_or("unknown");
     log::log!(level, "[host] question task={} attempt={attempt} outcome={outcome}", task.id);
+}
+
+/// True when an agent error reports that the selected model isn't available for this account/CLI.
+pub(super) fn is_model_unavailable_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    (lower.contains("model")
+        && (lower.contains("not found")
+            || lower.contains("not supported")
+            || lower.contains("not available")
+            || lower.contains("does not exist")
+            || lower.contains("may not exist")
+            || lower.contains("unavailable")
+            || lower.contains("not have access")))
+        || lower.contains("model_not_found")
+        || lower.contains("no such model")
 }
 
 /// What the host does with a run that has ended.

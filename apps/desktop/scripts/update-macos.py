@@ -8,12 +8,14 @@ import os
 import platform
 import plistlib
 import re
+import selectors
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -357,6 +359,7 @@ def check(attend):
         raise ValueError("Unexpected main revision")
     current = revision(APP)
     if PENDING.exists() and current == head:
+        attend.close()
         shutil.rmtree(PENDING)
     # A verified build that main has moved past stays installable until the newer one is verified.
     if current != head and not (PENDING.exists() and revision(PENDING) == head):
@@ -408,27 +411,37 @@ def install():
 
 
 class Offer:
-    """Only a verified pending build can accept a restart from the desktop UI."""
+    """Only a verified pending build can accept a restart from the desktop UI.
+
+    Serves `ready.sock` on a dedicated thread so status checks and restart requests are answered
+    immediately even while the main worker thread runs cleanup or build commands."""
 
     def __init__(self, commit):
         self.commit = commit
         self.address = CACHE / "ready.sock"
         self.address.unlink(missing_ok=True)
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._wake_r = self._wake_w = None
+        self._thread = None
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._action = None
+        self._handled = 0
+        self._seen = 0
+        self._closed = False
         try:
             self.listener.bind(str(self.address))
-            self.listener.listen(4)
+            self.listener.listen(16)
+            self.listener.setblocking(False)
+            self._wake_r, self._wake_w = socket.socketpair()
+            self._wake_r.setblocking(False)
+            self._thread = threading.Thread(target=self._serve, name="scarlet-offer", daemon=True)
+            self._thread.start()
         except OSError:
             self.close()
             raise
 
-    def poll(self, timeout):
-        """Answer one window. Return the action that needs the worker's attention, if any."""
-        self.listener.settimeout(max(0.01, timeout))
-        try:
-            client, _ = self.listener.accept()
-        except socket.timeout:
-            return None
+    def _handle(self, client):
         with client:
             client.settimeout(2)
             try:
@@ -440,25 +453,86 @@ class Offer:
                     client.sendall(b"ok\n")
                     if message != f"check {self.commit}\n".encode():
                         return "check"
-                elif message == f"restart {self.commit}\n".encode() and revision(PENDING) == self.commit:
-                    intent = CACHE / "restart"
-                    temp = intent.with_suffix(".tmp")
-                    temp.write_text(self.commit)
-                    temp.replace(intent)
+                elif message == f"restart {self.commit}\n".encode():
                     try:
-                        client.sendall(b"accepted\n")
-                    except OSError:
-                        intent.unlink(missing_ok=True)
-                        raise
-                    return "restart"
+                        matches = revision(PENDING) == self.commit
+                    except (OSError, ValueError):
+                        matches = False
+                    if matches:
+                        intent = CACHE / "restart"
+                        temp = intent.with_suffix(".tmp")
+                        temp.write_text(self.commit)
+                        temp.replace(intent)
+                        try:
+                            client.sendall(b"accepted\n")
+                        except OSError:
+                            intent.unlink(missing_ok=True)
+                            raise
+                        return "restart"
+                    client.sendall(b"stale\n")
                 else:
                     client.sendall(b"stale\n")
-            except OSError:
+            except (OSError, ValueError):
                 pass  # A window may close while its status check is in flight.
         return None
 
+    def _serve(self):
+        with selectors.DefaultSelector() as selector:
+            selector.register(self.listener, selectors.EVENT_READ, "accept")
+            selector.register(self._wake_r, selectors.EVENT_READ, "wake")
+            while not self._closed:
+                try:
+                    events = selector.select()
+                except OSError:
+                    break
+                for key, _ in events:
+                    if key.data == "wake":
+                        return
+                    while not self._closed:
+                        try:
+                            client, _ = self.listener.accept()
+                        except BlockingIOError:
+                            break
+                        except OSError:
+                            return
+                        action = self._handle(client)
+                        with self._lock:
+                            self._handled += 1
+                            if action == "restart":
+                                self._action = "restart"
+                            elif action == "check" and self._action != "restart":
+                                self._action = "check"
+                            self._cond.notify_all()
+                        if action == "restart":
+                            return
+
+    def poll(self, timeout):
+        """Wait up to `timeout` seconds for a window action, returning `"check"`, `"restart"`, or `None`."""
+        with self._lock:
+            if self._action is None and self._handled == self._seen and not self._closed:
+                self._cond.wait(max(0.01, timeout))
+            self._seen = self._handled
+            action, self._action = self._action, None
+            return action
+
     def close(self):
-        self.listener.close()
+        with self._lock:
+            self._closed = True
+            self._cond.notify_all()
+        if self._wake_w is not None:
+            try:
+                self._wake_w.sendall(b"\x00")
+            except OSError:
+                pass
+        if self._thread is not None and self._thread.is_alive() and self._thread is not threading.current_thread():
+            self._thread.join(timeout=5)
+        for sock in (self.listener, self._wake_r, self._wake_w):
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+        self._wake_r = self._wake_w = None
         self.address.unlink(missing_ok=True)
 
 

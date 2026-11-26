@@ -283,7 +283,7 @@ export function renderRoutes(ctx: Ctx) {
       const start = snapToFrame(body.range.start, fps);
       const end = snapToFrame(body.range.end, fps);
       if (start < 0 || end <= start || end > snapToFrame(timelineDuration(timeline), fps))
-        throw badRequest("invalid_export_range", "Choose at least one frame within the working edit.");
+        throw badRequest("invalid_export_range", "Choose at least one frame within the video.");
       body.range = { start, end };
     }
     if (body.owner && body.kind !== "export" && (body.kind !== "full" || body.range))

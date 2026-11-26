@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { applyOps, createProject, makeMediaClip, planPlaybackSegments, planSegments, spanningSections, timelineFromKeepRanges } from "@scarlet/timeline";
 import type { MediaClip, Project, Timeline } from "@scarlet/timeline";
 import * as ffmpeg from "./exec.js";
+import { resolveFfmpeg, resolveFfprobe } from "./exec.js";
 import {
   atempoFactors,
   assembleSegments,
@@ -71,8 +72,8 @@ it("exports picture and sound without source chapters, including when reassembli
   const metadata = path.join(dir, "synthetic-chapters.txt");
   await fs.writeFile(metadata, ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=500\ntitle=Fixture chapter\n");
   const source = path.join(dir, "chaptered.mp4");
-  await runCapture("ffmpeg", ["-v", "error", "-i", src, "-f", "ffmetadata", "-i", metadata, "-t", "1", "-map", "0:v:0", "-map", "0:a:0", "-map_chapters", "1", "-c", "copy", source]);
-  const chapters = async (file: string) => JSON.parse((await runCapture("ffprobe", ["-v", "error", "-show_chapters", "-of", "json", file])).stdout.toString()).chapters;
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-i", src, "-f", "ffmetadata", "-i", metadata, "-t", "1", "-map", "0:v:0", "-map", "0:a:0", "-map_chapters", "1", "-c", "copy", source]);
+  const chapters = async (file: string) => JSON.parse((await runCapture(resolveFfprobe(), ["-v", "error", "-show_chapters", "-of", "json", file])).stdout.toString()).chapters;
   expect(await chapters(source)).toHaveLength(1);
   const { project, timeline } = fixture();
   project.media[0]!.path = path.basename(source);
@@ -95,17 +96,17 @@ beforeAll(async () => {
   logo = path.join(dir, "logo.png");
   still = path.join(dir, "still.png");
   const common = ["-hide_banner", "-nostdin", "-loglevel", "error", "-y"];
-  await runCapture("ffmpeg", [
+  await runCapture(resolveFfmpeg(), [
     ...common,
     "-f", "lavfi", "-i", "testsrc2=duration=10:size=320x180:rate=30",
     "-f", "lavfi", "-i", "sine=frequency=440:duration=10",
     "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-shortest", src,
   ]);
-  await runCapture("ffmpeg", [
+  await runCapture(resolveFfmpeg(), [
     ...common, "-f", "lavfi", "-i", "color=c=red@0.5:s=64x64:d=0.1,format=rgba", "-frames:v", "1", "-update", "1", logo,
   ]);
-  await runCapture("ffmpeg", [
+  await runCapture(resolveFfmpeg(), [
     ...common, "-f", "lavfi", "-i", "color=c=blue:s=64x64:d=0.1,format=rgb24", "-frames:v", "1", "-update", "1", still,
   ]);
 });
@@ -168,7 +169,7 @@ async function probeOut(file: string) {
 }
 
 async function longestKeyframeGap(file: string, duration: number) {
-  const { stdout } = await runCapture("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_packets",
+  const { stdout } = await runCapture(resolveFfprobe(), ["-v", "error", "-select_streams", "v:0", "-show_packets",
     "-show_entries", "packet=pts_time,flags", "-of", "json", file]);
   const { packets } = JSON.parse(stdout.toString()) as { packets: { pts_time: string; flags: string }[] };
   const keys = packets.filter(p => p.flags.includes("K")).map(p => Number(p.pts_time));
@@ -192,13 +193,13 @@ it("exports a resized frame range with optional captions and an equally long aud
   const saved = async (omitCaptions: boolean) => {
     const file = path.join(dir, `export-captions-${omitCaptions}.mp4`);
     await renderFullCached(project, timeline, cache, file, { ...options, omitCaptions });
-    const meta = JSON.parse((await runCapture("ffprobe", ["-v", "error", "-show_entries",
+    const meta = JSON.parse((await runCapture(resolveFfprobe(), ["-v", "error", "-show_entries",
       "stream=codec_type,width,height,duration,nb_frames,start_time", "-of", "json", file])).stdout.toString()).streams;
     expect(meta[0]).toMatchObject({ codec_type: "video", width: 160, height: 90, nb_frames: "30" });
     expect(Number(meta[0].start_time)).toBeCloseTo(0, 4);
     expect(meta[1].codec_type).toBe("audio");
     expect(Number(meta[1].duration)).toBeCloseTo(1, 2);
-    return (await runCapture("ffmpeg", ["-v", "error", "-ss", "0.5", "-i", file, "-frames:v", "1", "-f", "md5", "-"])).stdout.toString();
+    return (await runCapture(resolveFfmpeg(), ["-v", "error", "-ss", "0.5", "-i", file, "-frames:v", "1", "-f", "md5", "-"])).stdout.toString();
   };
   expect(await saved(true)).not.toBe(await saved(false));
 });
@@ -302,7 +303,7 @@ describe("ffmpeg", () => {
 describe("probe", () => {
   it("recognizes a container's separate alpha plane even when ffprobe reports yuv420p", async () => {
     const file = path.join(dir, "tagged-alpha.mkv");
-    await runCapture("ffmpeg", ["-v", "error", "-i", src, "-t", "1", "-map", "0:v:0", "-c:v", "copy",
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-i", src, "-t", "1", "-map", "0:v:0", "-c:v", "copy",
       "-metadata:s:v:0", "alpha_mode=1", file]);
     expect(await probeMedia(file)).toMatchObject({ hasAlpha: true, pixFmt: "yuv420p" });
   });
@@ -324,7 +325,7 @@ describe("probe", () => {
 
   it("matches the displayed dimensions of rotated phone footage", async () => {
     const portrait = path.join(dir, "portrait.mp4");
-    await runCapture("ffmpeg", ["-v", "error", "-display_rotation", "90", "-i", src, "-c", "copy", portrait]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-display_rotation", "90", "-i", src, "-c", "copy", portrait]);
     expect(await probeMedia(portrait)).toMatchObject({ width: 180, height: 320, fps: 30 });
   });
 
@@ -348,7 +349,7 @@ describe("probe", () => {
 
   it("reads a sound file as audio with no picture, and leaves out what a file does not have", async () => {
     const sound = path.join(dir, "sound.wav");
-    await runCapture("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1.5:sample_rate=22050", "-ac", "1", sound]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1.5:sample_rate=22050", "-ac", "1", sound]);
     const p = await probeMedia(sound);
     expect([p.hasVideo, p.hasAudio, p.isStillImage, p.hasAlpha, p.fps, p.width, p.height, p.rotation]).toEqual([false, true, false, false, 0, 0, 0, 0]);
     expect([p.sampleRate, p.channels, p.audioCodec]).toEqual([22050, 1, "pcm_s16le"]);
@@ -399,7 +400,7 @@ it("keeps a flash and beep aligned when seeking in the original and the complete
   const original = path.join(dir, "sync-original.mp4");
   const proxy = path.join(dir, "sync-proxy.mp4");
   const pulses = "between(t,1,1.15)+between(t,4,4.15)";
-  await runCapture("ffmpeg", ["-v", "error", "-y",
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-y",
     "-f", "lavfi", "-i", `color=black:s=128x72:r=30:d=6,drawbox=color=white:t=fill:enable='${pulses}'`,
     "-f", "lavfi", "-i", `aevalsrc='0.8*sin(2*PI*1000*t)*(${pulses})':s=48000:d=6`,
     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", "-shortest", original]);
@@ -413,8 +414,8 @@ it("keeps a flash and beep aligned when seeking in the original and the complete
   for (const file of [original, proxy, gpuProxy]) {
     for (const seek of [3.5, 0.5]) {
       const input = ["-v", "error", "-ss", String(seek), "-i", file, "-t", "0.8"];
-      const video = await runCapture("ffmpeg", [...input, "-an", "-vf", "scale=2:2,format=gray", "-f", "rawvideo", "-"]);
-      const audio = await runCapture("ffmpeg", [...input, "-vn", "-ar", "48000", "-ac", "1", "-f", "s16le", "-"]);
+      const video = await runCapture(resolveFfmpeg(), [...input, "-an", "-vf", "scale=2:2,format=gray", "-f", "rawvideo", "-"]);
+      const audio = await runCapture(resolveFfmpeg(), [...input, "-vn", "-ar", "48000", "-ac", "1", "-f", "s16le", "-"]);
       const flash = video.stdout.findIndex((v, i) => i % 4 === 0 && v > 200) / 4 / 30;
       let beep = -1;
       for (let i = 0; i + 1 < audio.stdout.length; i += 2) {
@@ -428,7 +429,7 @@ it("keeps a flash and beep aligned when seeking in the original and the complete
 
 it("keeps a delayed microphone aligned with the picture in a preview and a delivery", async () => {
   const input = path.join(dir, "delayed-microphone.mp4");
-  await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i",
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i",
     "color=black:s=64x64:r=30:d=1.5,drawbox=color=white:t=fill:enable='gte(t,0.5)'",
     "-itsoffset", "0.5", "-f", "lavfi", "-i", "sine=frequency=440:duration=1:sample_rate=48000",
     "-c:v", "libx264", "-c:a", "aac", input]);
@@ -441,8 +442,8 @@ it("keeps a delayed microphone aligned with the picture in a preview and a deliv
     if (quality === "delivery") await renderFullCached(project, timeline, path.join(dir, "delayed-cache"), output, { mediaRoot: dir, quality });
     else await renderRange(project, timeline, range, output, { mediaRoot: dir, quality });
     const decode = ["-v", "error", "-i", output];
-    const video = await runCapture("ffmpeg", [...decode, "-an", "-vf", "scale=2:2,format=gray", "-f", "rawvideo", "-"]);
-    const audio = await runCapture("ffmpeg", [...decode, "-vn", "-ar", "48000", "-ac", "1", "-f", "s16le", "-"]);
+    const video = await runCapture(resolveFfmpeg(), [...decode, "-an", "-vf", "scale=2:2,format=gray", "-f", "rawvideo", "-"]);
+    const audio = await runCapture(resolveFfmpeg(), [...decode, "-vn", "-ar", "48000", "-ac", "1", "-f", "s16le", "-"]);
     const flash = video.stdout.findIndex((v,i) => i % 4 === 0 && v > 200) / 4 / 30;
     let tone = -1;
     for (let i = 0; i < audio.stdout.length; i += 2) {
@@ -457,7 +458,7 @@ it("handles cancellation while FFmpeg is writing a proxy checkpoint", async () =
   const input = path.join(dir, "cancel-proxy-source.mp4");
   const output = path.join(dir, "cancel-proxy-output.mp4");
   const checkpointDir = path.join(dir, "cancel-proxy-parts");
-  await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=30:d=32",
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=30:d=32",
     "-c:v", "libx264", input]);
   const controller = new AbortController();
   // The first progress report comes from FFmpeg, before the checkpoint is published.
@@ -470,7 +471,7 @@ it("handles cancellation while FFmpeg is writing a proxy checkpoint", async () =
 
 it("reuses the last completed proxy section after interruption and preserves the audio clock", async () => {
   const input = path.join(dir, "long.mp4"), output = path.join(dir, "preview.mp4");
-  await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=30000/1001:d=32",
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=30000/1001:d=32",
     "-f", "lavfi", "-i", "sine=d=32", "-c:v", "libx264", "-c:a", "aac", input]);
   const controller = new AbortController(), checkpointDir = path.join(dir, "parts");
   const part = path.join(checkpointDir, "libx264-32", "0.mp4");
@@ -488,20 +489,20 @@ it("reuses the last completed proxy section after interruption and preserves the
   const [original, proxy] = await Promise.all([probeMedia(input), probeMedia(output)]);
   expect(proxy.hasAudio).toBe(true);
   expect(proxy.duration).toBeCloseTo(original.duration, 1);
-  const count = (file: string) => runCapture("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries",
+  const count = (file: string) => runCapture(resolveFfprobe(), ["-v", "error", "-select_streams", "v:0", "-show_entries",
     "stream=nb_frames", "-of", "csv=p=0", file]).then(result => result.stdout.toString().trim());
   expect(await count(output)).toBe(await count(input));
 });
 
 function pictureTimes(file: string) {
-  return runCapture("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries",
+  return runCapture(resolveFfprobe(), ["-v", "error", "-select_streams", "v:0", "-show_entries",
     "frame=pts_time", "-of", "csv=p=0", file]).then(result => result.stdout.toString().split("\n").filter(Boolean).map(parseFloat));
 }
 
 it("resumes a recording whose frame rate drifts and keeps each picture at its source time", async () => {
   // A phone recording at 29.97 that drops two pictures before it ends: its measured rate no longer matches the declared one.
   const input = path.join(dir, "drifting.mp4"), output = path.join(dir, "drifting-preview.mp4");
-  await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=30000/1001:d=32",
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=30000/1001:d=32",
     "-f", "lavfi", "-i", "sine=d=32", "-vf", "select='not(between(n\\,950\\,951))'", "-fps_mode", "passthrough",
     "-c:v", "libx264", "-c:a", "aac", input]);
   const source = await probeMedia(input);
@@ -524,7 +525,7 @@ it("resumes a recording whose frame rate drifts and keeps each picture at its so
 
 it("keeps every later picture when a screen recording holds one frame across an entire checkpoint", async () => {
   const input = path.join(dir, "sparse-screen.mp4"), output = path.join(dir, "sparse-proxy.mp4");
-  await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=10:d=72",
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=10:d=72",
     "-f", "lavfi", "-i", "sine=d=72", "-vf", "select='lt(t,1)+gt(t,65)'", "-fps_mode", "passthrough", "-c:v", "libx264", "-c:a", "aac", input]);
   const checkpointDir = path.join(dir, "sparse-parts"), want = await pictureTimes(input);
   expect(want).toHaveLength(79);
@@ -540,7 +541,7 @@ it("keeps every later picture when a screen recording holds one frame across an 
 
 it("keeps the first picture on its source tick when sound leads by more than a checkpoint", async () => {
   const input = path.join(dir, "late-camera.mp4"), output = path.join(dir, "late-camera-proxy.mp4");
-  await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=30000/1001:d=32",
+  await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=32x32:r=30000/1001:d=32",
     "-f", "lavfi", "-i", "sine=d=68", "-vf", "setpts=PTS+1057", "-fps_mode", "passthrough",
     "-movie_timescale", "1000000", "-c:v", "libx264", "-c:a", "aac", input]);
   await makeProxy(input, output, { height: 32, checkpointDir: path.join(dir, "late-camera-parts") });
@@ -572,7 +573,7 @@ describe("waveform", () => {
   it("streams fractional waveform buckets with identical peaks, RMS and silence after the audio ends", async () => {
     // PCM has no decoder priming offset between a range seek to zero and full-file decoding.
     const pcm = path.join(dir, "waveform.wav");
-    await runCapture("ffmpeg", ["-v", "error", "-y", "-i", src, "-vn", "-ac", "1", "-ar", "8000", "-c:a", "pcm_s16le", pcm]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-y", "-i", src, "-vn", "-ac", "1", "-ar", "8000", "-c:a", "pcm_s16le", pcm]);
     const pointsPerSecond = 53;
     const cache = await extractWaveformFull(pcm, 10.137, pointsPerSecond);
     const duration = (await probeMedia(pcm)).duration;
@@ -678,7 +679,7 @@ describe("pure helpers", () => {
     }
     expect(encoderArgs("libx265", "preview")).toEqual(encoderArgs("libx264", "preview"));
     // The flags are ones ffmpeg takes, and delivery spends more bits on the same picture.
-    const bytes = async (quality: "preview" | "delivery") => (await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=1",
+    const bytes = async (quality: "preview" | "delivery") => (await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=1",
       "-c:v", "libx264", ...encoderArgs("libx264", quality), "-pix_fmt", "yuv420p", "-f", "h264", "-"])).stdout.length;
     expect(await bytes("delivery")).toBeGreaterThan(await bytes("preview"));
   });
@@ -695,7 +696,7 @@ describe("pure helpers", () => {
       const name = String.raw`C:\grade.cube`;
       await fs.writeFile(path.join(mediaRoot, name), "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n");
       const [filter] = effectFilters([{ type: "lut", enabled: true, params: { file: name } }], "video", { mediaRoot, warn: () => {} });
-      await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", `color=red:s=16x16:d=0.1,${filter}`, "-f", "null", "-"]);
+      await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", `color=red:s=16x16:d=0.1,${filter}`, "-f", "null", "-"]);
     }
   });
 
@@ -800,7 +801,7 @@ describe("render", () => {
     await fs.writeFile(lut, "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n");
     const filter = (params: Record<string, unknown>) => effectFilters([{ type: "lut", enabled: true, params }], "video", { mediaRoot, warn: () => {} })[0];
     for (const params of [{ file: name }, { path: lut, interp: "trilinear" }]) {
-      const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", `color=red:s=16x16:d=0.1,${filter(params)}`, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
+      const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", `color=red:s=16x16:d=0.1,${filter(params)}`, "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
       expect(stdout[0]).toBeGreaterThan(245);
       expect(stdout[1]).toBeLessThan(5);
     }
@@ -817,7 +818,7 @@ describe("render", () => {
       expect(() => filter({ file: "external.cube" })).toThrow(/project media/);
       const literal = String.raw`..\alternate.cube`;
       await fs.copyFile(lut, path.join(mediaRoot, literal));
-      await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", `color=red:s=16x16:d=0.1,${filter({ file: literal })}`, "-f", "null", "-"]);
+      await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", `color=red:s=16x16:d=0.1,${filter({ file: literal })}`, "-f", "null", "-"]);
     }
   });
 
@@ -880,7 +881,7 @@ describe("render", () => {
   it("keeps a clip stored sideways off the GPU downscale, which would not turn it", async () => {
     const { project, timeline } = fixture();
     // A phone's portrait video: the same landscape stream, with a note to show it turned.
-    await runCapture("ffmpeg", ["-v", "error", "-display_rotation", "90", "-i", src, "-c", "copy", path.join(dir, "sideways.mp4")]);
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-display_rotation", "90", "-i", src, "-c", "copy", path.join(dir, "sideways.mp4")]);
     Object.assign(project.media[0]!, { path: "sideways.mp4", width: 180, height: 320, hasAlpha: false, originalPlaybackType: 'video/mp4; codecs="avc1,mp4a.40.2"' });
     // The portrait canvas matches the turned picture, so everything but the rotation asks for the GPU.
     const graph = await buildFilterGraph(project, timeline, { start: 0, end: 1 }, { mediaRoot: dir, width: 90, height: 160, decoder: "cuda" });
@@ -942,7 +943,7 @@ describe("render", () => {
 
   it("reveals the underlying picture when the upper video stream ends before its audio", async () => {
     const source = path.join(dir, "trailing-audio.mp4");
-    await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=red:s=64x64:r=30:d=1",
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "color=red:s=64x64:r=30:d=1",
       "-f", "lavfi", "-i", "anullsrc=r=48000:d=2", "-c:v", "libx264", "-c:a", "aac", source]);
     const project = createProject("Layers", { width: 64, height: 64 });
     project.media.push({ id: "top", kind: "video", name: "top", path: source, duration: 2,
@@ -952,7 +953,7 @@ describe("render", () => {
       clips: [{ kind: "color", id: "card", enabled: true, color: "blue", opacity: 1, timelineIn: 0, timelineOut: 2 }] });
     const output = path.join(dir, "trailing-audio-delivery.mp4");
     await renderFullCached(project, timeline, path.join(dir, "trailing-audio-cache"), output, { mediaRoot: dir, quality: "delivery" });
-    const pixel = async (time: number) => (await runCapture("ffmpeg", ["-v", "error", "-ss", String(time), "-i", output,
+    const pixel = async (time: number) => (await runCapture(resolveFfmpeg(), ["-v", "error", "-ss", String(time), "-i", output,
       "-an", "-frames:v", "1", "-vf", "scale=1:1,format=rgb24", "-f", "rawvideo", "-"])).stdout;
     expect((await pixel(0.5))[0]).toBeGreaterThan(240);
     expect((await pixel(1.5))[2]).toBeGreaterThan(240);
@@ -960,7 +961,7 @@ describe("render", () => {
 
   it("exports at original quality with the software encoder and 320 kb/s sound, in a cache of its own", async () => {
     const source = path.join(dir, "best-source.mp4");
-    await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=128x72:r=30:d=2",
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=128x72:r=30:d=2",
       "-f", "lavfi", "-i", "anoisesrc=r=48000:d=2:a=0.5", "-ac", "2", "-c:v", "libx264", "-c:a", "aac", "-b:a", "512k", source]);
     const project = createProject("Best", { width: 128, height: 72 });
     project.media.push({ id: "cam", kind: "video", name: "cam", path: source, duration: 2,
@@ -968,7 +969,7 @@ describe("render", () => {
     // Two pieces, so the export encodes rather than copying the original picture.
     const timeline = timelineFromKeepRanges(project.id, "cam", [{ start: 0, end: 0.8 }, { start: 1.2, end: 2 }]);
     const cache = path.join(dir, "best-cache");
-    const audioRate = async (file: string) => Number(JSON.parse((await runCapture("ffprobe", ["-v", "error", "-select_streams", "a:0",
+    const audioRate = async (file: string) => Number(JSON.parse((await runCapture(resolveFfprobe(), ["-v", "error", "-select_streams", "a:0",
       "-show_entries", "stream=bit_rate", "-of", "json", file])).stdout.toString()).streams[0].bit_rate);
     const best = await renderFullCached(project, timeline, cache, path.join(dir, "best.mp4"),
       { mediaRoot: dir, quality: "delivery", hwaccel: "auto", best: true });
@@ -988,7 +989,7 @@ describe("render", () => {
 
   it("shows a delayed camera only during its picture stream and preserves the earlier sound", async () => {
     const source = path.join(dir, "delayed-camera.mp4");
-    await runCapture("ffmpeg", ["-v", "error", "-itsoffset", "0.5", "-f", "lavfi", "-i", "color=red:s=64x64:r=30:d=1",
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-itsoffset", "0.5", "-f", "lavfi", "-i", "color=red:s=64x64:r=30:d=1",
       "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:d=1.5", "-fps_mode:v", "passthrough", "-c:v", "libx264", "-c:a", "aac", source]);
     const project = createProject("Camera offset", { width: 64, height: 64 });
     project.media.push({ id: "top", kind: "video", name: "top", path: source, duration: 1.5,
@@ -1000,12 +1001,12 @@ describe("render", () => {
       const output = path.join(dir, `delayed-camera-${start}.mp4`);
       await renderRange(project, timeline, { start, end: 1.5 }, output, { mediaRoot: dir, quality: "preview" });
       const decode = ["-v", "error", "-i", output];
-      const { stdout } = await runCapture("ffmpeg", [...decode, "-an", "-vf", "scale=1:1,format=rgb24", "-f", "rawvideo", "-"]);
+      const { stdout } = await runCapture(resolveFfmpeg(), [...decode, "-an", "-vf", "scale=1:1,format=rgb24", "-f", "rawvideo", "-"]);
       const pixel = (t: number, channel: number) => stdout[Math.round((t - start) * 30) * 3 + channel];
       expect(pixel(start + 0.1, 2)).toBeGreaterThan(240);
       expect(pixel(0.6, 0)).toBeGreaterThan(240);
       expect(pixel(1.25, 0)).toBeGreaterThan(240);
-      const sound = await runCapture("ffmpeg", [...decode, "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]);
+      const sound = await runCapture(resolveFfmpeg(), [...decode, "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]);
       const firstTone = new Int16Array(sound.stdout.buffer, sound.stdout.byteOffset, sound.stdout.length / 2)
         .findIndex(sample => Math.abs(sample) > 1000);
       expect(firstTone).toBeGreaterThanOrEqual(0);
@@ -1020,19 +1021,19 @@ describe("render", () => {
     const run = await renderFullCached(project, timeline, cacheDir, path.join(dir, "run.mp4"), { mediaRoot: dir, height: 180, segmentSeconds: 1 });
     expect(run.segments.length).toBeGreaterThan(2);
     expect(run.rendered).toBe(run.segments.length);
-    // One encode for every section, plus the concat.
-    expect(spawnStats.ffmpeg - before).toBe(2);
-    const frames = async (file: string) => Number((await runCapture("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0",
+    // One encode for every section, the continuous program audio, and the concat.
+    expect(spawnStats.ffmpeg - before).toBe(3);
+    const frames = async (file: string) => Number((await runCapture(resolveFfprobe(), ["-v", "error", "-count_frames", "-select_streams", "v:0",
       "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", file])).stdout.toString().trim());
     const samples = async (file: string) =>
-      (await runCapture("ffmpeg", ["-v", "error", "-i", file, "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])).stdout.length / 2;
+      (await runCapture(resolveFfmpeg(), ["-v", "error", "-i", file, "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"])).stdout.length / 2;
     for (const [k, segment] of run.segments.entries()) {
       const alone = path.join(dir, `alone-${k}.mp4`);
       await renderRange(project, timeline, segment.range, alone, { mediaRoot: dir, quality: "preview", height: 180 });
       expect(await frames(segment.file)).toBe(await frames(alone));
       // Same pictures in the same order. Only an animated position exactly on a pixel
       // boundary may round differently, because the shared clock reads t a few ulps off.
-      const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-i", segment.file, "-i", alone, "-lavfi", "[0:v][1:v]psnr=stats_file=-", "-f", "null", "-"]);
+      const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", segment.file, "-i", alone, "-lavfi", "[0:v][1:v]psnr=stats_file=-", "-f", "null", "-"]);
       const psnr = stdout.toString().split("\n").filter(Boolean).map(line => Number(/psnr_avg:(\S+)/.exec(line)![1]!.replace("inf", "Infinity")));
       expect(Math.min(...psnr)).toBeGreaterThan(35);
       const [a, b] = await Promise.all([samples(segment.file), samples(alone)]);
@@ -1098,7 +1099,7 @@ describe("render", () => {
       const graph = await buildFilterGraph(project, timeline, range, { mediaRoot: dir, pictureOnly: true });
       try {
         if (inputLoops !== undefined) expect(graph.args.includes("-loop")).toBe(inputLoops);
-        const { stdout } = await runCapture("ffmpeg", ["-v", "error", ...graph.args, "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
+        const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", ...graph.args, "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
         expect(stdout.length).toBe(Math.round((range.end - range.start) * project.settings.fps) * size);
         return Array.from({ length: stdout.length / size }, (_, frame) => stdout.subarray(frame * size, (frame + 1) * size));
       } finally { await graph.cleanup(); }
@@ -1111,13 +1112,13 @@ describe("render", () => {
 
     beforeAll(async () => {
       for (const colour of ["red", "blue"]) {
-        await runCapture("ffmpeg", [...common, "-f", "lavfi", "-i", `color=c=${colour}:s=64x64:r=30:d=4`, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path.join(dir, `${colour}.mp4`)]);
+        await runCapture(resolveFfmpeg(), [...common, "-f", "lavfi", "-i", `color=c=${colour}:s=64x64:r=30:d=4`, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path.join(dir, `${colour}.mp4`)]);
       }
       // The GIF turns blue after its first picture, and a still shows only the first.
-      await runCapture("ffmpeg", [...common, "-f", "lavfi", "-i", "color=c=red:s=64x64:r=10:d=0.1", "-f", "lavfi", "-i", "color=c=blue:s=64x64:r=10:d=0.9",
+      await runCapture(resolveFfmpeg(), [...common, "-f", "lavfi", "-i", "color=c=red:s=64x64:r=10:d=0.1", "-f", "lavfi", "-i", "color=c=blue:s=64x64:r=10:d=0.9",
         "-filter_complex", "[0][1]concat=n=2", path.join(dir, "blink.gif")]);
-      await runCapture("ffmpeg", [...common, "-i", path.join(dir, "red.mp4"), "-frames:v", "1", "-c", "copy", path.join(dir, "one.mp4")]);
-      await runCapture("ffmpeg", [...common, "-f", "lavfi", "-i", "color=c=red:s=64x64:d=0.1,format=rgb24", "-frames:v", "1", "-update", "1", path.join(dir, "red.png")]);
+      await runCapture(resolveFfmpeg(), [...common, "-i", path.join(dir, "red.mp4"), "-frames:v", "1", "-c", "copy", path.join(dir, "one.mp4")]);
+      await runCapture(resolveFfmpeg(), [...common, "-f", "lavfi", "-i", "color=c=red:s=64x64:d=0.1,format=rgb24", "-frames:v", "1", "-update", "1", path.join(dir, "red.png")]);
     });
 
     it("shows no background between two clips, whichever frame the cut is on", async () => {
@@ -1180,7 +1181,7 @@ describe("render", () => {
       const encoders = await ffmpeg.ffmpegEncoders();
       const av1 = ["libsvtav1", "libaom-av1", "librav1e"].find(name => encoders.has(name));
       if (!av1) return ctx.skip();
-      await runCapture("ffmpeg", [...common, "-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", "-c:v", av1, "-pix_fmt", "yuv420p", path.join(dir, "red.avif")]);
+      await runCapture(resolveFfmpeg(), [...common, "-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", "-c:v", av1, "-pix_fmt", "yuv420p", path.join(dir, "red.avif")]);
       const kind = detectMediaKind(await probeMedia(path.join(dir, "red.avif")));
       expect(kind).toBe("image");
       stills.media = [{ id: "still", kind, name: "red.avif", path: "red.avif", hasAlpha: false }];
@@ -1332,7 +1333,7 @@ describe("render", () => {
       const output = path.join(dir, "between-frames.mp4");
       const exported = await renderFullCached(stills, takes, path.join(dir, "between-frames-cache"), output, { mediaRoot: dir, quality: "delivery", segmentSeconds: 4 });
       expect(exported.segments.map(segment => segment.range)).toEqual(sections);
-      const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-i", output, "-an", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
+      const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", output, "-an", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]);
       expect(centres(Array.from({ length: stdout.length / size }, (_, frame) => stdout.subarray(frame * size, (frame + 1) * size)))).toBe(whole);
       // The one frame the timeline shows at the cut is the first take's as well.
       const frame = { start: 3.5, end: 3.5 + 1 / 30 };
@@ -1376,7 +1377,7 @@ describe("render", () => {
       const silent = async (timeline: Timeline, range: { start: number; end: number }) => {
         const graph = await buildFilterGraph(project, timeline, range, { mediaRoot: dir });
         try {
-          const { stdout } = await runCapture("ffmpeg", ["-v", "error", ...graph.args.slice(0, graph.args.indexOf("-map")),
+          const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", ...graph.args.slice(0, graph.args.indexOf("-map")),
             "-map", "[vout]", "-f", "null", "-", "-map", "[aout]", "-ac", "1", "-f", "s16le", "pipe:1"]);
           expect(stdout.length).toBe(Math.round((range.end - range.start) * 48000) * 2);
           const quiet: number[] = [];
@@ -1405,7 +1406,7 @@ describe("render", () => {
       const heard = async (timeline: Timeline, range: { start: number; end: number }) => {
         const graph = await buildFilterGraph(project, timeline, range, { mediaRoot: dir });
         try {
-          const { stdout } = await runCapture("ffmpeg", ["-v", "error", ...graph.args.slice(0, graph.args.indexOf("-map")),
+          const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", ...graph.args.slice(0, graph.args.indexOf("-map")),
             "-map", "[vout]", "-f", "null", "-", "-map", "[aout]", "-ac", "1", "-f", "s16le", "pipe:1"]);
           expect(stdout.length).toBe(Math.round((range.end - range.start) * 48000) * 2);
           let loud = 0;
@@ -1427,7 +1428,7 @@ describe("render", () => {
     it("shows footage at another rate, or played at another speed, on exactly its clip's frames", async () => {
       const movie = (id: string, fps: number) => ({ id, kind: "video" as const, name: id, path: `${id}.mp4`, duration: 4, fps, width: 64, height: 64, hasAudio: false, hasAlpha: false });
       for (const rate of [60, 24]) {
-        await runCapture("ffmpeg", [...common, "-f", "lavfi", "-i", `color=c=red:s=64x64:r=${rate}:d=4`, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path.join(dir, `red${rate}.mp4`)]);
+        await runCapture(resolveFfmpeg(), [...common, "-f", "lavfi", "-i", `color=c=red:s=64x64:r=${rate}:d=4`, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", path.join(dir, `red${rate}.mp4`)]);
       }
       // Slower footage has fewer pictures than the cut has frames: 30 fps footage in a 60 fps project, three 20-frame clips and then nothing.
       const fast = createProject("Fast edges", { width: 64, height: 64, fps: 60, aspect: "custom" });
@@ -1466,7 +1467,7 @@ describe("render", () => {
 
     it("says when a movie's index could not be used, for a range and for a single frame", async () => {
       // A Matroska file filed as an indexed MP4: the header-only read fails, and a packet scan reads it.
-      await runCapture("ffmpeg", ["-v", "error", "-y", "-i", src, "-c", "copy", path.join(dir, "filed-as-mp4.mkv")]);
+      await runCapture(resolveFfmpeg(), ["-v", "error", "-y", "-i", src, "-c", "copy", path.join(dir, "filed-as-mp4.mkv")]);
       const { project } = fixture();
       project.media = [{ id: "m1", kind: "video", name: "filed-as-mp4.mkv", path: "filed-as-mp4.mkv", duration: 10, fps: 30, width: 320, height: 180,
         hasAudio: true, hasAlpha: false, originalPlaybackType: 'video/mp4; codecs="avc1.64000d,mp4a.40.2"', previewClock: { frameRate: "30/1", startPts: 0, videoStart: 0 } }];
@@ -1607,12 +1608,12 @@ describe("render", () => {
       const encoders = vi.spyOn(ffmpeg, "ffmpegEncoders").mockResolvedValue(new Set(["h264_qsv", "h264_nvenc"]));
       const capture = ffmpeg.runCapture, run = ffmpeg.runFfmpeg;
       const probe = vi.spyOn(ffmpeg, "runCapture").mockImplementation((binary, args, opts) => binary === bin && args.includes("-frames:v")
-        ? Promise.resolve({ code: 0, stdout: Buffer.alloc(0), stderr: "" }) : capture(binary === bin ? "ffmpeg" : binary, args, opts));
+        ? Promise.resolve({ code: 0, stdout: Buffer.alloc(0), stderr: "" }) : capture(binary === bin ? resolveFfmpeg() : binary, args, opts));
       const actual: string[] = [];
       let qsvCalls = 0, deviceBusy = false;
       const encode = vi.spyOn(ffmpeg, "runFfmpeg").mockImplementation((args, opts) => {
         const pos = args.indexOf("-c:v");
-        if (pos < 0) return run(args, { ...opts, ffmpegPath: "ffmpeg" });
+        if (pos < 0) return run(args, { ...opts, ffmpegPath: resolveFfmpeg() });
         const name = args[pos + 1]!;
         actual.push(name);
         if (name === "h264_qsv") {
@@ -1623,7 +1624,7 @@ describe("render", () => {
         // Use the local software encoder to produce valid fixture bytes for the simulated NVIDIA driver.
         const rewritten = [...args];
         rewritten.splice(pos, args.indexOf("-pix_fmt", pos) - pos, "-c:v", "libx264");
-        return run(rewritten, { ...opts, ffmpegPath: "ffmpeg" });
+        return run(rewritten, { ...opts, ffmpegPath: resolveFfmpeg() });
       });
       try {
         const options = { quality: "delivery" as const, hwaccel: "qsv" as const, ffmpegPath: bin,
@@ -1855,7 +1856,7 @@ describe("render", () => {
       await renderPlaybackSegment(project, timeline, range, cache, file, options);
       expect((await fs.readFile(file)).includes(Buffer.from("moof"))).toBe(true);
       for (const stream of ["a", "v"]) {
-        const { stdout } = await runCapture("ffprobe", ["-v", "error", "-select_streams", stream,
+        const { stdout } = await runCapture(resolveFfprobe(), ["-v", "error", "-select_streams", stream,
           "-show_entries", "frame=pts_time,nb_samples", "-of", "json", file]);
         const { frames } = JSON.parse(stdout.toString()) as { frames: { pts_time: string; nb_samples: number }[] };
         const starts = frames.map(frame => Number(frame.pts_time));
@@ -1865,7 +1866,7 @@ describe("render", () => {
         expect(Math.min(...starts)).toBeCloseTo(0, 4);
         expect(Math.max(...ends)).toBeCloseTo(range.end - range.start, 4);
       }
-      const { stdout: pcm } = await runCapture("ffmpeg", ["-loglevel", "error", "-i", file, "-vn", "-ac", "1", "-f", "s16le", "-"]);
+      const { stdout: pcm } = await runCapture(resolveFfmpeg(), ["-loglevel", "error", "-i", file, "-vn", "-ac", "1", "-f", "s16le", "-"]);
       expect(pcm.byteLength).toBe(Math.round((range.end - range.start) * project.settings.sampleRate) * 2);
       edges.push(range === plan[index] ? pcm.subarray(-960) : pcm.subarray(0, 960));
       // A different version with the same pixels/audio reuses the expensive video encode.
@@ -2074,7 +2075,7 @@ describe("render", () => {
     expect(ripple.segments.map(s => s.cached)).toEqual([true, true]);
     const clean = path.join(dir, "fresh-ripple.mp4");
     await renderFullCached(project, timeline, path.join(dir, "fresh-ripple"), clean, opts);
-    const decoded = async (file: string) => (await runCapture("ffmpeg", [
+    const decoded = async (file: string) => (await runCapture(resolveFfmpeg(), [
       "-v", "error", "-i", file, "-map", "0:v", "-map", "0:a", "-f", "framemd5", "-",
     ])).stdout;
     expect(await decoded(out)).toEqual(await decoded(clean));
@@ -2130,7 +2131,7 @@ describe("render", () => {
     expect(p.hasAudio).toBe(true);
     // Every presented frame must sit on the editor's grid, including after
     // the second section begins. AAC priming precedes picture time zero.
-    const { stdout } = await runCapture("ffprobe", ["-v", "error", "-show_packets",
+    const { stdout } = await runCapture(resolveFfprobe(), ["-v", "error", "-show_packets",
       "-show_entries", "packet=stream_index,pts_time:packet_side_data=skip_samples", "-of", "json", out2]);
     const { packets } = JSON.parse(stdout.toString()) as { packets: { stream_index: number; pts_time: string; side_data_list?: { skip_samples: number }[] }[] };
     const pictures = packets.filter(packet => packet.stream_index === 0).map(packet => Number(packet.pts_time)).sort((a, b) => a - b);
@@ -2157,7 +2158,7 @@ describe("render", () => {
     const exportAudio = async (mediaId: string) => {
       const timeline = timelineFromKeepRanges(project.id, mediaId, [{ start: 0, end: 0.5 }]);
       await renderFullCached(project, timeline, cache, output, { quality: "delivery", mediaRoot: dir });
-      const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-i", output, "-map", "0:a",
+      const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", output, "-map", "0:a",
         "-ac", "1", "-f", "s16le", "-"]);
       let peak = 0;
       for (let i = 0; i < stdout.length; i += 2) peak = Math.max(peak, Math.abs(stdout.readInt16LE(i)));
@@ -2175,7 +2176,7 @@ describe("render", () => {
     const cache = path.join(dir, "delivery-picture-cache");
     const options = { quality: "delivery" as const, segmentSeconds: 2, mediaRoot: dir };
     const output = path.join(dir, "delivery-picture.mp4");
-    const streamHash = async (stream: string) => (await runCapture("ffmpeg", [
+    const streamHash = async (stream: string) => (await runCapture(resolveFfmpeg(), [
       "-v", "error", "-i", output, "-map", "0:" + stream, "-c", "copy", "-f", "streamhash", "-hash", "sha256", "-",
     ])).stdout.toString();
     const before = await renderFullCached(project, timeline, cache, output, options);
@@ -2216,14 +2217,14 @@ describe("render", () => {
     const output = path.join(dir, "audio-only-delivery.mp4");
     const cache = path.join(dir, "audio-only-delivery-cache");
     const render = await renderFullCached(project, timeline, cache, output, { mediaRoot: dir, quality: "delivery" });
-    const streams = JSON.parse((await runCapture("ffprobe", ["-v", "error", "-of", "json", "-show_entries",
+    const streams = JSON.parse((await runCapture(resolveFfprobe(), ["-v", "error", "-of", "json", "-show_entries",
       "stream=codec_type,start_time,duration_ts,time_base", output])).stdout.toString()).streams;
     expect(streams.find((stream: { codec_type: string }) => stream.codec_type === "audio")).toMatchObject({
       start_time: "0.000000", time_base: "1/48000", duration_ts: Math.round(render.duration * 48000),
     });
     const mixes = (await fs.readdir(cache)).filter(file => file.startsWith("mix-"));
     expect(mixes).toHaveLength(2);
-    const audioHash = async () => (await runCapture("ffmpeg", ["-v", "error", "-i", output,
+    const audioHash = async () => (await runCapture(resolveFfmpeg(), ["-v", "error", "-i", output,
       "-map", "0:a", "-c", "copy", "-f", "hash", "-"])).stdout.toString();
     const expected = await audioHash();
     // The delivered AAC is complete even if the intermediate lossless sections were cleaned up.
@@ -2237,7 +2238,7 @@ describe("render", () => {
 it("expands quiet dialogue downward while leaving a loud passage at unity", async () => {
   const filters = effectFilters([{ type: "expander", enabled: true, params: { thresholdDb: -30, rangeDb: -12, ratio: 3 } }],
     "audio", { mediaRoot: dir, warn: message => { throw new Error(message); } });
-  const { stdout } = await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i",
+  const { stdout } = await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i",
     "aevalsrc='if(lt(t,1),0.001,0.5)':s=48000:d=2", "-af", filters.join(","), "-f", "f32le", "-"]);
   expect(stdout.readFloatLE(24000 * 4)).toBeCloseTo(0.001 * 10 ** (-12 / 20), 5);
   expect(stdout.readFloatLE(72000 * 4)).toBeCloseTo(0.5, 4);
@@ -2269,16 +2270,120 @@ it("assembles a cut's preview window from cached playback sections and encodes o
   const cut = await render(after, join, "window-3.mp4");
   expect([cut.rendered, cut.reused]).toEqual([1, 1]);
   const file = path.join(dir, "window-3.mp4");
-  const frames = Number((await runCapture("ffprobe", ["-v", "error", "-count_frames", "-select_streams", "v:0",
+  const frames = Number((await runCapture(resolveFfprobe(), ["-v", "error", "-count_frames", "-select_streams", "v:0",
     "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", file])).stdout.toString().trim());
   expect(frames).toBe(11 * 30);
-  // The sound runs the length of the window across the copied and the encoded section: the file says so, and decoding
-  // it gives the whole window and no more than its packets hold. How much of each section's encoder lead-in a decode
-  // drops differs between ffmpeg builds (1,792 samples over on one, 2,432 on another), so the count isn't held to a tolerance.
-  const audio = JSON.parse((await runCapture("ffprobe", ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration,nb_frames",
+  // Continuous program audio keeps the window's sound sample-aligned across copied and newly encoded sections,
+  // with no per-section AAC priming or padding piling up at interior joins.
+  const audio = JSON.parse((await runCapture(resolveFfprobe(), ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration,nb_frames",
     "-of", "json", file])).stdout.toString()).streams[0] as { duration: string; nb_frames: string };
   expect(Number(audio.duration)).toBeCloseTo(11, 2);
-  const sound = await runCapture("ffmpeg", ["-v", "error", "-i", file, "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]);
-  expect(sound.stdout.length / 2).toBeGreaterThanOrEqual(11 * 48000 - 1024);
+  const sound = await runCapture(resolveFfmpeg(), ["-v", "error", "-i", file, "-vn", "-ac", "1", "-ar", "48000", "-f", "s16le", "-"]);
+  expect(Math.abs(sound.stdout.length / 2 - 11 * 48000)).toBeLessThanOrEqual(1024);
   expect(sound.stdout.length / 2).toBeLessThanOrEqual(Number(audio.nb_frames) * 1024);
+}, 60_000);
+
+it("assembles a multi-cut preview with continuous audio and no seam pops or cumulative drift", async () => {
+  const toneSrc = path.join(dir, "steady-tone-preview.mp4");
+  await runCapture(resolveFfmpeg(), [
+    "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+    "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=35",
+    "-f", "lavfi", "-i", "aevalsrc=0.4*sin(2*PI*220*t)+0.3*sin(2*PI*660*t):s=48000:c=stereo:d=35",
+    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-b:a", "128k", toneSrc,
+  ]);
+  const project = createProject("Multi-cut preview", { width: 320, height: 180, fps: 30, aspect: "custom", sampleRate: 48000, audioChannels: 2 });
+  project.media.push({
+    id: "m1", kind: "video", name: "steady-tone-preview.mp4", path: path.basename(toneSrc),
+    hash: "steady-tone-preview", duration: 35, fps: 30, width: 320, height: 180, hasAudio: true,
+  });
+  // 18 cut clips (> 16 so program audio exercises lossless multi-section mixing, and > 32 s of source
+  // so default planPlaybackSegments produces 8+ sections) separated by 0.2 s skips (exact integer
+  // cycles of both 220 Hz and 660 Hz, so valid cuts stay phase-continuous).
+  const frameCounts = [45, 52, 48, 56, 46, 51, 45, 52, 48, 56, 46, 51, 45, 52, 48, 56, 46, 51];
+  let sourceCursor = 0;
+  let totalDuration = 0;
+  const keepRanges = frameCounts.map(frames => {
+    const duration = frames / 30;
+    const range = { start: sourceCursor, end: sourceCursor + duration };
+    sourceCursor += duration + 0.2;
+    totalDuration += duration;
+    return range;
+  });
+  const timeline = timelineFromKeepRanges(project.id, "m1", keepRanges);
+  const cache = path.join(dir, "multi-cut-preview-cache");
+  const output = path.join(dir, "multi-cut-preview.mp4");
+  const result = await renderFullCached(project, timeline, cache, output, {
+    mediaRoot: dir, quality: "preview", height: 180, hwaccel: "none",
+  });
+  expect(result.segments.length).toBeGreaterThanOrEqual(8);
+
+  // Every audio packet must retain full AAC frame duration (no 1-tick Non-monotonic DTS collisions).
+  const { stdout: pktJson } = await runCapture(resolveFfprobe(), [
+    "-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time,duration_time", "-of", "json", output,
+  ]);
+  const { packets } = JSON.parse(pktJson.toString()) as { packets: { pts_time: string; duration_time: string }[] };
+  expect(packets.length).toBeGreaterThan(100);
+  for (let i = 0; i < packets.length - 1; i++) {
+    expect(Number(packets[i]!.duration_time)).toBeGreaterThan(0.02);
+    expect(Number(packets[i + 1]!.pts_time)).toBeGreaterThan(Number(packets[i]!.pts_time));
+  }
+
+  // Decoded PCM must match the video duration within a single AAC frame (no +30 ms/segment excess drift)
+  // and stay free of sharp click/pop discontinuities across interior segment seams.
+  const { stdout: pcm } = await runCapture(resolveFfmpeg(), [
+    "-v", "error", "-i", output, "-vn", "-ac", "1", "-ar", "48000", "-f", "f32le", "-",
+  ]);
+  const sampleTotal = pcm.byteLength / 4;
+  expect(Math.abs(sampleTotal - Math.round(totalDuration * 48000))).toBeLessThanOrEqual(1024);
+  let maxJump = 0;
+  for (let i = 2; i < sampleTotal - 2; i++) {
+    const s0 = pcm.readFloatLE((i - 2) * 4);
+    const s1 = pcm.readFloatLE((i - 1) * 4);
+    const s2 = pcm.readFloatLE(i * 4);
+    const d2 = Math.abs(s2 - 2 * s1 + s0);
+    if (d2 > maxJump) maxJump = d2;
+  }
+  expect(maxJump).toBeLessThan(0.12);
+}, 60_000);
+
+it("encodes multi-split batches cleanly when an adelay audio clip precedes an earlier track in amix", async () => {
+  const src44 = path.join(dir, "src44.mp4");
+  await runCapture(resolveFfmpeg(), [
+    "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+    "-f", "lavfi", "-i", "color=c=green:s=320x180:r=30:d=6",
+    "-f", "lavfi", "-i", "sine=frequency=520:sample_rate=44100:duration=6",
+    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-shortest", src44,
+  ]);
+  const project = createProject("Multi-split adelay", { width: 320, height: 180, fps: 30000 / 1001, aspect: "custom", sampleRate: 48000, audioChannels: 2 });
+  project.media.push(
+    { id: "m48", kind: "video", name: "src.mp4", path: "src.mp4", duration: 10, fps: 30, width: 320, height: 180, hasAudio: true },
+    { id: "m44", kind: "video", name: "src44.mp4", path: "src44.mp4", duration: 6, fps: 30, width: 320, height: 180, hasAudio: true },
+  );
+  // Put delayed 44.1 kHz clips on track a1 BEFORE track a2's 0-start clip so adelay streams feed amix (including across a later split).
+  const timeline: Timeline = {
+    version: "draft", parent: null, projectId: project.id, name: "Main", background: "#000000", markers: [],
+    tracks: [
+      { id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [makeMediaClip("m48", 0, 6, 0, { volume: 0 })] },
+      { id: "a1", kind: "audio", name: "A1", muted: false, hidden: false, clips: [
+        makeMediaClip("m44", 0, 2.5, 1, { volume: 0.5, audioFadeIn: 0.02, audioFadeOut: 0.02 }),
+        makeMediaClip("m44", 0, 1.8, 4.1, { volume: 0.5, audioFadeIn: 0.02, audioFadeOut: 0.02 }),
+      ] },
+      { id: "a2", kind: "audio", name: "A2", muted: false, hidden: false, clips: [makeMediaClip("m48", 0, 1.05, 0, { volume: 1, audioFadeOut: 0.05 })] },
+    ],
+  };
+  const splits = [
+    { range: { start: 0, end: 2.002 }, output: path.join(dir, "split-adelay-0.mp4") },
+    { range: { start: 2.002, end: 4.004 }, output: path.join(dir, "split-adelay-1.mp4") },
+    { range: { start: 4.004, end: 6.006 }, output: path.join(dir, "split-adelay-2.mp4") },
+  ];
+  await renderRange(project, timeline, { start: 0, end: 6.006 }, splits[0]!.output, {
+    mediaRoot: dir, quality: "preview", height: 180, hwaccel: "none", splits,
+  });
+  for (const s of splits) {
+    const info = await probeMedia(s.output);
+    expect(info.hasAudio).toBe(true);
+    expect(info.duration).toBeCloseTo(2, 1);
+  }
 }, 60_000);

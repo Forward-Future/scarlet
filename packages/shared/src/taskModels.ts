@@ -17,7 +17,7 @@ export type TaskModelType = z.infer<typeof TaskModelType>;
 
 /** The two kinds of work every editor starts with. They can be renamed, given a model or deleted like their own. */
 export const DEFAULT_TASK_MODELS: TaskModelType[] = [
-  { id: "cutting", name: "Cutting", description: "Taking out words, pauses, retakes and mistakes, and tightening the edit.", model: "same" },
+  { id: "cutting", name: "Cutting", description: "Cutting words, pauses, retakes and mistakes, and tightening the video.", model: "same" },
   { id: "motion-graphics", name: "Motion graphics", description: "Titles, lower thirds, callouts, animated text and end cards over the picture.", model: "same" },
 ];
 

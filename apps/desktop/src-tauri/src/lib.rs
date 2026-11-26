@@ -3,6 +3,7 @@
 
 pub mod commands;
 pub mod config;
+pub mod copies;
 pub mod engine;
 pub mod host;
 pub mod util;
@@ -118,7 +119,7 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.menu(quit::menu).on_menu_event(|app, event| {
         if event.id() == quit::QUIT_MENU_ID {
-            quit::ask_before_quitting(app);
+            quit::ask_before_quitting(app, "menu");
         } else if event.id() == quit::REPORT_PROBLEM_MENU_ID {
             use tauri::Emitter;
             let _ = app.emit("report-problem://open", ());
@@ -151,7 +152,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                quit::ask_before_quitting(window.app_handle());
+                quit::ask_before_quitting(window.app_handle(), "window");
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -185,6 +186,7 @@ pub fn run() {
             logs::export_logs,
             logs::save_problem_report,
             logs::send::send_problem_report,
+            logs::send::send_problem_details,
             storage::measure_project_storage,
             storage::developer_storage,
             updates::update_status,
@@ -210,9 +212,12 @@ pub fn run() {
                 app.manage(release_updates::ReleaseUpdates::default());
                 release_updates::start(handle.clone());
             }
-            if let Some(source) = update_source {
-                log::info!("updates: {source:?}");
-                app.manage(source);
+            match update_source {
+                Some(source) => {
+                    log::info!("updates: {source:?}");
+                    app.manage(source);
+                }
+                None => log::info!("updates: none (this copy gets no updates)"),
             }
             #[cfg(target_os = "linux")]
             if let Some(window) = handle.get_webview_window("main") {
@@ -223,7 +228,19 @@ pub fn run() {
                 handle.state::<commands::ExportDestinations>().load(root.join("export-destinations.json"));
             }
             let config = Arc::new(Mutex::new(AppConfig::load(&paths.config_file)));
-            log::info!("Scarlet desktop {} starting; data {}; config {}", env!("CARGO_PKG_VERSION"), paths.data_dir.display(), paths.config_file.display());
+            // Which copy of Scarlet this is: the regular app, a review or test build, the demo or a development build
+            // each run under their own identifier, data and log, and a report starts from knowing which one was used.
+            let identifier = handle.config().identifier.clone();
+            let kind = if is_demo(&handle) { "demo" } else if cfg!(debug_assertions) { "debug" } else { "release" };
+            log::info!(
+                "Scarlet desktop {} starting; copy {identifier} ({kind} build, pid {}); data {}; config {}; log {}",
+                env!("CARGO_PKG_VERSION"),
+                std::process::id(),
+                paths.data_dir.display(),
+                paths.config_file.display(),
+                paths.log_dir.display()
+            );
+            copies::started(&identifier, &paths.log_dir, &paths.data_dir, env!("CARGO_PKG_VERSION"), kind);
 
             let mcp = match engine::resolve_engine_launch(&paths.home, paths.resource_dir.as_deref()) {
                 Ok(l) => {
@@ -241,7 +258,9 @@ pub fn run() {
             app.manage(AppState { paths: paths.clone(), config: config.clone(), engine: engine.clone(), host: host.clone(), login });
 
             // The native interview demo uses in-memory fixtures and has no engine jobs.
-            if !is_demo(&handle) {
+            if is_demo(&handle) {
+                log::info!("demo: the engine is not started (the demo runs on in-memory fixtures)");
+            } else {
                 engine.start_solo();
             }
             Ok(())
@@ -250,9 +269,23 @@ pub fn run() {
         .expect("error while building the Scarlet desktop app");
 
     app.run(|app_handle, event| {
+        // What the system asked of Scarlet, so an "Open With Scarlet" or a Dock click that seems to do nothing leaves a
+        // trace. Only how many files: their paths stay out of the log.
+        match &event {
+            #[cfg(target_os = "macos")]
+            RunEvent::Opened { urls } => log::info!("system asked Scarlet to open {} item(s) (Open With or a link); Scarlet has no handler for this", urls.len()),
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { has_visible_windows, .. } => log::info!("reopened from the Dock (window visible: {has_visible_windows})"),
+            RunEvent::ExitRequested { code, .. } => match code {
+                Some(code) => log::info!("exit requested by Scarlet (code {code})"),
+                None => log::info!("exit requested by the system"),
+            },
+            _ => {}
+        }
         if let RunEvent::Exit = event {
             if let Some(state) = app_handle.try_state::<AppState>() {
                 log::info!("exiting: cancelling tasks and stopping the engine");
+                copies::stopped();
                 state.login.cancel_all();
                 crisper::stop_setups_now();
                 state.host.stop_blocking();

@@ -224,6 +224,7 @@ export async function ingestMedia(
       if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
       throw error;
     });
+    if (info?.isDirectory()) throw badRequest("path_is_directory", `${basename(source.path)} is a folder`);
     if (!info?.isFile()) throw badRequest("path_not_found", `no file at ${source.path}`);
     if (!opts.name) name = basename(source.path);
     const destination = join(mediaDir, mediaId + safeExt(name));
@@ -350,9 +351,11 @@ async function ingestInBackground(ctx: Ctx, projectId: string, asset: MediaAsset
   let preparation = asset.preparation;
   const publish = ctx.db.transaction((status: MediaWithStatus["status"], preparation?: MediaAsset["preparation"], error?: string) => {
     // A manual transcription can finish while the proxy is being built, and the recording's voice roles or audio track can be saved.
+    // So can the editor's note on the file, and the page a graphic was drawn from.
     const current = ctx.repos.projects.getMedia(asset.id);
     const media = ctx.repos.projects.putMedia(projectId, { ...asset, transcriptId: current?.transcriptId,
       lastTranscription: current?.lastTranscription, voiceRoles: current?.voiceRoles,
+      editorNote: current?.editorNote, graphic: current?.graphic ?? asset.graphic,
       audioTrack: current?.audioTrack, audioStreams: current?.audioStreams ?? asset.audioStreams, preparation }, status, error);
     ctx.bus.publish({ type: "media.updated", projectId, media });
     return media;

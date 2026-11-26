@@ -2,7 +2,7 @@
  * Clip-edge audio inspection for source-second cuts (`timeline_propose` / `timeline_first_cut`).
  */
 import { round3 } from "./analysis.js";
-import { DIP_DBFS, inWord, levelStrip, onWordOnset, pageAt, pageReaches, plain, snapLimit, soundAt, type JoinPage } from "./dialogue-acoustics.js";
+import { inWord, levelBars, levelStrip, onWordOnset, pageAt, pageReaches, plain, snapLimit, soundAt, type JoinPage } from "./dialogue-acoustics.js";
 
 /** A level this low ends a piece of sound: room tone, or the closure before the next word. */
 const FRAGMENT_QUIET_DBFS = -45;
@@ -41,6 +41,9 @@ function edgeFragment(page: NonNullable<JoinPage["edges"]>, t: number, side: "in
   const levels = page.levels;
   if (!levels) return;
   const { db, step, from } = levels, toward = side === "out" ? -1 : 1;
+  const bars = levelBars(levels);
+  const fragmentQuiet = Math.max(FRAGMENT_QUIET_DBFS, bars.trough);
+  const fragmentSound = bars.speech > -40 ? bars.speech : FRAGMENT_SOUND_DBFS;
   const first = Math.floor((t - from) / step + toward * 1e-6), removed = first - toward;
   if (first < 0 || first >= db.length || removed < 0 || removed >= db.length) return;
   let peak = -Infinity;
@@ -48,9 +51,9 @@ function edgeFragment(page: NonNullable<JoinPage["edges"]>, t: number, side: "in
     const i = first + toward * k;
     if (i < 0 || i >= db.length) return;
     const level = db[i]!;
-    if (k && level <= FRAGMENT_QUIET_DBFS && level <= peak - FRAGMENT_DROP_DB) {
+    if (k && level <= fragmentQuiet && level <= peak - FRAGMENT_DROP_DB) {
       // Sound on both sides of the edge: the cut goes through it. Quiet on the removed side is a whole sound, kept.
-      if (peak < FRAGMENT_SOUND_DBFS || db[removed]! < peak - FRAGMENT_DROP_DB) return;
+      if (peak < fragmentSound || db[removed]! < peak - FRAGMENT_DROP_DB) return;
       const quietAt = from + (i + .5) * step, lo = Math.min(t, quietAt), hi = Math.max(t, quietAt);
       // The sound that plays, up to where the quiet begins. Under a level step of it is the step's own rounding.
       const seconds = Math.abs(from + (toward > 0 ? i : i + 1) * step - t);
@@ -71,7 +74,7 @@ function soundUnderEdge(pages: JoinPage[], mediaId: string, stream: number, t: n
   if (side === "in" && onWordOnset(page, t)) return;
   // Room tone under the edge, too brief to be a run of silence: the instant between two words said in one breath.
   const levels = page.levels, here = levels && levels.db[Math.floor((t - levels.from) / levels.step)];
-  if (here !== undefined && here <= DIP_DBFS) return;
+  if (here !== undefined && here <= levelBars(levels).dip) return;
   const split = page.words.find(w => inWord(w, t));
   const fragment = edgeFragment(page, t, side);
   if (!split && !fragment) return;

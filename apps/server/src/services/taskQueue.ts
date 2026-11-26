@@ -90,6 +90,9 @@ function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: stri
       byId: new Map(tasks.map(task => [task.id, task])) };
   }
   const queues = new Map<string, ReturnType<typeof readQueue>>();
+  let learningCheckActive: boolean | undefined;
+  const hasActiveLearningCheck = () =>
+    learningCheckActive ??= ctx.repos.tasks.count("kind = 'learning_check' AND state IN ('claimed', 'running')") > 0;
   const logBlocked = (row: { id: string; project_id: string; created_at: string }, reason: string, blocker?: string) => {
     const wait = Date.parse(checkedAt) - Date.parse(row.created_at);
     if (!(wait >= 30_000)) return;
@@ -101,6 +104,11 @@ function claimNext(ctx: Ctx, host: AgentHost, taskId?: string, freeAgents?: stri
   for (const row of rows) {
     if (row.rewording) {
       logBlocked(row, "rewording");
+      continue;
+    }
+    // Learning checks read rules and decisions across projects, so run one at a time: each check then sees what earlier ones offered.
+    if (row.kind === "learning_check" && hasActiveLearningCheck()) {
+      logBlocked(row, "learning_check_running");
       continue;
     }
     // A host that can't run the request never reads the project's queue for it.

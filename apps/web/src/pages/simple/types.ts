@@ -1,6 +1,6 @@
 import type { Dispatch, MouseEvent, ReactNode, SetStateAction } from "react";
 import type { Change, CutAssessment, TimeRange, Timeline } from "@scarlet/timeline";
-import type { EditRef, Task, ThreadEdit } from "@scarlet/shared";
+import { cutText, type EditRef, type Task, type ThreadEdit } from "@scarlet/shared";
 import { clock as clockLabel, clockRange } from "../../lib/format";
 import { blurOnPointerClick } from "../../lib/hotkeys";
 import type { JoinClock } from "../../lib/joinClock";
@@ -43,13 +43,17 @@ type CallState = "approved" | "skipped" | "open" | "revising";
 interface PassCall {
   index: number;
   askOrder?: number;
-  /** Its number, as on its card and the timeline: the order it reached the editor in. */
+  /** The order it reached the editor in, which names its row for good. The editor never sees it: a call goes by its time. */
   n: number;
   /** Where its row goes in the list. */
   start: number;
   /** Where its cut is on the working cut. None while it isn't there as it was staged, so nothing on the timeline is its. */
   at?: number;
   summary: string;
+  /** Full reason from the cut assessment, shown as a quiet hover note when distinct from `summary`. */
+  reason?: string;
+  /** Duration of the staged cut/keep stretch in seconds, for the hover summary. */
+  length?: number;
   state: CallState;
   version: number;
   /** The word its row ends on while it waits: how much its cut takes out, or Check when Scarlet proposes keeping the footage. */
@@ -66,11 +70,14 @@ export interface OpenPass {
   threadId: string;
   /** How many cuts the pass proposes. */
   cuts: number;
-  /** Every call in the pass, numbered, with where it stands: the progress the summary card shows. */
+  /** Every call in the pass, with where it stands: the progress the summary card shows. */
   calls: PassCall[];
-  /** The numbers of the request's edits that ask for a look, by `editKey`: they count on from the calls. */
+  /** The request's edits that ask for a look, by `editKey`: the order they reached the editor in, after the calls, and
+   *  the name they go by, at their time ("Cut at 0:11"). */
   editNumbers: ReadonlyMap<string, { n: number; name: string }>;
   openCall(index: number): void;
+  /** Take back Keep on a decided call while the pass still waits on the editor. */
+  unkeepCall?(index: number): void;
   running: boolean;
   /** Scarlet is still on the pass and has checked none of its staged cuts, so there is nothing yet to apply or schedule. */
   unchecked: boolean;
@@ -86,7 +93,7 @@ export interface OpenPass {
 
 export type HoveredReviewRow = { threadId: string; editKey?: string; call?: number };
 /** `state`: amber while it asks for a look, filled once kept, as its row in the chat says. */
-type ReviewMarker = { edit: ThreadEdit; number: number; total: number; state?: "check" | "kept" };
+type ReviewMarker = { edit: ThreadEdit; state?: "check" | "kept" };
 export type LocatedReview = { head: string | null; markers: ReviewMarker[] };
 export type ReportReviewMarkers = (threadId: string, review?: LocatedReview) => void;
 
@@ -113,6 +120,12 @@ export interface ChatActions {
   collapse?(run: string): void;
   /** Show the whole timeline, from a press on any request's band. */
   fitTimeline?(): void;
+  /**
+   * The new layout's column of edits hears how many rows a request draws under Needs review. That can be more than it
+   * counts as waiting on the editor: a request about a cut or edit that stopped early keeps its row there, with its
+   * Resume or Retry.
+   */
+  forYouRows?(threadId: string, rows: number): void;
   pass?: OpenPass;
   reviewingId?: string;
   listening?: Listening;
@@ -144,20 +157,19 @@ export interface ChatActions {
   revise(thread: Thread, change: Change): void;
   /**
    * What a request about one cut is called while that cut is a call of the pass waiting now, or an edit of its request
-   * that asks for a look: "Cut 2", its number, the same on its line in the list, on its card and on the timeline. Any
-   * other cut goes by its time.
+   * that asks for a look: by its time ("Cut at 2:47"), the same on its row in the list, on its card and in the box's tag.
    */
   cutName?(about: { changeId?: string; cutIndex?: number; editIndex?: number }): string | undefined;
-  /** The number a call of the waiting pass goes by, for a line that names it ("Listening to Cut 2"). */
-  callNumber?(changeId: string, cutIndex: number): number | undefined;
+  /** Where a call of the waiting pass is in the video, for a line that names it ("Listening to the cut at 2:47"). */
+  callTime?(changeId: string, cutIndex: number): number | undefined;
   /** Open Learnings with this rule in view, from the line under the request it came from. */
   reviewLearning?(learningId: string): void;
 }
 
 /**
  * Which of a request's lists is open. A request with nothing for the editor to review has one list, every edit
- * ("all"). One with review rows has three tabs: For you ("need", or none: it is the one shown until another is
- * pressed), Working and Done. There "all" is For you with low risk edits included, the edits Scarlet didn't flag listed
+ * ("all"). One with review rows has three tabs: Needs review ("need", or none: it is the one shown until another is
+ * pressed), Working and Done. There "all" is Needs review with low risk edits included, the edits Scarlet didn't flag listed
  * among the ones that wait, each in its place in the video: the timeline shows them as it does for a list of every edit.
  */
 export type OpenList = "all" | "need" | "working" | "done" | undefined;
@@ -166,15 +178,15 @@ export type PassList = [open: OpenList, setOpen: Dispatch<SetStateAction<OpenLis
 /**
  * A request about one cut or edit that is still in the chat, drawn directly under the row it is about. `key` is that
  * row's. `needs`: the request itself waits on the editor (it asks a question, or stopped early and offers Resume or
- * Retry), so its row stays in For you with it.
+ * Retry), so its row stays in Needs review with it.
  */
-export interface Nest { key: string; node: ReactNode; needs?: boolean }
+export interface Nest { key: string; node: ReactNode; needs?: boolean; version?: string }
 export const noNests: readonly Nest[] = [];
 /** What the requests about each row's cut or edit took, by the row's key, for the hover of the word the row ends on. */
 export type Spent = ReadonlyMap<string, string>;
 export const noSpent: Spent = new Map();
 
-/** Whether For you has listed this edit, or a version of it it replaced, so it keeps its row there once decided. */
+/** Whether Needs review has listed this edit, or a version of it it replaced, so it keeps its row there once decided. */
 export const listedBefore = (listed: ReadonlySet<string>, e: Omit<ThreadEdit, "at">) =>
   listed.has(editKey(e)) || e.previous.some(p => listed.has(editKey(p)));
 
@@ -213,10 +225,15 @@ export function belongsTo(edit: ThreadEdit | undefined, change: Change) {
   return !!edit && (edit.changeId === change.id || edit.previous.some(ref => ref.changeId === change.id));
 }
 
+/** The change that made this edit as it stands now, falling back to an earlier attempt it replaced. */
+export function changeForEdit(changes: readonly Change[], edit: ThreadEdit | undefined) {
+  return edit && (changes.find(c => c.id === edit.changeId) ?? changes.find(c => belongsTo(edit, c)));
+}
+
 /** A request's words, short enough to lead a hover note: its first line, up to 32 characters. */
 export const shortTitle = (title: string) => {
   const line = title.split("\n")[0]!.trim();
-  return line.length > 32 ? `${line.slice(0, 31).trimEnd()}…` : line;
+  return line.length > 32 ? `${cutText(line, 31).trimEnd()}…` : line;
 };
 
 /** Scarlet is on a request now, as against one waiting its turn or for an answer. */

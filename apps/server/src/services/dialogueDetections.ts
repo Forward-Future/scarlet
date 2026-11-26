@@ -3,9 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileInDirectory, heardAudio, heardAudioKey, speechActivityOf, speechActivityStart, type HeardAudio } from "@scarlet/render";
-import type { DialogueDetections, ServerSettings } from "@scarlet/shared";
+import { isHandOff, type DialogueDetections, type ServerSettings } from "@scarlet/shared";
 import type { MediaAsset, TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
+import { logId } from "../logText.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { UhmDetector } from "../transcribe/uhm.js";
 import { getTranscriptionProvider } from "../transcribe/index.js";
@@ -112,8 +113,8 @@ export function dialogueDetector(ctx: Ctx) {
   const unalignedPages = new WeakSet<DialogueDetections>();
   function scanEdit(projectId: string, taskId: string, startedAt?: string): ScanEdit {
     const owner = ctx.repos.tasks.get(taskId);
-    // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does.
-    if (!owner || owner.projectId !== projectId || !editsDialogue(owner.kind)) throw notFound("edit in this project");
+    // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does, and a hand-off does a request's cutting, so it scans as the request would.
+    if (!owner || owner.projectId !== projectId || !(editsDialogue(owner.kind) || isHandOff(owner))) throw notFound("edit in this project");
     return { taskId, startedAt: startedAt ?? owner.startedAt };
   }
   function activeEdit(edit: ScanEdit) {
@@ -205,7 +206,9 @@ export function dialogueDetector(ctx: Ctx) {
     // recording's speakers as its own page would, and reads the page itself only if that one stops, as the pause stops it.
     const ahead = edit && policy.settings.provider !== "openai" ? pending.get(JSON.stringify([...params, keptSide, false])) : undefined;
     if (ahead) {
-      void ctx.track(ctx.speakers.turns(ctx, projectId, media, undefined, true).catch(() => {}), projectId);
+      void ctx.track(ctx.speakers.turns(ctx, projectId, media, undefined, true).catch(error => {
+        if (!ctx.mediaSignal(projectId).aborted) ctx.log(`[dialogue] speaker-turns-failed media=${logId(media.id)} project=${logId(projectId)} ${error instanceof Error ? error.message : String(error)}`);
+      }), projectId);
       const ready = ahead.ready.catch(() => openPage(projectId, media, from, to, edit, policy, keptSide).then(page => page.ready));
       return { analyzed: ready, ready, work: ahead.work };
     }
@@ -253,7 +256,12 @@ export function dialogueDetector(ctx: Ctx) {
       // The page's minute, its speech detection and any emissions its alignment lacks all come from one decode of
       // the recording, shared with the pages before and after it.
       const recording = await recordingWav(ctx, file, signal, pageAudio(media, stream));
+      const hasWindowSamples = (samples: number, start: number, end: number) =>
+        samples === 0 || (Math.round(start * SAMPLE_RATE) < samples && Math.round(end * SAMPLE_RATE) > Math.round(start * SAMPLE_RATE));
       try {
+        if (!hasWindowSamples(recording.samples, from, to)) {
+          return keptSide ? { acoustic: [], segments: [] } : { segments: [], acoustic: [], speechActivity: [] };
+        }
         await recording.writeWindow(wav, from, to);
         if (keptSide) {
           const speech = await inWhisperLane(() => transcribeWindow(wav));
@@ -313,9 +321,9 @@ export function dialogueDetector(ctx: Ctx) {
               // The other voice's minute comes from one decode of its track, shared with the pages before and after it,
               // as the page's own does: cut from the source, each page of a long recording took ffmpeg most of a second.
               const other = await recordingWav(ctx, file, signal, { audioTrack: roles.other - 1 });
-              try { await other.writeWindow(wav, from, to); } finally { other.release(); }
-              const isolated = await inWhisperLane(() => transcribeWindow(wav));
-              const words = isolated.segments.flatMap(s => s.words);
+              const otherHasAudio = hasWindowSamples(other.samples, from, to);
+              try { if (otherHasAudio) await other.writeWindow(wav, from, to); } finally { other.release(); }
+              const words = otherHasAudio ? (await inWhisperLane(() => transcribeWindow(wav))).segments.flatMap(s => s.words) : [];
               result.otherVoiceTurns = turns.map(turn => ({ ...turn, text: words.filter(w => {
                 const mid = from + (w.start + w.end) / 2;
                 return mid >= turn.start - .12 && mid < turn.end + .12;

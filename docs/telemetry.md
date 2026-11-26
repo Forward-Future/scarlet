@@ -17,7 +17,7 @@ To disable reporting before the first launch, set `SCARLET_TELEMETRY_ENABLED=fal
 | `server.boot.heartbeat` | The engine starts | `projectCount` |
 | `feature.used` | A listed request succeeds | `feature` |
 | `task.requested` | A request is queued | `kind`, `agent`, `fast` |
-| `task.finished` | A request is done, failed or cancelled | `kind`, `agent`, `state`, `changeCount`, `interrupted`, `durationMs`, `failureReason` (failed only) |
+| `task.finished` | A request is done, failed or cancelled | `kind`, `agent`, `state`, `changeCount`, `interrupted`, `durationMs` (omitted if a queued transcription ended before starting), `failureReason` (failed only; clean pauses, project deletes and quits are reported as `cancelled` with `interrupted: true`) |
 | `edit.reviewed` | An editor explicitly keeps an applied edit or successfully submits a revision or Undo edit request about it | `decision` (keep, revise, undo), `editId` |
 | `render.finished` | An export is done, failed or cancelled | `kind`, `state`, `quality`, `failureReason` (failed only) |
 | `export.finished` | An export succeeds: a rendered video, a handoff folder, a timeline or captions | `route` (render, handoff, otio, srt, vtt), `firstExport` |
@@ -74,7 +74,7 @@ The ingest host sees the source IP when it receives a request. Scarlet disables 
 
 ## Problem reports
 
-A problem report is separate from usage reports. Scarlet sends one only when the editor presses **Send report** in Report a problem, which opens from a Report beside an error, the screen a crash leaves, Help › Report a Problem… or Settings › Advanced. It is sent whether or not usage reports are on, because the editor asked to send it. The desktop app sends it straight away, itself, so a report still goes when the engine has stopped.
+A problem report is separate from usage reports. Scarlet sends one only when the editor asks: one press on a Report beside an error (or Report this problem on the screen a crash leaves) sends it at once, and **Send report** in the Report a problem form, from Help › Report a Problem… or Settings › About, sends one with the editor's words. It is sent whether or not usage reports are on, because the editor asked to send it. The desktop app sends it straight away, itself, so a report still goes when the engine has stopped.
 
 It goes to the same PostHog project and host as usage reports (`SCARLET_POSTHOG_KEY` and `SCARLET_POSTHOG_HOST` apply) as one `bug.reported` event with:
 
@@ -88,6 +88,8 @@ It goes to the same PostHog project and host as usage reports (`SCARLET_POSTHOG_
 | `system` | The system report from Export logs: version, OS, engine and agent status, desktop settings |
 | `recentProblems` | The newest 12 warning and error lines from the cleaned log |
 | `log` | The newest 300 KB of the cleaned log, and `logTruncated` when older lines were left out |
+
+Words the editor adds afterwards with **Add details** go as a `bug.details` event with the report's `reportId` and `reference` and their `description`, and nothing else beyond the fields every report has.
 
 Plus `installId` (when the engine has made one, so a report can be read beside usage), `platform`, `arch`, `scarletVersion` and `channel`. The log is the one Export logs saves: the same allowlist of operations and fields, with keys and tokens removed. Unlike usage reports, a problem report can carry the editor's own words, the error text on screen and the raw IDs in the log. It never carries media, frames, audio, transcripts, prompts or sign-ins. If it can't be sent, the editor can save the same report as a `.zip` in Downloads.
 

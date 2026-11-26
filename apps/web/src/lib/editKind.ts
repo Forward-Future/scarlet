@@ -12,11 +12,12 @@ export function editKindWord(edit: Pick<ThreadEdit, "kind">): string | undefined
 }
 
 /**
- * The word at the end of an edit's row in a list, so every row has one: what it did, "To do" for a marker left for the
- * editor, "Check" for a spot Scarlet changed nothing at and asks the editor to check, or "Edit" for an assembly or a mix
- * of several things.
+ * The word at the end of an edit's row in a list, so every row has one: what it did ("Cut", "Audio", "B-roll"…),
+ * "To do" for a marker left for the editor, "Check" for a spot Scarlet changed nothing at and asks the editor to
+ * check, or "Edit" for an assembly or a mix of several things.
  */
-export function editRowWord(edit: Pick<ThreadEdit, "kind" | "marker" | "onlyCheck">): string {
+export function editRowWord(edit: Pick<ThreadEdit, "kind" | "marker" | "onlyCheck" | "beforeCut">): string {
+  if (edit.beforeCut) return "Cut";
   return editKindWord(edit) ?? (edit.marker ? "To do" : edit.onlyCheck ? "Check" : "Edit");
 }
 
@@ -63,13 +64,13 @@ function said(sentence: string | undefined, words: string) {
  * Footage put back reads as added. Anything else keeps its footage, so After plays it: it's outlined and named, never
  * hatched like removed footage. `name` names a moment's band for all of its edits.
  */
-export function editFocus(edit: ThreadEdit, duration: number, name?: string): ProgressFocus | undefined {
+export function editFocus(edit: ThreadEdit, duration: number, name?: string, key?: string): ProgressFocus | undefined {
   const word = editKindWord(edit);
   // A marker at a point took nothing out, so it isn't drawn or named as a cut.
   if (edit.at !== undefined) return focusAround({ start: edit.at, end: edit.at }, duration, word ?? (edit.marker ? undefined : "Cut"),
-    edit.marker ? { tone: "kept" } : undefined);
+    edit.marker ? { tone: "kept", key } : { key });
   const restored = edit.kind === "restore";
   // A moment is named as its card is ("2 edits"), and an assembly or a mix as its row is ("Edit"): a band is never blank.
   return focusAround(edit.range, duration, restored ? `Put back · ${lengthLabel(edit.range.end - edit.range.start)}` : name ?? editRowWord(edit),
-    { tone: restored ? "added" : "kept" });
+    { tone: restored ? "added" : "kept", key });
 }

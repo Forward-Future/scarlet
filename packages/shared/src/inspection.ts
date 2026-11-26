@@ -95,16 +95,25 @@ export interface RepeatAuditResult {
   /** Joins in scope with a side that wasn't heard, per recording. */
   unheardJoins?: UnheardJoins[];
   /**
-   * What the picture does that the pass has neither changed nor kept: a picture on screen for under a second between
-   * two others, or a recording laid over the main picture that is off it while it still shows what it showed. They
-   * count in `remaining`.
+   * What the picture does that the pass has neither changed nor kept: a brief picture, a recording off picture while
+   * it still shows what it showed, a glide across a screen change, text cut off by the frame's edge, content under an
+   * inset, text too small to read, visible video player controls, or a blank/loading screen. They count in `remaining`.
    */
   pictures?: PictureCheckFinding[];
 }
 
+/**
+ * Text whose usual line height is below this percent of the video's height (about 27 px at 1080p) is listed by the
+ * closing check as `smallText` when it isn't given another bar. Matches the stock `frame-screen` skill.
+ */
+export const SMALL_TEXT_PERCENT = 2.5;
+
 /** A picture finding the closing check lists, read by Scarlet's MCP server on the version checked. */
-export const PictureCheckFinding = z.object({ id: z.string().min(1), kind: z.enum(["brief", "offPicture"]),
-  from: z.number().finite(), to: z.number().finite() }).passthrough();
+export const PictureCheckFinding = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["brief", "offPicture", "moveAcrossCut", "clippedText", "underCover", "smallText", "blankScreen", "playerControls"]),
+  from: z.number().finite(), to: z.number().finite(),
+}).passthrough();
 export type PictureCheckFinding = z.infer<typeof PictureCheckFinding>;
 
 /** Subtracting two times in seconds can land a hair past an exact limit (16.1 - 8.1 > 8): a window that long still counts. */

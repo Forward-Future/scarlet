@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { createProject, type MediaAsset, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
+import { ffmpeg } from "../render/ffmpeg.js";
 
 let directory: string;
 let workspace: ScarletApp;
@@ -51,4 +52,27 @@ it("saves the editor's note on a file, says when the file was added, and takes t
 
   expect((await api("PUT", "/media/med_sponsor/note", { note: "x".repeat(2001) })).status).toBe(400);
   expect((await api("PUT", "/media/med_missing/note", { note: "Hi" })).status).toBe(404);
+});
+
+it("keeps a note written on a file while the file is still being added", async () => {
+  const { ctx } = workspace;
+  const source = join(directory, "Sponsor read.mp4");
+  await ffmpeg(["-f", "lavfi", "-i", "color=red:size=160x90:rate=25:duration=1", "-f", "lavfi", "-i", "sine=duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", source]);
+  // The editor writes the note while the file's fingerprint is read, which is when its row still says it is being added.
+  const hashFile = ctx.render.hashFile.bind(ctx.render);
+  let noted: Promise<Response> | undefined;
+  ctx.render.hashFile = async (...args) => {
+    const [media] = ctx.repos.projects.listMedia(project.id);
+    if (media?.status === "ingesting" && !noted) {
+      noted = Promise.resolve(api("PUT", `/media/${media.id}/note`, { note: "Finished sponsor read." }));
+      expect((await noted).status).toBe(200);
+    }
+    return hashFile(...args);
+  };
+  const res = await api("POST", `/projects/${project.id}/media/import`, { path: source });
+  expect(res.status).toBe(201);
+  const { media } = await res.json() as { media: MediaAsset };
+  while (ctx.pending.size) await Promise.allSettled([...ctx.pending]);
+  expect(noted).toBeDefined();
+  expect(ctx.repos.projects.getMedia(media.id)).toMatchObject({ status: "ready", editorNote: "Finished sponsor read." });
 });

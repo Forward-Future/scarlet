@@ -2,10 +2,10 @@
  * What the window shows when a page breaks while drawing, in place of a blank window: what broke, Reload, and a
  * report of it that carries the error on screen.
  */
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { isRouteErrorResponse, useRouteError } from "react-router-dom";
 import { appLog, errorName, withoutAddresses } from "../../lib/appLog";
-import { ReportProblemDialog } from "./ReportProblem";
+import { ReportLink } from "./ReportLink";
 
 export function describeRouteError(error: unknown): string {
   if (isRouteErrorResponse(error)) return `${error.status} ${error.statusText}`.trim();
@@ -15,7 +15,6 @@ export function describeRouteError(error: unknown): string {
 
 export function RouteErrorScreen() {
   const error = useRouteError();
-  const [reporting, setReporting] = useState(false);
   const message = describeRouteError(error);
   useEffect(() => {
     const stack = error instanceof Error ? (error.stack ?? "").split("\n").slice(0, 6).join(" | ") : message;
@@ -29,11 +28,10 @@ export function RouteErrorScreen() {
         <p className="text-muted">Scarlet hit a problem showing this page. Reloading usually fixes it, and a report helps us fix it for good.</p>
         <p className="font-mono text-[12px] text-dim whitespace-pre-wrap break-words select-text" data-log-private>{message}</p>
         <div className="flex flex-wrap gap-2">
-          <button className="btn-primary" onClick={() => setReporting(true)}>Report this problem</button>
+          <ReportLink className="btn-primary" label="Report this problem" about={`Something went wrong: ${message}`} />
           <button className="btn-ghost" onClick={() => window.location.reload()}>Reload</button>
         </div>
       </section>
-      <ReportProblemDialog open={reporting} onClose={() => setReporting(false)} about={`Something went wrong: ${message}`} />
     </main>
   );
 }

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { buildSystemPrompt, type EarlierRequest } from "@scarlet/mcp/prompt";
-import { agentCapabilities, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, PROJECT_EDIT_TASK_KINDS, taskRunKind, workspaceCapabilities, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
+import { agentCapabilities, cutText, wellFormed, isAsideTask, isBatchSummary, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, isStyleGuideEdit, PROJECT_EDIT_TASK_KINDS, requestText, taskRunKind, workspaceCapabilities, type Skill, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { notFound } from "../errors.js";
@@ -9,8 +9,9 @@ import { changeDiff, cutRevisionReference, passToRevise } from "./changes.js";
 import { mimeFor, styleGuidePath } from "./graphics.js";
 import { learningCheckContext } from "./learnings.js";
 import { assistantSkills } from "./skills.js";
+import { resolvePromptStyleGuides, styleGuideAssetPaths, styleGuideEdits } from "./styleGuides.js";
 import { runAttempts, runRoot } from "./runAttempts.js";
-import { handOffTypes } from "./taskModels.js";
+import { handOffTypes, requestOf } from "./taskModels.js";
 import { answerHandoffInstruction, recoveryInstruction, savedChanges } from "./taskRecap.js";
 import { resolveTimeline } from "./timeline.js";
 
@@ -67,6 +68,23 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   const c = task.context;
   const editSkill = isSkillEdit(task) ? ctx.repos.skills.get(c.skillId ?? "") : undefined;
   if (isSkillEdit(task) && !editSkill) throw notFound("the skill this request revises");
+  const editGuideRecord = isStyleGuideEdit(task) ? ctx.repos.styleGuides.get(c.styleGuideId ?? "") : undefined;
+  if (isStyleGuideEdit(task) && !editGuideRecord) throw notFound("the style guide this request updates");
+  const editStyleGuide = editGuideRecord
+    ? {
+        guide: editGuideRecord,
+        assets: styleGuideAssetPaths(ctx, editGuideRecord),
+        attachedIds: c.attachments?.map(a => a.id),
+        hasPreview: Boolean(editGuideRecord.preview),
+        earlier: styleGuideEdits(ctx, editGuideRecord.id)
+          .filter(t => t.id !== task.id && (!task.createdAt || !t.createdAt || t.createdAt < task.createdAt))
+          .slice(-6)
+          .map(t => {
+            const asked = t.instruction.trim() || (t.context.attachments?.length ? `Attached ${t.context.attachments.map(a => a.name).join(", ")}` : "");
+            return { asked: clipped(asked, CHAT.asked), ...(t.summary?.trim() && { replied: clipped(t.summary, CHAT.message) }) };
+          }),
+      }
+    : undefined;
   // A run that edits no video is told nothing of the video's timeline, the edit it's about or the editor's skills: a
   // look at one frame, a read for a rule, a skill's revision. An edit's area checks each asked for a prompt, up to 20.
   // A hand-off edits the video for the request that handed it the work, so it is told what a request is.
@@ -102,9 +120,13 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // a later part replaced while it was away.
   const recap = !!task.resumeRootId && !(resumeSession && answered);
   const before = recap ? ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.retryTaskId') = ?", [task.projectId, task.id])[0] : undefined;
+  const rawInstruction = task.instruction.trim()
+    || (isStyleGuideEdit(task) && c.attachments?.length
+      ? `Use the attached ${c.attachments.length === 1 ? "file" : "files"} (${c.attachments.map(a => a.name).join(", ")}) to update this style guide and render its preview.`
+      : task.instruction);
   const instruction = answered && !resumeSession
     ? answerHandoffInstruction(ctx, task, before)
-    : before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : task.instruction;
+    : before ? recoveryInstruction(ctx, before, task.resumeRootId, task.id) : rawInstruction;
   // The run is launched with its harness's to-do tool, and asked to lay out its steps, when the harness has one and the
   // chat will show the plan. A dialogue pass shows the stages Scarlet measures and a request about one staged cut its
   // own two, and a skill edit changes no video: none is given the tool or asked, so each runs exactly as it did.
@@ -112,20 +134,25 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     && agentCapabilities(task.agent, (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS).plan;
   const listens = isListenCheck(task);
   const told = { ...task, instruction };
+  const activeSkills = aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true);
   const systemPrompt = buildSystemPrompt({
     project: { project, timeline: !aside && project.head ? resolveTimeline(ctx, project, "head") : null },
     task: now ? { ...told, context: { ...c, changeId: now.change.id, cutIndex: now.index } } : told,
     notes,
+    // A request that names no notes is told how many are open, so it needn't list them to find out.
+    openNotes: aside || notes ? undefined : ctx.repos.notes.select("project_id = ? AND state IN ('open', 'in_progress')", [task.projectId]).length,
     change,
     replacedPass: now && named?.id,
     // A resumed session already holds the earlier questions and answers.
     qa: resumeSession ? undefined : pairQuestionsAndAnswers(events),
     earlier: earlierRequests(ctx, task),
-    skills: aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), c.skillIds, true),
+    skills: activeSkills,
     editSkill: editSkill ?? undefined,
+    editStyleGuide,
     learningCheck: isLearningCheck(task) ? learningCheckContext(ctx, task) : undefined,
     areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
     listenCheck: isListenCheck(task) ? task.context.listenCheck : undefined,
+    batchSummary: isBatchSummary(task) ? task.context.batchSummary : undefined,
     checkIn: ctx.settings().checkIn,
     // A run that edits no video writes nothing the editor reads as Scarlet talking to them.
     talkingToYou: aside ? undefined : ctx.settings().talkingToYou,
@@ -133,10 +160,10 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     timeLimitMinutes: opts.timeLimitMinutes,
     // A request has its harness's own shell, file and web tools; a run that edits no video has Scarlet's alone.
     capabilities: { ...(aside && !listens ? agentCapabilities(task.agent) : workspaceCapabilities(agentCapabilities(task.agent, undefined, task.model))), plan: plans },
-    ...graphicsContext(ctx, project, task),
+    ...graphicsContext(ctx, project, task, activeSkills),
     // The kinds of work the editor gave other models, for a request to hand off; what a hand-off is doing, for one.
     ...(handOff && c.handOff ? { handOff: { name: c.handOff.name, description: c.handOff.description,
-      request: (c.checksTaskId && ctx.repos.tasks.get(c.checksTaskId)?.context.message) || c.message || task.instruction } }
+      request: requestText(requestOf(ctx, task)) } }
       : { taskModels: handOffTypes(ctx, task) }),
   });
   // Whether the host launches the CLI with its own to-do tool on, with its shell, file and web tools (every request:
@@ -145,23 +172,26 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // A listen is launched with its harness's own tools as well: Gemini hears a passage only by opening its file there.
   const launch = { ...(plans && { plan: true }), ...((!aside || listens) && { workspace: true }), refusedTool: aside ? REFUSED_TOOL : REFUSED_OUTSIDE };
   if (resumeSession) {
-    return { systemPrompt, instruction: answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
-      : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`, resumeSession, ...launch };
+    return { systemPrompt: wellFormed(systemPrompt), instruction: wellFormed(answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
+      : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`), resumeSession, ...launch };
   }
-  return { systemPrompt, instruction: firstMessage(instruction.trim()), ...launch };
+  // Every reader takes the prompt: the desktop host's JSON reader refuses a message with half a character in it.
+  return { systemPrompt: wellFormed(systemPrompt), instruction: wellFormed(firstMessage(instruction.trim())), ...launch };
 }
 
 /**
  * What the editor gave a request for its graphics: the files attached to it and the project's style guide. A request that edits no video is given none.
  */
-function graphicsContext(ctx: Ctx, project: Project, task: Task) {
+function graphicsContext(ctx: Ctx, project: Project, task: Task, activeSkills: readonly Skill[]) {
   if (task.kind === "skill_from_change" || (isAsideTask(task) && !isHandOff(task))) return {};
   const attachments = (task.context.attachments ?? []).map(a => ({ ...a, mime: a.mime ?? mimeFor(a.name), path: join(ctx.paths.attachments(project.id), a.id, a.name) }));
   const guide = project.styleGuide;
   const guidePath = styleGuidePath(ctx, project.id, guide);
+  const libraryStyleGuides = resolvePromptStyleGuides(ctx, task, activeSkills);
   return {
     ...(attachments.length && { attachments }),
     ...(guide && { styleGuide: { name: guide.name, text: guide.text, ...(guidePath && { path: guidePath, mime: mimeFor(guidePath) }) } }),
+    ...(libraryStyleGuides.length && { libraryStyleGuides }),
   };
 }
 
@@ -182,7 +212,7 @@ function firstMessage(instruction: string) {
  */
 const CHAT = { requests: 6, chars: 6000, asked: 600, told: 3, message: 800, edits: 3 };
 
-const clipped = (text: string, max: number) => (text.trim().length > max ? `${text.trim().slice(0, max).trimEnd()}…` : text.trim());
+const clipped = (text: string, max: number) => (text.trim().length > max ? `${cutText(text.trim(), max).trimEnd()}…` : text.trim());
 
 /** The latest things Scarlet showed the editor while it worked on a request, over all its attempts, each said once. */
 function toldEditor(ctx: Ctx, attempts: Task[]): string[] {
@@ -243,7 +273,9 @@ export function earlierRequests(ctx: Ctx, task: Task): EarlierRequest[] {
  * person reads as what it asked: its name in the chat, "Undo", doesn't say which edit was put back.
  */
 export function followUpInstruction(ctx: Ctx, projectId: string, threadId: string, text: string, before?: string): string {
-  const thread = ctx.repos.tasks.select("project_id = ? AND coalesce(json_extract(json, '$.context.threadId'), id) = ?", [projectId, threadId], "created_at ASC, rowid ASC");
+  // The editor's requests only: a hand-off shares its request's thread, and what it did is in that request's reply.
+  const thread = ctx.repos.tasks.select("project_id = ? AND coalesce(json_extract(json, '$.context.threadId'), id) = ? AND kind IN (SELECT value FROM json_each(?))",
+    [projectId, threadId, JSON.stringify(PROJECT_EDIT_TASK_KINDS)], "created_at ASC, rowid ASC");
   // A request reworded in the queue is told what came before it, as it was when first asked.
   const at = before ? thread.findIndex(t => t.id === before) : -1;
   const tasks = at < 0 ? thread : thread.slice(0, at);

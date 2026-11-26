@@ -190,6 +190,8 @@ export interface ExportAndTaskToolsDeps {
   getHeader(): Promise<{ project: { head?: string | null } }>;
   artifactDir(): Promise<string> | string;
   postEvent(ev: Omit<TaskEvent, "taskId">): Promise<{ posted: boolean; error?: string }>;
+  /** Told each file `export_otio` wrote, which the editor is given by its path. */
+  exported?(path: string): void;
   /** The kinds of work the editor gave other models, signed in now (Task models). A request with any has `hand_off`. */
   taskModels?: TaskModelOffer[];
   /** Seconds a wait inside the call under way may take (`waitLeft` in server.ts). */
@@ -201,7 +203,7 @@ export interface TaskModelOffer { id: string; name: string; description?: string
 
 /** Registers export_otio, task events, and skills/learnings (immediately after registerGraphics). */
 export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
-  const { tool, client, projectId, taskId, startedAt, task, agent, getHeader, artifactDir, postEvent, taskModels, waitLeft } = deps;
+  const { tool, client, projectId, taskId, startedAt, task, agent, getHeader, artifactDir, exported, postEvent, taskModels, waitLeft } = deps;
 
   tool(
     "export_otio",
@@ -216,6 +218,7 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
       }
       const otio = await client.get<unknown>(`/projects/${projectId}/versions/${apiPathId(v)}/export.otio`);
       const dest = await writeArtifact(await artifactDir(), path ?? join("exports", `${sanitize(v)}.otio`), JSON.stringify(otio, null, 2));
+      exported?.(dest);
       return json({ path: dest, version: v });
     },
   );
@@ -280,8 +283,9 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
         if (result.state === "unavailable") return text(result.reason);
         const by = nameOf(result.by);
         const kind = offers.find(o => o.id === type || o.name.toLowerCase() === type?.toLowerCase())?.name ?? type ?? "the work";
-        // The chat says once that the work went to another model.
-        if (!told.has(result.handoffId) && result.state !== "failed") {
+        // The chat says once that the work went to another model: as it is handed over. A call that only asks after a
+        // hand-off by its id says nothing, since a run resumed in a new session would say it a second time.
+        if (!handoffId && !told.has(result.handoffId) && result.state !== "failed") {
           told.add(result.handoffId);
           await postEvent({ type: "log", text: `Handed ${kind.toLowerCase()} to ${by}.`, data: { kind: "editor_progress", activity: "Handing off" } });
         }
@@ -314,7 +318,7 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
 
   tool(
     "learning_suggest",
-    "Offer the editor a standing rule for one of their skills. It goes on a list they review when they choose, with what they said; nothing in the skill changes unless they approve it. Give the rule as one plain sentence that would read well in the skill, and the skill it belongs in, by id or exact name. In replaces, quote each passage of that skill the rule contradicts or overrides, word for word and one stretch of text each; the editor sees them beside the rule before deciding, and approving it replaces them. Leave replaces out when nothing in the skill says otherwise. When the rule comes from what the editor decided, give from: the ids of the decisions it comes from, as your prompt lists them, and what they were in a few words as they read after their count (\"cuts you rejected\", \"laughs you kept\"); the editor sees those decisions in place of words they said.",
+    "Offer the editor a standing rule for one of their skills. It goes on a list they review when they choose, with what they said; nothing in the skill changes unless they approve it. Give the rule as one plain sentence that would read well in the skill, and the skill it belongs in, by id or exact name. Offer at most one rule for a request — or two only when it states two truly separate rules — combining closely related points for the same skill into one sentence. In replaces, quote each passage of that skill the rule contradicts or overrides, word for word and one stretch of text each; the editor sees them beside the rule before deciding, and approving it replaces them. Leave replaces out when nothing in the skill says otherwise. When the rule comes from what the editor decided, give from: the ids of the decisions it comes from, as your prompt lists them, and what they were in a few words as they read after their count (\"cuts you rejected\", \"laughs you kept\"); the editor sees those decisions in place of words they said.",
     SuggestLearningRequest.shape,
     async ({ rule, skill, replaces, from }) => {
       if (!taskId) return text("Not running as a Scarlet task, so there is no list to add this to.");

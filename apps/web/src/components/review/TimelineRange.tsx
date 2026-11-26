@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from "react-dom";
 import type { TimeRange } from "@scarlet/timeline";
 import { lengthLabel, playbackClock, preciseRange } from "../../lib/format";
-import { isAltClearRangeKey } from "../../lib/hotkeys";
+import { appLog } from "../../lib/appLog";
+import { matchesClearRangeKey } from "../../lib/hotkeys";
 import type { ScrubRelease } from "../../lib/player";
 import { DimMs, Icon } from "../ui/primitives";
 import { QueuedImg } from "./QueuedImg";
@@ -221,11 +222,20 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       g.marked = drawn;
       g.stop();
       setLive(undefined);
-      if (drawn && g.last) now.current.onRange(g.last);
-      else if (!cancelled && !edge) {
+      if (drawn && g.last) {
+        // Once, as it is let go: the moves on the way are the seeks the player logs.
+        appLog("timeline", "range-set", { start: g.last.start, end: g.last.end, via: edge ? "handle" : "drag" });
+        now.current.onRange(g.last);
+      } else if (!cancelled && !edge) {
         const at = clampTime(pressed, now.current.start, now.current.end);
         if (shift && now.current.onShiftPress) now.current.onShiftPress(toFrame(at, now.current.fps)); else now.current.onPress(at);
       }
+    };
+    // The release can be lost with the window (⌘Tab, a system dialog in the middle of a drag). The drag ends there, as
+    // a cancelled one does, so the next click anywhere doesn't land a stale stretch.
+    const lost = () => {
+      g.stop();
+      setLive(undefined);
     };
     g.stop = () => {
       if (gesture.current !== g) return;
@@ -236,6 +246,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       document.removeEventListener("pointermove", move, true);
       document.removeEventListener("pointerup", up, true);
       document.removeEventListener("pointercancel", up, true);
+      window.removeEventListener("blur", lost);
       if (drag.current === held) drag.current = null;
       lifetime.abort();
       finish?.({ marked: !!g.marked });
@@ -247,6 +258,7 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     document.addEventListener("pointermove", move, true);
     document.addEventListener("pointerup", up, true);
     document.addEventListener("pointercancel", up, true);
+    window.addEventListener("blur", lost);
     // Held still, the press opens the close-up: on a handle at that end, on the ruler at the frame pressed.
     g.hold = window.setTimeout(() => {
       if (gesture.current !== g || g.moved) return;
@@ -261,11 +273,17 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
   const lit = useUiStore(s => s.aimLit);
   const nudge = (edge: "start" | "end", e: KeyboardEvent<HTMLButtonElement>) => {
     if (!range) return;
-    if (isAltClearRangeKey(e)) { e.preventDefault(); e.stopPropagation(); onRange(undefined); return; }
+    if (matchesClearRangeKey(e)) {
+      e.preventDefault(); e.stopPropagation();
+      appLog("timeline", "range-cleared", { via: "key", key: "alt+x" });
+      onRange(undefined);
+      return;
+    }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape" || (!e.shiftKey && (e.key === "Delete" || e.key === "Backspace"))) {
       e.preventDefault();
       e.stopPropagation();
+      appLog("timeline", "range-cleared", { via: "key", key: e.key });
       onRange(undefined);
       return;
     }
@@ -428,7 +446,7 @@ function RangeMenu({ at, onClear, onClose }: { at: { x: number; y: number }; onC
  * it opened. A tick under each picture marks its frame, a taller one each whole second with its time, and a red one the
  * edge of a cut or an edit. The side of the line inside the range is shaded.
  */
-function RangeLoupe({ time, at, fps, last, inside, snapped, edges, frameAt, sheet, pictureAspect }: { time: number; at: number; fps: number; last: number;
+export function RangeLoupe({ time, at, fps, last, inside, snapped, edges, frameAt, sheet, pictureAspect }: { time: number; at: number; fps: number; last: number;
   inside: "before" | "after"; snapped: boolean; edges: readonly number[]; frameAt?(time: number, exact?: boolean): string | undefined;
   sheet?: LoupeSheet; pictureAspect: number }) {
   const frame = Math.round(time * fps);

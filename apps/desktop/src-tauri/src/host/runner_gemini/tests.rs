@@ -1,5 +1,5 @@
 use super::*;
-use super::acp_parse::SCARLET_TOOLS;
+use super::acp_parse::{absolute_path, names_path, SCARLET_TOOLS};
 use crate::host::runner::testing::sample_mcp;
 
 /// A task folder inside the test's temporary folder, so the run's own Gemini folder beside it goes with it.
@@ -602,6 +602,48 @@ fn reads_a_relative_path_from_the_task_folder_so_one_that_climbs_out_is_refused(
     assert!(allow(json!({ "name": "read_file", "rawInput": { "path": "artifacts/../notes.md" } })));
     assert!(allow(json!({ "name": "read_file", "locations": [{ "path": "artifacts/page.html" }] })));
     assert!(allow(json!({ "name": "run_shell_command", "rawInput": { "command": "cd .. && ls" } })));
+}
+
+/// A file that opens with a comment was refused as a path outside the task folder, and the run ended on the refusals.
+#[test]
+fn takes_text_with_a_line_break_for_what_a_file_holds_not_a_path() {
+    let roots = vec!["/w".to_string()];
+    let allow = |call: Value| workspace_permission(&json!({ "toolCall": call }), &roots);
+    let write = |content: &str| json!({ "name": "write_file", "rawInput": { "file_path": "artifacts/card.js", "content": content } });
+    assert!(allow(write("// The lower third's card.\nexport const card = { width: 640 };\n")));
+    assert!(allow(write("/* card */\r\n.card { color: white }")));
+    assert!(allow(write("~/ is home\n../ is the folder above")));
+    assert!(allow(json!({ "name": "replace", "rawInput": { "file_path": "artifacts/card.js", "edits": [{ "old_string": "// old\nconst a = 1;", "new_string": "// new\nconst a = 2;" }] } })));
+    // One line is still a path, with a break at its end too, and what a call says it touches always is.
+    assert!(!allow(json!({ "name": "read_file", "rawInput": { "path": "/etc/passwd" } })));
+    assert!(!allow(json!({ "name": "read_file", "rawInput": { "path": "/etc/passwd\n" } })));
+    assert!(!allow(json!({ "name": "read_file", "rawInput": { "path": "\r\n../../../agent.json\r\n" } })));
+    assert!(!allow(json!({ "name": "write_file", "locations": [{ "path": "/etc/hosts" }], "rawInput": { "content": "// a\n// b" } })));
+    assert!(!allow(json!({ "name": "write_file", "rawInput": { "file_path": "/etc/hosts", "content": "// a\n// b" } })));
+}
+
+/// `\Users\…` and `\\server\share` were never checked on Windows, where they are paths from a root.
+#[test]
+fn reads_a_path_that_starts_with_a_backslash_as_one_from_a_root_on_windows() {
+    for path in ["\\Users\\me\\secret.txt", "\\\\server\\share\\secret.txt", " \\Windows\\win.ini"] {
+        assert!(absolute_path(path, true) && names_path(path, true), "{path}");
+        // Elsewhere a backslash is no separator: a file's name, or a search's pattern.
+        assert!(!absolute_path(path, false) && !names_path(path, false), "{path}");
+    }
+    for path in ["/etc/passwd", "~/.ssh/id_rsa", "C:\\Users\\me", "c:/Users/me"] {
+        assert!(absolute_path(path, true) && absolute_path(path, false), "{path}");
+    }
+    for path in ["artifacts/page.html", "notes.md", "artifacts\\page.html", "C:notes.md", ""] {
+        assert!(!absolute_path(path, true) && !absolute_path(path, false), "{path}");
+    }
+    // A path that climbs is one on every system, a long text or one with a line break on none.
+    assert!(names_path("..\\..\\secret", true) && names_path("..\\..\\secret", false));
+    assert!(!names_path("\\title{Cold open}\n\\author{Scarlet}", true));
+    assert!(names_path(&format!("/{}", "x".repeat(4094)), false) && !names_path(&format!("/{}", "x".repeat(4095)), false));
+    // The request is refused where the path is one.
+    let roots = vec!["C:\\work\\task".to_string()];
+    let allowed = workspace_permission(&json!({ "toolCall": { "name": "read_file", "rawInput": { "path": "\\Users\\me\\secret.txt" } } }), &roots);
+    assert_eq!(allowed, !cfg!(windows));
 }
 
 #[cfg(unix)]

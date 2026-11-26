@@ -274,9 +274,9 @@ export function describeDialogueRemovals(cuts: readonly TimeRange[]): string {
   const seconds = cuts.reduce((total, cut) => total + cut.end - cut.start, 0);
   const duration = Number(seconds.toFixed(2));
   if (cuts.length === 1) {
-    return `Removed ${duration} s at ${clock(Math.floor(cuts[0]!.start))}.`;
+    return `Cut ${duration} s at ${clock(Math.floor(cuts[0]!.start))}.`;
   }
-  return `Removed ${duration} s across ${cuts.length} cuts.`;
+  return `Cut ${duration} s across ${cuts.length} cuts.`;
 }
 
 const dialogueChangeId = /^chg_[a-f0-9]{64}_(applied|review)$/;

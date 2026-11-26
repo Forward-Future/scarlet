@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { clipsAt, type Timeline } from "@scarlet/timeline";
 import { AgentId, type EditRef } from "@scarlet/shared";
 import { desktop, isDesktop, type AgentPick } from "../lib/desktop";
+import { appLog, errorName } from "../lib/appLog";
 
 /** Playhead context the agent panel attaches to the next instruction. */
 export interface AgentContext {
@@ -19,8 +20,6 @@ export interface AgentContext {
   editIndex?: number;
   /** Original edit represented by this review row. Local to the renderer, including saved drafts. */
   reviewRef?: EditRef;
-  /** Number shown on the thread timeline. The agent uses changeId and editIndex for identity. */
-  editNumber?: number;
   /** The other edits of the moment the message is about, when the editor was on a moment of the list and not one edit. */
   momentEdits?: { changeId: string; spot: number; label?: string }[];
   /**
@@ -96,6 +95,7 @@ export function pointOf(context: AgentContext | "whole" | null | undefined) {
 const AGENT_KEY = "scarlet.agent";
 const RUN_TOKENS_KEY = "scarlet.runTokens";
 const NEW_LAYOUT_KEY = "scarlet.newLayout";
+const REVIEW_DICTATION_KEY = "scarlet.reviewDictation";
 const FIRST_EDIT_HINT_KEY = "scarlet.firstEditHint";
 const SIGN_IN_LATER_KEY = "scarlet.signInLater";
 
@@ -157,7 +157,16 @@ function sameTarget(now: ComposerDraft["agentContext"], sent: ComposerDraft["age
   }
 }
 
+export interface ExportNotice {
+  path: string;
+  format: "mp4" | "otio" | "srt" | "vtt" | "folder";
+}
+
 interface UiState {
+  exportNotice: ExportNotice | null;
+  showExportNotice(notice: ExportNotice): void;
+  dismissExportNotice(): void;
+
   exportStarNotice: "unseen" | "visible" | "seen";
   offerExportStar(): void;
   dismissExportStar(): void;
@@ -189,6 +198,13 @@ interface UiState {
   newLayout: boolean;
   setNewLayout(v: boolean): void;
 
+  /**
+   * What was said into the mic waits in the message box to be read and sent, instead of going at once. On unless
+   * turned off in Settings → General.
+   */
+  reviewDictation: boolean;
+  setReviewDictation(v: boolean): void;
+
   /** Context pinned to the next agent instruction (from transcript span, note popover, etc). */
   draftOwner: string | null;
   savedDrafts: Record<string, ComposerDraft>;
@@ -196,6 +212,11 @@ interface UiState {
   clearSentDraft(owner: string | null, sent: ComposerDraft): void;
   /** Puts a message that couldn't be sent back into the box it was sent from, unless that box has words in it again. */
   keepUnsent(owner: string | null, unsent: ComposerDraft): void;
+  /**
+   * Puts words said into the mic at the end of the message being written in the box they were said into, aimed where
+   * the box was when the mic opened, to be read and sent. Says whether that box is the one on the page.
+   */
+  dictate(owner: string | null, text: string, aim: ComposerDraft["agentContext"]): boolean;
   agentContext: ComposerDraft["agentContext"];
   /** `was` is the target this one takes the place of when the page re-aims it at the same thing, as when a staged cut moves. */
   setAgentContext(c: AgentContext | "whole" | null, was?: AgentContext): void;
@@ -252,12 +273,18 @@ function loadDrafts(): Record<string, ComposerDraft> {
       if (draft.playheadPoint && agentContext && agentContext !== "whole") playheadPoints.add(agentContext);
       return [[owner, { agentDraft: draft.agentDraft, agentContext }]];
     }));
-  } catch {
+  } catch (error) {
+    // Unreadable drafts are dropped: the messages being written when Scarlet last closed are gone, and the log says so.
+    appLog("error", "drafts-unreadable", { name: errorName(error) }, { level: "warn" });
     return {};
   }
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
+  exportNotice: null,
+  showExportNotice: (exportNotice) => set({ exportNotice }),
+  dismissExportNotice: () => set({ exportNotice: null }),
+
   exportStarNotice: "unseen",
   offerExportStar: () => {
     if (get().exportStarNotice !== "unseen") return;
@@ -320,6 +347,15 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ newLayout: v });
   },
 
+  reviewDictation: (() => { try { return localStorage.getItem(REVIEW_DICTATION_KEY) !== "off"; } catch { return true; } })(),
+  setReviewDictation: (v) => {
+    try {
+      if (v) localStorage.removeItem(REVIEW_DICTATION_KEY);
+      else localStorage.setItem(REVIEW_DICTATION_KEY, "off");
+    } catch { /* Keep the choice for this session. */ }
+    set({ reviewDictation: v });
+  },
+
   draftOwner: null,
   savedDrafts: loadDrafts(),
   openDraft: (projectId, threadId) => {
@@ -372,6 +408,21 @@ export const useUiStore = create<UiState>((set, get) => ({
     if (current) set(recovered);
     else if (owner) set({ savedDrafts: { ...state.savedDrafts, [owner]: recovered } });
   },
+  dictate: (owner, text, aim) => {
+    const state = get();
+    const current = state.draftOwner === owner;
+    const existing = current ? state : owner ? state.savedDrafts[owner] : undefined;
+    const words = existing?.agentDraft ?? "";
+    // Words typed while the mic was open stay first, and what was said follows them.
+    const agentDraft = words.trim() ? `${words.replace(/\s+$/, "")} ${text}` : text;
+    // The box stays aimed where it is when words were typed meanwhile or it is the recording's target re-aimed (a newer
+    // version of the same cut); otherwise it goes back to where the recording was aimed.
+    const kept = existing?.agentContext ?? null;
+    const agentContext = aim === null || words.trim() || sameTarget(kept, aim) ? kept ?? aim : aim;
+    if (current) set({ agentDraft, agentContext });
+    else if (owner) set({ savedDrafts: { ...state.savedDrafts, [owner]: { agentDraft, agentContext } } });
+    return current;
+  },
   agentContext: null,
   setAgentContext: (agentContext, was) => {
     if (was && agentContext && agentContext !== "whole") reaimed.set(agentContext, was);
@@ -412,5 +463,12 @@ useUiStore.subscribe((state, previous) => {
   try {
     if (Object.keys(drafts).length) localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
     else localStorage.removeItem(DRAFTS_KEY);
-  } catch { /* Drafts stay in memory if storage is unavailable. */ }
+  } catch (error) {
+    // Drafts stay in memory if storage is unavailable, and would then be lost with a quit: the log says so, once.
+    if (!draftsUnsaved) appLog("error", "drafts-not-saved", { name: errorName(error), drafts: Object.keys(drafts).length }, { level: "warn" });
+    draftsUnsaved = true;
+    return;
+  }
+  draftsUnsaved = false;
 });
+let draftsUnsaved = false;

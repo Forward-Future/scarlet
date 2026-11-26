@@ -16,7 +16,7 @@ import { cacheLabel, cachePercent, useSourceCaches } from "../components/media/s
 import { useMediaProcessing } from "../components/media/useMediaProcessing";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { ConfirmDialog, EmptyState, Icon, InlineError } from "../components/ui/primitives";
-import { ReportLink } from "../components/shell/ReportProblem";
+import { ReportLink } from "../components/shell/ReportLink";
 
 function Thumb({ m }: { m: MediaAsset }) {
   const [failed, setFailed] = useState(false);
@@ -199,7 +199,7 @@ export function MediaPage({ uploads, onPlay }: {
       const paths = await desktop.pickFiles();
       // The files are queued once handed over, so the picker is free again: waiting for them to be in would hold it for
       // as long as a link downloading ahead of them.
-      if (paths.length) void startPaths(paths);
+      if (paths.length) void startPaths(paths, { expand: false });
     } catch (e) {
       setPickerError(errorMessage(e));
     } finally {

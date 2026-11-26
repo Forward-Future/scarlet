@@ -210,6 +210,31 @@ pub(crate) mod testing {
         }
     }
 
+    /// A PATH for finding the CLI `name` in, and the program on it that Scarlet can start. On Windows a batch shim
+    /// Scarlet can't see through to its program (a Scoop or Volta one) comes first on that PATH; elsewhere nothing can
+    /// stand in a program's way, and the folder ahead of it is empty.
+    pub fn shadowed_cli(dir: &std::path::Path, name: &str) -> (HashMap<String, String>, std::path::PathBuf) {
+        let (shims, programs) = (dir.join("shims"), dir.join("programs"));
+        std::fs::create_dir_all(&shims).unwrap();
+        std::fs::create_dir_all(&programs).unwrap();
+        let program = programs.join(if cfg!(windows) { format!("{name}.exe") } else { name.to_string() });
+        if cfg!(windows) {
+            std::fs::write(shims.join(format!("{name}.cmd")), format!("@echo off\r\n\"%~dp0..\\apps\\{name}\\current\\{name}.exe\" %*\r\n")).unwrap();
+            // A real program, in case the lookup asks Windows whether it is one.
+            let cmd = std::env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into());
+            std::fs::copy(cmd, &program).unwrap();
+        } else {
+            std::fs::write(&program, "#!/bin/sh\n").unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = std::env::join_paths([&shims, &programs]).unwrap().to_string_lossy().into_owned();
+        (HashMap::from([("PATH".to_string(), path)]), program)
+    }
+
     /// A shell script that takes its prompt on stdin, prints `lines` and then runs `then` ("exit 1", "sleep 30").
     #[cfg(unix)]
     pub fn fake_cli(dir: &std::path::Path, lines: &[&str], then: &str) -> String {

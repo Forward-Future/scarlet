@@ -73,22 +73,20 @@ export function bandLabel(label: string, px: number) {
 
 export interface TimelineDot {
   time: number;
-  /** "Edit 3 of 5 · 0:42" */
+  /** "Cut at 0:42" */
   title: string;
   summary?: string;
   /** Where it runs and for how long, or how much came out. */
   detail?: string;
   /** The request or change the edit came from. */
   context?: string;
-  /** An applied edit's number, as in the chat. Numbered dots show it, filled once kept and amber while it asks for a look. */
-  n?: number;
   /**
-   * Whose numbers the dot's are. Dots of different groups never share a marker: a call's number and an edit's are
-   * counted apart, and one pill can't say both. Edits have none.
+   * Which kind of marker the dot is. Dots of different groups never share a marker: a call waiting on the editor and an
+   * applied edit each keep their own. Edits have none.
    */
   group?: string;
   state?: "kept" | "check";
-  /** What the hover note calls it while it waits on the editor, as "Cut 23 needs you". Only such a dot has a note. */
+  /** What the hover note calls it while it waits on the editor, as "Cut at 2:47 needs you". Only such a dot has a note. */
   need?: string;
   /** The edit or call that's open. Its marker is lit, at the start of its band while that is on the timeline. */
   current?: boolean;
@@ -104,18 +102,11 @@ export interface TimelineDot {
   leaving?: boolean;
 }
 
-/** A marker shows its edit's number. Edits that share a marker show their run of numbers ("12–13"), or the lowest and a plus when they skip. */
-function dotLabel(dots: readonly { n?: number }[], numbered: number, first: number, last: number) {
-  const count = dots.length;
-  if (!numbered) return undefined;
-  // Places of one edit made in several places share its one number.
-  if (count === 1 || (first === last && dots.every(d => d.n !== undefined))) return String(first);
-  return numbered === count && last - first === count - 1 ? `${first}–${last}` : `${first}+`;
-}
-
-/** A numbered marker is a 17 px circle, which holds two digits. A longer label is a pill sized to its text (about
- *  6.6 px a character) with room either side. A plain dot is 8 px. */
-const markWidth = (label?: string) => !label ? 8 : label.length <= 2 ? 17 : Math.round(label.length * 6.6 + 11);
+/** A marker is a plain dot with no number or time on it: hovering it says when it is. One edit is a 9 px dot; edits
+ *  that share a marker are a 15 px pill. */
+const DOT = 9;
+const PILL = 15;
+const markWidth = (several: boolean) => several ? PILL : DOT;
 export const MARK_GAP = 3;
 /** How finely the zoom slider moves. */
 export const ZOOM_STEPS = 1000;
@@ -126,8 +117,8 @@ export const GLIDE_FROM_SHARE = 0.03;
 export const GLIDE_MS = 260;
 /** How far from a marker, in pixels, hovering the strip still picks it. */
 const MARK_SNAP = 24;
-/** A pill's run reaches at most this many pixels along the track, so a dense pass reads as several runs ("1–14",
- *  "15–27") that each zoom to a stretch worth seeing, not as one pill for all of it. */
+/** A pill's run reaches at most this many pixels along the track, so a dense pass reads as several pills that each zoom
+ *  to a stretch worth seeing, not as one pill for all of it. */
 const RUN_REACH = 104;
 /** How long an edit's arrival plays, in ms: a cut's red closing (.26 s) and then the marker's ring (.7 s). */
 export const LANDING_PLAYS = 1000;
@@ -141,17 +132,16 @@ export interface MarkLayout {
   times: number[];
   dots: TimelineDot[];
   at: number;
-  label?: string;
   width: number;
 }
 
 export function isPill({ dots }: MarkLayout) {
   const first = dots[0]!;
-  return dots.some(dot => (dot.n ?? dot.time) !== (first.n ?? first.time));
+  return dots.some(dot => dot.time !== first.time);
 }
 
-/** Each edit draws as its numbered circle. Circles that would touch at this zoom share one pill with their run of
- *  numbers, so there are never more markers than fit and none hides another. A run reaches at most RUN_REACH: the next
+/** Each edit draws as its dot. Dots that would touch at this zoom share one pill, so there are never more markers than
+ *  fit and none hides another. A run reaches at most RUN_REACH: the next
  *  edit starts a run of its own, moved along just clear of the one before if it would touch it. The open edit keeps its
  *  own circle the same way. Only circles of one
  *  group share: a call's and an edit's each keep their own. Before the track is measured, nothing is shared.
@@ -171,14 +161,8 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
   // How far apart two times are, in pixels, at the zoom the runs are for.
   const px = (a: number, b: number) => groupSpan > 0 ? (b - a) / groupSpan * width : 0;
   const marker = (key: string, time: number, dots: TimelineDot[]) => {
-    const numbers = new Set<number>();
-    let first = Infinity, last = -Infinity;
-    for (const { n } of dots) if (n !== undefined) {
-      numbers.add(n); first = Math.min(first, n); last = Math.max(last, n);
-    }
-    const label = dotLabel(dots, numbers.size, first, last);
-    const layout: MarkLayout = { key, time, times: [time], dots, at: position(time), label, width: markWidth(label) };
-    return { layout, numbers, first, last };
+    const layout: MarkLayout = { key, time, times: [time], dots, at: position(time), width: markWidth(false) };
+    return { layout };
   };
   // The distance between two markers' centres, in pixels at the zoom the runs are for, counting a run moved along.
   const centreGap = (a: MarkLayout, b: MarkLayout) => px(mid(a), mid(b)) + (shift.get(b) ?? 0) - (shift.get(a) ?? 0);
@@ -192,11 +176,11 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
     circles.set(dots[0]!.group ?? "", row);
     // A marker joins the run before it when its first edit's circle would touch that run's last, or the two markers
     // would touch, as long as the run doesn't reach too far.
-    const crowded = (a: MarkLayout, b: MarkLayout) => px(a.times.at(-1)!, b.times[0]!) < markWidth("1") + MARK_GAP
+    const crowded = (a: MarkLayout, b: MarkLayout) => px(a.times.at(-1)!, b.times[0]!) < DOT + MARK_GAP
       || centreGap(a, b) < a.width / 2 + b.width / 2 + MARK_GAP;
     for (let before = row.at(-1); width > 0 && before && crowded(before.layout, next.layout); before = row.at(-1)) {
       // A run that would reach too far stays apart, moved along just clear of the one before if it would touch it. So
-      // does the edit that's open: its own number is lit at the start of its band, in no pill.
+      // does the edit that's open: its own dot is lit at the start of its band, in no pill.
       const open = (m: MarkLayout) => m.dots.some(dot => dot.current);
       if (px(before.layout.times[0]!, next.layout.times.at(-1)!) > RUN_REACH || open(before.layout) || open(next.layout)) {
         const clear = before.layout.width / 2 + next.layout.width / 2 + MARK_GAP;
@@ -208,11 +192,7 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
       const group = before.layout;
       for (const t of next.layout.times) group.times.push(t);
       for (const dot of next.layout.dots) group.dots.push(dot);
-      for (const n of next.numbers) before.numbers.add(n);
-      before.first = Math.min(before.first, next.first);
-      before.last = Math.max(before.last, next.last);
-      group.label = dotLabel(group.dots, before.numbers.size, before.first, before.last);
-      group.width = markWidth(group.label);
+      group.width = markWidth(isPill(group));
       // Its middle has moved: whether it still needs moving along is worked out again against the run before it.
       shift.delete(next.layout);
       shift.delete(group);
@@ -233,7 +213,7 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
       const m = row[i]!.layout;
       const half = m.width / 2;
       return m.times.length > 1 || m.dots.length > 1 || shift.has(m) || xs[i] !== natural[i]
-        || (!!m.label && (natural[i]! < minLeft(half) || natural[i]! > width - half));
+        || natural[i]! < minLeft(half) || natural[i]! > width - half;
     };
     for (let i = 0; i < row.length; i++) {
       const half = row[i]!.layout.width / 2;
@@ -254,16 +234,65 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
     for (let i = 0; i < row.length; i++) {
       const half = row[i]!.layout.width / 2;
       if (keepInside(i) && xs[i]! < minLeft(half)) xs[i] = minLeft(half);
+      if (i > 0 && groupSpan >= span) {
+        const clear = row[i - 1]!.layout.width / 2 + half + MARK_GAP;
+        if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
+      }
     }
     return row.map(({ layout }, i) => ({ ...layout, at: xs[i]! / width * 100 }));
   };
   const placed = [...circles.values()].flatMap(placeRow).sort((a, b) => a.at - b.at);
-  // Markers from different groups never merge into one pill, and still must not draw on top of each other.
-  if (width > 0 && groupSpan >= span && circles.size > 1 && placed.length > 1) {
+  // Markers from different groups never merge into one pill, and still must not draw on top of each other. When all
+  // groups together crowd the track beyond what fits at their own spacing, fold the closest eligible same-group pair
+  // into a pill so every drawn marker still fits with MARK_GAP between neighbours.
+  const fitsTrack = (list: readonly MarkLayout[]) => {
+    if (!list.length) return true;
+    let x = Math.min(width - list[0]!.width / 2, list[0]!.width / 2 + startInset);
+    for (let i = 1; i < list.length; i++) x += list[i - 1]!.width / 2 + list[i]!.width / 2 + MARK_GAP;
+    return x + list.at(-1)!.width / 2 <= width;
+  };
+  if (width > 0 && groupSpan >= span && placed.length > 1 && (circles.size > 1 || !fitsTrack(placed))) {
+    while (!fitsTrack(placed)) {
+      let bestI = -1, bestJ = -1, bestGap = Infinity;
+      for (let i = 0; i < placed.length; i++) {
+        const a = placed[i]!;
+        if (a.dots.some(dot => dot.current)) continue;
+        const group = a.dots[0]!.group ?? "";
+        for (let j = i + 1; j < placed.length; j++) {
+          const b = placed[j]!;
+          if ((b.dots[0]!.group ?? "") !== group) continue;
+          if (!b.dots.some(dot => dot.current) && px(a.times[0]!, b.times.at(-1)!) <= RUN_REACH) {
+            const gap = b.times[0]! - a.times.at(-1)!;
+            if (gap < bestGap) { bestGap = gap; bestI = i; bestJ = j; }
+          }
+          break;
+        }
+      }
+      if (bestI < 0) break;
+      const a = placed[bestI]!, b = placed[bestJ]!;
+      const times = [...a.times, ...b.times];
+      const dots = [...a.dots, ...b.dots];
+      const merged: MarkLayout = {
+        key: a.key,
+        time: a.time,
+        times,
+        dots,
+        at: position((times[0]! + times.at(-1)!) / 2),
+        width: markWidth(dots.some(dot => dot.time !== dots[0]!.time)),
+      };
+      placed.splice(bestJ, 1);
+      placed[bestI] = merged;
+      placed.sort((x, y) => x.at - y.at);
+    }
     const xs = placed.map(m => m.at / 100 * width);
-    for (let i = 1; i < placed.length; i++) {
-      const clear = placed[i - 1]!.width / 2 + placed[i]!.width / 2 + MARK_GAP;
-      if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
+    for (let i = 0; i < placed.length; i++) {
+      const half = placed[i]!.width / 2;
+      const minX = Math.min(width - half, half + startInset);
+      if (xs[i]! < minX) xs[i] = minX;
+      if (i > 0) {
+        const clear = placed[i - 1]!.width / 2 + half + MARK_GAP;
+        if (xs[i]! < xs[i - 1]! + clear) xs[i] = xs[i - 1]! + clear;
+      }
     }
     for (let i = placed.length - 1; i >= 0; i--) {
       const half = placed[i]!.width / 2;
@@ -277,6 +306,10 @@ export function layoutMarks(marks: TimelineDot[], from: number, span: number, wi
       const half = placed[i]!.width / 2;
       const minX = Math.min(width - half, half + startInset);
       if (xs[i]! < minX) xs[i] = minX;
+      if (i > 0) {
+        const clear = placed[i - 1]!.width / 2 + half + MARK_GAP;
+        if (xs[i]! < xs[i - 1]! + clear) xs[i] = Math.min(width - half, xs[i - 1]! + clear);
+      }
     }
     return placed.map((m, i) => ({ ...m, at: xs[i]! / width * 100 }));
   }
@@ -303,6 +336,5 @@ export function nearestMark(layout: MarkLayout[], percent: number, width: number
 
 export function dotState(dots: TimelineDot[]) {
   if (dots.some(d => d.state === "check")) return "check";
-  const numbered = dots.filter(d => d.n !== undefined);
-  return numbered.length && numbered.every(d => d.state === "kept") ? "kept" : undefined;
+  return dots.length && dots.every(d => d.state === "kept") ? "kept" : undefined;
 }

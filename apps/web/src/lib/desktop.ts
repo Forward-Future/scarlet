@@ -213,7 +213,9 @@ export const desktop = {
   /** Save the logs and a system report as one .zip the editor picks a place for. Null when cancelled. */
   exportLogs: () => invoke<string | null>("export_logs"),
   /** Send a problem report to the Scarlet team now: the editor's words, the error on screen and the cleaned logs. */
-  sendProblemReport: (report: ProblemReportWords) => invoke<{ reference: string }>("send_problem_report", { report }),
+  sendProblemReport: (report: ProblemReportWords) => invoke<{ id: string; reference: string }>("send_problem_report", { report }),
+  /** Add the editor's words to a report already sent with one press. */
+  sendProblemDetails: (details: { reportId: string; description: string }) => invoke<void>("send_problem_details", { details }),
   /** Save a problem report that couldn't be sent in Downloads. Returns where it went. */
   saveProblemReport: (report: ProblemReportWords) => invoke<string>("save_problem_report", { report }),
   pickFile: (title: string) => invoke<string | null>("plugin:dialog|open", { options: { title, multiple: false, directory: false } }),

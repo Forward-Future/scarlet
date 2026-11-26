@@ -9,6 +9,7 @@ export interface ModelChoice {
   model?: string;
   name: string;
   label: string;
+  custom?: boolean;
   defaultEffort?: string;
   profiles: ModelOptions[];
 }
@@ -38,6 +39,7 @@ export function modelChoices(agents: OnlineAgent[]): ModelChoice[] {
         model,
         name,
         label: info?.custom ? `${name} · Custom` : name,
+        custom: info?.custom || undefined,
         defaultEffort: profiles.every(p => p?.defaultEffort === defaultEffort) ? defaultEffort : undefined,
         profiles: profiles.filter(p => p !== undefined),
       };
@@ -71,29 +73,95 @@ interface ModelPreferences {
 
 /**
  * Providers that offer hundreds of models: their models stay out of the selector until the editor shows the ones they
- * want in Settings › Models (or stars one). Every other provider's models show until hidden.
+ * want in Settings › Models (or stars one).
  */
 export const OPT_IN_PROVIDERS: readonly AgentId[] = ["openrouter"];
 
-const agentOfKey = (key: string) => key.slice(0, Math.max(0, key.indexOf(":"))) as AgentId;
-const optIn = (key: string) => OPT_IN_PROVIDERS.includes(agentOfKey(key));
+/**
+ * Current frontier models recommended for editing, enabled out of the box for each CLI provider.
+ * All other models from these providers stay disabled until turned on in Settings › Models (or starred),
+ * unless a provider's catalog has none of these recommended models (e.g. an older CLI).
+ */
+export const RECOMMENDED_MODELS: Partial<Record<AgentId, readonly string[]>> = {
+  claude: ["opus", "fable"],
+  codex: ["gpt-6.2-sol", "gpt-6.2-astra"],
+  gemini: ["gemini-4-neon"],
+};
 
-/** Whether the model with this key is left out of the selector. */
-export function isModelHidden(prefs: Pick<ModelPreferences, "hidden" | "shown" | "favorites">, key: string): boolean {
-  return optIn(key) ? !prefs.shown.includes(key) && !prefs.favorites.includes(key) : prefs.hidden.includes(key);
+const agentOfKey = (key: string) => key.slice(0, Math.max(0, key.indexOf(":"))) as AgentId;
+const modelOfKey = (key: string) => {
+  const sep = key.indexOf(":");
+  return sep >= 0 ? key.slice(sep + 1) : "";
+};
+const optInProvider = (key: string) => OPT_IN_PROVIDERS.includes(agentOfKey(key));
+
+/** Whether a model key matches a provider's recommended frontier defaults (including context-window suffixes like `[1m]`). */
+export function isRecommendedModel(key: string): boolean {
+  const agent = agentOfKey(key);
+  const recommended = RECOMMENDED_MODELS[agent];
+  if (!recommended) return false;
+  const model = modelOfKey(key);
+  if (!model) return true; // Provider default when no named models are advertised.
+  const base = model.replace(/\[[^\]]+\]$/, "");
+  return recommended.includes(model) || recommended.includes(base);
 }
 
-/** Local to this editor's profile. Newly discovered models are visible by default, except an opt-in provider's. */
+/** Whether a model key is disabled by default until explicitly shown or starred. */
+function defaultHiddenKey(key: string): boolean {
+  if (optInProvider(key)) return true;
+  const agent = agentOfKey(key);
+  return Boolean(RECOMMENDED_MODELS[agent]) && !isRecommendedModel(key);
+}
+
+/** Whether `choices` for `agent` includes at least one recommended frontier model. */
+export function providerHasRecommendedModels(choices: readonly Pick<ModelChoice, "agent" | "key">[], agent: AgentId): boolean {
+  if (!RECOMMENDED_MODELS[agent]) return false;
+  return choices.some(c => c.agent === agent && isRecommendedModel(c.key));
+}
+
+/** Whether the model with this key is left out of the selector. */
+export function isModelHidden(
+  prefs: Pick<ModelPreferences, "hidden" | "shown" | "favorites">,
+  key: string,
+  opts?: { custom?: boolean; providerHasRecommended?: boolean },
+): boolean {
+  if (prefs.favorites.includes(key)) return false;
+  if (prefs.hidden.includes(key)) return true;
+  if (prefs.shown.includes(key)) return false;
+  if (opts?.custom) return false;
+  if (optInProvider(key)) return true;
+  if (RECOMMENDED_MODELS[agentOfKey(key)]) {
+    if (isRecommendedModel(key)) return false;
+    if (opts?.providerHasRecommended === false) return false;
+    return true;
+  }
+  return false;
+}
+
+/** Whether a model choice is hidden, accounting for custom models and whether its provider advertises recommended defaults. */
+export function isChoiceHidden(
+  prefs: Pick<ModelPreferences, "hidden" | "shown" | "favorites">,
+  choice: Pick<ModelChoice, "agent" | "key" | "custom">,
+  allChoices: readonly Pick<ModelChoice, "agent" | "key">[],
+): boolean {
+  return isModelHidden(prefs, choice.key, {
+    custom: choice.custom,
+    providerHasRecommended: providerHasRecommendedModels(allChoices, choice.agent),
+  });
+}
+
+/** Local to this editor's profile. Frontier defaults and local models show by default; other models are opt-in. */
 export const useModelPreferences = create<ModelPreferences>()(persist((set) => ({
   hidden: [],
   shown: [],
   favorites: [],
   tuningByModel: {},
   setVisible: (keys, visible) => set((state) => {
-    const optKeys = keys.filter(optIn), rest = keys.filter(k => !optIn(k));
+    const shownKeys = keys.filter(defaultHiddenKey);
+    const hideableKeys = keys.filter(k => !optInProvider(k));
     return {
-      hidden: visible ? state.hidden.filter((k) => !rest.includes(k)) : [...new Set([...state.hidden, ...rest])],
-      shown: visible ? [...new Set([...state.shown, ...optKeys])] : state.shown.filter((k) => !optKeys.includes(k)),
+      hidden: visible ? state.hidden.filter((k) => !keys.includes(k)) : [...new Set([...state.hidden, ...hideableKeys])],
+      shown: visible ? [...new Set([...state.shown, ...shownKeys])] : state.shown.filter((k) => !keys.includes(k)),
       favorites: visible ? state.favorites : state.favorites.filter((k) => !keys.includes(k)),
     };
   }),

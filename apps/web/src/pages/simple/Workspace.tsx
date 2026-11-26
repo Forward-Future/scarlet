@@ -5,9 +5,10 @@ import { useSearchParams } from "react-router-dom";
 import { ChatRail } from "../../components/shell/ChatRail";
 import { appliedReviewChange, timelineDuration, type Change, type CutAssessment, type TimeRange } from "@scarlet/timeline";
 import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
-import { editGroups, listPlaces, useReviewed, useRevising } from "../../components/review/threadEditState";
+import { useReviewed, useRevising } from "../../components/review/threadEditState";
 import { QueueTray, useRewordingHold, type QueuedRequest } from "../../components/chat/QueueTray";
-import { recordEditReview } from "../../lib/editReviews";
+import { QueueInChat } from "../../components/chat/QueueInChat";
+import { recordEditReview, recordEditReviews } from "../../lib/editReviews";
 import { forgetCalls, recordUndo, undoLast, type CallStep } from "../../lib/undo";
 import { editKey, keepEdits, notYetKept } from "../../lib/keptEdits";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
@@ -31,10 +32,11 @@ import { Loading } from "../../components/ui/primitives";
 import { api, errorMessage } from "../../lib/client";
 import { readTimeline } from "../../lib/timelineCache";
 import { appLog } from "../../lib/appLog";
-import { clock as clockLabel, lengthLabel, parseTimestamp, plural, removedSeconds } from "../../lib/format";
+import { clock as clockLabel, lengthLabel, parseTimestamp, plural, preciseRange, distinctClock } from "../../lib/format";
 import { editPlaybackRange } from "../../lib/editPlaybackRange";
 import { listMoments, momentRange } from "../../lib/editMoments";
-import { reviewStops, rowAfter, rowBeside, rowPlace, rowsOfTab, stopsShown, tabShown, type ListOrder, type ReviewStop } from "../../lib/reviewTabs";
+import { inListOrder, reviewStops, rowAfter, rowBeside, rowNext, rowPlace, rowsOfTab, stopsShown, tabShown, type ListOrder, type ReviewStop } from "../../lib/reviewTabs";
+import { sectionStops } from "./beta/reviewTabsBeta";
 import { editFocus, editKindWord } from "../../lib/editKind";
 import { player } from "../../lib/player";
 import { cutChange } from "../../lib/appliedCutPlayback";
@@ -44,30 +46,39 @@ import type { JoinClock } from "../../lib/joinClock";
 import { buildThreads, firstCutDeliveries, isRedo, revisionTarget, stagedCuts, type Thread } from "../../lib/threads";
 import { runIsActive } from "../../lib/taskRun";
 import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, threadRuns, waitingToStart } from "../../lib/requestRuns";
-import { callRevisions, decidedPassCalls, isOpenPass, keepGoesTo, noRevisions, openPass, passForYouOrder, passRevision, rejectedCallIndex, reviewCalls, revisedFrom, revisionCut, savedChoices,
+import { callRevisions, decidedPassCalls, isOpenPass, keepGoesTo, noRevisions, openPass, passForYouOrder, passRevision, reviewCalls, revisedFrom, revisionCut, savedChoices,
   type Call, type CutChoice, type PassForYouItem } from "../../lib/passCalls";
 import { callNow, carriedCall, carryingVersions, revisedCall } from "../../lib/carriedCuts";
 import { canPreviewMedia } from "../../lib/upload";
 import { showingWorkingCut, useShownCut } from "../../stores/shownCut";
 import { useProjectStore } from "../../stores/project";
 import { messageTimestamps, type MessageClock } from "../../lib/messageTimestamps";
-import { markedRangeOf, playheadPoints, pointOf, useUiStore, withMarkedRange, type AgentContext, type MarkedRange } from "../../stores/ui";
+import { insertInDraft, markedRangeOf, playheadPoints, pointOf, useUiStore, withMarkedRange, type AgentContext, type MarkedRange } from "../../stores/ui";
+import { AimHostContext } from "../../components/review/AimRow";
 import { CutPreview } from "../WatchPage";
 import { EditHoverContext, type TimelineDot, type TimelineGap } from "../../components/review/TimelineScrubber";
-import { aimedAtChange, approves, belongsTo, firstKey, isWorking, noEdits, noop, shortTitle, stepsOver, tagOf,
+import { aimedAtChange, approves, belongsTo, changeForEdit, firstKey, isWorking, noEdits, noop, shortTitle, stepsOver, tagOf,
   type ChatActions, type HoveredReviewRow, type Listening, type LocatedReview, type OpenList, type OpenPass, type Panel, type PassList, type ReportReviewMarkers } from "./types";
 import { WorkspaceComposer } from "./WorkspaceComposer";
+import { WorkspaceComposer as WorkspaceComposerBeta } from "./beta/WorkspaceComposerBeta";
 import { SimpleHeader } from "./SimpleHeader";
 import { TRANSCRIPT_RAIL_MIN, TranscriptRail } from "./TranscriptRail";
 import { savedRewording, saveRewording } from "./rewordingStorage";
-import { savedCollapsed, savedOpenLists, saveCollapsed, saveOpenLists } from "./openListsStorage";
+import { savedCollapsed, savedDockList, savedOpenLists, saveCollapsed, saveDockList, saveOpenLists } from "./openListsStorage";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./ReviewCards";
+import { ReviewDock } from "./ReviewDock";
+import { REVIEW_RAIL_MIN, ReviewRail, sideRailWidth } from "./ReviewRail";
+import { RailStore, ReviewRailContext, type RailSection, type UnifiedRailRow } from "./railStore";
+import { ReviewDockContext, ReviewDockStore, stepInDock, type DockEntry } from "./reviewDockStore";
 import { TimelineWorking } from "../../components/review/TimelineWorking";
 import { Turn } from "./Turn";
+import { Turn as TurnBeta } from "./beta/TurnBeta";
 import { useCallListen } from "./useCallListen";
 import { useAppliedCut, type AppliedCutSide, type StagedCall } from "./useAppliedCut";
+import { useCutAdjust } from "./useCutAdjust";
 import { useCallCardShortcuts, useCarryingFootage, useChatAutoFollow, useDraftTimeline, useEditCardShortcuts, useLandingTracker, useOutsideClearMarkedRange, usePassCallNumbers, usePassChoices, useProjectBookmark, useEscapeCloses, useUndoShortcut, useWatchedMomentAutoKeep } from "./workspaceHooks";
 import "../../simple.css";
+import "./beta/beta.css";
 
 const narrow = window.matchMedia("(max-width: 767px)");
 function subscribeWidth(update: () => void) {
@@ -88,8 +99,12 @@ const SIMPLE_RAIL_MIN = 320;
 /**
  * The workspace: speak or type an edit, then watch each change with Before and After.
  * Every request is in one conversation, oldest first. The player on the right shows whatever the chat points at.
+ *
+ * `beta` is the new layout (Settings → General → "New workspace layout (Beta)"): the chat, a column of edits, then the
+ * player, scoped under `[data-new-layout]`. The default layout keeps its lists in a dock under the chat instead. The
+ * two share everything else; where they differ, `beta` says which way. It is fixed for a mount: the caller keys on it.
  */
-export function LegacySimpleWorkspace() {
+export function Workspace({ beta = false }: { beta?: boolean }) {
   const current = useProjectStore(useShallow(s => {
     if (!s.current) return null;
     const { id, project, changes, tasks, notes, timeline, media, renderSettingsRevision, reviewStatus, reviewError, headError } = s.current;
@@ -141,7 +156,21 @@ export function LegacySimpleWorkspace() {
     return buildThreads({ changes, tasks: tasks.filter(t => !takenFromQueue(t) || again.has(t.id)), notes: notesStillAsked(notes, tasks) });
   }, [changes, tasks, notes]);
   const ordered = useMemo(() => [...threads].sort((a, b) => parseTimestamp(a.createdAt) - parseTimestamp(b.createdAt)), [threads]);
+  const threadIds = useMemo(() => ordered.map(t => t.id), [ordered]);
   const { justLanded, landedAt } = useLandingTracker(changes, current.reviewStatus);
+
+  // The fixed bottom review lists dock: merges Needs review / Working / Done (and untabbed See all) across requests so
+  // edit lists stay fixed at the bottom above the message box while new messages flow above them.
+  const [dock] = useState(() => new ReviewDockStore());
+  const dockHasTabs = useSyncExternalStore(dock.subscribeHasTabs, dock.hasTabsSnapshot, dock.hasTabsSnapshot);
+  const [dockList, setDockList] = useState<OpenList>(() => savedDockList(current.id));
+  const dockListOf = useRef(current.id);
+  useEffect(() => {
+    if (beta) return;
+    if (dockListOf.current === current.id) return saveDockList(current.id, dockList);
+    dockListOf.current = current.id;
+    setDockList(savedDockList(current.id));
+  }, [current.id, dockList]);
 
   // The request Scarlet is asking about: the question at the front of the line. With no cut or edit open, the next
   // message answers it.
@@ -165,6 +194,7 @@ export function LegacySimpleWorkspace() {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => savedCollapsed(current.id));
   const collapsedOf = useRef(current.id);
   useEffect(() => {
+    if (beta) return;
     if (collapsedOf.current === current.id) return saveCollapsed(current.id, collapsed);
     collapsedOf.current = current.id;
     setCollapsed(savedCollapsed(current.id));
@@ -179,14 +209,39 @@ export function LegacySimpleWorkspace() {
     const runs = new Set(threadRuns(thread).map(run => run.root));
     return [...runs].some(run => all.has(run)) ? new Set([...all].filter(run => !runs.has(run))) : all;
   }), []);
+  // The new layout's column of edits beside the chat is one unified list per section for the whole video (`rail`).
+  // Working, at the column's foot, is open until the editor folds it, so what Scarlet has is in view; Done opens on a press.
+  const [rail] = useState(() => new RailStore());
+  useEffect(() => () => rail.dispose(), [rail]);
+  const railProject = useRef(current.id);
+  useEffect(() => {
+    if (railProject.current === current.id) return;
+    railProject.current = current.id;
+    rail.resetLinger();
+  }, [rail, current.id]);
+  const railVersion = useSyncExternalStore(rail.subscribe, rail.snapshot, rail.snapshot);
+  const [railOpen, setRailOpen] = useState({ working: true, done: false, low: false });
+  if (beta) {
+    rail.setLowOpen(railOpen.low);
+    rail.setDoneOpen(railOpen.done);
+  }
+  const railView = rail.view();
   // One list of every edit is open at a time, so two "Hide" links never stand for one timeline: opening another
   // request's closes it. The list of what needs the editor is a review list, and leaves the others as they are.
-  const listOf = (threadId: string): PassList => [lists[threadId], next => setLists(all => {
-    const open = typeof next === "function" ? next(all[threadId]) : next;
-    if (open === all[threadId]) return all;
-    const others = open !== "all" ? all : Object.fromEntries(Object.entries(all).filter(([, list]) => list !== "all"));
-    return { ...others, [threadId]: open };
-  })];
+  const listOf = (threadId: string): PassList => [lists[threadId], next => {
+    // In the new layout a row that is with Scarlet or decided is under Working or Done: going to it opens that part
+    // of the column.
+    if (beta) {
+      const to = typeof next === "function" ? next(lists[threadId]) : next;
+      if (to === "working" || to === "done") setRailOpen(was => was[to] ? was : { ...was, [to]: true });
+    }
+    setLists(all => {
+      const open = typeof next === "function" ? next(all[threadId]) : next;
+      if (open === all[threadId]) return all;
+      const others = open !== "all" ? all : Object.fromEntries(Object.entries(all).filter(([, list]) => list !== "all"));
+      return { ...others, [threadId]: open };
+    });
+  }];
   // The pass whose full list is open in the chat, and the row the pointer is over there.
   const [openList, setOpenList] = useState<string>();
   // The request whose own row opened an edit, and which edit. Moving to another edit leaves it behind.
@@ -200,8 +255,8 @@ export function LegacySimpleWorkspace() {
   // Counts the presses on a band, each of which shows the whole timeline.
   const [fitTimeline, setFitTimeline] = useState(0);
   // The request whose edits the timeline numbers when nothing is open: the one picked, else the latest, unless the
-  // editor took them off.
-  const marked = picked === null ? undefined : threads.find(t => t.id === picked) ?? ordered.at(-1);
+  // editor took them off. The new layout picks none: the timeline shows every Needs review dot plus what is open.
+  const marked = beta || picked === null ? undefined : threads.find(t => t.id === picked) ?? ordered.at(-1);
   // The timeline is on the request the editor went to: an edit they opened, or a pass's full list. Otherwise it is on the
   // request picked in the chat, else the latest, so that request's edits are marked from the start.
   const focusThread = threads.find(t => t.id === focus?.threadId) ?? marked;
@@ -366,7 +421,7 @@ export function LegacySimpleWorkspace() {
     [reviewContext, pass?.id, pass?.toVersion, current.renderSettingsRevision]);
   const preparedCandidates = useMemo(() => new Map<string, PreparedCut>(), [draftCache]);
   const {
-    returningCall, review, liveReview, passRemovals, listenRemovals, stagedOn, toWorkingCut, placing, placeCut, placed,
+    returningCall, review, liveReview, passRemovals, listenRemovals, callSiblings, stagedOn, toWorkingCut, placing, placeCut, placed,
     overrideForCall, cutOverride, rechecking, conflict, answeringCut, versionBefore, callPlaybackKey, beforeVersion, preparedCall, savedBefore,
     callTimeline, callDuration, pinnedCallVersion, versionAfter, savedAfter, needsSingleCut, single, heard, audition, listenJoined,
     listedPassEdits, rejectedPassEdits, locatedPassEdits, callView, visit, viewAudition, viewJoined, playedAudition, callViewNow,
@@ -476,7 +531,7 @@ export function LegacySimpleWorkspace() {
     // A message being spoken is in the box until it is out. Aiming the box builds it again, which would drop the
     // recording without a word: Revise waits, as the tag's × does.
     if (useUiStore.getState().speaking) return;
-    player.pause();
+    player.pause(true);
     aimAt(thread, target, label);
     setWriteRequest(n => n + 1);
     useUiStore.getState().focusComposer();
@@ -537,7 +592,7 @@ export function LegacySimpleWorkspace() {
   useEffect(() => { setDecideError(""); }, [pass?.id]);
   useEffect(() => { setStripError(""); }, [suggestion?.id]);
   /**
-   * Approve or skip the call that's playing, then move on to the next row still waiting in For you, a call or a
+   * Approve or skip the call that's playing, then move on to the next row still waiting in Needs review, a call or a
    * flagged edit. The last call applies the pass, with Scarlet's picks for the rest, or schedules it for when Scarlet
    * finishes checking.
    */
@@ -550,8 +605,47 @@ export function LegacySimpleWorkspace() {
       projectId: current.id, changeId: pass.id, index: listening.index, ...(was && { was }) });
     // A and S reach the log as a bare key: this says which call it decided and how many still wait.
     appLog("action", choice === approves(allCalls.find(a => a.index === listening.index)) ? "approve-call" : "skip-call", { change: pass.id, cut: listening.index, at: listening.cut.start, left: remainingCalls.length });
+    if (beta) {
+      // The new layout goes on down its column of edits: the next row that waits, else the first low-risk row.
+      const view = rail.view();
+      const currentCallRow = passThread ? view.findForCall(passThread.id, listening.index) : undefined;
+      const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
+      const nextRow = nextRowAfter(waits, currentCallRow, listedAt.get(listening.index) ?? listening.cut.start)
+        ?? view.sections.low.find(isSteppableRailRow);
+      const nextSamePassCall = nextRow?.isCall && nextRow.threadId === passThread?.id && nextRow.callIndex !== undefined
+        ? allCalls.find(a => a.index === nextRow.callIndex) : undefined;
+      player.pause();
+      if (nextSamePassCall) {
+        setListening({ changeId: pass.id, index: nextSamePassCall.index, cut: { start: nextSamePassCall.start, end: nextSamePassCall.end }, side: "after", take: 0, key: `${pass.id}/${nextSamePassCall.index}` });
+        return void saveChoices(pass, decidedNow);
+      }
+      if (nextRow) nextRow.open?.();
+      else setListening(undefined);
+      if (remainingCalls.length > 0) return void saveChoices(pass, decidedNow);
+      if (revision || queuedCuts.size) return void saveChoices(pass, decidedNow);
+      if (passRunning) return void saveChoices(pass, decidedNow, true);
+      await approveReview(pass, decidedNow, !!nextRow);
+      return;
+    }
+    const nextDock = dockHasTabs ? nextDockAfterKeep(listedAt.get(listening.index) ?? listening.cut.start) : undefined;
     const next = nextAfterCallDecision;
     player.pause();
+    if (dockHasTabs) {
+      if (nextDock?.row.callIndex !== undefined) {
+        const nextCall = allCalls.find(a => a.index === nextDock.row.callIndex);
+        if (nextCall) {
+          setListening({ changeId: pass.id, index: nextCall.index, cut: { start: nextCall.start, end: nextCall.end }, side: "after", take: 0, key: `${pass.id}/${nextCall.index}` });
+          return void saveChoices(pass, decidedNow);
+        }
+      }
+      if (nextDock?.row.open) nextDock.row.open();
+      else setListening(undefined);
+      if (remainingCalls.length > 0) return void saveChoices(pass, decidedNow);
+      if (revision || queuedCuts.size) return void saveChoices(pass, decidedNow);
+      if (passRunning) return void saveChoices(pass, decidedNow, true);
+      await approveReview(pass, decidedNow, !!nextDock?.row.open);
+      return;
+    }
     if (next && "call" in next) {
       setListening({ changeId: pass.id, index: next.call.index, cut: { start: next.call.start, end: next.call.end }, side: "after", take: 0, key: `${pass.id}/${next.call.index}` });
       return void saveChoices(pass, decidedNow);
@@ -667,7 +761,7 @@ export function LegacySimpleWorkspace() {
   function letGoOnChatPress(e: React.MouseEvent<HTMLElement>) {
     if (e.defaultPrevented || e.button !== 0 || !focusThread || showing || listening || suggestion) return;
     const target = e.target as Element;
-    if (target.closest('.unit-msg, .composer-dock, button, a, input, textarea, select, label, [role="button"], [role="menu"], [role="menuitem"], [role="dialog"], .said.is-clipped, .said.is-open')) return;
+    if (target.closest('.unit-msg, .composer-dock, .simple-review-dock, button, a, input, textarea, select, label, [role="button"], [role="menu"], [role="menuitem"], [role="dialog"], .said.is-clipped, .said.is-open')) return;
     if (window.getSelection()?.toString()) return;
     if (!e.currentTarget.querySelector(".unit-msg.is-marked")) return;
     letGo(focusThread.id);
@@ -684,7 +778,7 @@ export function LegacySimpleWorkspace() {
     setFocus(undefined);
   }
   function listenCall(change: Change, a: CutAssessment) {
-    if (passThread) unfold(passThread);
+    if (!beta && passThread) unfold(passThread);
     // The same call opened again while it's open keeps its words where they are.
     if (listening?.changeId !== change.id || listening.index !== a.index) startVisit();
     setSourceChoice({ id: "", play: false });
@@ -728,13 +822,13 @@ export function LegacySimpleWorkspace() {
     setAimAgain(n => n + 1);
   }
   function openEdit(thread: Thread, ref: EditRef, from?: string, single?: boolean) {
-    unfold(thread);
+    if (!beta) unfold(thread);
     // The edit that's open, pressed again, plays again from the top: its card and the timeline's zoom stay. A cut
     // starts over as the video runs, unlit; any other edit keeps its side. Esc is what closes it. A cut plays under
     // this view's own listen; any other edit under the player's. A moment's main edit picked on its own from under
     // the moment's row, or the moment picked again from its row, is opened anew.
     const sameWay = threadTimeline.single === !!single;
-    if (showing && matchesEdit(showing, ref) && thread.id === focus?.threadId && sameWay) {
+    if (showing && !threadTimeline.leaving && matchesEdit(showing, ref) && thread.id === focus?.threadId && sameWay) {
       setOpenedFrom(from ? { run: from, ref: { changeId: ref.changeId, spot: ref.spot } } : undefined);
       player.pause();
       // Choosing it again takes the aim off an empty message box, so the box is aimed at the cut or edit again.
@@ -744,6 +838,7 @@ export function LegacySimpleWorkspace() {
       return;
     }
     setOpenedFrom(from ? { run: from, ref: { changeId: ref.changeId, spot: ref.spot } } : undefined);
+    if (threadTimeline.leaving) threadTimeline.stay();
     leaveForEdit();
     if (thread.id === focus?.threadId && !threadTimeline.loading) {
       const edit = threadTimeline.edits.find(e => matchesEdit(e, ref)) ?? threadTimeline.rejected.find(e => matchesEdit(e, ref));
@@ -761,9 +856,12 @@ export function LegacySimpleWorkspace() {
     stopShowing();
     player.seek(decision.time, true);
   }
+  const chosenRef = useRef(false);
+  chosenRef.current = threadTimeline.chosen;
   function listOpen(threadId: string, open: boolean, moved?: boolean) {
     setOpenList(current => open ? threadId : current === threadId ? undefined : current);
     if (open && !moved) setFocus(f => f?.threadId === threadId ? f : { threadId });
+    else if (!beta && !open && !chosenRef.current) setFocus(f => f?.threadId === threadId && !f.changeId ? undefined : f);
   }
   const lightMark = (time?: number, row?: HoveredReviewRow) => {
     // A row's dot is where its footage is on the version the timeline shows.
@@ -777,6 +875,8 @@ export function LegacySimpleWorkspace() {
     threadTimeline.clear();
     setListening(undefined);
     setReviewId(undefined);
+    // The new layout's timeline goes back to every request's Needs review dots.
+    if (beta) setFocus(undefined);
   }
   function reviewSuggestion(change: Change) {
     player.pause();
@@ -822,36 +922,36 @@ export function LegacySimpleWorkspace() {
   const allCalls = useMemo(() => pass ? reviewCalls(pass, passCuts, passOver,
     revisionInput && { ...revisionInput.call, index: revisionInput.index }) : [], [pass, passCuts, passOver, revisionInput]);
   const passEdits = passThread ? listedPassEdits : noEdits;
-  // While a pass waits on the editor, its calls and the edits of its request that ask for a look are one run of
-  // numbers: each says the same number in the list, on the timeline and on its card, and is named as what it is,
-  // "Cut 6", or "Edit 6" for one that took no footage out.
+  // While a pass waits on the editor, its calls and the edits of its request that ask for a look go by their times:
+  // each is named the same in the list, on its card and in the box's tag, as what it is and where it is, "Cut at 8:52",
+  // or "Edit at 8:52" for one that took no footage out. The order they reached the editor in is kept, but never shown.
   const passRoot = pass ? (stagingTask(pass, changes, tasks) ?? tasks.find(t => t.id === pass.taskId)) : undefined;
   const { callNo, passEditNo } = usePassCallNumbers(current.id, pass, passThread, passRoot, allCalls, passEdits, passThread ? rejectedPassEdits : noEdits);
-  // A call says its place among the calls ("Cut 2 of 5") while its number is one of theirs. A call that arrived after
-  // the edits were numbered has a number past them, and says the number alone.
-  const ofCalls = (n?: number) => n !== undefined && n <= allCalls.length ? ` of ${allCalls.length}` : "";
+  const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
+    ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
   const revisions = useMemo(() => pass ? callRevisions(pass, tasks, changes) : undefined, [pass, tasks, changes]);
   const queuedCuts = new Set(cutRuns.keys());
   const sentBack = (index: number) => index === revisingIndex || queuedCuts.has(index);
   const asks = allCalls.filter(a => !sentBack(a.index));
   const cutCount = passCuts?.length ?? pass?.cutReasons?.length ?? 0;
   const passChoices = pass ? choicesOf(pass) : {};
-  // The calls still waiting on the editor: the ones For you counts.
+  // The calls still waiting on the editor: the ones Needs review counts.
   const waiting = (a: Call) => !sentBack(a.index) && passChoices[a.index] === undefined;
   const waitingCalls = allCalls.filter(waiting);
   const remainingCalls = listening ? waitingCalls.filter(a => a.index !== listening.index) : [];
-  // A call's number is the order it reached the editor in: a later ask, or the cuts the pass hands over
-  // when it ends, never renumber the calls the editor has seen. A request about that cut, its card, its line in the
-  // list and its dot on the timeline all say "Cut 2".
-  const callNumber = (about: { changeId?: string; cutIndex?: number }) => {
+  // A call goes by its time on the working cut, where its row is in the list. A request about that cut, its card, its
+  // row and its tag in the box all say "Cut at 2:47".
+  const callAtTime = (about: { changeId?: string; cutIndex?: number }) => {
     if (!pass) return undefined;
     const index = callNow(pass, about, passThread?.changes ?? [], changes, tasks, footage);
-    return index === undefined ? undefined : callNo.get(index);
+    const call = index === undefined ? undefined : allCalls.find(a => a.index === index);
+    return call && (listedAt.get(call.index) ?? call.start);
   };
   const cutName = (about: { changeId?: string; cutIndex?: number; editIndex?: number }) => {
     if (about.editIndex !== undefined && about.changeId) return passEditNo.get(`${about.changeId}/${about.editIndex}`)?.name;
-    const n = callNumber(about);
-    return n ? `Cut ${n}` : undefined;
+    const at = callAtTime(about);
+    // Two calls in one second are told apart to the millisecond.
+    return at !== undefined ? `Cut at ${distinctClock(at, [...listedAt.values()])}` : undefined;
   };
   // Where each call goes in the list: at its time on the working cut, among the edits made there. One that isn't there
   // as it was staged goes where what is left of its footage sits, or else with the call before it, so the calls keep
@@ -873,12 +973,25 @@ export function LegacySimpleWorkspace() {
       const past = revisionInput?.index === a.index ? history.slice(0, -1) : history;
       const edit = overrideForCall(a.index);
       const at = edit ? (edit.version === head ? edit.range.start : undefined) : placeCut(a)?.start;
-      return { index: a.index, askOrder: a.askOrder, n: callNo.get(a.index)!, start: listedAt.get(a.index)!, at, summary: a.summary || a.reason, version: past.length + 1, earlier: past.at(-1),
-        tag: approves(a) === "cut" ? removedSeconds(a.end - a.start) : "Check",
+      return { index: a.index, askOrder: a.askOrder, n: callNo.get(a.index)!, start: listedAt.get(a.index)!, at, summary: a.summary || a.reason,
+        ...beta && { reason: a.reason, length: Math.max(0, (edit?.range.end ?? a.end) - (edit?.range.start ?? a.start)) },
+        version: past.length + 1, earlier: past.at(-1),
+        tag: approves(a) === "cut" ? "Cut" : "Check",
         run: cutRuns.get(a.index),
         state: sentBack(a.index) ? "revising" : passChoices[a.index] === undefined ? "open" : passChoices[a.index] === approves(a) ? "approved" : "skipped" };
     }),
     openCall: index => { const call = allCalls.find(a => a.index === index); if (call) listenCall(pass, call); },
+    unkeepCall: index => {
+      if (deciding === pass.id) return;
+      const choices = choicesOf(pass);
+      const was = choices[index];
+      if (was === undefined) return;
+      const { [index]: _decided, ...rest } = choices;
+      recordUndo({ kind: "call", word: "Unkeep", projectId: current.id, changeId: pass.id, index, was,
+        name: cutName({ changeId: pass.id, cutIndex: index }) });
+      appLog("action", "unkeep-call", { change: pass.id, index });
+      void saveChoices(pass, rest, false);
+    },
     apply: () => void (passRunning ? saveChoices(pass, choicesOf(pass), true) : approveReview(pass)),
   } : undefined;
   const actions: ChatActions = {
@@ -889,10 +1002,8 @@ export function LegacySimpleWorkspace() {
     showing,
     showingSingle: threadTimeline.single,
     showingFrom: openedFrom && showing && matchesEdit(showing, openedFrom.ref) ? openedFrom.run : undefined,
-    marked: focusThread?.id,
-    mark: markThread,
-    collapsed,
-    collapse,
+    // The default layout's picked band and folded requests; the new layout has neither.
+    ...!beta && { marked: focusThread?.id, mark: markThread, collapsed, collapse },
     fitTimeline() { setFitTimeline(n => n + 1); },
     reviewingId: suggestion?.id,
     listening,
@@ -907,11 +1018,13 @@ export function LegacySimpleWorkspace() {
     revise: reviseChange,
     reply: replyToThread,
     // The one question that waits, while the box is on it and says Answer. Answer on a question about a cut also opens
-    // that cut, and with several waiting it says which the box is on: those keep their link.
-    answering: replyThread?.question && !replyThread.question.cutConflict?.range && (!agentContext || agentContext === "whole")
+    // that cut, and with several waiting it says which the box is on: those keep their link. In the new layout the
+    // question the box answers sits on top of it, so its band needs no Answer; aimed elsewhere, it has one.
+    answering: beta ? replyThread?.question && (!agentContext || agentContext === "whole") ? replyThread.question.id : undefined
+      : replyThread?.question && !replyThread.question.cutConflict?.range && (!agentContext || agentContext === "whole")
       && tasks.filter(t => t.kind !== "transcribe" && t.state === "waiting_for_user" && !!t.question).length === 1 ? replyThread.question.id : undefined,
     cutName,
-    callNumber: (changeId, cutIndex) => callNumber({ changeId, cutIndex }),
+    callTime: (changeId, cutIndex) => callAtTime({ changeId, cutIndex }),
   };
   // The pass goes in once nothing is left to decide: no call waits on the editor and no cut is with Scarlet. The editor's
   // last call does this itself; this covers a pass that gets there another way, such as a run that ends with every
@@ -929,23 +1042,25 @@ export function LegacySimpleWorkspace() {
     else void approveReview(pass);
   }, [autoApply]); // eslint-disable-line react-hooks/exhaustive-deps
   const span = (r: { start: number; end: number }) => `${clockLabel(r.start)}–${clockLabel(r.end)} · ${lengthLabel(r.end - r.start)}`;
-  // Only the calls still waiting on the editor are marked, each with its number, amber as in the chat. A decided call's dot goes.
-  // A call's dot never shares a pill with an edit's: the two count apart.
+  // Only the calls still waiting on the editor are marked, each with an amber dot. A decided call's dot goes.
+  // A call's dot never shares a pill with an edit's.
   // A dot sits where the cut's footage is on the working cut. A cut that can't be placed there has no dot.
   // While a suggestion plays the timeline is the suggestion's, as it is a call's or an edit's while that is open: After
   // is on the version it proposes, where the pass's cuts sit elsewhere. The calls' dots are back when it closes.
   // The calls are on the timeline while the timeline is the pass's, while one of them is open, and while the editor
   // hasn't picked a request in the chat or gone to another's edit: they hold the next request. Another request picked,
-  // or the marked band let go, the timeline marks only that request's edits, or nothing, and For you leads to them.
-  const callsShown = !!pass && (passThread?.id === focusThread?.id || listening?.changeId === pass.id || (typeof picked !== "string" && !focus));
+  // or the marked band let go, the timeline marks only that request's edits, or nothing, and Needs review leads to them.
+  // The new layout shows the pass's calls whatever request the timeline is on.
+  const callsShown = beta ? !!pass && !suggestion && !source
+    : !!pass && (passThread?.id === focusThread?.id || listening?.changeId === pass.id || (typeof picked !== "string" && !focus));
   const marks: TimelineDot[] = pass && !suggestion
     ? !callsShown ? [] : allCalls.flatMap(a => {
       const override = pass.cutEdits?.find(c => c.index === a.index);
       const at = sentBack(a.index) || passChoices[a.index] !== undefined ? undefined
         : override ? override.version === (pinnedCallVersion ?? head) ? override.range : undefined
         : pinnedCallVersion ? undefined : placeCut(a);
-      return at ? [{ time: at.start, n: callNo.get(a.index), group: "call", title: `Cut ${callNo.get(a.index)}${ofCalls(callNo.get(a.index))} · ${clockLabel(at.start)}`, summary: a.reason,
-        detail: `Takes out ${lengthLabel(a.end - a.start)}`, context: pass.description, state: "check" as const, need: `Cut ${callNo.get(a.index)}`,
+      return at ? [{ time: at.start, group: "call", title: `Cut at ${clockLabel(at.start)}`, summary: a.reason,
+        detail: `Cut · ${lengthLabel(a.end - a.start)}`, context: pass.description, state: "check" as const, need: `Cut at ${clockLabel(at.start)}`,
         current: listening?.changeId === pass.id && listening.index === a.index, open: () => actions.listen(pass, a) }] : [];
     })
     // A suggestion's band is on the place the player is on. Each of its other places is a dot beside it, and a press
@@ -957,7 +1072,7 @@ export function LegacySimpleWorkspace() {
   const openCall = listening && listening.changeId === pass?.id ? allCalls.find(a => a.index === listening.index) : undefined;
   const openCallBack = !!openCall && sentBack(openCall.index);
   // What the video shows of the open call. Nothing, while its cut isn't on the working cut to be shown.
-  const cutPosition = openCall && heard ? `cut at ${clockLabel(heard.start)} · ${callNo.get(openCall.index)}${ofCalls(callNo.get(openCall.index))}` : "";
+  const cutPosition = openCall && heard ? `cut at ${clockLabel(heard.start)}` : "";
   const shownEdit = actions.showing;
   const reviewed = useReviewed(current.id, focusThread);
   const revisingEdit = useRevising(focusThread);
@@ -965,27 +1080,51 @@ export function LegacySimpleWorkspace() {
   const shownAt = shownEdit && (shownEdit.at ?? shownEdit.range.start);
   // The applied edit on screen, so Revise is about it and not a proposal still waiting.
   // An edit another request made is open here when this request flagged it (`Thread.flagged`).
-  const shownChange = shownEdit && focusChanges.find(c => belongsTo(shownEdit, c));
+  const shownChange = changeForEdit(focusChanges, shownEdit);
   // The card names voice cleanup only where its edit put it on or changed it, read against the version the edit was made on.
   const shownCleanup = !!shownChange?.ops?.some(o => o.op === "updateClip" && JSON.stringify(o.patch).includes("voiceCleanup"));
   const shownChangeBefore = useReviewTimeline(current.id, shownCleanup ? shownChange!.fromVersion : undefined, timeline).timeline;
   // Keep (K) records that the edit was reviewed and moves on to the next flagged edit that hasn't been; Revise (R) changes this one.
   const reviewingEdit = shownEdit && shownChange && focusThread ? shownEdit : undefined;
   const threadEdits = threadTimeline.edits;
+  // The new layout's row for what is open, and the batch it is one of (`+N`): its edits are framed and kept together.
+  const openRailRow = (reviewingEdit && focusThread ? railView.findForEdit(focusThread.id, reviewingEdit) : undefined)
+    ?? (openCall && passThread ? railView.findForCall(passThread.id, openCall.index) : undefined)
+    ?? (reviewingEdit || openCall ? railView.findOpen() : undefined);
+  const openBatchItems = reviewingEdit && focusThread && !reviewingEdit.rejected && !revisingEdit(reviewingEdit)
+    && openRailRow?.batch && openRailRow.batch.length > 1
+    ? openRailRow.batch : undefined;
+  const openBatchIndex = openBatchItems && reviewingEdit && focusThread
+    ? openBatchItems.findIndex(item => item.members.some(m => m.threadId === focusThread.id && matchesEdit(m.edit, reviewingEdit)))
+    : -1;
+  const openBatchKeys = useMemo(() => {
+    const keys = new Set<string>();
+    if (!openBatchItems || !focusThread) return keys;
+    for (const item of openBatchItems) {
+      for (const member of item.members) {
+        if (member.threadId === focusThread.id) keys.add(editKey(member.edit));
+      }
+    }
+    return keys;
+  }, [openBatchItems, focusThread]);
+  const openBatchEdits = useMemo(
+    () => openBatchKeys.size > 1 ? threadEdits.filter(e => openBatchKeys.has(editKey(e))) : [],
+    [openBatchKeys, threadEdits],
+  );
   // While another edit is open, the calls still waiting on the editor play as Scarlet staged them, their footage
-  // stepped over on After, and the timeline shows each as a gap with its number: the video round the edit is the one
+  // stepped over on After, and the timeline shows each as a gap at its time: the video round the edit is the one
   // it will be, and a retake a call takes out doesn't look missed (the editor asked for it, 2026-11-23). A call Scarlet
   // would leave in, one revised into an edit of its own, or one that can't be placed on the video now plays as it is.
   const stagedKey = reviewingEdit && pass && !suggestion && !listening && !pinnedCallVersion && !placing
     ? waitingCalls.flatMap(a => {
       if (approves(a) !== "cut" || pass.cutEdits?.some(c => c.index === a.index)) return [];
       const at = placeCut(a);
-      return at && at.end > at.start ? [`${a.index}:${callNo.get(a.index) ?? ""}:${at.start}:${at.end}`] : [];
+      return at && at.end > at.start ? [`${a.index}:${at.start}:${at.end}`] : [];
     }).join(",") : "";
   const stagedCalls = useMemo<StagedCall[]>(() => !stagedKey || !pass ? [] : stagedKey.split(",").map(part => {
-    const [index, n, start, end] = part.split(":");
+    const [index, start, end] = part.split(":");
     const call = allCalls.find(a => a.index === Number(index));
-    return { n: n ? Number(n) : undefined, removed: { start: Number(start), end: Number(end) },
+    return { removed: { start: Number(start), end: Number(end) },
       open: () => { if (call) actions.listen(pass, call); } };
   }), [stagedKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const {
@@ -1010,11 +1149,11 @@ export function LegacySimpleWorkspace() {
     title: `Cut at ${at} · ${lengthLabel(removed.end - removed.start)}`, summary: label, label: `Cut at ${at}`, shortLabel: at,
     skipped: appliedSide === "after",
     open: edit && focusThread ? () => actions.openEdit(focusThread, edit, undefined, true) : undefined }));
-  // A waiting call's cut round the open edit, played as staged: grey as a cut, edged in amber, named by its number.
+  // A waiting call's cut round the open edit, played as staged: grey as a cut, edged in amber, named by its time.
   // A press opens the call, on either side.
   const stagedGap = (c: StagedCall, skipped: boolean): TimelineGap => ({ start: c.removed.start, end: c.removed.end,
-    title: `${c.n ? `Cut ${c.n}` : "Cut"} · ${lengthLabel(c.removed.end - c.removed.start)}`, summary: "Waits for your call",
-    label: c.n ? `Cut ${c.n}` : "Cut", shortLabel: c.n ? String(c.n) : undefined, skipped, call: true, open: c.open });
+    title: `Cut at ${clockLabel(c.removed.start)} · ${lengthLabel(c.removed.end - c.removed.start)}`, summary: "Waits for your call",
+    label: `Cut at ${clockLabel(c.removed.start)}`, shortLabel: clockLabel(c.removed.start), skipped, call: true, open: c.open });
   const stagedGaps = cutKey ? stagedAround.map(c => stagedGap(c, appliedSide === "after"))
     : !callView ? stagedCalls.map(c => stagedGap(c, true)) : [];
   // A call shown where the cuts around it still have their footage marks them the same way, by their time on the
@@ -1093,10 +1232,10 @@ export function LegacySimpleWorkspace() {
   }, [reopen, current.reviewStatus, pass?.id, allCalls.length, reviewRead]); // eslint-disable-line react-hooks/exhaustive-deps
   useProjectBookmark(placeOnCut, openBookmark, panel);
   const onVideo = openCall && conflict ? (heard && callTimeline ? `Current passage at ${clockLabel(heard.start)}` : undefined)
-    : openCall && visit?.side === "before" ? `Showing what the cut at ${visit.label} took out · Before`
+    : openCall && visit?.side === "before" ? `Showing cut at ${visit.label} · Before`
     : openCall ? (cutPosition ? `Showing ${cutPosition} · ${listening!.side === "after" ? "After" : "Before"}${pinnedCallVersion ? " · As reviewed" : ""}` : undefined)
     : suggestion ? `Showing the suggestion · ${side === "after" ? "After" : "Before"}`
-    : shownEdit && visiting ? `Showing what the cut at ${visiting.at} took out · Before`
+    : shownEdit && visiting ? `Showing cut at ${visiting.at} · Before`
     : shownEdit && appliedCut ? `Showing “${shownEdit.label}” · ${appliedSide === "after" ? "After" : "Before"}`
     : shownEdit ? `Showing “${shownEdit.label}” at ${clockLabel(reviewRange?.start ?? shownEdit.at ?? shownEdit.range.start)}`
     : chosenSource && source === chosenSource ? `Showing ${chosenSource.name}` : undefined;
@@ -1105,18 +1244,18 @@ export function LegacySimpleWorkspace() {
   // once decided, or for any settled edit, its edge is solid.
   const callUndecided = !openCall || openCallBack || passChoices[openCall.index] === undefined;
   const editUndecided = !!shownEdit?.check && !reviewed(shownEdit);
-  const callFocus = listening ? callView ? callView.focus : heard && callTimeline && focusAround(heard, callDuration ?? 0, conflict ? "Current passage" : `Takes out · ${lengthLabel(heard.end - heard.start)}`) : undefined;
+  const callFocus = listening ? callView ? callView.focus : heard && callTimeline && focusAround(heard, callDuration ?? 0, conflict ? "Current passage" : `Cut · ${lengthLabel(heard.end - heard.start)}`) : undefined;
   const editLine = shownEdit && !appliedCut && !shownEdit.beforeCut && !shownEdit.rejected && !reviewRange
     ? threadTimeline.selectedMoment
-      ? editFocus({ ...shownEdit, range: momentRange(threadTimeline.selectedMoment) }, cutDuration ?? 0, `${threadTimeline.selectedMoment.edits.length} edits`)
-      : editFocus(shownEdit, cutDuration ?? 0)
+      ? editFocus({ ...shownEdit, range: momentRange(threadTimeline.selectedMoment) }, cutDuration ?? 0, `${threadTimeline.selectedMoment.edits.length} edits`, firstKey(shownEdit))
+      : editFocus(shownEdit, cutDuration ?? 0, undefined, firstKey(shownEdit))
     : undefined;
-  const lineFocus = listening ? callFocus ? { ...callFocus, ...callUndecided && { undecided: true } } : undefined
+  const rawLineFocus = listening ? callFocus ? { ...callFocus, ...callUndecided && { undecided: true }, ...(openCall && { key: `call:${openCall.askOrder ?? openCall.index}` }) } : undefined
     : places.length ? suggestionLine
-    : appliedCut ? focusAround(appliedCut, beforeDuration, `Took out · ${lengthLabel(appliedCut.end - appliedCut.start)}`, { undecided: editUndecided, playbackEnd: afterListen?.end })
+    : appliedCut ? focusAround(appliedCut, beforeDuration, `Cut · ${lengthLabel(appliedCut.end - appliedCut.start)}`, { undecided: editUndecided, playbackEnd: afterListen?.end, key: cutKey })
     // Until the earlier version arrives, a line marks the join in the working cut and says how much came out there.
     : shownEdit?.beforeCut ? focusAround({ start: shownAt!, end: shownAt! }, cutDuration ?? 0,
-      `Took out · ${lengthLabel(shownEdit.beforeCut.removed.end - shownEdit.beforeCut.removed.start)}`, { undecided: editUndecided })
+      `Cut · ${lengthLabel(shownEdit.beforeCut.removed.end - shownEdit.beforeCut.removed.start)}`, { undecided: editUndecided })
     // A rejected edit is out of the video: its band is where it was, outlined, over the video as it runs without it.
     : shownEdit?.rejected ? focusAround(shownEdit.at !== undefined ? { start: shownEdit.at, end: shownEdit.at } : shownEdit.range, cutDuration ?? 0, "Rejected", { tone: "kept" })
     // Any other edit is drawn for what it did: a sound fix or a zoom keeps its footage, so After plays it.
@@ -1124,24 +1263,45 @@ export function LegacySimpleWorkspace() {
     : reviewRange ? focusAround(reviewRange, cutDuration ?? 0, "Check", { tone: "check" })
     // A moment is drawn across all of its edits, as it plays.
     : editLine ? editUndecided ? { ...editLine, undecided: true } : editLine : undefined;
+  // When an edit is opened from a collapsed +N batch, frame all edits of the batch steadily on the timeline so every
+  // dot stays visible and stepping 1 of N -> 2 of N doesn't jump the zoom.
+  const batchTimelineView = useMemo((): TimeRange | undefined => {
+    if (!openBatchItems || openBatchItems.length <= 1) return undefined;
+    if (beforeCut) {
+      if (!appliedCut || !beforeDuration) return undefined;
+      const cutRanges = [
+        appliedCut,
+        ...otherEdits.filter(o => o.edit && openBatchKeys.has(editKey(o.edit))).map(o => o.removed),
+      ];
+      if (cutRanges.length <= 1) return undefined;
+      const minStart = Math.min(...cutRanges.map(r => r.start));
+      const maxEnd = Math.max(...cutRanges.map(r => r.end));
+      const pad = Math.max(5, (maxEnd - minStart) * 0.08);
+      return { start: Math.max(0, minStart - pad), end: Math.min(beforeDuration, maxEnd + pad) };
+    }
+    if (!cutDuration || openBatchEdits.length <= 1) return undefined;
+    const minStart = Math.min(...openBatchEdits.map(e => e.at ?? e.range.start));
+    const maxEnd = Math.max(...openBatchEdits.map(e => e.at ?? e.range.end));
+    const pad = Math.max(5, (maxEnd - minStart) * 0.08);
+    return { start: Math.max(0, minStart - pad), end: Math.min(cutDuration, maxEnd + pad) };
+  }, [openBatchItems, beforeCut, appliedCut, beforeDuration, otherEdits, openBatchKeys, cutDuration, openBatchEdits]);
+  const lineFocus = rawLineFocus && batchTimelineView && openRailRow
+    ? { ...rawLineFocus, view: batchTimelineView, key: `batch:${openRailRow.key}` }
+    : rawLineFocus;
   const playerView = suggestion || appliedCut ? undefined : !listening && focusThread && !source ? threadTimeline : undefined;
   // Each applied edit's dot names it, says where it sits and how long it runs, and quotes the change it came from.
   const editDot = (thread: Thread, e: ThreadEdit, title: string, at: number): TimelineDot => {
     const landed = justLanded(e.changeId) ? e.beforeCut || e.at !== undefined ? "cut" as const : "edit" as const : undefined;
     return { time: at, landed, landedAt: landed ? landedAt(e.changeId) : undefined, title, summary: e.label, edit: `${e.changeId}/${e.spot}`,
-      detail: e.beforeCut ? `Took out ${lengthLabel(e.beforeCut.removed.end - e.beforeCut.removed.start)}`
+      detail: e.beforeCut ? `Cut · ${lengthLabel(e.beforeCut.removed.end - e.beforeCut.removed.start)}`
         : e.at !== undefined ? editKindWord(e) ?? "Cut" : [editKindWord(e), span(e.range)].filter(Boolean).join(" · "),
-      context: [...thread.changes, ...thread.flagged ?? []].find(c => belongsTo(e, c))?.description,
+      context: changeForEdit([...thread.changes, ...thread.flagged ?? []], e)?.description,
       // A press on the edit's marker opens it, as its row in the chat does.
       open: () => actions.openEdit(thread, e) };
   };
   /** A pass's edit by its time, as its row in the pass's list and the message box's tag say it: "Cut at 2:05". */
   const passEditName = (e: ThreadEdit, at: number) => `${e.beforeCut ? "Cut" : "Edit"} at ${clockLabel(at)}`;
-  /** One that asks for a look while the pass waits has its number, counted on from the calls: "Cut 6 · 8:52". */
-  const passEditDot = (thread: Thread, e: ThreadEdit, at: number) => {
-    const numbered = passEditNo.get(editKey(e));
-    return numbered ? { ...editDot(thread, e, `${numbered.name} · ${clockLabel(at)}`, at), n: numbered.n } : editDot(thread, e, passEditName(e, at), at);
-  };
+  const passEditDot = (thread: Thread, e: ThreadEdit, at: number) => editDot(thread, e, passEditName(e, at), at);
 
   const [compareHost, setCompareHost] = useState<HTMLElement | null>(null);
 
@@ -1155,32 +1315,39 @@ export function LegacySimpleWorkspace() {
     else next.delete(id);
     return next;
   }), []);
-  // The timeline numbers the edits of the request picked in the chat, or of the one that's open, as the chat does:
+  // The timeline marks the edits of the request picked in the chat, or of the one that's open, as the chat does:
   // filled once kept and amber while it asks for a look. With nothing picked it marks nothing, and another request's
   // edits draw nothing. An edit sent back for revision doesn't ask for a look until its new version arrives.
-  const onLatest = !firstCuts?.size && marked?.id === focusThread?.id;
+  const onLatest = !beta && !firstCuts?.size && marked?.id === focusThread?.id;
   const listShown = !!focusThread && openList === focusThread.id;
-  // A pass's edits are numbered in timeline order, as its list goes, except while the pass waits on the editor: then
-  // only the ones that ask for a look are marked, with the numbers they have among its calls, and its other edits go
-  // in with the last call. They share a pill only with others like them.
-  // An edit made in several places is one edit: each of its places carries the number its row has in the chat.
+  // A pass's edits are all marked, except while the pass waits on the editor: then only the ones that ask for a look
+  // are, and its other edits go in with the last call. They share a pill only with others like them.
   const passWaits = !!passThread && passThread.id === focusThread?.id && (waitingCalls.length > 0 ||
     passEdits.some(e => e.check && !passReviewed(e) && !passRevising(e)));
-  // Each dot has its row's number, which an edit keeps when another of the request's is rejected.
-  const dotOrder = playerView && focusThread && !passFocused ? listPlaces(focusThread, playerView.edits, playerView.rejected.filter(e => rejectedCallIndex(e) === undefined)) : undefined;
-  const dotNumbers = new Map((dotOrder ? editGroups(playerView!.edits) : []).flatMap(g => g.members.map(m => [m.edit, dotOrder!.number(g.members[0]!.edit)!] as const)));
-  const numberedDots: TimelineDot[] = playerView && focusThread ? playerView.edits.flatMap((e, i): TimelineDot[] => {
+  const numberedDots: TimelineDot[] = playerView && focusThread ? playerView.edits.flatMap((e): TimelineDot[] => {
     const state = reviewed(e) ? "kept" as const : e.check && !revisingEdit(e) ? "check" as const : undefined;
     const current = e === shownEdit;
+    // The new layout marks only what asks for a look, what is open, and the rest of an open batch.
+    if (beta && state !== "check" && !current && !openBatchKeys.has(editKey(e))) return [];
     const at = (state === "check" ? e.reviewRange?.start : undefined) ?? e.at ?? e.range.start;
     const need = state === "check" ? passEditNo.get(editKey(e))?.name ?? passEditName(e, at) : undefined;
-    if (passWaits) return state === "check" || current ? [{ ...passEditDot(focusThread, e, at), group: "pass", state, current, need }] : [];
-    // The hover note names the request first: "Edit 3" alone would read as the chat's third request.
-    const dot = editDot(focusThread, e, `${shortTitle(focusThread.title)} · ${dotNumbers.get(e) ?? i + 1} of ${dotOrder?.total ?? playerView.edits.length} · ${clockLabel(at)}`, at);
-    return [{ ...dot, n: dotNumbers.get(e) ?? i + 1, state, current, need }];
+    if (beta && passFocused) return [{ ...passEditDot(focusThread, e, at), group: pass && passEditNum(e) !== undefined ? "pass" : undefined, state, current, need }];
+    if (!beta && passWaits) return state === "check" || current ? [{ ...passEditDot(focusThread, e, at), group: "pass", state, current, need }] : [];
+    // The hover note names the request, then where the edit is.
+    const dot = editDot(focusThread, e, `${shortTitle(focusThread.title)} · ${clockLabel(at)}`, at);
+    return [{ ...dot, state, current, need }];
   }) : [];
-  // The waiting pass's edits that ask for a look are with its calls when the timeline is on another request, numbered
-  // after the calls as For you counts them. While the timeline is the pass's own, its dots above draw them.
+  // When a collapsed batch of cuts is open on beforeTimeline, plot all cuts in the batch as clickable timeline dots.
+  const batchCutDots: TimelineDot[] = beforeCut && appliedCut && focusThread && reviewingEdit && openBatchKeys.size > 1
+    ? [
+      { ...passEditDot(focusThread, reviewingEdit, appliedCut.start), state: reviewed(reviewingEdit) ? "kept" as const : undefined, current: true },
+      ...otherEdits.flatMap((other): TimelineDot[] => {
+        if (!other.edit || !openBatchKeys.has(editKey(other.edit))) return [];
+        return [{ ...passEditDot(focusThread, other.edit, other.removed.start), state: reviewed(other.edit) ? "kept" as const : undefined, current: false }];
+      }),
+    ] : [];
+  // The waiting pass's edits that ask for a look are with its calls when the timeline is on another request. While the
+  // timeline is the pass's own, its dots above draw them.
   const passDots: TimelineDot[] = !callsShown || !passThread || suggestion || (playerView && focusThread?.id === passThread.id) ? []
     : passEdits.flatMap(e => {
       if (!e.check || passReviewed(e) || passRevising(e)) return [];
@@ -1189,22 +1356,23 @@ export function LegacySimpleWorkspace() {
     });
   // In the default full timeline, unresolved flags from older requests also need a way in. Their chat lists already
   // load positions on the current working cut. Use those positions only, so old versions cannot put a dot at the wrong time.
-  const showOtherFlags = picked === undefined && !focus && !suggestion && !listening && !source;
-  // With no request picked, the timeline marks every request's edits, each numbered as its own request's list has it:
+  // The new layout keeps every request's unresolved Needs review flags on the timeline.
+  const showOtherFlags = beta ? !suggestion && !listening && !source : picked === undefined && !focus && !suggestion && !listening && !source;
+  // With no request picked, the timeline marks every request's edits:
   // the editor let go of the picked band to see them all (2026-11-23). The waiting pass keeps its calls' dots.
   const showEvery = picked === null && !focus && !suggestion && !listening && !source;
   const drawnChecks = new Set([...numberedDots, ...passDots].filter(dot => dot.state === "check").map(dot => dot.edit));
   const otherFlags = showOtherFlags || showEvery ? [...ordered].reverse().flatMap(thread => {
     const review = backgroundReview.get(thread.id);
     if (!review || review.head !== head || thread.id === focusThread?.id || thread.id === passThread?.id) return [];
-    return review.markers.flatMap(({ edit, number, total, state }) => {
+    return review.markers.flatMap(({ edit, state }) => {
       if (!showEvery && state !== "check") return [];
       const key = editKey(edit);
       if (drawnChecks.has(key)) return [];
       drawnChecks.add(key);
       const at = (state === "check" ? edit.reviewRange?.start : undefined) ?? edit.at ?? edit.range.start;
-      return [{ ...editDot(thread, edit, `${shortTitle(thread.title)} · ${number} of ${total} · ${clockLabel(at)}`, at),
-        n: number, group: thread.id, state, need: state === "check" ? passEditName(edit, at) : undefined }];
+      return [{ ...editDot(thread, edit, `${shortTitle(thread.title)} · ${clockLabel(at)}`, at),
+        ...!beta && { group: thread.id }, state, need: state === "check" ? passEditName(edit, at) : undefined }];
     });
   }) : [];
   const olderFlaggedEdits = new Set(otherFlags.map(dot => dot.edit));
@@ -1255,7 +1423,7 @@ export function LegacySimpleWorkspace() {
   }, [focus, threadTimeline.chosen, threadTimeline.error, openList, newest, settled]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownIndex = reviewingEdit ? threadEdits.indexOf(reviewingEdit) : -1;
   // An edit made in several places is one edit, as the request's list shows it: one row, counted once in "1 of 3" and
-  // in For you, and ↑ ↓ and Keep go from edit to edit. A pass lists each of its edits on a line of its own.
+  // in Needs review, and ↑ ↓ and Keep go from edit to edit. A pass lists each of its edits on a line of its own.
   // A pass's list goes by moments: edits that play as one change are one row, kept together, and ↑ ↓ step from moment
   // to moment. An edit of a moment opened on its own from under the moment's row is a row of its own, beside the
   // moment's other edits, and Keep keeps just that one.
@@ -1267,13 +1435,12 @@ export function LegacySimpleWorkspace() {
   const shownRow = reviewingEdit ? editsByRow.findIndex(row => row.includes(reviewingEdit)) : -1;
   const waitingEdit = (e: ThreadEdit) => !!e.check && !reviewed(e) && !revisingEdit(e);
   // Which of each request's lists the chat shows: ↑ ↓ and Keep go by the rows of that tab.
+  const explicitAllDock = dock.explicitAllReport(threadIds);
   const focusList = focusThread ? lists[focusThread.id] : undefined;
-  const passList = passThread ? lists[passThread.id] : undefined;
+  const passList = !beta && dockHasTabs && !explicitAllDock ? dockList : passThread ? lists[passThread.id] : undefined;
   const passIsFocus = !!pass && !!passThread && passThread.id === focusThread?.id;
   const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
-  const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
-    ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
-  // The waiting pass's calls and flagged edits together, in the order For you lists them: by time, as its rows lead
+  // The waiting pass's calls and flagged edits together, in the order Needs review lists them: by time, as its rows lead
   // with their times (the editor's call, 2026-11-24).
   const passForYouItems = pass && passThread ? passForYouOrder(
     allCalls.map(call => ({ call, at: listedAt.get(call.index) ?? call.start, num: callNo.get(call.index), waiting: waiting(call) })),
@@ -1286,24 +1453,28 @@ export function LegacySimpleWorkspace() {
     () => decidedPassCalls(pass && passThread?.id === focusThread?.id ? undefined : focusThread, threadEdits, threadTimeline.rejected),
     [pass, passThread?.id, focusThread, threadEdits, threadTimeline.rejected],
   );
-  // Whether the request has something for the editor to review, now or decided: its rows are then under For you,
+  // Whether the request has something for the editor to review, now or decided: its rows are then under Needs review,
   // Working and Done in the chat, as its block there works it out. With nothing to review it has one list of every edit.
+  const asksEditor = (run?: { state: Task["state"] }) => run?.state === "waiting_for_user";
   const focusTabbed = (passIsFocus && allCalls.length > 0) || decidedCallRows.length > 0
     || threadEdits.some(e => !!e.check || decidedCallEditKeys.has(editKey(e)))
     || threadTimeline.rejected.some(e => !!e.wasCheck || decidedCallEditKeys.has(editKey(e)));
+  const activeFocusList = !beta && dockHasTabs && !explicitAllDock && focusTabbed ? dockList : focusList;
   // A flagged edit not yet kept says its place among the ones still to check, as a call does.
   const flaggedRows = useMemo(() => editsByRow.filter(row => row.some(waitingEdit)), [editsByRow, reviewed, revisingEdit]); // eslint-disable-line react-hooks/exhaustive-deps
   const waitingPassForYouEdits = passIsFocus ? passForYouItems.filter((item): item is Extract<PassForYouItem<Call, ThreadEdit>, { kind: "edit" }> => item.kind === "edit" && item.waiting) : [];
   const editPlace = reviewingEdit && waitingEdit(reviewingEdit)
     ? (passIsFocus ? waitingPassForYouEdits.findIndex(item => matchesEdit(item.edit, reviewingEdit)) : flaggedRows.indexOf(editsByRow[shownRow]!))
     : -1;
-  const shownPassNo = reviewingEdit ? passEditNo.get(editKey(reviewingEdit))?.name : undefined;
-  const closeEdit = () => { player.pause(); threadTimeline.clear(); };
+  const closeEdit = () => { player.pause(); threadTimeline.clear(); if (beta) setFocus(undefined); };
   // Every row of a request's lists is under exactly one tab (`rowPlace`), and the stops below are those rows as ↑ ↓
   // and Keep go through them: the chat draws its tabs by the same rule, so both agree on a tab's rows. A request that
-  // asks the editor a question about a cut or an edit waits on them, so its row is For you's.
-  const asksEditor = (run?: { state: Task["state"] }) => run?.state === "waiting_for_user";
+  // asks the editor a question about a cut or an edit waits on them, so its row is Needs review's.
   const passWaitingEdit = (e: ThreadEdit) => !!e.check && !passReviewed(e) && !passRevising(e);
+  // A flagged edit whose revision has stopped to ask the editor something waits on them again, as a call that asks does.
+  const waitsOrAsks = (e: ThreadEdit) => waitingEdit(e) || (!!e.check && asksEditor(revisingEdit(e)));
+  const passWaitsOrAsks = (e: ThreadEdit) => passWaitingEdit(e) || (!!e.check && asksEditor(passRevising(e)));
+  const callWaitsOrAsks = (call: Call) => waiting(call) || (sentBack(call.index) && asksEditor(cutRuns.get(call.index)));
   const passEditRows = useMemo(() => passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 && threadTimeline.moments
     ? threadTimeline.moments.map(m => m.edits) : listMoments(passEdits).map(m => m.edits) as ThreadEdit[][],
   [passThread?.id, focusThread?.id, threadTimeline.edits.length, threadTimeline.moments, passEdits]);
@@ -1313,7 +1484,7 @@ export function LegacySimpleWorkspace() {
   /** The focused request's stops: its rows of edits, the pass's calls when it is the pass's, and what was rejected. */
   const focusStopsNow = (): Stop[] => reviewStops({
     rows: editsByRow,
-    place: row => rowPlace(row, { waits: e => waitingEdit(e) || asksEditor(revisingEdit(e)), sent: e => !!revisingEdit(e),
+    place: row => rowPlace(row, { waits: waitsOrAsks, sent: e => !!revisingEdit(e),
       kept: e => reviewed(e) || decidedCallEditKeys.has(editKey(e)) }),
     num: passIsFocus ? passEditNum : undefined,
     calls: passIsFocus ? callStops() : [],
@@ -1322,7 +1493,7 @@ export function LegacySimpleWorkspace() {
   /** The waiting pass's stops, also while the timeline is on another request. */
   const passStopsNow = (): Stop[] => passIsFocus ? focusStopsNow() : reviewStops({
     rows: passEditRows,
-    place: row => rowPlace(row, { waits: e => passWaitingEdit(e) || asksEditor(passRevising(e)), sent: e => !!passRevising(e), kept: e => passReviewed(e) }),
+    place: row => rowPlace(row, { waits: passWaitsOrAsks, sent: e => !!passRevising(e), kept: e => passReviewed(e) }),
     num: passEditNum, calls: callStops(),
     gone: (passThread ? rejectedPassEdits : noEdits).map(e => ({ at: e.range.start, num: passEditNum(e) })),
   });
@@ -1330,19 +1501,35 @@ export function LegacySimpleWorkspace() {
   // request's keep the order its edits are listed in.
   const focusOrder: ListOrder = threadTimeline.moments ? { numbers: false } : undefined;
   const passOrder: ListOrder = { numbers: false };
-  const focusStops = reviewingEdit && focusTabbed ? focusStopsNow() : [];
+  // In the new layout every request's rows are in the column of edits, each under one of its parts.
+  const focusStops = reviewingEdit && (beta || focusTabbed) ? focusStopsNow() : [];
   const hereStop = reviewingEdit ? focusStops.find(stop => stop.row?.includes(reviewingEdit)) : undefined;
   const here = reviewingEdit ? { at: reviewingEdit.at ?? reviewingEdit.range.start, num: passIsFocus ? passEditNum(reviewingEdit) : undefined } : undefined;
+  // The edit open is a low-risk row of the column: one Scarlet didn't flag that the editor hasn't decided. One just
+  // rejected is no row any more: it is low risk if Scarlet hadn't flagged it, unless Working or Done is the list shown.
+  const onLowRisk = openRailRow ? openRailRow.section === "low"
+    : hereStop ? hereStop.place === "optional"
+    : tabShown(focusList) === "you" && !!reviewingEdit && !reviewingEdit.check && !reviewingEdit.wasCheck;
   /** What ↑, ↓ or Keep opens for a stop: its call, or the edit its row is opened by. */
   const stopTarget = (stop: Stop | undefined, lead: (row: readonly ThreadEdit[]) => ThreadEdit): { call: Call } | { edit: ThreadEdit } | undefined =>
     !stop ? undefined : stop.call ? { call: stop.call } : stop.row ? { edit: lead(stop.row) } : undefined;
+  const isSteppableRailRow = (row: UnifiedRailRow) => !!row.open && !row.rejected && !row.skipped;
+  function nextRowAfter(list: readonly UnifiedRailRow[], current: UnifiedRailRow | undefined, whereAt: number): UnifiedRailRow | undefined {
+    const idx = current ? list.findIndex(r => r.key === current.key) : -1;
+    if (idx >= 0) return list[idx + 1] ?? (idx > 0 ? list[0] : undefined);
+    const filtered = current ? list.filter(r => r.key !== current.key) : list;
+    return filtered.find(r => r.at > whereAt) ?? filtered[0];
+  }
   function editBeside(delta: number): { edit: ThreadEdit } | { call: Call } | undefined {
     if (!reviewingEdit) return undefined;
-    // Under the tabs, ↑ and ↓ step through the rows of the tab shown, in its order: For you's waiting rows, then the
+    // In the new layout ↑ and ↓ step through the part of the column the open row is in.
+    if (beta) return stopTarget(rowBeside(sectionStops(focusStops, focusList, onLowRisk, focusOrder), hereStop, here!, delta, focusOrder),
+      row => row.find(waitsOrAsks) ?? row[0]!);
+    // Under the tabs, ↑ and ↓ step through the rows of the tab shown, in its order: Needs review's waiting rows, then the
     // optional ones while that line is open; Working's; Done's. From an edit that isn't a row there (one just rejected,
     // or one of another tab) they step to the row after or before where it is.
-    if (focusTabbed) return stopTarget(rowBeside(stopsShown(focusStops, focusList, focusOrder), hereStop, here!, delta, focusOrder),
-      row => row.find(waitingEdit) ?? row[0]!);
+    if (focusTabbed) return stopTarget(rowBeside(stopsShown(focusStops, activeFocusList, focusOrder), hereStop, here!, delta, focusOrder),
+      row => row.find(waitsOrAsks) ?? row[0]!);
     // With one list of every edit they step through them all. A rejected edit is no row of the list, just rejected or
     // open again from its row: from it they step to the edit after or before where it was.
     if (shownRow < 0) {
@@ -1352,14 +1539,88 @@ export function LegacySimpleWorkspace() {
       return row && { edit: row[0]! };
     }
     const row = editsByRow[shownRow + delta];
-    return row && { edit: row.find(waitingEdit) ?? row[0]! };
+    return row && { edit: row.find(waitsOrAsks) ?? row[0]! };
   }
   // ↑ and ↓ reach the log as a bare key: this says which call they went to.
   function stepToCall(change: Change, call: Call) {
     appLog("action", "step", { to: "call", call: callNo.get(call.index), of: allCalls.length, change: change.id, cut: call.index });
     actions.listen(change, call);
   }
+  function openSteppedDockEntry(next: DockEntry | undefined) {
+    if (!next) return;
+    if (next.row.callIndex !== undefined && pass) {
+      const call = allCalls.find(a => a.index === next.row.callIndex);
+      if (call) { stepToCall(pass, call); return; }
+    }
+    if (next.row.edit) {
+      const order = next.row.editOrder;
+      appLog("action", "step", { to: "edit", edit: order?.index ?? 1, of: order?.of ?? 1, change: next.row.edit.changeId });
+    }
+    (next.row.stepOpen ?? next.row.open)?.();
+  }
+  function stepInRail(delta: 1 | -1) {
+    if (openMoment && reviewingEdit) {
+      const subIdx = openMoment.members.indexOf(reviewingEdit);
+      const subNext = subIdx >= 0 ? openMoment.members[subIdx + delta] : undefined;
+      if (subNext) {
+        actions.playEdit(subNext, true);
+        return;
+      }
+    }
+    const view = rail.view();
+    const current = (reviewingEdit && focusThread ? view.findForEdit(focusThread.id, reviewingEdit) : undefined)
+      ?? (openCall && passThread ? view.findForCall(passThread.id, openCall.index) : undefined)
+      ?? (reviewingEdit || openCall ? view.findOpen() : undefined);
+    const section: RailSection = current?.section
+      ?? (reviewingEdit ? (onLowRisk ? "low" : tabShown(focusList)) : openCall ? tabShown(passList) : "you");
+    const whereAt = reviewingEdit ? (reviewingEdit.at ?? reviewingEdit.range.start)
+      : openCall ? (listedAt.get(openCall.index) ?? openCall.start)
+      : 0;
+    const list = view.sections[section].filter(isSteppableRailRow);
+    let next: UnifiedRailRow | undefined;
+    if (!reviewingEdit && !openCall) {
+      next = delta > 0 ? list[0] : list.at(-1);
+    } else {
+      const idx = current ? list.findIndex(r => r.key === current.key) : -1;
+      if (idx >= 0) next = list[idx + delta];
+      else next = delta > 0 ? list.find(r => r.at >= whereAt) : list.findLast(r => r.at < whereAt);
+    }
+    if (next) {
+      if (next.isCall && next.callIndex !== undefined && pass && next.threadId === passThread?.id) {
+        appLog("action", "step", { to: "call", call: callNo.get(next.callIndex), of: allCalls.length, change: pass.id, cut: next.callIndex });
+      } else if (next.editRef) {
+        appLog("action", "step", { to: "edit", change: next.editRef.changeId });
+      }
+      next.open?.();
+      return;
+    }
+    // Past the end of flagged rows, ↓ continues into Safe edits; above Safe edits, ↑ goes back into flagged rows.
+    // Working and Done stay within their own unified lists.
+    if (section === "you" && delta > 0) view.sections.low.find(isSteppableRailRow)?.open?.();
+    else if (section === "low" && delta < 0) view.sections.you.findLast(isSteppableRailRow)?.open?.();
+  }
   function stepEdit(delta: number) {
+    if (beta) return stepInRail(delta > 0 ? 1 : -1);
+    const explicitAll = dock.explicitAllReport(threadIds);
+    if (dockHasTabs && !explicitAll && reviewingEdit) {
+      // Stepping inside an unfolded moment's individual edits stays within that moment first.
+      if (openMoment) {
+        const at = openMoment.members.indexOf(reviewingEdit);
+        const member = at >= 0 ? openMoment.members[at + delta] : undefined;
+        if (member) {
+          appLog("action", "step", { to: "edit", edit: threadEdits.indexOf(member) + 1, of: threadEdits.length, change: member.changeId });
+          actions.playEdit(member, true);
+          return;
+        }
+      }
+      const nav = dock.tabNavigable(threadIds, dockList);
+      const current = nav.find(e => e.row.on || e.members?.some(m => m.on));
+      const hereAt = reviewingEdit.at ?? reviewingEdit.range.start;
+      const tier = reviewingEdit.check || reviewingEdit.wasCheck ? "you" : "optional";
+      const next = stepInDock(nav, current, { at: hereAt, threadId: focusThread?.id, tier }, delta);
+      openSteppedDockEntry(next);
+      return;
+    }
     const next = editBeside(delta);
     if (!next) return;
     if ("call" in next && pass) return stepToCall(pass, next.call);
@@ -1373,40 +1634,57 @@ export function LegacySimpleWorkspace() {
     if (!pass || !passThread) return undefined;
     // The rows of the tab the pass's block shows, a call or an edit. From nothing, ↓ starts on its first row and ↑ on its last.
     const stops = passStopsNow();
-    const list = stopsShown(stops, passList, passOrder);
+    // The new layout lists Needs review's waiting rows before its low-risk ones.
+    const list = stopsShown(stops, passList, passOrder, beta);
     const next = openCall
       ? rowBeside(list, stops.find(stop => stop.call?.index === openCall.index), { at: listedAt.get(openCall.index) ?? openCall.start, num: callNo.get(openCall.index) }, delta, passOrder)
       : delta > 0 ? list[0] : list.at(-1);
-    return stopTarget(next, row => row.find(passWaitingEdit) ?? row[0]!);
+    return stopTarget(next, row => row.find(passWaitsOrAsks) ?? row[0]!);
   }
-  // Keep goes to the next row that waits on the editor in For you, in its order, a call or a flagged edit, wrapping to
-  // the earlier ones, and the card closes once nothing is left. With For you's low risk edits included and on an edit
-  // Scarlet didn't flag, it goes to the next low risk row instead, then to what waits. A request with one list of
+  // Keep goes to the next row in Needs review's list: with low risk edits included, the very next row down that one list
+  // (flagged edit, call or low risk edit alike), wrapping to what still waits at the end, and closing once none is
+  // left; with low risk edits off, the next row that waits, wrapping to earlier ones. A request with one list of
   // every edit goes down that list to the next row that hasn't been kept.
   const unkeptEdit = (e: ThreadEdit) => !e.check && !reviewed(e) && !revisingEdit(e);
-  const stillWaits = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.call ? waiting(stop.call) : !!stop.row?.some(waits);
-  const waitingStops = rowsOfTab(focusStops, "you", false, focusOrder).filter(stillWaits(waitingEdit));
-  const onOptional = focusList === "all" && !!hereStop?.row && !hereStop.row.some(e => !!e.check);
-  const afterKeep = !reviewingEdit || !focusTabbed ? undefined
-    : onOptional ? rowAfter(rowsOfTab(focusStops, "you", true, focusOrder).filter(stop => stop.place === "optional"), hereStop, here!, focusOrder) ?? waitingStops[0]
-    : rowAfter(waitingStops, hereStop, here!, focusOrder);
-  const afterListKeep = reviewingEdit && !focusTabbed ? keepGoesTo<Call>(editsByRow, shownRow, e => unkeptEdit(e) || waitingEdit(e), []) : undefined;
+  const stillWaits = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.call ? callWaitsOrAsks(stop.call) : !!stop.row?.some(waits);
+  const reviewable = (waits: (e: ThreadEdit) => boolean) => (stop: Stop) => stop.place === "optional" ? !!stop.row : stillWaits(waits)(stop);
+  const waitingStops = rowsOfTab(focusStops, "you", false, focusOrder).filter(stillWaits(waitsOrAsks));
+  const keepStops = activeFocusList === "all" ? rowsOfTab(focusStops, "you", true, focusOrder).filter(reviewable(waitsOrAsks)) : waitingStops;
+  // In the new layout Keep on a low-risk row goes to the next low-risk row, wrapping to the earlier ones; on any other
+  // row to the next one that waits, wrapping to the earlier ones.
+  const lowStops = inListOrder(focusStops.filter(stop => stop.place === "optional" && !!stop.row), focusOrder);
+  const afterKeep = !reviewingEdit ? undefined
+    : beta ? rowAfter(onLowRisk ? lowStops : waitingStops, hereStop, here!, focusOrder)
+    : !focusTabbed ? undefined
+    : activeFocusList === "all"
+      ? rowNext(keepStops, hereStop, here!, focusOrder) ?? waitingStops.find(stop => stop !== hereStop)
+      : rowAfter(waitingStops, hereStop, here!, focusOrder);
+  const afterListKeep = !beta && reviewingEdit && !focusTabbed ? keepGoesTo<Call>(editsByRow, shownRow, e => unkeptEdit(e) || waitsOrAsks(e), []) : undefined;
   // Keep reaches a moment as ↑ ↓ do: whole, at the edit it is named for, however much of it is kept already. The
   // first of its edits still to keep would open alone and unfold the moment.
   const momentLead = (edit: ThreadEdit) => threadTimeline.moments ? editsByRow.find(row => row.includes(edit))?.[0] ?? edit : edit;
-  const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitingEdit) ?? momentLead(row.find(unkeptEdit) ?? row[0]!)) ?? afterListKeep;
+  const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitsOrAsks) ?? momentLead(row.find(unkeptEdit) ?? row[0]!)) ?? afterListKeep;
   const nextEditAfterKeep = nextAfterKeep && "edit" in nextAfterKeep ? afterKeep ? nextAfterKeep.edit : momentLead(nextAfterKeep.edit) : undefined;
   const nextCallAfterKeep = nextAfterKeep && "call" in nextAfterKeep ? nextAfterKeep.call : undefined;
-  // Keep or Reject edit on a call goes on the same way: to the next row that waits in For you, a call or a flagged edit.
+  // Keep or Reject edit on a call goes on the same way: to the next row in Needs review's list (including low risk edits when shown).
   const openStops = listening && pass ? passStopsNow() : [];
-  const nextAfterCallDecision = !listening || !pass ? undefined : stopTarget(
-    rowAfter(rowsOfTab(openStops, "you", false, passOrder).filter(stillWaits(passWaitingEdit)), openStops.find(stop => stop.call?.index === listening.index),
-      { at: listedAt.get(listening.index) ?? listening.cut.start, num: callNo.get(listening.index) }, passOrder),
-    row => row.find(passWaitingEdit) ?? row[0]!);
+  const callHereStop = listening ? openStops.find(stop => stop.call?.index === listening.index) : undefined;
+  const callHere = listening ? { at: listedAt.get(listening.index) ?? listening.cut.start, num: callNo.get(listening.index) } : undefined;
+  const passWaitingStops = rowsOfTab(openStops, "you", false, passOrder).filter(stillWaits(passWaitsOrAsks));
+  const passKeepStops = passList === "all" ? rowsOfTab(openStops, "you", true, passOrder).filter(reviewable(passWaitsOrAsks)) : passWaitingStops;
+  const afterCallDecision = !listening || !pass ? undefined
+    : !beta && passList === "all"
+      ? rowNext(passKeepStops, callHereStop, callHere!, passOrder) ?? passWaitingStops.find(stop => stop !== callHereStop)
+      : rowAfter(passWaitingStops, callHereStop, callHere!, passOrder);
+  const nextAfterCallDecision = stopTarget(afterCallDecision, row => row.find(passWaitsOrAsks) ?? row[0]!);
   const onCall = !!openCall && !openCallBack && !reviewingEdit;
   const upcomingCall = onCall ? (nextAfterCallDecision && "call" in nextAfterCallDecision ? nextAfterCallDecision.call : undefined) : nextCallAfterKeep;
   const upcomingEdit = onCall ? (nextAfterCallDecision && "edit" in nextAfterCallDecision ? nextAfterCallDecision.edit : undefined) : nextEditAfterKeep;
-  const editSentBack = !!reviewingEdit && !!revisingEdit(reviewingEdit);
+  const editRevision = reviewingEdit ? revisingEdit(reviewingEdit) : undefined;
+  const editRevisionTask = editRevision ? tasks.find(t => t.id === editRevision.id) : undefined;
+  const editSentBack = !!editRevision;
+  // In the new layout a revision that stops to ask the editor something is answered from its edit's card.
+  const answeringEdit = beta && !!reviewingEdit && editRevisionTask?.state === "waiting_for_user" && !!editRevisionTask.question;
   const activeReview = workspaceActive && !source && !editSentBack;
   const [priorityRow, setPriorityRow] = useState<HoveredReviewRow>();
   useEffect(() => {
@@ -1510,6 +1788,7 @@ export function LegacySimpleWorkspace() {
       ...(named && { name: threadTimeline.selectedMoment ? `${threadTimeline.selectedMoment.edits.length} edits` : tagOf(named) }) };
   };
   function keepShown() {
+    if (beta) return keepShownInColumn();
     if (!reviewingEdit || !focusThread) return;
     // K reaches the log as a bare key, and the button as "Keep": this says which edit was kept.
     appLog("action", "keep-edit", { edit: shownIndex + 1, of: threadEdits.length, change: reviewingEdit.changeId, flagged: !!reviewingEdit.check || undefined });
@@ -1523,17 +1802,185 @@ export function LegacySimpleWorkspace() {
     }
     moveOnFromShown();
   }
+  /** Keep in the new layout: a combined row of the column keeps every edit under it. */
+  function keepShownInColumn() {
+    if (!reviewingEdit || !focusThread) return;
+    // Already-kept edits opened from Done have nothing left to keep; close the card cleanly.
+    const unified = !openMoment ? rail.view().findForEdit(focusThread.id, reviewingEdit) : undefined;
+    if (unified?.section === "done") { closeEdit(); return; }
+    // K reaches the log as a bare key, and the button as "Keep": this says which edit was kept.
+    appLog("action", "keep-edit", { edit: shownIndex + 1, of: threadEdits.length, change: reviewingEdit.changeId, flagged: !!reviewingEdit.check || undefined });
+    // A combined row across requests (or a collapsed +N batch) keeps all of its underlying edits together.
+    const byThread = new Map<string, Omit<ThreadEdit, "at">[]>();
+    if (unified && unified.members.length > 0) {
+      for (const member of unified.members) {
+        const list = byThread.get(member.threadId);
+        if (list) {
+          if (!list.some(e => editKey(e) === editKey(member.edit))) list.push(member.edit);
+        } else byThread.set(member.threadId, [member.edit]);
+      }
+    } else {
+      byThread.set(focusThread.id, editsByRow[shownRow] ?? [reviewingEdit]);
+    }
+    const primaryEdits = byThread.get(focusThread.id) ?? [];
+    const primaryFresh = notYetKept(current.id, focusThread.id, primaryEdits);
+    const extraParts: { threadId: string; refs: Omit<ThreadEdit, "at">[] }[] = [];
+    for (const [tid, edits] of byThread) {
+      if (tid === focusThread.id) continue;
+      const fresh = notYetKept(current.id, tid, edits);
+      if (fresh.length) extraParts.push({ threadId: tid, refs: fresh });
+    }
+    let keptAny = false;
+    if (primaryEdits.length && keepEdits(current.id, focusThread.id, primaryEdits, head ?? undefined)) {
+      keptAny = true;
+      if (primaryFresh.length > 1) recordEditReviews(current.id, primaryFresh, "keep");
+      else recordEditReview(current.id, threadTimeline.selectedTarget, "keep");
+    }
+    for (const part of extraParts) {
+      if (keepEdits(current.id, part.threadId, part.refs, head ?? undefined)) {
+        keptAny = true;
+        recordEditReviews(current.id, part.refs, "keep");
+      }
+    }
+    if (keptAny) {
+      const undone = undoneEdit(reviewingEdit);
+      recordUndo({
+        kind: "keep",
+        word: reviewingEdit.marker ? "Done" : "Keep",
+        projectId: current.id,
+        threadId: focusThread.id,
+        refs: primaryFresh,
+        ...(extraParts.length > 0 && { extraParts }),
+        ...undone,
+        ...(unified?.batch && unified.batch.length > 1 && { name: unified.label }),
+      });
+    }
+    moveOnFromShown();
+  }
+  /** Next row in the unified fixed bottom dock's Needs review Priority list. */
+  function nextDockAfterKeep(hereAt: number): DockEntry | undefined {
+    const waitingList = dock.waitingEntries(threadIds);
+    const keepList = dock.keepEntries(threadIds, true);
+    const current = keepList.find(e => e.row.on || e.members?.some(m => m.on));
+    const confident = keepList.filter(e => e.place === "optional");
+    // While on a waiting item, finish remaining waiting items first (wrapping to earlier ones),
+    // then move into safe edits below.
+    if (!current || current.place === "you") {
+      return rowAfter(waitingList, current, { at: hereAt }, { numbers: false })
+        ?? confident[0];
+    }
+    // While on a safe edit, advance strictly down Safe edits, wrapping back to anything still waiting at the end.
+    return rowNext(confident, current, { at: hereAt }, { numbers: false })
+      ?? waitingList.find(e => e !== current);
+  }
+  /** Keep all confident edits across requests at once, with one-press ⌘Z undo. */
+  function keepConfident() {
+    const parts = dock.confidentEdits(threadIds).flatMap(({ threadId, refs }) => {
+      const fresh = notYetKept(current.id, threadId, refs);
+      return fresh.length ? [{ threadId, refs: fresh }] : [];
+    });
+    if (!parts.length) return;
+    const wasOnConfident = !!reviewingEdit && !reviewingEdit.check && !reviewingEdit.wasCheck;
+    for (const part of parts) if (keepEdits(current.id, part.threadId, part.refs, head ?? undefined)) recordEditReviews(current.id, part.refs, "keep");
+    recordUndo({ kind: "keepAll", word: "Keep all", projectId: current.id, parts });
+    appLog("action", "keep-low-risk", { count: parts.reduce((n, part) => n + part.refs.length, 0), requests: parts.length });
+    if (wasOnConfident) {
+      const firstWaiting = dock.waitingEntries(threadIds)[0];
+      if (firstWaiting?.row.open) firstWaiting.row.open();
+      else closeEdit();
+    }
+  }
+  // Keep all keeps every low-risk edit of the column at once, every request's, as Keep keeps one: the engine is
+  // told, each is Done's, and one ⌘Z takes them all back (the editor's choice, 2026-11-24). A low-risk edit open on the
+  // card goes on as Keep would from it, to what still waits, else the card closes.
+  function keepLowRisk() {
+    const parts = rail.view().lowRiskParts().flatMap(({ threadId, edits }) => {
+      const fresh = notYetKept(current.id, threadId, edits);
+      return fresh.length ? [{ threadId, refs: fresh }] : [];
+    });
+    if (!parts.length) return;
+    const wasOpen = !!reviewingEdit && onLowRisk;
+    for (const part of parts) if (keepEdits(current.id, part.threadId, part.refs, head ?? undefined)) recordEditReviews(current.id, part.refs, "keep");
+    recordUndo({ kind: "keepAll", word: "Keep all", projectId: current.id, parts });
+    appLog("action", "keep-low-risk", { count: parts.reduce((n, part) => n + part.refs.length, 0), requests: parts.length });
+    if (wasOpen && !openWaiting()) closeEdit();
+  }
   // Keep, Add and Reject edit go on to the same place: the next edit or call that still waits, else the card closes.
   function moveOnFromShown() {
+    if (beta) return moveOnInColumn();
+    if (dockHasTabs && !dock.explicitAllReport(threadIds) && reviewingEdit) {
+      const next = nextDockAfterKeep(reviewingEdit.at ?? reviewingEdit.range.start);
+      if (next?.row.open) { next.row.open(); return; }
+      closeEdit();
+      return;
+    }
     if (nextEditAfterKeep) actions.playEdit(nextEditAfterKeep, openOnItsOwn(nextEditAfterKeep));
     else if (nextCallAfterKeep) actions.listen(pass!, nextCallAfterKeep);
     else closeEdit();
   }
-  // A revision sent from a row of For you goes on as Keep does (the editor chose this on 2026-11-23): the row is
+  /** Keep, Add and Reject edit in the new layout go on down the column: the next row that waits in Needs review (then
+   * the first low-risk row), or from a low-risk row to the next one (then what waits), else the card closes. */
+  function moveOnInColumn() {
+    if (openMoment && reviewingEdit && nextEditAfterKeep && openMoment.edits.includes(nextEditAfterKeep)) {
+      actions.playEdit(nextEditAfterKeep, true);
+      return;
+    }
+    const view = rail.view();
+    const current = (reviewingEdit && focusThread ? view.findForEdit(focusThread.id, reviewingEdit) : undefined)
+      ?? (reviewingEdit ? view.findOpen() : undefined);
+    const whereAt = reviewingEdit ? (reviewingEdit.at ?? reviewingEdit.range.start) : 0;
+    const section = current?.section ?? (onLowRisk ? "low" : "you");
+    if (section === "done") { closeEdit(); return; }
+    if (section === "low") {
+      const lows = view.sections.low.filter(isSteppableRailRow);
+      const idx = current ? lows.findIndex(r => r.key === current.key) : -1;
+      const next = idx >= 0 ? lows[idx + 1] : lows.find(r => r.key !== current?.key);
+      if (next) { next.open?.(); return; }
+      if (!openWaiting(current)) closeEdit();
+      return;
+    }
+    const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
+    const next = nextRowAfter(waits, current, whereAt);
+    if (next) { next.open?.(); return; }
+    const firstLow = view.sections.low.find(r => isSteppableRailRow(r) && r.key !== current?.key);
+    if (firstLow) { firstLow.open?.(); return; }
+    closeEdit();
+  }
+  /** Opens the first row that still waits on the editor in unified Needs review. Says whether there was any. */
+  function openWaiting(exclude?: UnifiedRailRow) {
+    const first = rail.view().sections.you.find(r => isSteppableRailRow(r) && (r.needs || r.asks) && r.key !== exclude?.key);
+    if (!first) return false;
+    first.open?.();
+    return true;
+  }
+  // A revision sent from a row of Needs review goes on as Keep does (the editor chose this on 2026-11-23): the row is
   // Working's now, and the card moves to the next one that waits. From Working or Done, and in a request with one
   // list of every edit, the card stays on the edit it revised.
   function moveOnFromRevised() {
-    if (reviewingEdit) { if (focusTabbed && tabShown(focusList) === "you") moveOnFromShown(); return; }
+    if (beta) {
+      if (reviewingEdit) { if ((openRailRow?.section ?? tabShown(focusList)) === "you") moveOnFromShown(); return; }
+      if (!openCall || !pass || !passThread) return;
+      const view = rail.view();
+      const currentCallRow = view.findForCall(passThread.id, openCall.index);
+      if ((currentCallRow?.section ?? tabShown(passList)) !== "you") return;
+      const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
+      const nextRow = nextRowAfter(waits, currentCallRow, listedAt.get(openCall.index) ?? openCall.start);
+      player.pause();
+      if (nextRow) nextRow.open?.();
+      else setListening(undefined);
+      return;
+    }
+    if (dockHasTabs && !dock.explicitAllReport(threadIds)) {
+      if (tabShown(dockList) !== "you") return;
+      if (reviewingEdit) { moveOnFromShown(); return; }
+      if (!openCall || !pass) return;
+      const next = nextDockAfterKeep(listedAt.get(openCall.index) ?? openCall.start);
+      player.pause();
+      if (next?.row.open) next.row.open();
+      else setListening(undefined);
+      return;
+    }
+    if (reviewingEdit) { if (focusTabbed && tabShown(activeFocusList) === "you") moveOnFromShown(); return; }
     if (!openCall || !pass || !passThread || tabShown(passList) !== "you") return;
     const next = nextAfterCallDecision;
     player.pause();
@@ -1568,6 +2015,15 @@ export function LegacySimpleWorkspace() {
     const step = await undoLast(current.id, project, version => useProjectStore.getState().historyEdit(version, "revert"), takeBackCall);
     // A call taken back is open on its card already.
     if (step?.kind === "call") return;
+    if (step?.kind === "callAdjust") {
+      const prior = useProjectStore.getState().current?.changes.find(c => c.id === step.replacedId);
+      const cut = prior && stagedCuts(prior)[step.index];
+      if (prior && cut) {
+        player.pause();
+        setListening(prev => ({ changeId: prior.id, index: step.index, cut, side: "after", take: (prev?.take ?? 0) + 1, key: `${prior.id}/${step.index}` }));
+      }
+      return;
+    }
     // A Keep, Add or Reject edit moved the card on: taken back, the card goes back to the edit it was about.
     const opened = step?.kind === "keep" ? step : step?.kind === "revision" && step.edit && step.threadId ? { threadId: step.threadId, edit: step.edit } : undefined;
     const thread = opened && threadsNow.current.find(t => t.id === opened.threadId);
@@ -1580,17 +2036,30 @@ export function LegacySimpleWorkspace() {
   // decision of the editor's are: one that asks for a look, or a spot marked for them, waits for their own Keep. While
   // a cut, an edit or a call is open the player is on its own passage, and nothing is kept this way.
   const watchedMoments = useMemo(() => {
-    if (!focusThread || lists[focusThread.id] !== "all" || !threadTimeline.moments || !passFocused) return [];
+    const lowIncluded = dockHasTabs && !explicitAllDock ? true : !!focusThread && lists[focusThread.id] === "all";
+    if (!focusThread || !lowIncluded || !threadTimeline.moments || !passFocused) return [];
     return threadTimeline.moments
       .filter(m => m.edits.every(e => !e.check && !e.marker) && m.edits.some(e => !reviewed(e) && !revisingEdit(e)));
-  }, [focusThread, lists, threadTimeline.moments, passFocused, reviewed, revisingEdit]);
+  }, [focusThread, lists, dockHasTabs, explicitAllDock, threadTimeline.moments, passFocused, reviewed, revisingEdit]);
   const watching = watchedMoments.length > 0 && !reviewingEdit && !listening && !suggestion && !source;
   useWatchedMomentAutoKeep(watching, watchedMoments, current.id, focusThread?.id, head);
   useEditCardShortcuts(workspaceActive && !!reviewingEdit, stepEdit, closeEdit);
 
-  // ↑ and ↓ step through the pass's For you items (calls and flagged edits), one at a time.
+  // ↑ and ↓ step through the pass's Needs review items (calls and flagged edits), one at a time.
   const stopListening = () => { player.pause(); setListening(undefined); };
   function stepCut(delta: number) {
+    // In the new layout ↑ and ↓ step through the column of edits, one row at a time.
+    if (beta) return stepInRail(delta > 0 ? 1 : -1);
+    if (dockHasTabs && !dock.explicitAllReport(threadIds)) {
+      const nav = dock.tabNavigable(threadIds, dockList);
+      if (!nav.length) return;
+      const current = nav.find(e => e.row.on || e.members?.some(m => m.on));
+      const next = openCall
+        ? stepInDock(nav, current, { at: listedAt.get(openCall.index) ?? openCall.start, threadId: passThread?.id, tier: "you" }, delta)
+        : delta > 0 ? nav[0] : nav.at(-1);
+      openSteppedDockEntry(next);
+      return;
+    }
     const next = callBeside(delta);
     if (!next || !pass || !passThread) return;
     if ("call" in next) return stepToCall(pass, next.call);
@@ -1601,13 +2070,14 @@ export function LegacySimpleWorkspace() {
   const applyingShown = !!suggestion && deciding === suggestion.id;
   // Capture phase, so ↑ and ↓ step between cuts while a pass waits for a call. ← and → pass through to the player.
   const reviewKeysOn = workspaceActive && !!(passThread || suggestionThread) && !reviewingEdit;
-  useCallCardShortcuts(reviewKeysOn, !!pass, { stepCut, stopListening, closeReview, listening: !!listening, suggestion: !!suggestion, applying: applyingShown, calls: passForYouItems.length > 0 });
+  useCallCardShortcuts(reviewKeysOn, !!pass, { stepCut, stopListening, closeReview, listening: !!listening, suggestion: !!suggestion, applying: applyingShown,
+    calls: dockHasTabs && !explicitAllDock ? dock.tabNavigable(threadIds, dockList).length > 0 : passForYouItems.length > 0 });
 
   // Esc closes the Transcript beside the player. A cut, an edit or a suggestion that's open takes Esc first.
   const escClosesTranscript = workspaceActive && transcript && !reviewingEdit && !(reviewKeysOn && (!!listening || !!suggestion));
   useEscapeCloses(escClosesTranscript, () => setTranscript(false));
   // With nothing else for Esc to close, it lets go of the picked request, as a second press on its band does.
-  const escLetsGo = workspaceActive && !!focusThread && !transcript && !reviewingEdit && !listening && !suggestion && !showing;
+  const escLetsGo = !beta && workspaceActive && !!focusThread && !transcript && !reviewingEdit && !listening && !suggestion && !showing;
   useEscapeCloses(escLetsGo, () => { if (focusThread) letGo(focusThread.id); });
 
   // Keep the newest message in view as replies arrive, unless the editor scrolled up to read.
@@ -1630,8 +2100,9 @@ export function LegacySimpleWorkspace() {
   // spot marked for the editor changed nothing, so neither has one.
   const editDid = !reviewingEdit || threadTimeline.selectedMoment || shownMarker ? undefined
     : beforeCut ? cutBefore.timeline && <CutWordsLine key={`what ${editKey(reviewingEdit)}`} timeline={cutBefore.timeline} media={media}
-      range={beforeCut.removed} length={lengthLabel(removedLength)} verb="Took out" />
-    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, before: shownChangeBefore, media, fps }));
+      range={beforeCut.removed} length={lengthLabel(removedLength)} verb="Cut" />
+    : (detail => detail && <p className="edit-card-what">{detail}</p>)(editDetail(shownChange, reviewingEdit, { timeline, before: shownChangeBefore, media, fps })
+      ?? (shownChange?.author.type === "human" && threadTimeline.originalChange !== shownChange ? editDetail(threadTimeline.originalChange, reviewingEdit, { timeline, before: shownChangeBefore, media, fps }) : undefined));
   // The transcript stays folded away. Its icon on the card opens it for this edit only.
   const scriptKey = reviewingEdit && beforeCut ? editKey(reviewingEdit) : undefined;
   const scriptOpen = !!scriptKey && scriptFor === scriptKey;
@@ -1662,6 +2133,19 @@ export function LegacySimpleWorkspace() {
   }, [appliedTarget?.version, threadTimeline.located, reviewingEdit]);
   const editOpen = !!reviewingEdit;
   const openEditKey = reviewingEdit && editKey(reviewingEdit);
+  // Opening a Safe/Working/Done edit unfolds its section.
+  // Manually refolding that section while the same edit stays open keeps it folded.
+  const lastUnfoldedSection = useRef<string>(undefined);
+  const openDisplaySection = openRailRow ? (railView.display.sectionOf(openRailRow.key) ?? openRailRow.section) : undefined;
+  useEffect(() => {
+    const sec = openDisplaySection;
+    const openKey = reviewingEdit && focusThread ? `${focusThread.id}:${openEditKey}` : openCall && pass ? `call:${pass.id}:${openCall.index}` : undefined;
+    const key = openKey && (sec === "working" || sec === "done" || sec === "low") ? `${sec}:${openKey}` : undefined;
+    if (!key || (sec !== "working" && sec !== "done" && sec !== "low")) { lastUnfoldedSection.current = undefined; return; }
+    if (lastUnfoldedSection.current === key) return;
+    lastUnfoldedSection.current = key;
+    setRailOpen(was => was[sec] ? was : { ...was, [sec]: true });
+  }, [openDisplaySection, reviewingEdit, focusThread, openEditKey, openCall, pass]);
   // The edit that's open, for a rejection that lands after the editor stepped on: only the edit it was sent from moves on.
   const openEditNow = useRef(openEditKey);
   openEditNow.current = openEditKey;
@@ -1704,7 +2188,7 @@ export function LegacySimpleWorkspace() {
   const rejectedCard = reviewingEdit && (reviewingEdit.rejected || leavingNow) && focusThread
     ? <RejectedEditCard edit={reviewingEdit} /> : undefined;
   const editCard = reviewingEdit && !reviewingEdit.rejected && !leavingNow && shownChange && focusThread && !editSentBack
-    ? <AppliedEditCard projectId={current.id} focusThread={focusThread} reviewingEdit={reviewingEdit} shownPassNo={shownPassNo}
+    ? <AppliedEditCard projectId={current.id} focusThread={focusThread} reviewingEdit={reviewingEdit}
         editPlace={editPlace} flaggedCount={passIsFocus ? waitingPassForYouEdits.length : flaggedRows.length} editDid={editDid} selectedMoment={threadTimeline.selectedMoment}
         shownKind={shownKind} shownMarker={shownMarker} reviewRange={reviewRange} onPlayCheck={playCheck} visiting={visiting}
         beforeCut={beforeCut} cutBeforeTimeline={cutBefore.timeline} cutBeforeError={cutBefore.error} onRetryCutBefore={cutBefore.retry}
@@ -1714,6 +2198,13 @@ export function LegacySimpleWorkspace() {
         appliedSide={appliedSide} workspaceActive={workspaceActive} cutKey={cutKey} onChooseCutSide={chooseCutSide}
         setCompareHost={setCompareHost} onRevise={() => actions.revise(focusThread, shownChange)}
         onKeep={keepShown} madeBy={shownChange.handedOff}
+        batch={openBatchItems && openBatchIndex >= 0 ? {
+          index: openBatchIndex,
+          count: openBatchItems.length,
+          kept: openRailRow?.section === "done",
+          onPrev: () => openBatchItems[openBatchIndex - 1]?.open?.(),
+          onNext: () => openBatchItems[openBatchIndex + 1]?.open?.(),
+        } : undefined}
         // Add asks Scarlet to make or find what the to-do says to add. Its row says Adding… meanwhile, ⌘Z takes the request
         // back as it does a revision, and the card goes on as Keep does, so a run of to-dos is one press each.
         onSentAdd={shownMarker && !reviewed(reviewingEdit) ? task => {
@@ -1741,7 +2232,14 @@ export function LegacySimpleWorkspace() {
           // One Scarlet was asked to put back stays in the video meanwhile, its row saying Rejecting…: the card goes on,
           // to the rest of its moment first, whose other edits are still the editor's to look at.
           const rest = threadTimeline.selectedMoment?.edits.find(e => e !== reviewingEdit);
-          if (!sent.version) return rest ? actions.playEdit(rest, true) : moveOnFromShown();
+          if (!sent.version) {
+            if (rest) return actions.playEdit(rest, true);
+            if (openBatchItems && openBatchIndex >= 0) {
+              const nextInBatch = openBatchItems[openBatchIndex + 1] ?? openBatchItems[openBatchIndex - 1];
+              if (nextInBatch?.open) return nextInBatch.open();
+            }
+            return moveOnFromShown();
+          }
           player.pause();
           // The box was aimed at the whole moment: what is open now is the one edit that was rejected.
           const ui = useUiStore.getState();
@@ -1764,11 +2262,11 @@ export function LegacySimpleWorkspace() {
     : heard && (timeline.version === pass.fromVersion || toWorkingCut) ? { timeline, range: heard }
     : stagedOn.timeline && !heard ? { timeline: stagedOn.timeline, range: listening.cut } : undefined;
   const callScriptOpen = !!callKey && scriptFor === callKey && (!conflict || !!heard);
-  // Where the call's cut is in the video, as its dot on the timeline says.
-  const callAt = openCall ? (heard ?? placeCut(openCall))?.start : undefined;
+  // Where the call's cut is in the video: the time its row in the list leads with, so its card names it the same way.
+  const callAt = openCall ? listedAt.get(openCall.index) ?? (heard ?? placeCut(openCall))?.start : undefined;
   const callCard = !editOpen && pass && openCall && listening
-    ? <CallCard projectId={current.id} pass={pass} openCall={openCall} listening={listening} callNum={callNo.get(openCall.index)}
-        callAt={callAt} callHistory={callHistory} callWords={callWords} callLength={callLength!} callKey={callKey}
+    ? <CallCard projectId={current.id} pass={pass} openCall={openCall} listening={listening}
+        callAt={callAt !== undefined ? distinctClock(callAt, [...listedAt.values()]) : undefined} callHistory={callHistory} callWords={callWords} callLength={callLength!} callKey={callKey}
         callScriptOpen={callScriptOpen} media={media} conflict={!!conflict} heard={heard} visit={visit} decideError={decideError}
         placing={placing} stagedOnError={stagedOn.error} onRetryStagedOn={stagedOn.retry} workspaceActive={workspaceActive}
         onToggleSide={() => listenSide(listening.side === "after" ? "before" : "after")}
@@ -1789,7 +2287,7 @@ export function LegacySimpleWorkspace() {
   // The chat is one conversation and stays where it is. A cut or an edit that's open has its words and its controls on
   // its card; the message box is aimed at it.
   const itemThread = callCard ? passThread : editOpen ? focusThread : undefined;
-  const selected = answeringCut && callCard ? `ask:${rechecking!.id}` : callCard ? `call:${listening!.key}/${versionBefore ?? ""}` : editOpen ? `edit:${editKey(reviewingEdit!)}` : askThread ? `ask:${askThread.id}` : "new";
+  const selected = answeringCut && callCard ? `ask:${rechecking!.id}` : answeringEdit ? `ask:${editRevisionTask!.id}` : callCard ? `call:${listening!.key}/${versionBefore ?? ""}` : editOpen ? `edit:${editKey(reviewingEdit!)}` : askThread ? `ask:${askThread.id}` : "new";
 
   // The message box talks to the cut or edit that's open; with none open it answers Scarlet's question, else starts a
   // new edit. A message being written stays aimed where it was, so moving to another cut never sends a half-written
@@ -1838,7 +2336,9 @@ export function LegacySimpleWorkspace() {
     // The box is built again when its request changes, which drops the caret. When the editor moved the message by
     // hand, or was typing in the box, what they type next still goes into it, not to A, S, R or K on the open card.
     const typing = carry || !!document.activeElement?.closest(".composer-input");
-    const aim: { thread?: Thread; target?: AgentContext; label?: string } = why === "new" ? {} : answeringCut && callCard ? { thread: passThread } : callCard && passThread
+    const aim: { thread?: Thread; target?: AgentContext; label?: string } = why === "new" ? {} : answeringCut && callCard ? { thread: passThread }
+      : answeringEdit && focusThread ? { thread: focusThread }
+      : callCard && passThread
       ? { thread: passThread, ...cutTarget(pass!, listening!.index, listening!.cut) }
       : editOpen && focusThread && shownChange ? { thread: focusThread, ...editAim(reviewingEdit!, shownChange) } : { thread: askThread };
     // The box is already on this request (or on New edit). An aim the editor made there by hand stays as it is; one
@@ -1997,13 +2497,50 @@ export function LegacySimpleWorkspace() {
   // An answer says so too, so a message meant as a new edit isn't sent to Scarlet's question by mistake.
   const boxTag = aimedAt ? (aimed && cutName(aimed)) ?? tagOf(aimedAt) : replyThread ? replyThread.question ? "Answer" : "Reply" : undefined;
   // Scarlet can have several questions waiting, one from each cut or edit it works on. The box answers them one at a
-  // time, in the order asked, and its tag says which this one is: "Answer 1 of 2".
+  // time, in the order asked, and its tag says which this one is: "Answer 1 of 2". In the new layout, the question for
+  // the open cut or edit is the one answered, and the header over the box names which edit it is about.
   const questions = tasks.filter(t => t.kind !== "transcribe" && t.state === "waiting_for_user" && !!t.question);
-  const answerNote = boxTag === "Answer" && questions.length > 1 && replyThread?.question
-    ? `${questions.findIndex(t => t.id === replyThread.question!.id) + 1} of ${questions.length}` : undefined;
+  const activeAskedTask = boxTag === "Answer"
+    ? (answeringCut && rechecking?.state === "waiting_for_user" && rechecking.question ? rechecking
+      : answeringEdit && editRevisionTask ? editRevisionTask
+      : replyThread?.question)
+    : undefined;
+  const answerNote = beta
+    ? activeAskedTask && questions.length > 1 ? `${questions.findIndex(t => t.id === activeAskedTask.id) + 1} of ${questions.length}` : undefined
+    : boxTag === "Answer" && questions.length > 1 && replyThread?.question
+      ? `${questions.findIndex(t => t.id === replyThread.question!.id) + 1} of ${questions.length}` : undefined;
+  const askedInfo = useMemo(() => {
+    if (!beta || !activeAskedTask || !replyThread) return undefined;
+    const { changeId, cutIndex, editIndex } = activeAskedTask.context;
+    if (pass && cutIndex !== undefined) {
+      const idx = callNow(pass, { changeId, cutIndex }, passThread?.changes ?? [], changes, tasks, footage);
+      const call = idx !== undefined ? allCalls.find(a => a.index === idx) : undefined;
+      // Its row goes by the order the call reached the editor in (`callRowKey`), not by its place in the pass.
+      if (call) return { rowKey: `call/${callNo.get(call.index)}`, subject: { time: clockLabel(listedAt.get(call.index) ?? call.start), label: call.summary || call.reason } };
+    }
+    if (changeId && editIndex !== undefined) {
+      const ownPool = focusThread?.id === replyThread.id && threadEdits.length ? threadEdits
+        : rail.info(replyThread.id)?.edits?.length ? rail.info(replyThread.id)!.edits!
+        : threadEditList(replyThread, media);
+      let edit = ownPool.find(e => matchesEdit(e, { changeId, spot: editIndex }));
+      if (!edit) {
+        for (const t of threads) {
+          const found = rail.info(t.id)?.edits?.find(e => matchesEdit(e, { changeId, spot: editIndex }));
+          if (found) { edit = found; break; }
+        }
+      }
+      if (edit) {
+        const key = editKey(edit);
+        const at = (edit as ThreadEdit).at ?? edit.range.start;
+        return { rowKey: key, subject: { time: clockLabel(at), label: (edit.reason && edit.summary) || edit.label } };
+      }
+    }
+    return undefined;
+  }, [beta, activeAskedTask, replyThread, pass, passThread, changes, tasks, footage, allCalls, callNo, focusThread?.id, threadEdits, media, passEditNo, rail, railVersion, threads]);
   const aimOnOpen = callCard ? answeringCut ? !aimed : aimed?.changeId === pass!.id && aimed.cutIndex === listening!.index
-    : editOpen && !!aimed && aimed.cutIndex === undefined && (aimed.changeId === reviewingEdit!.changeId || aimed.changeId === shownChange!.id)
-      && (aimed.editIndex === undefined || aimed.editIndex === reviewingEdit!.spot);
+    : editOpen ? answeringEdit ? !aimed : !!aimed && aimed.cutIndex === undefined && (aimed.changeId === reviewingEdit!.changeId || aimed.changeId === shownChange!.id)
+      && (aimed.editIndex === undefined || aimed.editIndex === reviewingEdit!.spot)
+    : false;
   const aimMatches = itemThread ? replyThread?.id === itemThread.id && aimOnOpen
     // A suggestion that's open is what the box is on once Revise (R) aims it there.
     : openSuggestion && aimed?.changeId === openSuggestion ? replyThread?.id === suggestionThread!.id
@@ -2017,9 +2554,9 @@ export function LegacySimpleWorkspace() {
   // chosen in its passage has the words' times, not the cut's.
   const aimedCall = pass && aimed && aimed.changeId === pass.id && aimed.cutIndex !== undefined
     ? allCalls.find(a => a.index === aimed.cutIndex) ?? (aimed.end !== undefined ? { start: aimed.time, end: aimed.end } : undefined) : undefined;
-  // A call's tag is only its number ("Cut 3"), so the box's tag line says where that cut is.
-  const aimTime = boxTag && aimedCall && aimed && cutName(aimed) === boxTag ? (placeCut(aimedCall) ?? aimedCall).start : undefined;
-  const targetTime = aimed && replyThread && boxTag && aimTime === undefined ? targetTimeOf(aimed) : undefined;
+  // A call's tag is its time ("Cut at 2:47"), to the millisecond on a click, where its row is in the list.
+  const targetTime = aimed && replyThread && boxTag
+    ? (aimedCall && cutName(aimed) === boxTag ? callAtTime(aimed) : undefined) ?? targetTimeOf(aimed) : undefined;
   const aimLabel = !replyThread ? "Starting a new edit"
     : aimedCall && (targetLabel || aimedAtItem) ? `Revising the cut at ${clockLabel((placeCut(aimedCall) ?? aimedCall).start)}`
     : targetLabel ? `Revising ${targetLabel}`
@@ -2052,8 +2589,8 @@ export function LegacySimpleWorkspace() {
   };
 
   const compact = useSyncExternalStore(subscribeWidth, () => narrow.matches);
-  // What stays put above the message box: the request Scarlet is on now, else the pass waiting on the editor's calls.
-  // Everything queued waits behind it, so it holds the same place until it's done and then joins the chat.
+  // In the new layout on a narrow window, what stays put above the message box: the request Scarlet is on now, else the
+  // pass waiting on the editor's calls. Everything queued waits behind it, so it holds the same place until it's done.
   const [pinHost, setPinHost] = useState<HTMLElement | null>(null);
   const editingPaused = current.project.editingPaused;
   // A request in line again after its question was answered is still the one Scarlet is on: it holds its place for the
@@ -2142,9 +2679,12 @@ export function LegacySimpleWorkspace() {
     : undefined;
   const typedTimes = useUiStore(useShallow(s => {
     const point = messageClock && pointOf(s.agentContext);
-    return point?.fromMessage && point.version === playerVersion && point.mediaId === source?.id
+    // In the new layout the times in a message to the cut or edit that's open are marked too, on the video as it shows.
+    return (beta && replyTo && !rewordingItem && messageDuration > 0) || (point?.fromMessage && point.version === playerVersion && point.mediaId === source?.id)
       ? [...new Set(messageTimestamps(s.agentDraft, messageDuration).map(stamp => stamp.time))] : [];
   }));
+  const chipClock = useMemo(() => messageDuration > 0 ? { duration: messageDuration, seek: (time: number) => seekFromMessage.current?.(time) } : undefined, [messageDuration]);
+  const [aimHost, setAimHost] = useState<HTMLElement | null>(null);
 
 
   /**
@@ -2160,6 +2700,13 @@ export function LegacySimpleWorkspace() {
     const next = withMarkedRange(box.agentContext, marked);
     if (was && was === wordsInCall.current && next) wordsInCall.current = next;
     box.setAgentContext(next, next && was?.changeId ? was : undefined);
+    // In the new layout the stretch is in the words themselves, where the cursor is; an end that moves changes them in
+    // place, and a stretch taken off leaves them as the editor wrote them.
+    if (beta && marked) {
+      const words = preciseRange(marked.start, marked.end);
+      const wasWords = was?.markedRange ? preciseRange(was.markedRange.start, was.markedRange.end) : undefined;
+      if (words !== wasWords) insertInDraft(words, wasWords);
+    }
     // A handle stepped a frame by ← or → keeps the keys, so the next press steps it again.
     if (marked && !byKey) box.focusComposer();
   };
@@ -2185,7 +2732,23 @@ export function LegacySimpleWorkspace() {
   // it was. Words chosen in the transcript or a stretch marked on the ruler stay through a seek or pause; only N takes
   // their place. With a cut or an edit open, a pause or N into an empty box shows its time in the tag, and the next seek
   // moves it there: the message stays the cut's or the edit's, and Scarlet is told the frame the editor stopped on.
-  const pickPoint = (picked: AgentContext, how: "seek" | "n" | "pause") => {
+  //
+  // The new layout (the editor's decision, 2026-11-24) puts a time in the message's own words instead. A press, a scrub,
+  // a skip or a pause only moves the video. Shift + click on the timeline, or N, puts that moment's time into the words
+  // where the cursor is, and Shift + drag a stretch (`markRange`). The first time of a new edit is also where it is
+  // aimed, to the frame; a message to a cut or an edit stays theirs, and Scarlet is told the first frame picked besides.
+  const pickPoint = (picked: AgentContext, how: "seek" | "n" | "pause" | "add") => {
+    if (beta) {
+      if (how !== "n" && how !== "add") return;
+      const box = useUiStore.getState();
+      if (rewordingItem || box.speaking) return;
+      const target = box.agentContext;
+      if (replyTo) {
+        if (aimedAtChange(target) && !pausedAtRef.current) setPausedAt({ time: picked.time, version: picked.version, ...picked.mediaId && { mediaId: picked.mediaId } });
+      } else if (!target && !messageTimestamps(box.agentDraft, messageDuration).length) box.setAgentContext({ ...picked, fromMessage: true });
+      insertInDraft(clockLabel(picked.time));
+      return;
+    }
     const box = useUiStore.getState();
     if (rewordingItem || box.speaking) return;
     const written = box.agentDraft.trim();
@@ -2266,21 +2829,45 @@ export function LegacySimpleWorkspace() {
   };
   const { effective } = useAgentAvailability();
   const resumeRunWith = resumeRunChoice(tasks, effective);
-  const composer = <WorkspaceComposer newEdit={!replyTo} playerVersion={playerVersion} mediaId={source?.id} key={JSON.stringify([current.id, replyTo])} thread={replyThread}
+  // Requests waiting their turn are the editor's messages too: bubbles in the chat, right at the end of the conversation.
+  const queueRows = beta && (queuedItems.length > 0 || editingPaused) ? <QueueInChat items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id}
+      onRemove={id => void removeQueued(id)}
+      paused={editingPaused}
+      onContinue={editingPaused ? () => queueAction(resumeRunWith ? resumeEditing(current.id, resumeRunWith) : resumeEditing(current.id)).catch(() => {}) : undefined}
+      // The editor's calls are theirs to put off: the request they hold back can start without them.
+      onStart={!editingPaused && queued[0] && waitFor(queued[0])?.kind === "review" ? id => void queueAction(startBeforeCalls(id)).catch(() => {}) : undefined}
+      // The pencil of the request whose words are in the box puts them back as they were.
+      onReword={id => {
+        // A message being spoken is the box's until it is out: it would be saved over this request's words.
+        if (useUiStore.getState().speaking) return;
+        const item = queuedItems.find(i => i.id === id);
+        setRewording(item && rewording?.id !== id ? { id, text: item.text } : undefined);
+      }} /> : undefined;
+  const composerProps = {
+    newEdit: !replyTo, playerVersion, mediaId: source?.id, thread: replyThread,
     // A new request is the latest thing said, so the chat goes to it. A cut or an edit that's open stays open.
-    onCreated={() => { follow.current = true; }} onSent={sentUnder(aims.current)}
+    onCreated: () => { follow.current = true; }, onSent: sentUnder(aims.current),
     // The box carries a tag naming the cut or edit it revises, or the point a new edit is about. Taking the tag off
     // makes the message a new edit about the whole video.
-    messageClock={messageClock} pausedAt={replyTo ? pausedAt : undefined} aimTime={aimTime} targetTime={targetTime}
-    targetTag={boxTag} targetTagNote={answerNote} onClearTarget={clearTarget} onRestoreTarget={restoreTarget}
-    // A queued request's words have the box to themselves: its row in the tray, lit, says which request they are.
-    rewording={rewordingItem && { id: rewordingItem.id, text: rewording!.text,
-      onChange: text => setRewording(r => r && { ...r, text }),
-      onSave: async (text, skillIds) => {
+    messageClock, pausedAt: replyTo ? pausedAt : undefined, targetTime,
+    targetTag: boxTag, targetTagNote: answerNote, onClearTarget: clearTarget, onRestoreTarget: restoreTarget,
+    // A queued request's words have the box to themselves: its row in the queue, lit, says which request they are.
+    rewording: rewordingItem && { id: rewordingItem.id, text: rewording!.text,
+      onChange: (text: string) => setRewording(r => r && { ...r, text }),
+      onSave: async (text: string, skillIds?: string[]) => {
         if (text !== rewordingItem.text.trim()) await rewordTask(rewordingItem.id, text, skillIds);
         setRewording(active => active === rewording ? undefined : active);
       },
-      onCancel: () => setRewording(undefined) }}
+      onCancel: () => setRewording(undefined) },
+  };
+  const composer = beta ? <WorkspaceComposerBeta key={JSON.stringify([current.id, replyTo])} {...composerProps}
+    chipClock={chipClock}
+    // The box names the cut or edit it talks to as its row does: the row that's open draws itself on the box's line.
+    aimSlot={aimMatches && itemThread && aimedAt ? setAimHost : undefined}
+    askedSubject={askedInfo?.subject} askedTask={activeAskedTask}
+    // A question about a cut opens that cut from the question over the box, as long as it isn't open already.
+    onOpenAsked={replyThread?.question?.cutConflict?.range && pass && !(answeringCut && callCard) ? () => replyToThread(replyThread) : undefined} />
+    : <WorkspaceComposer key={JSON.stringify([current.id, replyTo])} {...composerProps}
     // Pause, Resume and Stop are at the right of the band of the request Scarlet has. Only with no such band, editing
     // paused while requests wait their turn, does the tray hold Resume.
     tray={queuedItems.length > 0 || (editingPaused && !editing) ? <QueueTray items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id} opened={trayOpen}
@@ -2297,14 +2884,33 @@ export function LegacySimpleWorkspace() {
         setRewording(item && rewording?.id !== id ? { id, text: item.text } : undefined);
       }} /> : undefined} />;
 
-  return <EditHoverContext.Provider value={hoveredEdit}>
-    <main className="min-h-0 flex flex-1 flex-col">
+  const adjustName = rejectTarget ? cutName(rejectTarget) ?? targetName(rejectTarget) : openCall && pass ? cutName({ changeId: pass.id, cutIndex: openCall.index }) : undefined;
+  const cutAdjust = useCutAdjust({
+    projectId: current.id, head, timeline, media, fps,
+    focusThread, shownChange: threadTimeline.originalChange ?? shownChange, reviewingEdit: editSentBack ? undefined : reviewingEdit,
+    selectedMoment: !!threadTimeline.selectedMoment, hasReviewRange: !!reviewRange, singleEdit: threadTimeline.single, leaving: threadTimeline.leaving,
+    cutKey, appliedCut, beforeTimeline, otherCuts, stagedAround, setCutSide,
+    onEngineLeave: asked => asked ? threadTimeline.leave() : threadTimeline.stay(),
+    onAppliedRejected: version => {
+      if (openEditNow.current !== openEditKey) return;
+      player.pause();
+      setLeavingEdit({ key: openEditKey!, version, dot: shownMarks.find(dot => dot.edit === openEditKey) });
+    },
+    ...(adjustName && { cutName: tagOf(adjustName) }),
+    pass, openCall, listening, setListening, conflict: !!conflict, openCallBack, deciding: !!deciding,
+    heard, callTimeline, callView, passRemovals: callSiblings,
+    onDecideCall: choice => { if (openCall) void decideCut(choice); },
+  });
+
+  const page = <>
+    <main className="min-h-0 flex flex-1 flex-col" data-new-layout={beta ? "" : undefined}>
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
         onPaths={paths => { void uploads.startPaths(paths); setPanel("media"); }}
         onFiles={files => { uploads.start(files); setPanel("media"); }}>
-        <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}
+        <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={beta ? sideRailWidth : simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}
           // With the Transcript open the chat leaves it its narrowest, so the two never take the player's room between them.
-          reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}>
+          // The new layout also leaves room for its column of edits at its narrowest.
+          reserve={(beta ? REVIEW_RAIL_MIN : 0) + (transcript ? TRANSCRIPT_RAIL_MIN : 0)}>
           <SimpleHeader projectName={current.project.name} importing={importing} importFailed={importFailed}
             threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} menuSays={menuSays} toLearn={toLearn}
             transcript={transcript} setTranscript={setTranscript} setPanel={setPanel} openLearnings={() => { setLearnFocus(undefined); setPanel("learnings"); }}
@@ -2315,25 +2921,37 @@ export function LegacySimpleWorkspace() {
             <span>{menuError || "Some files need attention."}</span>
             {importFailed && !menuError && <button type="button" className="simple-link" onClick={() => setPanel("media")}>View media</button>}
           </div>}
-          <div className="simple-thread" onClick={letGoOnChatPress}>
-            <div ref={chat} className="simple-chat" onScroll={e => {
+          <div className="simple-thread" onClick={beta ? undefined : letGoOnChatPress}>
+            <div ref={chat} className="simple-chat" onScroll={beta ? e => {
               const pane = e.currentTarget;
               follow.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop < 48;
-            }}>
+            } : undefined}>
               {current.reviewStatus === "loading" ? <Loading label="Loading edits…" />
                 : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}{" "}
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
-                : ordered.length ? ordered.map(thread => <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
-                  pinned={pinned} pinHost={pinHost} list={listOf(thread.id)}
-                  reportReviewMarkers={(showOtherFlags || showEvery) && thread.id !== focusThread?.id && thread.id !== passThread?.id
-                    ? reportReviewMarkers : undefined} reportEvery={showEvery} />)
+                : ordered.length ? ordered.map((thread, i) => beta
+                  ? <TurnBeta key={thread.id} projectId={current.id} thread={thread} threadOrder={i} actions={chatActions}
+                    pinned={compact ? pinned : undefined} pinHost={compact ? pinHost : null} list={listOf(thread.id)}
+                    askingRowKey={askedInfo?.rowKey}
+                    reportReviewMarkers={showOtherFlags && thread.id !== focusThread?.id && thread.id !== passThread?.id
+                      ? reportReviewMarkers : undefined} />
+                  : <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
+                    list={listOf(thread.id)} laterRequests={ordered.length - 1 - i}
+                    reportReviewMarkers={(showOtherFlags || showEvery) && thread.id !== focusThread?.id && thread.id !== passThread?.id
+                      ? reportReviewMarkers : undefined} reportEvery={showEvery} />)
                 : !media.length ? <p className="simple-empty">Drop footage here, then say what you want.</p>
                 : caching && <p className="simple-empty" role="status">You can start editing while the video caches.</p>}
               {/* A new timeline that keeps failing to read is said after the conversation, which stays where it is. */}
               {!current.reviewStatus && current.headError && <p className="simple-error" role="alert">{current.headError}{" "}
                 <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>}
+              {/* In the new layout's three columns, queued bubbles stay inside the one chat scroll flow so no pinned block
+                  can overlap or slice chat text. */}
+              {beta && !compact && queueRows}
             </div>
-            <div ref={setPinHost} className="simple-pin" aria-label="Working on now" />
+            {!beta && <ReviewDock key={current.id} store={dock} threadIds={threadIds} list={[dockList, setDockList]} laterRequests={ordered.length}
+              onListOpen={listOpen} onKeepConfident={keepConfident} />}
+            {beta && compact && <div ref={setPinHost} className="simple-pin" aria-label="Working on now" />}
+            {beta && compact && queueRows}
             {/* The tag in the box shows where a message goes. This line says it for screen readers only. */}
             {!rewordingItem && (replyThread || !aimMatches) && <div className="simple-target" role="status">
               <span>{aimLabel}</span>
@@ -2341,10 +2959,14 @@ export function LegacySimpleWorkspace() {
             {composer}
           </div>
         </ChatRail>
+        {beta && <ReviewRail projectId={current.id} store={rail} compact={compact} reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}
+          open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
+          selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined}
+          onDoneLow={keepLowRisk} onHover={lightMark} />}
         <div className="workspace-stage simple-stage">
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}
-          <CutPreview simple={{ seekFromMessage, typedTimes, marks: source || beforeCut ? [] : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? editCard ?? callCard ?? suggestCard, foot: <><TimelineWorking tasks={timelineWork} rootOf={rootOf} />{undoFoot}</>,
+          <CutPreview simple={{ seekFromMessage, typedTimes, marks: source ? [] : beforeCut ? (leavingNow ? [] : batchCutDots) : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? editCard ?? callCard ?? suggestCard, foot: <><TimelineWorking tasks={timelineWork} rootOf={rootOf} />{undoFoot}</>,
             gaps: cutKey ? [...gaps, ...stagedGaps] : callGaps ?? (stagedGaps.length ? stagedGaps : undefined),
             skippedRanges: cutKey || callView || !stagedCalls.length
               ? joinedPlayer?.clock.removed && playedListen !== appliedListen ? [...joinedPlayer.clock.removed, ...stagedAround.map(c => c.removed)]
@@ -2364,7 +2986,7 @@ export function LegacySimpleWorkspace() {
                 ? { key: callPlaybackKey(listening.index, callTimeline.version), start: audition.start, side: listening.side,
                   beforeWindow: preparedCall?.before.window, afterWindow: preparedCall?.after.window,
                   beforeFile: preparedCall?.before.file, afterFile: preparedCall?.after.file } : undefined,
-            onGap: hearInBefore, onBand, onPick: pickPoint, onRange: markRange, holdPassage: cutWaits, reviewRange, writeRequest, heard: heardPick, quiet: quietOpen }} threadView={playerView}
+            onGap: hearInBefore, onBand, cutAdjust, onPick: pickPoint, ...beta && { shiftTimes: true }, onRange: markRange, holdPassage: cutWaits, reviewRange, writeRequest, heard: heardPick, quiet: quietOpen }} threadView={playerView}
             workingCache={workingCache} draftVersion={previewVersion} draft={previewTimeline}
             openingJoin={!source && (appliedCut ? joinPending : openingJoin)} cutLoadError={cutLoadError}
             draftFailed={openingJoin ? !!single.error || (!!single.preview && !listenJoined) : pinnedCallVersion ? !!savedBefore.error : !appliedCut && draftFailed}
@@ -2377,11 +2999,18 @@ export function LegacySimpleWorkspace() {
           </div>}
         </div>
         {transcript && <TranscriptRail compact={compact} paneKey={source?.id ?? previewVersion ?? head}
-          draft={previewTimeline} source={source} onAsk={askAbout} onClose={() => setTranscript(false)} />}
+          draft={previewTimeline} source={source} beside={beta ? ["simple-chat", "simple-review-rail"] : undefined} onAsk={askAbout} onClose={() => setTranscript(false)} />}
       </Dropzone>
     </main>
     {panel === "media" && <MediaDrawer uploads={uploads} notice={local ? undefined : notice}
       onPlay={id => previewSource(id, true)} onClose={() => setPanel(null)} />}
     {panel === "export" && <ExportSheet hasCut={hasCut} onClose={() => setPanel(null)} />}
-  </EditHoverContext.Provider>;
+  </>;
+  return beta
+    ? <ReviewRailContext.Provider value={rail}><AimHostContext.Provider value={aimHost}><EditHoverContext.Provider value={hoveredEdit}>
+      {page}
+    </EditHoverContext.Provider></AimHostContext.Provider></ReviewRailContext.Provider>
+    : <ReviewDockContext.Provider value={dock}><EditHoverContext.Provider value={hoveredEdit}>
+      {page}
+    </EditHoverContext.Provider></ReviewDockContext.Provider>;
 }

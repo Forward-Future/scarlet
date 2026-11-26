@@ -152,7 +152,7 @@ it("gives way at once to what went wrong when the engine can't start, and goes o
   expect(host.querySelector('main[aria-busy="true"]')).toBeNull();
   expect(host.querySelector("h1")?.textContent).toBe("Scarlet couldn’t start");
   expect(host.textContent).toContain("Error: scarlet-engine sidecar not found");
-  expect([...host.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Open logs", "Copy diagnostics", "Report this problem"]);
+  expect([...host.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Open logs", "Copy diagnostics"]); // Report a problem shows only in the desktop shell (ReportProblem.test.tsx).
   // An engine started again later, by a rebuild or a fix, still brings the window up.
   await becomes("ready");
   await answer();
@@ -184,7 +184,7 @@ it("says Scarlet lost its engine when it crashes, that it couldn't start when it
   await engine({ state: "starting", url: null, token: undefined, restarts: 1, error: "Scarlet’s engine stopped unexpectedly (exit code 1). Starting it again…" });
   await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe("Reconnecting to Scarlet…"));
   expect(host.textContent).toContain("Scarlet’s engine stopped unexpectedly (exit code 1). Starting it again…");
-  expect([...host.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Open logs", "Copy diagnostics", "Report this problem"]);
+  expect([...host.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Open logs", "Copy diagnostics"]); // Report a problem shows only in the desktop shell (ReportProblem.test.tsx).
   // It fails to start again and again: Scarlet couldn't start, and why.
   await engine({ state: "error", url: null, token: undefined, restarts: 4, error: "engine exited before reporting ready (see log for its output)" });
   await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe("Scarlet couldn’t start"));

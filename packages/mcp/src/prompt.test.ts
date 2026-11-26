@@ -101,6 +101,8 @@ describe("the prompt for reading a request for a standing rule", () => {
     // It reads the skill a rule goes into before offering it, so the editor sees what the rule would change, and a
     // rule the skill already has isn't offered.
     expect(prompt).toContain("read the skill it belongs in, in full, with `skills_list`, then offer it with `learning_suggest`");
+    expect(prompt).toContain("Offer at most one rule for a request — or two only when it states two truly separate rules");
+    expect(prompt).toContain("Never offer a rule from decisions that are already behind a rule listed below.");
     expect(prompt).toContain("beside what the skill says that it would change");
     expect(prompt).toContain("a rule the skill or a rule listed below already says, in any wording");
     // A rule is offered only when the editor said it as one, or when the same kind of fix keeps coming back: a single
@@ -225,6 +227,7 @@ describe("an editing prompt", () => {
     const prompt = buildSystemPrompt({ ...base, task: task({}) });
     expect(prompt).toContain("Always save why you made each edit, even when the editor asked for the exact change.");
     expect(prompt).toContain("Scarlet shows the short summary of what changed in the chat and the reason on the card above the timeline.");
+    expect(prompt).toContain("Keep them to at most three lines (about 160 characters)");
   });
 
   it("points a revision at the staged cut or the edit the editor chose", () => {
@@ -246,8 +249,8 @@ describe("an editing prompt", () => {
       timelineEdits: [{ label: "Frame the watch", range: { start: 10, end: 20 } },
         { label: " Frame the Fall Guys game ", range: { start: 181, end: 260 }, summary: "Screen zooms to the game window. ",
           reason: " The score was too small to read as you called it out. ", check: "A Windows dialog sits over the game from 4:17" }] } as unknown as Change;
-    const told = buildSystemPrompt({ ...base, change: { change }, task: task({ changeId: "chg_3", editIndex: 1, editNumber: 13 }) });
-    expect(told).toContain(`- Selected edit index: 1 (edit 13 in the editor's list), "Frame the Fall Guys game"`);
+    const told = buildSystemPrompt({ ...base, change: { change }, task: task({ changeId: "chg_3", editIndex: 1 }) });
+    expect(told).toContain(`- Selected edit index: 1, "Frame the Fall Guys game"`);
     expect(told).toContain(`- What you told the editor this edit did: "Screen zooms to the game window."`);
     expect(told).toContain(`- Why you made this edit: "The score was too small to read as you called it out."`);
     expect(told).toContain(`- What you asked the editor to check on this edit: "A Windows dialog sits over the game from 4:17"`);
@@ -304,6 +307,14 @@ describe("an editing prompt", () => {
     const prompt = buildSystemPrompt({ project: "Two recordings, no edit yet.", skills: [], notes: [], qa: [] });
     expect(prompt).toContain("# Project\n\nTwo recordings, no edit yet.");
     expect(prompt).not.toMatch(/# Your task|# Review notes to address|# Change being revised|# Earlier questions and answers|# Your skills/);
+  });
+
+  it("says how many review notes are open when the request names none, so no turn goes on listing them", () => {
+    const at = (openNotes?: number) => buildSystemPrompt({ project: "One recording.", skills: [], openNotes });
+    expect(at(0)).toContain("# Review notes\n\nThe project has no open review notes.");
+    expect(at(1)).toContain("The project has 1 open review note; `notes_list` reads them.");
+    expect(at(3)).toContain("The project has 3 open review notes;");
+    expect(at(undefined)).not.toContain("# Review notes");
   });
 });
 

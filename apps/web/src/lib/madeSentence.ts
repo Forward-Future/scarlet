@@ -48,7 +48,7 @@ export function madeSentence(listed: readonly Listed[], length: (seconds: number
   const parts: SentencePart[] = [];
   if (cuts.length) {
     const removed = cuts.reduce((sum, e) => sum + Math.max(0, e.beforeCut!.removed.end - e.beforeCut!.removed.start), 0);
-    if (removed > 0) parts.push("Took out ", { strong: length(removed) }, " in ", { strong: plural(cuts.length, "cut") });
+    if (removed > 0) parts.push("Cut ", { strong: length(removed) }, " in ", { strong: plural(cuts.length, "cut") });
     else parts.push("Made ", { strong: plural(cuts.length, "cut") });
   }
   if (others.length) {

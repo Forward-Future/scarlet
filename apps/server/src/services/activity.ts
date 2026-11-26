@@ -1,4 +1,4 @@
-import { AGENT_LABEL, type ActivityEntry, type User } from "@scarlet/shared";
+import { AGENT_LABEL, cutText, type ActivityEntry, type User } from "@scarlet/shared";
 import { newId, type Author } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
@@ -43,5 +43,5 @@ export function authorName(author: Author): string {
 /** Short quote for summaries. */
 export function quote(text: string, max = 80): string {
   const t = text.replace(/\s+/g, " ").trim();
-  return `“${t.length > max ? `${t.slice(0, max - 1)}…` : t}”`;
+  return `“${t.length > max ? `${cutText(t, max - 1)}…` : t}”`;
 }

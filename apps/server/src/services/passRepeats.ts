@@ -1,4 +1,4 @@
-import { taskDialogueOperation, RepeatAuditRequest, type Task } from "@scarlet/shared";
+import { isHandOff, taskDialogueOperation, RepeatAuditRequest, type Task } from "@scarlet/shared";
 import { makeTimeMap, TimeRange } from "@scarlet/timeline";
 import type { z } from "zod/v3";
 import type { Ctx } from "../context.js";
@@ -21,7 +21,7 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
   function current() {
     const owner = ctx.repos.tasks.get(task.id);
     if (!owner || owner.startedAt !== task.startedAt || (request.startedAt && owner.startedAt !== request.startedAt) ||
-        !editsDialogue(owner.kind) || !["claimed", "running"].includes(owner.state))
+        !(editsDialogue(owner.kind) || isHandOff(owner)) || !["claimed", "running"].includes(owner.state))
       throw conflict("edit_inactive", "This edit is no longer running.");
     const project = ctx.repos.projects.header(projectId);
     if (!project || project.head !== request.version || (owner.context.branch && owner.context.branch !== project.branch))
@@ -135,13 +135,13 @@ export async function readPassRepeats(ctx: Ctx, task: Task, request: z.output<ty
     saveTask(ctx, { ...owner, state: "running", repeatAudit: { version: tl.version, remaining, unavailable, noFindings, returns: last?.returns ?? 0,
       ...(last?.totalReturns !== undefined && { totalReturns: last.totalReturns }), ...(last?.queuedAt && { queuedAt: last.queuedAt }) } });
     return { version: tl.version, ...(named !== tl.version && { readInsteadOf: named }), heard: check.repeats.length, staged: staged.length, remaining,
-      // One offset pages the repeats and the divided sentences together: a pass asked for the next pages of both at once.
+      // One offset pages the repeats, divided sentences and picture findings together.
       repeats: repeats.slice(request.offset, request.offset + 25),
-      ...(request.offset + 25 < Math.max(repeats.length, fragments.length) && { nextOffset: request.offset + 25 }),
+      ...(request.offset + 25 < Math.max(repeats.length, fragments.length, pictures.length) && { nextOffset: request.offset + 25 }),
       ...(silences.length && { silences: silences.slice(0, 25) }),
       ...(shortPieces.length && { shortPieces: shortPieces.slice(0, 25) }),
       ...(fragments.length && { fragments: fragments.slice(request.offset, request.offset + 25) }),
-      ...(pictures.length && { pictures: pictures.slice(0, 25) }),
+      ...(pictures.length && request.offset < pictures.length && { pictures: pictures.slice(request.offset, request.offset + 25) }),
       ...(check.unavailable.length && { unavailable: check.unavailable }),
       ...(check.joins.length && { joins }), ...(unheardJoins.length && { unheardJoins }) };
   }, "immediate")();

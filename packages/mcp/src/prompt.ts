@@ -4,7 +4,7 @@
  * provides context (timestamps, clip ids, notes, the change being revised)
  * and includes the applicable skills verbatim.
  */
-import { CHECK_IN_SHARE, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type Task } from "@scarlet/shared";
+import { CHECK_IN_SHARE, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type StyleGuideRecord, type Task } from "@scarlet/shared";
 import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
 import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
@@ -57,6 +57,8 @@ export interface PromptContext {
   task?: Pick<Task, "instruction" | "kind" | "context" | "agent" | "model"> & Partial<Task>;
   /** Review notes the task responds to. */
   notes?: Note[];
+  /** How many review notes are open in the project, for a request that names none: zero spares a turn listing them. */
+  openNotes?: number;
   /** Change being revised, with its diff. */
   change?: { change: Change; diff?: TimelineDiff; description?: string[] };
   /** The pass a request about one staged cut named, when revisions or later parts of the pass have replaced it with `change` since it was sent. */
@@ -71,12 +73,22 @@ export interface PromptContext {
   skills: Skill[];
   /** The skill a skill_edit task revises. Such a task edits no video, so its prompt is about the skill alone. */
   editSkill?: Skill;
+  /** The style guide a style_guide_edit task designs or updates. Edits no video. */
+  editStyleGuide?: {
+    guide: StyleGuideRecord;
+    assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
+    attachedIds?: string[];
+    hasPreview: boolean;
+    earlier?: Array<{ asked: string; replied?: string }>;
+  };
   /** What a learning_check task reads. Such a task edits no video, so its prompt is about the request alone. */
   learningCheck?: LearningCheckContext;
   /** What an area_check task looks at. Such a task edits no video, so its prompt is about one frame. */
   areaCheck?: { mediaId: string; at: number };
   /** What a listen_check task hears for a request whose model can't. Such a task edits no video, so its prompt is about one passage. */
   listenCheck?: { mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string };
+  /** A grouped batch of edits to summarize into one short title for the edits rail. */
+  batchSummary?: { key: string; prompt: string };
   /** The editor's setting for how many of a pass's cuts they are asked to check. Omitted = balanced. */
   checkIn?: CheckIn;
   /** The editor's own words, from Settings, on how Scarlet writes to them. Omitted or empty = nothing added. */
@@ -91,6 +103,15 @@ export interface PromptContext {
   attachments?: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
   /** The project's style guide: pasted text in full, or the file it is in. */
   styleGuide?: { name: string; text?: string; path?: string; mime?: string };
+  /** Library-wide style guides active for this request (via @name mention or the library Default). */
+  libraryStyleGuides?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    instructions: string;
+    reason: "mentioned" | "default";
+    assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
+  }>;
   /** The kinds of work the editor gave other models in Task models, signed in now: the request hands them off (`hand_off`). */
   taskModels?: Array<{ name: string; description?: string; by: { agent: string; model?: string; label?: string } }>;
   /** What a hand_off task does for the request that handed it the work: the editor's kind of work, and what they asked. */
@@ -111,6 +132,69 @@ function styleGuideSection(guide: NonNullable<PromptContext["styleGuide"]>): str
   if (guide.path) lines.push(`It is in the ${fileKind(guide.mime, guide.path)} at ${guide.path}.`);
   if (guide.text?.trim()) lines.push(guide.path ? `What they wrote with it:\n\n${guide.text.trim()}` : guide.text.trim());
   return lines.join("\n\n");
+}
+
+/** Library-wide style guides active for this request (explicit @name mention or library Default). */
+function libraryStyleGuidesSection(guides: NonNullable<PromptContext["libraryStyleGuides"]>): string {
+  const blocks = guides.map(g => {
+    const why = g.reason === "mentioned"
+      ? `Explicitly chosen for this request (@${g.name}).`
+      : `The editor's default style guide (@${g.name}), which applies automatically unless another @style is named.`;
+    const lines = [`## @${g.name}`, why];
+    if (g.description.trim()) lines.push(`Summary: ${g.description.trim()}`);
+    if (g.instructions.trim()) lines.push("", g.instructions.trim());
+    if (g.assets.length) {
+      lines.push(
+        "",
+        "### Style guide files",
+        "Link fonts and images directly by their absolute path in `graphic_render` (Scarlet copies them into the graphic). Inspect images, PDFs or text with `attachment_read(styleGuideId, assetId)`.",
+        ...g.assets.map(a => `- "${a.name}" (${fileKind(a.mime, a.name)}, ${fileSize(a.size)}), styleGuideId="${g.id}", assetId="${a.id}", at ${a.path}`),
+      );
+    }
+    return lines.join("\n");
+  });
+  return `# Style guides\n\nFollow these visual style rules whenever you create or revise motion graphics, titles, callouts, or overlays.\n\n${blocks.join("\n\n---\n\n")}`;
+}
+
+/** Prompt for designing or updating a library style guide in chat (with attached files and live 16:9 preview). */
+function buildStyleGuideEditPrompt(ctx: PromptContext, edit: NonNullable<PromptContext["editStyleGuide"]>): string {
+  const { guide, assets, attachedIds, hasPreview, earlier } = edit;
+  const attachedSet = new Set(attachedIds ?? []);
+  const newFiles = assets.filter(a => attachedSet.has(a.id));
+  const existingFiles = assets.filter(a => !attachedSet.has(a.id));
+  const formatAsset = (a: (typeof assets)[number]) =>
+    `- "${a.name}" (${fileKind(a.mime, a.name)}, ${fileSize(a.size)}), styleGuideId="${guide.id}", assetId="${a.id}", at ${a.path}`;
+
+  const sections: string[] = [
+    `# You are designing a reusable style guide in Scarlet
+
+The editor is building a visual style guide named \`@${guide.name}\` for their motion graphics (chapter titles, lower thirds, stat callouts, end cards). They see only this chat and the live 16:9 visual preview beside it — never raw rules text — so the preview is how they judge your work.
+
+## How to work
+
+- When the editor attached files to their message, inspect images, SVGs, PDFs or text files with \`attachment_read(styleGuideId="${guide.id}", assetId="...")\`. Use the editor's words to know which files are brand assets to embed (logos, fonts) vs visual references to match (screenshots, inspiration). If they attached files without a message, inspect each file and apply it to the style guide.
+- Link attached fonts in \`@font-face\` and attached logos/images in \`<img>\` using their exact absolute disk \`path\` listed below.
+- ${hasPreview ? "This style guide already has a preview. Call `style_guide_preview_get` first so you preserve what the editor already likes and change only what they asked for." : "This style guide has no preview yet."}
+- Save a concise 1-line \`description\` (plain words summarizing the look, e.g. "Warm ivory, terracotta accents, geometric sans") and thorough \`instructions\` with \`style_guide_update\`. Include exact hex colors, typography + font file paths, layout rhythm, spacing, contrast rules, motion feel, and how each brand asset should be used so future motion graphics match consistently.
+- Always call \`style_guide_preview_render\` to render a crisp 1920×1080 (16:9) visual style sheet showing the look in action (for example: a Chapter Title, a Stat Callout, and a Lower Third arranged cleanly on a solid dark or brand-appropriate canvas so every element is immediately legible at thumbnail and full size). If \`missingFonts\` is returned, switch to an installed font from \`installedFonts\` or ask the editor with \`task_question\` if they requested a custom font.
+- \`task_question\` pauses and asks the editor when a key creative decision truly needs their input.
+
+End with one or two short, plain sentences telling the editor what you created or updated — no jargon, no tool names, no hex dumps unless they asked.`,
+    [
+      `# Style guide: @${guide.name}`,
+      `Description: ${guide.description.trim() || "(none yet)"}`,
+      `Current rules:\n${guide.instructions.trim() || "(none yet)"}`,
+      ...(newFiles.length ? ["Files attached to this message:\n" + newFiles.map(formatAsset).join("\n")] : []),
+      ...(existingFiles.length ? ["Earlier files on this style guide:\n" + existingFiles.map(formatAsset).join("\n")] : []),
+    ].join("\n\n"),
+  ];
+
+  if (earlier?.length) {
+    const turns = earlier.map((e, i) => `${i + 1}. Editor: "${e.asked}"${e.replied ? `\n   You replied: ${e.replied}` : ""}`);
+    sections.push(`# Earlier in this style guide chat\n\n${turns.join("\n")}`);
+  }
+  sections.push(...earlierAnswers(ctx.qa));
+  return sections.join("\n\n");
 }
 
 /** The editor's own words on how Scarlet writes to them, from "Talking to you" in Settings. */
@@ -147,7 +231,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 
 ## Project context
 
-- The project summary, task, selected position or range, and supplied feedback are below. \`project_get\` returns current state and the recorded edit context. \`timeline_get\` shows clip placement, tracks, transforms, effects, markers and version. \`skills_list\` provides the enabled skill library.
+- The project summary, task, selected position or range, and supplied feedback are below, current as this run starts: begin from them. \`project_get\` reads the project's state and the recorded edit context again later in the run. \`timeline_get\` shows clip placement, tracks, transforms, effects, markers and version. \`skills_list\` provides the enabled skill library.
 - \`transcript_get\`, \`transcript_search\`, \`dialogue_scan\`, \`media_profile\`, waveform data, and the available picture and audio inspection tools give different views of the footage. Source times refer to the recording. Timeline times refer to a version of the edit. \`timeline_at\` maps between them. Requesting missing transcript or waveform data starts or joins preparation. Transcript word times are approximate. Waveform silences, dialogue scan pauses and \`dialogue_check_join\` measure the recorded audio.
 - \`timeline_transcript\`, \`timeline_join_audit\` and \`timeline_diff\` show what a version plays, measure how each join sounds and compare versions, so you can check an edit from measurements.
 - \`notes_list\`, \`change_list\`, and \`change_get\` give feedback, change states and affected versions. \`change_review_cut\` compares a saved edit.
@@ -156,7 +240,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 
 - \`timeline_propose\` accepts typed operations or a replacement timeline. Specialized tools can assemble chosen source ranges, submit cut/keep/review decisions, crossfade specified joins, and build editable captions. Preserve the editor’s selected scope, protected material, and intended sync.
 - Save as you go. The editor reviews saved parts while you keep working, and a run stops at its time limit with only saved edits kept.
-- Use requested intent for authorized edits, suggestion for optional or preview-only changes, and alternative for competing options. Check the returned state when reporting what applied. When Scarlet adjusts a submitted edit, such as moving an edge onto measured silence, the result lists each adjustment with its evidence. Name each individual changed spot in \`timelineEdits\` with its exact range and a spot-specific label (each punch-in, zoom, or crop gets its own entry — never one umbrella range across untouched footage), and keep unrelated multi-spot passes in separate saves. A revision can link to its prior change and spot with \`replaces\` and to feedback with \`noteIds\`.
+- Use requested intent for authorized edits, suggestion for optional or preview-only changes, and alternative for competing options. Check the returned state when reporting what applied. When Scarlet adjusts a submitted edit, such as moving an edge onto measured silence, the result lists each adjustment with its evidence. Name each individual changed spot in \`timelineEdits\` with its exact range and a spot-specific label (each punch-in, zoom, or crop gets its own entry — never one umbrella range across untouched footage), and keep unrelated multi-spot passes in separate saves. When a save makes several related edits of the same kind (cuts, graphics, zooms, reframes, B-roll, audio fixes, transitions, etc.), pass \`batchTitle\` with a short plain-English title summarizing the group together (e.g. "3 model title cards", "4 zooms on demo screens", "2 cuts: false start & tangent"). A revision can link to its prior change and spot with \`replaces\` and to feedback with \`noteIds\`.
 - \`task_log\` can show the current activity, a finding, or both. Attach a saved change ID and spot to the exact phrase the editor can select to see the change. \`task_question\` hands a decision to the editor and pauses the task; the answer comes back as your next message.
 - Scarlet renders project media. \`render_request\` supports a short range or an explicitly requested full delivery.
 - A motion graphic is an HTML/CSS page Scarlet draws into a video with alpha (\`graphic_render\`). It goes over the picture on a track of its own with \`timeline_propose\`, as an edit like any other. A project has one style guide, saved with \`style_guide_save\` when the editor gives you one.
@@ -167,7 +251,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 - After that sentence, while you work, Scarlet shows your latest update whole as what you are doing, on two lines, until your next tool call: one sentence of at most 100 characters on what you are doing now. A longer update is cut off there. Updates leave the chat when you finish: afterwards the editor reads your closing sentences and the edits listed under the request, so what they asked for is never only in an update.
 - Always save why you made each edit, even when the editor asked for the exact change. Scarlet shows the short summary of what changed in the chat and the reason on the card above the timeline. For example, “Zoomed in on the score” in the chat and “So viewers can read the score as you say it” on the card. Ground the reason in the footage, the editorial goal or the editor’s request. For an exact request, a short reference to that request is enough. Write the reason as you would say it to the editor beside them: everyday words, “you” for them, what they will hear named by the words said (“your first try”, “the second time you say it”), never your own terms for the footage (delivery, take, start, surviving, edge, join). For a cut that waits on them, say in one or two short sentences what you chose and what might make them choose otherwise: “Your second try says the whole thing, so I took out the first. The first makes it clearer the model did the bug squash, so check the second still does.”, not “The second line gives the full task. Check who does the bug pass in the surviving delivery.” Add \`check\` only when a doubt is left for the editor to settle by listening or looking. Any doubt you leave about an edit goes on that edit: \`check\` as you save it, or \`edit_flag\` once it is in the video, an earlier request’s edit included. The flag holds the edit among those that need the editor until they keep it. A doubt about something you leave in, such as a restart that may not be meant, reaches the editor the same way, as an edit they can approve or skip: in a dialogue pass, a cut staged for review.
 - Keep every card short, simple and easy to read at a glance — one or two plain sentences as you would say them out loud, never a technical spec. Leave timestamps (\`2:26.0–2:57.0\`), durations (\`~31 s\`), \`Covers "..."\` prefixes, parenthetical tags (\`(with camera inset, ...)\`), arrow chains (\`→\`), beat-by-beat scripts, and production shorthand (\`3-stage\`, \`4-beat\`, \`archival/stock\`) off the card: the card already sits over that exact spot on the timeline. For a \`todo\` marker (\`addMarker\` with \`kind: "todo"\`), the marker’s text is what the card asks of the editor: write one short, plain sentence describing what to show or add, and keep the edit’s \`reason\` to one brief sentence on why without repeating the marker’s text.
-- End with one or two short, plain sentences that sum up at the highest level what you did to the video, as you would tell the editor in person, such as “Tightened the talk to 10:29 and punched in on each demo.” Scarlet shows them first under the request, on two lines of about 120 characters, and folds the rest away until the editor clicks. Nothing you want the editor to look at, listen to or decide goes in them: they reach what needs them from For you, which lists edits only, so each doubt goes on its edit (\`check\` or \`edit_flag\`) and a decision you need goes to \`task_question\`. No times, edit numbers or lists, and no Markdown: Scarlet shows them as plain text. When the editor asks for ideas at places in the video and not yet for the work itself, a list of them included (B-roll to add and where, spots for a graphic), each idea is a \`todo\` marker at its place (\`addMarker\` in \`timeline_propose\`) that says what you would do there, so For you lists them and each opens on the timeline; the sentences only say you left them. What the editor asks you to find or check at places in the video is listed the same way, one edit a place, each opening on the timeline: where an edit or a marker is already at the place, what you found goes on it (a revision that \`replaces\` it, or \`edit_flag\` when nothing about it changes), and otherwise a \`todo\` marker there says it. A web address the editor needs is written out in full, on the edit at its place or, when it has no place in the video, in your closing sentences: Scarlet makes it a link. A request you finish without an edit says why in those sentences.
+- End with one or two short, plain sentences that sum up at the highest level what you did to the video, as you would tell the editor in person, such as “Tightened the talk to 10:29 and punched in on each demo.” Keep them to at most three lines (about 160 characters) so the reply stays brief in the chat; anything past what fits folds away until the editor clicks. Nothing you want the editor to look at, listen to or decide goes in them: they reach what needs them from Needs review, which lists edits only, so each doubt goes on its edit (\`check\` or \`edit_flag\`) and a decision you need goes to \`task_question\`. No times, edit numbers or lists, and no Markdown: Scarlet shows them as plain text. When the editor asks for ideas at places in the video and not yet for the work itself, a list of them included (B-roll to add and where, spots for a graphic), each idea is a \`todo\` marker at its place (\`addMarker\` in \`timeline_propose\`) that says what you would do there, so Needs review lists them and each opens on the timeline; the sentences only say you left them. What the editor asks you to find or check at places in the video is listed the same way, one edit a place, each opening on the timeline: where an edit or a marker is already at the place, what you found goes on it (a revision that \`replaces\` it, or \`edit_flag\` when nothing about it changes), and otherwise a \`todo\` marker there says it. A web address the editor needs is written out in full, on the edit at its place or, when it has no place in the video, in your closing sentences: Scarlet makes it a link. A request you finish without an edit says why in those sentences.
 - Give times as m:ss.t on the timeline the editor will watch. Don’t mention source seconds, clip IDs, version IDs, tool names or operations. Say “edit” for a change, and “cut” only for an edit that removes footage.`;
 
 /**
@@ -241,6 +325,16 @@ function buildAreaCheckPrompt(check: { mediaId: string; at: number }, prefix: st
   ].join("\n\n");
 }
 
+/** Shared system prompt for AI-authored short titles summarizing any grouped batch of edits (used by direct HTTP calls and CLI side-checks). */
+export const BATCH_SUMMARY_SYSTEM = `You write one short, plain-English title for a grouped batch of video edits (cuts, graphics, zooms, reframes, captions, audio/music dips, B-roll, transitions, or other edits) shown on a single line in Scarlet's edits list.
+
+Rules:
+- Write ONE short phrase (about 3 to 7 words, max 52 characters) that captures what all the edits in the batch do together.
+- Include the edit count when helpful (examples: "110 dialogue cuts: pauses & retakes", "3 model title cards", "4 zooms on key demo screens", "5 B-roll cutaways on workflow", "3 music dips under speech", "2 cuts: false start & tangent").
+- Always say "cut" or "cuts" for cuts (never "removed", "trimmed", or "took out").
+- Never quote a single speech fragment or copy only the first edit's name as the title for a whole batch.
+- Reply with the title only: no quotes around it, no trailing period, no preamble, no tools.`;
+
 function buildListenCheckPrompt(check: { mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string }, caps: AgentCapabilities): string {
   const prefix = caps.toolPrefix ?? "";
   const call = `\`${prefix}source_audio\` with \`mediaId\` ${check.mediaId}, \`from\` ${check.from} and \`to\` ${check.to}${check.voice ? `, and \`voice\` "${check.voice}"` : ""}`;
@@ -278,7 +372,7 @@ It does in only these cases:
 
 Anything else is not a rule, so call nothing: a note about this video, this moment or this cut that hasn’t come up before, however general it could be made; a rule the skill or a rule listed below already says, in any wording; a rule the editor declined, in any wording; and a rule that only tells the agent to do its work well (check, play back, adjust as needed) without saying what the editor wants.
 
-When it is a rule, read the skill it belongs in, in full, with \`skills_list\`, then offer it with \`learning_suggest\`: once, or once for each separate rule. The editor reviews what you offer beside what the skill says that it would change, and nothing changes in a skill unless they approve it.
+When it is a rule, read the skill it belongs in, in full, with \`skills_list\`, then offer it with \`learning_suggest\`. Offer at most one rule for a request — or two only when it states two truly separate rules — and combine closely related preferences for the same skill into one concise sentence instead of splitting them into several offers. Never offer a rule from decisions that are already behind a rule listed below. The editor reviews what you offer beside what the skill says that it would change, and nothing changes in a skill unless they approve it.
 
 A rule is for every video the skill edits, so write the principle behind what they said or decided, not its instances: no words, names, times or moments from this video or the requests, and a number they gave or that their decisions show stays a guide, not a fixed amount. If it can't be put that way, it isn't a rule.
 
@@ -340,9 +434,11 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     ].join("\n\n");
   }
   if (ctx.editSkill) return buildSkillEditPrompt(ctx, ctx.editSkill);
+  if (ctx.editStyleGuide) return buildStyleGuideEditPrompt(ctx, ctx.editStyleGuide);
   if (ctx.learningCheck) return buildLearningCheckPrompt(ctx.learningCheck);
   if (ctx.areaCheck) return buildAreaCheckPrompt(ctx.areaCheck, ctx.capabilities?.toolPrefix ?? "");
   if (ctx.listenCheck) return buildListenCheckPrompt(ctx.listenCheck, ctx.capabilities ?? agentCapabilities(ctx.task?.agent, undefined, ctx.task?.model));
+  if (ctx.batchSummary) return BATCH_SUMMARY_SYSTEM;
   const parts: string[] = [SCARLET_INTRO];
   // Only a caller that says the run has the tool is asked: a harness's default says what it can do, not how this run was launched.
   if (ctx.capabilities?.plan) parts.push(PLAN_STEPS);
@@ -440,8 +536,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     if (c.changeId && c.editIndex !== undefined) {
       // The editor sees what changed in the chat and why on the card, along with any review check.
       const about = ctx.change?.change.id === c.changeId ? selectedEdit(ctx.change.change, c.editIndex) : undefined;
-      const listed = c.editNumber !== undefined ? ` (edit ${c.editNumber} in the editor's list)` : "";
-      ctxLines.push(`- Selected edit index: ${c.editIndex}${listed}${about ? `, "${about.label.trim()}"` : ""}`);
+      ctxLines.push(`- Selected edit index: ${c.editIndex}${about ? `, "${about.label.trim()}"` : ""}`);
       if (about?.summary?.trim()) ctxLines.push(`- What you told the editor this edit did: "${about.summary.trim()}"`);
       if (about?.reason?.trim()) ctxLines.push(`- Why you made this edit: "${about.reason.trim()}"`);
       if (about?.check?.trim()) ctxLines.push(`- What you asked the editor to check on this edit: "${about.check.trim()}"`);
@@ -478,6 +573,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 
   parts.push(...earlierInChat(ctx.earlier));
 
+  if (ctx.libraryStyleGuides?.length) parts.push(libraryStyleGuidesSection(ctx.libraryStyleGuides));
   if (ctx.styleGuide) parts.push(styleGuideSection(ctx.styleGuide));
   if (ctx.talkingToYou?.trim()) parts.push(talkingToYouSection(ctx.talkingToYou));
 
@@ -491,6 +587,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       return `- Note ${n.id} [${n.state}] by ${n.author.name} at ${where}${clips}${about}:\n  "${n.text.trim()}"${n.voiceTranscript && n.voiceTranscript !== n.text ? `\n  (raw voice transcript: "${n.voiceTranscript.trim()}")` : ""}${(n.replies ?? []).map(r => `\n  (${r.author.name} replied: "${r.text.trim()}")`).join("")}`;
     });
     parts.push(`# Review notes to address\n\n${lines.join("\n")}`);
+  } else if (ctx.openNotes !== undefined) {
+    // 62 runs listed the notes of a library that held two, each a turn that re-read the whole run (2026-11-24).
+    parts.push(`# Review notes\n\n${ctx.openNotes ? `The project has ${ctx.openNotes} open review note${ctx.openNotes === 1 ? "" : "s"}; \`notes_list\` reads them.` : "The project has no open review notes."}`);
   }
 
   // Change being revised

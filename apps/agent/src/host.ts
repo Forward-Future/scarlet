@@ -49,6 +49,8 @@ export interface HostOptions {
   /** Path to packages/mcp/dist/cli.js (resolved automatically when omitted). */
   mcpCliPath?: string;
   heartbeatMs?: number;
+  /** How long one heartbeat may take before the next goes instead. Under the engine's 90 s window. */
+  heartbeatTimeoutMs?: number;
   /** Seconds the server should hold an empty claim (long-poll). */
   claimWaitSeconds?: number;
   /** Delay between empty claims when the server answers immediately. */
@@ -239,12 +241,11 @@ export class AgentHost {
         if (signal.aborted) follow();
         else signal.addEventListener("abort", follow, { once: true });
         const promise = this.runTask(claimed, controller.signal);
+        // `runOne`'s own heartbeat names it from here on.
         this.running.set(claimed.id, { task: claimed, controller, promise });
-        const beat = setInterval(() => void this.heartbeat(), this.heartbeatMs);
         try {
           await promise;
         } finally {
-          clearInterval(beat);
           signal.removeEventListener("abort", follow);
           if (this.running.get(claimed.id)?.controller === controller) this.running.delete(claimed.id);
         }
@@ -286,7 +287,10 @@ export class AgentHost {
     }
     this.beating = true;
     try {
-      const reply = await this.client.heartbeat(this.config.hostId, this.agents, [...this.running.keys()]);
+      // One that hangs (a half-open connection after a network change) is given up, so the next one goes: else no
+      // heartbeat would reach the engine until it timed out, and the engine would take this host's runs as lost.
+      const signal = AbortSignal.any([this.stopController.signal, AbortSignal.timeout(this.opts.heartbeatTimeoutMs ?? 20_000)]);
+      const reply = await this.client.heartbeat(this.config.hostId, this.agents, [...this.running.keys()], signal);
       // The reply names the runs cancelled before this host subscribed, or while it was disconnected. An engine
       // from before that reply is asked about each run.
       if (reply?.cancelled) for (const id of reply.cancelled) this.running.get(id)?.controller.abort("server-cancelled");
@@ -595,7 +599,9 @@ export class AgentHost {
     if (signal.aborted) return complete("cancelled", undefined, "cancelled");
     const runner = this.opts.runner ?? defaultRunAgent;
     const timeoutMs = this.runTimeoutMs;
-    const stallMs = this.opts.stallMs ?? (positive(this.config.stallMinutes) ?? DEFAULT_STALL_MS / 60_000) * 60_000;
+    // 0 turns the stall limit off, as it does in the desktop's own host (desktop.json). Anything else that isn't a positive number is the default.
+    const stallMinutes = this.config.stallMinutes === 0 ? 0 : positive(this.config.stallMinutes) ?? DEFAULT_STALL_MS / 60_000;
+    const stallMs = this.opts.stallMs ?? stallMinutes * 60_000;
     const liveUsage = createLiveUsageReporter(this.client, task, signal, this.log);
     let questionSeen: string | undefined;
     // A runner that returns says whether its run ended on a question. Only one that threw leaves the question it saw.

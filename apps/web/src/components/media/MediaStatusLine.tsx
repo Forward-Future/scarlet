@@ -14,15 +14,17 @@ export function MediaStatusLine({ name, status, bar, children }: {
   children?: ReactNode;
 }) {
   const said = bar?.percent ? `${status.text} · ${bar.percent}` : status.text;
-  return <div className={`media-status${bar ? " has-bar" : ""}`}>
+  const hasAction = Boolean(children);
+  return <div className={`media-status${bar ? " has-bar" : ""}${bar && hasAction ? " has-action" : ""}`}>
     <div className="media-cache-line">
       <span className={`media-cache is-${status.tone}`} role="status" aria-label={`${name}: ${said}`}
         title={status.tone === "bad" ? status.text : undefined}>
         {(status.tone === "ok" || status.tone === "done") && <Icon name="check" size={11} />}{status.text}
       </span>
-      {children}
+      {!bar && children}
     </div>
     {bar && <progress className="activity-progress" aria-label={bar.label} value={bar.fraction} max={1} />}
     {bar && <span className="media-pct" aria-hidden="true">{bar.percent}</span>}
+    {bar && children}
   </div>;
 }

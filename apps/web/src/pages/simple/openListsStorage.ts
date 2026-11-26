@@ -44,3 +44,22 @@ export function saveCollapsed(projectId: string, runs: ReadonlySet<string>) {
     else localStorage.removeItem(collapsedKey(projectId));
   } catch { /* Without storage the folds last for this session only. */ }
 }
+
+/** Which tab the fixed bottom review dock had open, kept per project across restarts. */
+const dockListKey = (projectId: string) => `scarlet.reviewDock.v1:${projectId}`;
+
+export function savedDockList(projectId: string): OpenList {
+  try {
+    const saved = JSON.parse(localStorage.getItem(dockListKey(projectId)) ?? "null") as unknown;
+    return saved === "need" ? undefined : isOpenList(saved) ? saved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveDockList(projectId: string, list: OpenList) {
+  try {
+    if (isOpenList(list)) localStorage.setItem(dockListKey(projectId), JSON.stringify(list));
+    else localStorage.removeItem(dockListKey(projectId));
+  } catch { /* Without storage the tab choice lasts for this session only. */ }
+}

@@ -171,6 +171,77 @@ export function dedupeWords(words: TranscriptWord[]): TranscriptWord[] {
 // Timeline summaries
 // ---------------------------------------------------------------------------
 
+/** A transform's fields that move the picture, as " framed scale 1.4 x 0.1 crop l0.1 r0.2"; "" for none. */
+function describeTransform(t: MediaClip["transform"]): string {
+  if (!t) return "";
+  const parts: string[] = [];
+  if (t.scale !== undefined && t.scale !== 1) parts.push(`scale ${round3(t.scale)}`);
+  if (t.x) parts.push(`x ${round3(t.x)}`);
+  if (t.y) parts.push(`y ${round3(t.y)}`);
+  if (t.rotation) parts.push(`rot ${round3(t.rotation)}`);
+  const crops = ([["l", t.cropLeft], ["r", t.cropRight], ["t", t.cropTop], ["b", t.cropBottom]] as const).filter(([, v]) => v);
+  if (crops.length) parts.push(`crop ${crops.map(([k, v]) => `${k}${round3(v!)}`).join(" ")}`);
+  if (t.cornerRadius) parts.push(`corners ${round3(t.cornerRadius)}`);
+  return parts.length ? ` framed ${parts.join(" ")}` : "";
+}
+
+/** Clip fields left out of format full when they hold their default. */
+const CLIP_DEFAULTS: Record<string, unknown> = { enabled: true, speed: 1, opacity: 1, volume: 1, audioFadeIn: 0, audioFadeOut: 0, videoFadeIn: 0, videoFadeOut: 0 };
+const TRANSFORM_DEFAULTS: Record<string, unknown> = { x: 0, y: 0, scale: 1, rotation: 0, cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 };
+/** What format full's description says an omitted field holds. */
+export const FULL_TIMELINE_DEFAULTS = "Clip fields at their default are left out: enabled true, speed 1, opacity 1, volume 1, fades 0, effects none; in a transform x, y, rotation and crops 0, scale 1; a track's muted and hidden false; a marker's resolved false.";
+
+const withoutDefaults = (o: Record<string, unknown>, defaults: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(o).filter(([k, v]) => !(k in defaults && defaults[k] === v)));
+
+function compactClip(clip: Clip): Record<string, unknown> {
+  const out = withoutDefaults(clip as Record<string, unknown>, clip.kind === "media" ? CLIP_DEFAULTS : { enabled: true, opacity: 1 });
+  if (Array.isArray(out.effects) && !out.effects.length) delete out.effects;
+  if (out.transform) out.transform = withoutDefaults(out.transform as Record<string, unknown>, TRANSFORM_DEFAULTS);
+  return out;
+}
+
+/**
+ * The complete timeline for `timeline_get` format full, without fields at their default, optionally scoped to
+ * `[from, to]` in timeline seconds and paged by clip start when it would exceed `maxChars`. Codex read the whole
+ * timeline this way about 120 times in the editor's runs, at up to 150,000 characters each, and the runs that read it
+ * most were the costliest (2026-11-24). A result past Claude Code's 50,000-character spill point isn't read at all.
+ */
+export function fullTimelinePage(timeline: Timeline, opts: { from?: number; to?: number; maxChars?: number } = {}): string {
+  const { from, to, maxChars } = opts;
+  const windowFrom = from ?? 0;
+  const scoped = from !== undefined || to !== undefined;
+  const inWindow = (c: Clip) => !scoped || (clipEnd(c) > windowFrom && (to === undefined || c.timelineIn < to));
+  const total = timeline.tracks.reduce((n, t) => n + t.clips.length, 0);
+  const render = (cutoff?: number) => {
+    let shown = 0;
+    const tracks = timeline.tracks.map(t => {
+      const clips = [...t.clips].sort((a, b) => a.timelineIn - b.timelineIn)
+        .filter(c => inWindow(c) && (cutoff === undefined || c.timelineIn < cutoff)).map(compactClip);
+      shown += clips.length;
+      return { ...withoutDefaults(t as Record<string, unknown>, { muted: false, hidden: false }), clips };
+    });
+    const markers = timeline.markers
+      .filter(m => (!scoped || (m.time >= windowFrom && (to === undefined || m.time < to))) && (cutoff === undefined || m.time < cutoff))
+      .map(m => withoutDefaults(m as Record<string, unknown>, { resolved: false }));
+    const page = cutoff !== undefined
+      ? { page: `Clips starting before ${round3(cutoff)} s: ${shown} of ${total}. Call timeline_get with format full and from=${Math.floor(cutoff * 1000) / 1000}${to !== undefined ? ` and to=${round3(to)}` : ""} to read on.` }
+      : scoped ? { page: `Clips in ${round3(windowFrom)}–${to !== undefined ? round3(to) : "end"} s: ${shown} of ${total}.` } : {};
+    return JSON.stringify({ ...timeline, tracks, markers, ...page });
+  };
+  const whole = render();
+  if (!maxChars || whole.length <= maxChars) return whole;
+  const starts = [...new Set(timeline.tracks.flatMap(t => t.clips.filter(inWindow).map(c => c.timelineIn)).filter(t => t > windowFrom))].sort((a, b) => a - b);
+  if (!starts.length) return whole;
+  let lo = 0, hi = starts.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (render(starts[mid]!).length <= maxChars) { best = mid; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return render(starts[best]!);
+}
+
 function describeClip(clip: Clip, fps = 30): string {
   const range = `${formatTimecode(clip.timelineIn, fps)}–${formatTimecode(clipEnd(clip), fps)}`;
   const label = clip.label ? ` "${clip.label}"` : "";
@@ -182,7 +253,14 @@ function describeClip(clip: Clip, fps = 30): string {
     // A level that moves, and a voice cleaned, are said in a word: format full gives the keys and the effect.
     const level = clip.volumeKeyframes?.length ? ` level keys ${clip.volumeKeyframes.length}` : "";
     const voice = clip.effects?.some(e => e.type === "voiceCleanup" && e.enabled !== false) ? " voice cleanup" : "";
-    return `${clip.id}${label} ${range} <- ${clip.mediaId} ${clip.sourceIn.toFixed(2)}–${clip.sourceOut.toFixed(2)}${speed}${vol}${fades}${level}${voice}${off}`;
+    // The picture's framing, other effects and a transition, in a word each, so reading them needn't take format full,
+    // whose whole timeline was 59% of every tool result's characters in the editor's runs (2026-11-24).
+    const framed = describeTransform(clip.transform);
+    const keys = clip.keyframes?.length ? ` moves ${clip.keyframes.length} keys` : "";
+    const others = (clip.effects ?? []).filter(e => e.type !== "voiceCleanup" && e.enabled !== false).map(e => e.type);
+    const effects = others.length ? ` effects ${others.join(",")}` : "";
+    const transition = clip.transitionIn ? ` ${clip.transitionIn.type} in ${round3(clip.transitionIn.duration)} s` : "";
+    return `${clip.id}${label} ${range} <- ${clip.mediaId} ${clip.sourceIn.toFixed(2)}–${clip.sourceOut.toFixed(2)}${speed}${vol}${fades}${level}${voice}${framed}${keys}${effects}${transition}${off}`;
   }
   if (clip.kind === "caption") {
     return `${clip.id} ${range} caption "${truncate(clip.text, 60)}"${off}`;

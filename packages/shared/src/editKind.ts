@@ -225,17 +225,26 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         const patch = op.patch && typeof op.patch === "object" ? op.patch as Record<string, unknown> : {};
         const found = afterClip(op.clipId) ?? beforeClip(op.clipId);
         const at = range(found?.clip);
+        const isGraphicOverlay = !!found && found.track.id !== baseVideo && laid(found.clip) === "graphic";
         const keys = Object.keys(patch).filter(k => !NEUTRAL_KEYS.has(k));
-        if (!keys.length) return [{ facet: "neutral", range: at }];
+        if (!keys.length) {
+          const retimed = Object.keys(patch).some(k => k === "sourceIn" || k === "sourceOut" || k === "timelineIn" || k === "timelineOut");
+          return [{ facet: isGraphicOverlay && retimed ? "graphic" as const : "neutral", range: at }];
+        }
         return keys.flatMap((key): Placed | Placed[] => {
           // A split edit is at its join, between where the picture cuts and where the sound now does: one for each end.
           if (key === "splitEdit") return found?.clip.kind === "media"
             ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range })) : [{ facet: "split" as const, range: at }];
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
           if (key === "volumeKeyframes") return { facet: dips(patch.volumeKeyframes) ? "dip" as const : "audio" as const, range: at };
-          if (FRAMING_KEYS.has(key)) return { facet: framingFacet(patch, key), range: at };
+          // Repositioning or animating a graphic Scarlet laid over the picture is still a graphic edit, not a camera reframe.
+          if (FRAMING_KEYS.has(key)) return { facet: isGraphicOverlay ? "graphic" as const : framingFacet(patch, key), range: at };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
           if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at };
+          if (key === "mediaId" && found && found.track.id !== baseVideo) {
+            const next = found.clip.kind === "media" && typeof patch.mediaId === "string" ? { ...found.clip, mediaId: patch.mediaId } : found.clip;
+            return { facet: laid(next), range: at };
+          }
           if (key === "speed") return { facet: "speed" as const, range: at };
           // A transition is at its join, the clip's start, not along the clip.
           if (key === "transitionIn") return { facet: "transition" as const, range: found ? { start: found.clip.timelineIn, end: found.clip.timelineIn } : at };
@@ -256,7 +265,14 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         const patch = op.patch && typeof op.patch === "object" ? Object.keys(op.patch) : [];
         return patch.every(k => k === "muted" || k === "name") && patch.includes("muted") ? [{ facet: "audio" }] : [{ facet: "neutral" }];
       }
-      case "addTrack": case "splitClip": case "moveClip": case "removeTrack":
+      case "moveClip": {
+        const found = afterClip(op.clipId) ?? beforeClip(op.clipId);
+        if (found && found.track.id !== baseVideo && laid(found.clip) === "graphic") {
+          return [{ facet: "graphic" as const, range: range(found.clip) }];
+        }
+        return [{ facet: "neutral" }];
+      }
+      case "addTrack": case "splitClip": case "removeTrack":
         return [{ facet: "neutral" }];
       case "addMarker": case "updateMarker": {
         // A marker added or changed is left on the timeline, at its point. One marked resolved asks nothing more.

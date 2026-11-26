@@ -392,36 +392,49 @@ export interface ScreenFrameOptions {
  * seconds. Screen text is read from these: a 4K screen read at 1920 wide found the same lines as at full size, and
  * decodes in a quarter of the memory.
  */
-export async function screenFrames(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void): Promise<number> {
+export async function screenFrames(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void | Promise<void>): Promise<number> {
   let delivered = 0;
   return withDecoderFallback(
     file,
     onCpuForHdr(opts),
     "window",
-    decoder => framesFrom(file, range, { ...opts, decoder }, decoder ? (i, rgb) => { delivered = i + 1; onFrame(i, rgb); } : onFrame),
+    decoder => framesFrom(file, range, { ...opts, decoder }, decoder ? (i, rgb) => { delivered = i + 1; return onFrame(i, rgb); } : onFrame),
     // Frames already handed over stay handed over: only fall back before the first frame is emitted.
     () => delivered === 0,
   );
 }
 
-async function framesFrom(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void) {
+/** Maximum continuous main-thread work while draining decoded RGB frames before yielding to pending I/O. */
+const FRAME_SLICE_MS = 8;
+
+async function framesFrom(file: string, range: TimeRange, opts: ScreenFrameOptions, onFrame: (index: number, rgb: Buffer) => void | Promise<void>) {
   const { width, height } = opts, size = width * height * 3;
   const toneMap = (await toneMapFilters(opts.hdr)).map(f => f + ",").join("");
   const filter = shrinkFirst(opts.decoder, `${width}:${height}`, `fps=${opts.fps}:round=down,scale=${width}:${height}:flags=area,${toneMap}format=rgb24`);
   let pending: Buffer[] = [], held = 0, index = 0;
+  let sliceStart = performance.now();
   await runCapture(resolveFfmpeg(), [...input(file, range, opts.decoder), "-loglevel", "error", "-map", "0:v:0", "-an", "-vf", filter,
     "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], {
     signal: opts.signal, maxStderr: 256 * 1024,
     onStdoutChunk(chunk) {
       pending.push(chunk);
       held += chunk.length;
-      while (held >= size) {
-        const all = Buffer.concat(pending, held);
-        onFrame(index++, all.subarray(0, size));
-        const rest = all.subarray(size);
-        pending = rest.length ? [Buffer.from(rest)] : [];
-        held = rest.length;
-      }
+      if (held < size) return;
+      const all = pending.length === 1 ? pending[0]! : Buffer.concat(pending, held);
+      const complete = Math.floor(all.length / size) * size;
+      const tail = all.length - complete;
+      pending = tail ? [Buffer.from(all.subarray(complete))] : [];
+      held = tail;
+      return (async () => {
+        for (let offset = 0; offset < complete; offset += size) {
+          opts.signal?.throwIfAborted();
+          await onFrame(index++, all.subarray(offset, offset + size));
+          if (performance.now() - sliceStart >= FRAME_SLICE_MS) {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            sliceStart = performance.now();
+          }
+        }
+      })();
     },
   });
   return index;

@@ -63,6 +63,42 @@ pub fn codex_home_dir(run_dir: &Path) -> std::path::PathBuf {
     run_dir.with_file_name(format!("{name}.codex"))
 }
 
+/// Share a Codex auth/lock file into the run's isolated CODEX_HOME.
+/// Uses a symlink where supported; on standard Windows accounts (without symlink privilege / Developer Mode),
+/// falls back to an NTFS hard link so Codex still shares token refreshes and lock files without admin rights,
+/// and optionally copies for `codex exec` fallback when CODEX_HOME lives on a different drive.
+pub(super) fn link_codex_auth_file(from: &Path, to: &Path, create_if_missing: bool, allow_copy: bool) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(to).is_ok() {
+        std::fs::remove_file(to)?;
+    }
+    #[cfg(unix)]
+    {
+        let _ = (create_if_missing, allow_copy);
+        std::os::unix::fs::symlink(from, to)
+    }
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_file(from, to).is_ok() {
+            return Ok(());
+        }
+        if create_if_missing && !from.exists() {
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(from) {
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err),
+            }
+        }
+        match std::fs::hard_link(from, to) {
+            Ok(()) => Ok(()),
+            Err(_) if allow_copy && from.is_file() => {
+                std::fs::copy(from, to)?;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
 /// App Server reads user configuration from CODEX_HOME. Give it a private directory
 /// with the existing login and its write lock linked so Codex still owns token refreshes.
 fn isolated_codex_home(opts: &RunOptions) -> std::result::Result<std::path::PathBuf, &'static str> {
@@ -87,15 +123,9 @@ fn isolated_codex_home(opts: &RunOptions) -> std::result::Result<std::path::Path
     for config in ["config.toml", "managed_config.toml"] {
         if std::fs::symlink_metadata(home.join(config)).is_ok() { return Err("isolation_unavailable"); }
     }
-    #[cfg(unix)]
-    use std::os::unix::fs::symlink as link_file;
-    #[cfg(windows)]
-    use std::os::windows::fs::symlink_file as link_file;
     // Linked again on each run: the login may have moved since the last one.
-    for (from, name) in [(auth, "auth.json"), (codex_home.join("auth.lock"), "auth.lock")] {
-        let link = home.join(name);
-        if std::fs::symlink_metadata(&link).is_ok() { std::fs::remove_file(&link).map_err(|_| "isolation_unavailable")?; }
-        link_file(from, link).map_err(|_| "isolation_unavailable")?;
+    for (from, name, create_if_missing) in [(auth, "auth.json", false), (codex_home.join("auth.lock"), "auth.lock", true)] {
+        link_codex_auth_file(&from, &home.join(name), create_if_missing, false).map_err(|_| "isolation_unavailable")?;
     }
     Ok(home)
 }
@@ -112,15 +142,9 @@ fn exec_codex_home(opts: &RunOptions) -> Option<std::path::PathBuf> {
     if auth.is_none() && !has_api_key("codex", &opts.env) { return None; }
     let home = codex_home_dir(&opts.cwd);
     crate::config::private_directory(&home).ok()?;
-    #[cfg(unix)]
-    use std::os::unix::fs::symlink as link_file;
-    #[cfg(windows)]
-    use std::os::windows::fs::symlink_file as link_file;
     if let (Some(user_home), Some(auth)) = (user_home, auth) {
-        for (from, name) in [(auth, "auth.json"), (user_home.join("auth.lock"), "auth.lock")] {
-            let link = home.join(name);
-            if std::fs::symlink_metadata(&link).is_ok() { std::fs::remove_file(&link).ok()?; }
-            link_file(from, link).ok()?;
+        for (from, name, create_if_missing) in [(auth, "auth.json", false), (user_home.join("auth.lock"), "auth.lock", true)] {
+            link_codex_auth_file(&from, &home.join(name), create_if_missing, true).ok()?;
         }
     }
     Some(home)
@@ -164,6 +188,10 @@ async fn try_app_server(opts: &RunOptions, bin: &str, home: &Path) -> Option<Run
             return Some(RunResult { resume_failed: true, error: Some(format!("{error:#}")), ..Default::default() });
         }
         Err(error) if !state.turn_requested && !opts.cancel.is_cancelled() => {
+            let message = format!("{error:#}");
+            if is_terminal_codex_error(&message) {
+                return Some(RunResult::failed(message));
+            }
             log_fallback(opts, super::codex_app_server::fallback_reason(&error));
             return None;
         }
@@ -174,6 +202,21 @@ async fn try_app_server(opts: &RunOptions, bin: &str, home: &Path) -> Option<Run
     };
     let last = state.final_message.take().or_else(|| state.last_message.take());
     Some(codex_result(state, opts.model.as_deref(), &outcome, last, false))
+}
+
+/// Errors returned by Codex App Server that indicate an account/model/limit rejection rather than an App Server
+/// startup or protocol incompatibility, so falling back to `codex exec` would only repeat the exact same failure.
+fn is_terminal_codex_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("not supported when using codex")
+        || lower.contains("model_not_found")
+        || lower.contains("unsupported model")
+        || lower.contains("unknown model")
+        || lower.contains("does not exist")
+        || lower.contains("not have access")
+        || lower.contains("rate limit")
+        || lower.contains("usage limit")
+        || lower.contains("401 unauthorized")
 }
 
 fn log_fallback(opts: &RunOptions, reason: &str) {

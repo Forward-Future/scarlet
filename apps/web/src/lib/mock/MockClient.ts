@@ -9,6 +9,8 @@ import { appliedReviewChange } from "@scarlet/timeline";
 import type { ApproveLearningRequest, EditSkillRequest, Learning, RunChoice, UsageGroupBy, UsageResponse } from "@scarlet/shared";
 import type {
   AgentHost,
+  BatchSummariesRequest,
+  BatchSummariesResponse,
   CreateNoteRequest,
   ReviseRequest,
   CreateTaskRequest,
@@ -31,8 +33,8 @@ import type {
   VersionSummary,
 } from "@scarlet/shared";
 import type { AudioTrackSelection, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
-import { diffTimelines, newId, timelineDuration, ASPECT_PRESETS } from "@scarlet/timeline";
-import type { ActivityEntry, ApproveResponse, HandoffResponse, TrashedProject } from "@scarlet/shared";
+import { adjustCut, adjustEdit, applyOps, diffTimelines, frameAligned, newId, putBackCut, timelineDuration, ASPECT_PRESETS } from "@scarlet/timeline";
+import type { ActivityEntry, ApproveResponse, HandoffResponse, StagedCutRevision, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
 import { bootBackgroundActivity } from "./background";
 import { reviewCuts } from "./cutReview";
@@ -118,6 +120,12 @@ export class MockClient implements ScarletApi {
     this.store.db.versions[project.id] = [];
     return this.latency({ project }, 250);
   }
+  async createSampleProject(): Promise<{ project: Project }> {
+    this.requireAuth();
+    const demo = this.store.db.projects[0];
+    if (demo) return this.latency({ project: demo }, 250);
+    return this.createProject({ name: "Sample project" });
+  }
   async workspace(id: string) {
     this.requireAuth();
     const project = this.store.projectById(id);
@@ -149,6 +157,39 @@ export class MockClient implements ScarletApi {
     const head = project.head && this.store.db.timelines[project.head];
     return { version: project.head, edits: head ? threadTimeline(thread, head, this.store.db.versions[id] ?? [],
       version => this.store.db.timelines[version], project.settings.fps, this.store.db.media[id]) : [] };
+  }
+
+  async summarizeBatches(id: string, body: BatchSummariesRequest): Promise<BatchSummariesResponse> {
+    this.requireAuth();
+    this.store.projectById(id);
+    const summaries: Record<string, string> = {};
+    for (const batch of body.batches) {
+      const labels = batch.samples.map(s => s.label.toLowerCase());
+      const desc = (batch.descriptions ?? []).join(" ").toLowerCase();
+      if (batch.isDialoguePass) {
+        const parts = Object.entries(batch.breakdown ?? {}).sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, 2);
+        summaries[batch.key] = parts.length
+          ? `${batch.count} dialogue cuts: ${parts.join(" & ")}`
+          : `${batch.count} dialogue cuts: pauses & retakes`;
+      } else if (labels.includes("music bed") && labels.includes("wrap")) {
+        summaries[batch.key] = "Tightened wrap & music bed";
+      } else if (desc.includes("false start") && desc.includes("tangent")) {
+        summaries[batch.key] = "Cut false start & 14 s tangent";
+      } else {
+        const names = [...new Set(batch.samples.map(s => s.label.trim()).filter(Boolean))];
+        const kindNoun: Record<string, string> = {
+          cut: "cuts", graphic: "graphics", zoom: "zooms", reframe: "reframes",
+          broll: "B-roll shots", overlay: "overlays", text: "text edits", audio: "audio edits",
+          dip: "music dips", voice: "voice cleanups", transition: "transitions",
+          speed: "speed changes", split: "split edits", restore: "restored passages", insert: "inserts",
+        };
+        const noun = (batch.kind && kindNoun[batch.kind]) ?? "edits";
+        summaries[batch.key] = names.length >= 2 && names.length <= 2
+          ? `${batch.count} ${noun}: ${names.join(" & ")}`.slice(0, 52)
+          : `${batch.count} ${noun}`;
+      }
+    }
+    return this.latency({ summaries, pending: [] }, 60);
   }
 
   async setThreadDone(id: string, threadId: string, done: boolean, revision: string) {
@@ -238,9 +279,11 @@ export class MockClient implements ScarletApi {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
     return this.latency({ activity: list.slice(0, q.limit ?? 200) }, 150);
   }
-  async serverActivity(q: { before?: string; limit?: number } = {}): Promise<{ activity: ActivityEntry[] }> {
+  async serverActivity(q: { before?: string; beforeId?: string; limit?: number } = {}): Promise<{ activity: ActivityEntry[] }> {
     this.requireAuth();
-    return this.latency({ activity: this.store.activityLog.filter((a) => a.projectId === null && (!q.before || a.createdAt < q.before)).slice(0, q.limit ?? 200) });
+    const list = this.store.activityLog.filter((a) => a.projectId === null && (!q.before || a.createdAt < q.before || (a.createdAt === q.before && q.beforeId && a.id < q.beforeId)))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    return this.latency({ activity: list.slice(0, q.limit ?? 200) });
   }
   // --- media ----------------------------------------------------------------------
   async media(projectId: string): Promise<{ media: MediaAsset[] }> {
@@ -250,6 +293,10 @@ export class MockClient implements ScarletApi {
   async uploadMedia(projectId: string, file: Blob, name: string, kind?: string): Promise<{ media: MediaAsset }> {
     this.requireAuth();
     return this.latency(uploadMedia(this.store, projectId, file, name, kind), 200);
+  }
+  async expandMediaPaths(paths: string[]): Promise<{ files: string[]; folders: number; emptyFolders: Array<{ path: string; name: string }> }> {
+    this.requireAuth();
+    return { files: [...paths], folders: 0, emptyFolders: [] };
   }
   async importMedia(projectId: string, body: { path?: string; url?: string; kind?: string; importId?: string }, signal?: AbortSignal): Promise<{ media: MediaAsset }> {
     this.requireAuth();
@@ -319,6 +366,117 @@ export class MockClient implements ScarletApi {
     this.requireAuth();
     throw new ScarletApiError(409, "needs_scarlet", "This edit can’t be put back as it was.");
   }
+  async adjustCut(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
+    cut: { changeId: string; spot: number; label: string; range: TimeRange; at: number; before: { version: string; removed: TimeRange } };
+    removed: TimeRange }): Promise<{ project: Project; change: Change }> {
+    this.requireAuth();
+    const project = this.store.projectById(projectId);
+    if (!project.head || project.head !== body.expectedHead) throw new ScarletApiError(409, "cut_changed", "The video changed. Try again.");
+    const head = this.store.db.timelines[project.head];
+    if (!head) throw notFound("Timeline");
+    const fps = project.settings.fps;
+    const oldRemoved = body.cut.before.removed;
+    const oldLen = oldRemoved.end - oldRemoved.start;
+    const target = frameAligned(body.removed, fps);
+    const rejects = target.end - target.start <= 0.5 / fps;
+    const media = this.store.db.media[projectId] ?? project.media;
+    const dur = timelineDuration(head);
+    const fullDelta = body.cut.at <= 0.5 / fps
+      ? { ds: 0, de: -oldLen }
+      : dur > 0.5 / fps && Math.abs(body.cut.at - dur) <= 0.5 / fps
+        ? { ds: oldLen, de: 0 }
+        : { ds: target.start - oldRemoved.start, de: target.end - oldRemoved.end };
+    const next = rejects
+      ? (putBackCut(head, body.cut.at, oldLen, fps) ?? adjustCut(head, body.cut.at, oldLen, fullDelta.ds, fullDelta.de, fps, media))
+      : adjustCut(head, body.cut.at, oldLen, target.start - oldRemoved.start, target.end - oldRemoved.end, fps, media);
+    if (!next) throw new ScarletApiError(409, "needs_scarlet", "This cut can’t be adjusted directly. Use Revise instead.");
+    const version = newId("ver");
+    const createdAt = now();
+    const saved: Timeline = { ...next, version, parent: project.head, createdAt };
+    this.store.db.timelines[version] = saved;
+    const id = newId("chg");
+    const newJoinAt = Math.max(0, body.cut.at + (target.start - oldRemoved.start));
+    const description = rejects ? `Rejected · ${body.cut.label}` : `Adjusted · ${body.cut.label}`;
+    const change: Change = {
+      id, projectId, description, author: this.store.human(), decidedBy: this.store.human(), state: "approved", threadId: body.threadId,
+      ...(rejects && { rejects: true as const }),
+      fromVersion: project.head, toVersion: version, appliedOnto: project.head, appliedVersion: version,
+      timelineEdits: [{
+        label: body.cut.label,
+        range: rejects ? { start: body.cut.at, end: body.cut.at + oldLen } : { start: newJoinAt, end: newJoinAt },
+        replaces: { changeId: body.cut.changeId, spot: body.cut.spot },
+      }],
+      ...(!rejects && { leftOut: { version: body.cut.before.version, joins: [{ at: newJoinAt, removed: target }] } }),
+      noteIds: [], renders: [], ranges: diffTimelines(head, saved, fps).ranges, createdAt, updatedAt: createdAt,
+    };
+    this.store.db.changes.unshift(change);
+    project.head = version;
+    project.updatedAt = createdAt;
+    this.store.summary(projectId).head = version;
+    const versions = this.store.db.versions[projectId] ?? [];
+    for (const v of versions) v.isHead = false;
+    versions.push({ version, parent: change.fromVersion, name: saved.name, author: change.author, changeId: id, description, duration: timelineDuration(saved), isHead: true, createdAt });
+    this.store.db.versions[projectId] = versions;
+    this.store.emitChange(change);
+    this.store.emitProject(projectId);
+    return { project: { ...project }, change };
+  }
+  async adjustEdit(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
+    edit: { changeId: string; spot: number; label: string; range: TimeRange; kind?: string };
+    nextRange: TimeRange }): Promise<{ project: Project; change: Change }> {
+    this.requireAuth();
+    const project = this.store.projectById(projectId);
+    if (!project.head || project.head !== body.expectedHead) throw new ScarletApiError(409, "cut_changed", "The video changed. Try again.");
+    const head = this.store.db.timelines[project.head];
+    if (!head) throw notFound("Timeline");
+    const fps = project.settings.fps;
+    const prior = this.store.db.changes.find(c => c.id === body.edit.changeId);
+    const clipIds = prior?.ops?.flatMap(op => {
+      if (op.op === "addClip" && op.clip && typeof op.clip === "object" && typeof (op.clip as { id?: unknown }).id === "string") return [(op.clip as { id: string }).id];
+      if (op.op === "updateClip" && typeof op.clipId === "string") return [op.clipId];
+      return [];
+    });
+    const target = frameAligned(body.nextRange, fps);
+    const result = adjustEdit(head, body.edit.range, target, fps, this.store.db.media[projectId] ?? project.media, {
+      kind: body.edit.kind,
+      ...(clipIds?.length && { clipIds }),
+    });
+    if (!result) throw new ScarletApiError(409, "needs_scarlet", "This edit can’t be adjusted directly. Use Revise instead.");
+    const version = newId("ver");
+    const createdAt = now();
+    const saved: Timeline = { ...result.timeline, version, parent: project.head, createdAt };
+    this.store.db.timelines[version] = saved;
+    const id = newId("chg");
+    const rejects = !!result.removed;
+    const description = rejects ? `Rejected · ${body.edit.label}` : `Adjusted · ${body.edit.label}`;
+    const priorNamed = prior?.timelineEdits?.[body.edit.spot];
+    const change: Change = {
+      id, projectId, description, author: this.store.human(), decidedBy: this.store.human(), state: "approved", threadId: body.threadId,
+      ...(rejects && { rejects: true as const }),
+      fromVersion: project.head, toVersion: version, appliedOnto: project.head, appliedVersion: version,
+      ops: result.ops as unknown as Array<Record<string, unknown>>,
+      timelineEdits: [{
+        label: body.edit.label,
+        range: rejects ? body.edit.range : result.range,
+        ...(priorNamed?.reason && { reason: priorNamed.reason }),
+        ...(priorNamed?.summary && { summary: priorNamed.summary }),
+        ...(priorNamed?.check && { check: priorNamed.check }),
+        replaces: { changeId: body.edit.changeId, spot: body.edit.spot },
+      }],
+      noteIds: [], renders: [], ranges: diffTimelines(head, saved, fps).ranges, createdAt, updatedAt: createdAt,
+    };
+    this.store.db.changes.unshift(change);
+    project.head = version;
+    project.updatedAt = createdAt;
+    this.store.summary(projectId).head = version;
+    const versions = this.store.db.versions[projectId] ?? [];
+    for (const v of versions) v.isHead = false;
+    versions.push({ version, parent: change.fromVersion, name: saved.name, author: change.author, changeId: id, description, duration: timelineDuration(saved), isHead: true, createdAt });
+    this.store.db.versions[projectId] = versions;
+    this.store.emitChange(change);
+    this.store.emitProject(projectId);
+    return { project: { ...project }, change };
+  }
   async historyEdit(projectId: string, target: string, action: "revert" | "restore", expectedHead: string, branch: string) {
     this.requireAuth();
     return historyEdit(this.store, projectId, target, action, expectedHead, branch);
@@ -377,6 +535,42 @@ export class MockClient implements ScarletApi {
     if (body.applyWhenDone !== undefined) change.applyWhenDone = body.applyWhenDone ? { userId: "usr_mock", at: new Date().toISOString() } : undefined;
     this.store.emitChange(change);
     return { change: { ...change } };
+  }
+  async reviseStagedCut(changeId: string, index: number, body: StagedCutRevision): Promise<{ change: Change; replaced?: string; index?: number; carried?: true }> {
+    this.requireAuth();
+    const prior = this.store.changeById(changeId);
+    const project = this.store.projectById(prior.projectId);
+    const { review } = await this.cutReview(changeId);
+    if (!review?.cuts[index]) throw new ScarletApiError(400, "wrong_cut", "Choose a staged cut in this pass.");
+    const aligned = frameAligned({ start: body.start, end: body.end }, project.settings.fps);
+    const ranges = review.cuts.map((c, i) => i === index ? aligned : c.removed);
+    const ops = [...ranges].reverse().map(r => ({ op: "rippleDelete" as const, start: r.start, end: r.end }));
+    const base = this.store.db.timelines[prior.fromVersion];
+    if (!base) throw notFound("Timeline");
+    const version = newId("ver");
+    const createdAt = now();
+    const proposed: Timeline = { ...applyOps(base, ops), version, parent: prior.fromVersion, createdAt };
+    this.store.db.timelines[version] = proposed;
+    const id = newId("chg");
+    const cutAssessments = prior.cutAssessments?.map(a => a.index === index ? { ...a, start: aligned.start, end: aligned.end, reason: body.reason, ...(body.summary && { summary: body.summary }) } : a);
+    const revised: Change = {
+      ...prior,
+      id,
+      toVersion: version,
+      ops: ops as unknown as Array<Record<string, unknown>>,
+      cutAssessments,
+      cutChoices: prior.cutChoices?.filter(c => c.index !== index),
+      updatedAt: createdAt,
+    };
+    prior.state = "rejected";
+    prior.rejectedFrom = "ready";
+    prior.rejectReason = "Replaced by a newer revision of this pass.";
+    prior.replacedBy = id;
+    prior.updatedAt = createdAt;
+    this.store.db.changes.unshift(revised);
+    this.store.emitChange(prior);
+    this.store.emitChange(revised);
+    return { change: { ...revised }, replaced: prior.id, index };
   }
 
   async cutReviewDraft(changeId: string, restoredCuts: number[], ontoVersion?: string) {
@@ -623,6 +817,105 @@ export class MockClient implements ScarletApi {
   async skillFromChange(changeId: string, name: string, agent?: string): Promise<{ task: Task }> {
     this.requireAuth();
     return this.latency(skillFromChange(this.store, changeId, name, agent), 200);
+  }
+  async styleGuides(): Promise<{ styleGuides: import("@scarlet/shared").StyleGuideRecord[] }> {
+    this.requireAuth();
+    return this.latency({ styleGuides: [...this.store.db.styleGuides] }, 100);
+  }
+  async styleGuide(styleGuideId: string): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord; edits: Task[] }> {
+    this.requireAuth();
+    const styleGuide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!styleGuide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const edits = this.store.db.tasks.filter(t => t.kind === "style_guide_edit" && t.context.styleGuideId === styleGuideId).map(t => ({ ...t })).reverse();
+    return this.latency({ styleGuide, edits }, 100);
+  }
+  async createStyleGuide(body: import("@scarlet/shared").CreateStyleGuideRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    if (this.store.db.styleGuides.some(g => g.name.toLowerCase() === body.name.toLowerCase())) {
+      throw new ScarletApiError(409, "style_guide_exists", `A style guide named "@${body.name}" already exists.`);
+    }
+    const ts = new Date().toISOString();
+    if (body.isDefault) for (const g of this.store.db.styleGuides) g.isDefault = false;
+    const styleGuide: import("@scarlet/shared").StyleGuideRecord = {
+      id: newId("sg"), name: body.name, description: body.description?.trim() ?? "", instructions: body.instructions ?? "",
+      isDefault: Boolean(body.isDefault), assets: [], createdAt: ts, updatedAt: ts,
+    };
+    this.store.db.styleGuides.push(styleGuide);
+    this.store.emit({ type: "style_guide.updated", styleGuide });
+    return this.latency({ styleGuide }, 150);
+  }
+  async createStyleGuideFromGraphic(body: import("@scarlet/shared").StyleGuideFromGraphicRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    return this.createStyleGuide({ name: body.name, description: body.description || "Saved from project graphic", isDefault: body.isDefault });
+  }
+  async updateStyleGuide(styleGuideId: string, body: import("@scarlet/shared").UpdateStyleGuideRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    if (body.name && this.store.db.styleGuides.some(g => g.id !== styleGuideId && g.name.toLowerCase() === body.name!.toLowerCase())) {
+      throw new ScarletApiError(409, "style_guide_exists", `A style guide named "@${body.name}" already exists.`);
+    }
+    if (body.isDefault) for (const g of this.store.db.styleGuides) if (g.id !== styleGuideId) g.isDefault = false;
+    Object.assign(guide, {
+      ...(body.name !== undefined && { name: body.name }),
+      ...(body.description !== undefined && { description: body.description.trim() }),
+      ...(body.instructions !== undefined && { instructions: body.instructions }),
+      ...(body.isDefault !== undefined && { isDefault: body.isDefault }),
+      updatedAt: new Date().toISOString(),
+    });
+    this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+    return this.latency({ styleGuide: { ...guide } }, 120);
+  }
+  async deleteStyleGuide(styleGuideId: string): Promise<Record<string, never>> {
+    this.requireAuth();
+    this.store.db.styleGuides = this.store.db.styleGuides.filter(g => g.id !== styleGuideId);
+    this.store.emit({ type: "style_guide.deleted", styleGuideId });
+    return this.latency({});
+  }
+  async editStyleGuide(styleGuideId: string, body: import("@scarlet/shared").EditStyleGuideRequest): Promise<{ task: Task }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const home = this.store.db.projects[0];
+    if (!home) throw new ScarletApiError(409, "no_project", "Create a project first. Scarlet runs its requests from one.");
+    const task = this.store.makeTask(home.id, {
+      kind: "style_guide_edit",
+      agent: body.agent ?? this.store.db.settings.defaultAgent,
+      model: body.model,
+      effort: body.effort,
+      serviceTier: body.serviceTier,
+      instruction: body.prompt,
+      context: { styleGuideId: guide.id, ...(body.attachments?.length && { attachments: body.attachments }) },
+    });
+    setTimeout(() => {
+      guide.description = body.prompt.trim().slice(0, 80)
+        || (body.attachments?.length ? `Based on ${body.attachments.map(a => a.name).join(", ")}`.slice(0, 80) : guide.description);
+      guide.updatedAt = new Date().toISOString();
+      this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+      this.store.updateTask(task, { state: "done", resultStyleGuideId: guide.id, summary: `Updated @${guide.name}.`, finishedAt: new Date().toISOString() });
+    }, 300);
+    return this.latency({ task }, 150);
+  }
+  async uploadStyleGuideAsset(styleGuideId: string, file: Blob | { path: string }, name?: string): Promise<{ asset: import("@scarlet/shared").StyleGuideAsset; styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const named = name ?? (file instanceof Blob ? (typeof File !== "undefined" && file instanceof File ? file.name : "asset") : file.path.split(/[\\/]/).pop() || "asset");
+    const asset: import("@scarlet/shared").StyleGuideAsset = {
+      id: newId("sga"), name: named, size: file instanceof Blob ? file.size : 0,
+      ...(file instanceof Blob && file.type && { mime: file.type }), createdAt: new Date().toISOString(),
+    };
+    guide.assets = [...guide.assets, asset];
+    guide.updatedAt = new Date().toISOString();
+    this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+    return this.latency({ asset, styleGuide: { ...guide } }, 150);
+  }
+  styleGuideAssetUrl(styleGuideId: string, assetId: string) {
+    return this.fileUrl(`/style-guides/${encodeURIComponent(styleGuideId)}/assets/${encodeURIComponent(assetId)}`);
+  }
+  styleGuidePreviewUrl(styleGuideId: string, updatedAt?: string) {
+    const query = updatedAt ? `?v=${encodeURIComponent(updatedAt)}` : "";
+    return this.fileUrl(`/style-guides/${encodeURIComponent(styleGuideId)}/preview${query}`);
   }
   async localModelStatus() { return { state: "ready" as const }; }
   async settings(): Promise<{ settings: ServerSettings; transcriptionAvailable: boolean; transcriptionIssue?: string }> {

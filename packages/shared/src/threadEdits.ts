@@ -68,7 +68,7 @@ export interface ThreadEdit extends EditRef {
   rejected?: true;
   /**
    * The edit was flagged for the editor (`check`) before it was rejected. `check` is cleared so nothing treats a
-   * rejected edit as still waiting, while `wasCheck` keeps its row in For you, marked Rejected.
+   * rejected edit as still waiting, while `wasCheck` keeps its row in Needs review, marked Rejected.
    */
   wasCheck?: true;
 }
@@ -455,7 +455,7 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
       // join changed no footage, and is an edit of its own. A save made of steps that left footage out at the join (`built`)
       // moved it too: on Matt's pass a later save rolled the edges of six cuts it had made, “Extend end of ‘subscription.’”,
       // and each cut showed twice, the first still flagged and playing its old clipped join (2026-11-20).
-      if ((found || built) && edit.named && range.start === range.end && edit.beforeCut) edit.resaved = true;
+      if (!item.replaces && (found || built) && edit.named && range.start === range.end && edit.beforeCut) edit.resaved = true;
       const back = edit.named && kind === "restore" ? returned?.filter(r => r.start <= range.end + NAMED_SLACK && r.end >= range.start - NAMED_SLACK) : undefined;
       if (back?.length) edit.putBack = { start: Math.min(...back.map(r => r.start)), end: Math.max(...back.map(r => r.end)) };
       const prior = item.replaces ? edits.findIndex(e => matchesEdit(e, item.replaces!)) : -1;
@@ -463,6 +463,13 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
         const replaced = edits[prior]!;
         const isRejected = rejects(change);
         inheritReplacedEdit(edit, replaced, isRejected);
+        // A human edge adjustment keeps the original edit's note, check, and kind as they were rather than marking it "Revised".
+        if (!isRejected && change.author.type === "human") {
+          if (replaced.reason && !edit.reason) edit.reason = replaced.reason;
+          if (replaced.summary && !edit.summary) edit.summary = replaced.summary;
+          if (replaced.check) edit.check = replaced.check;
+          if (replaced.kind && (!edit.kind || edit.kind === "other")) edit.kind = replaced.kind;
+        }
         // A rejected edit keeps its own words on its row, which then says it was rejected: nothing is left to check.
         if (isRejected) {
           edit.rejected = true;

@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
+import { clock } from "../../lib/format";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildThreads, threadEditList, type VersionSummary } from "@scarlet/shared";
+import { buildThreads, REVISED_CHECK, threadEditList, type VersionSummary } from "@scarlet/shared";
 import { api } from "../../lib/client";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useProjectStore, type ProjectData } from "../../stores/project";
@@ -133,8 +134,48 @@ it("reads a request's edits again for a new working cut only while they are need
   expect(read).toHaveBeenCalledTimes(4);
 });
 
-it("words the request to reject one edit by its number and name", () => {
-  expect(rejectInstruction({ editNumber: 2, label: "captions" })).toBe("The editor rejected edit 2, “captions”. Put back exactly what it changed and leave every other edit as it is.");
+it("waits for the engine's first edit list instead of flashing raw saved edits, and falls back only if the read fails", async () => {
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const raw = threadEditList(thread) as ThreadEdit[];
+  expect(raw.length).toBeGreaterThan(1);
+  useProjectStore.setState({ current: data, status: "ready" });
+
+  let deliver!: (res: { version: string; edits: ThreadEdit[] }) => void;
+  let fail!: (err: Error) => void;
+  const read = vi.spyOn(api, "threadEdits")
+    .mockImplementationOnce(() => new Promise(resolve => { deliver = resolve; }))
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+
+  const seen: { count: number; settled: boolean }[] = [];
+  function Probe({ t }: { t: Thread }) {
+    const { listed, settled } = useThreadEdits(PRJ, t, true);
+    seen.push({ count: listed.length, settled });
+    return null;
+  }
+
+  // While the first engine read is in flight, no raw saved edits flash in the list.
+  await act(async () => root.render(<Probe t={thread} />));
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(seen.every(s => s.count === 0 && !s.settled)).toBe(true);
+
+  // Once the engine returns only the single edit still in the working cut, the list jumps straight from 0 to 1.
+  await act(async () => deliver({ version: data.project.head!, edits: [raw[0]!] }));
+  expect(seen.at(-1)).toEqual({ count: 1, settled: true });
+  expect(seen.map(s => s.count)).not.toContain(raw.length);
+
+  // Fresh mount where the engine read fails: still stays empty while pending, then falls back to the saved list.
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  seen.length = 0;
+  await act(async () => root.render(<Probe t={thread} />));
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(seen.every(s => s.count === 0 && !s.settled)).toBe(true);
+  await act(async () => fail(new Error("Engine offline")));
+  expect(seen.at(-1)).toEqual({ count: raw.length, settled: true });
+});
+
+it("words the request to reject one edit by its time and name", () => {
+  expect(rejectInstruction({ time: 62, label: "captions" })).toBe("The editor rejected the edit at 1:02, “captions”. Put back exactly what it changed and leave every other edit as it is.");
   expect(rejectInstruction({ label: "captions" })).toMatch(/^The editor rejected “captions”\. /);
   expect(rejectInstruction({})).toMatch(/^The editor rejected this edit\. /);
 });
@@ -159,37 +200,39 @@ it("says Needs your answer, not Revising…, while the request about a cut or ed
   expect(revisionWord({ id: "t1", state: "running" })).toBe("Revising…");
 });
 
-it("ends an edit's row on Needs your answer in amber, its number amber and still, while its revision asks the editor something", async () => {
+it("ends an edit's row on Needs your answer in amber, its time amber and still, while its revision asks the editor something", async () => {
   const base = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
   const edits = threadEditList(base) as ThreadEdit[];
   const asked = (state: "running" | "waiting_for_user") => ({ ...base, tasks: [...base.tasks,
     { ...data.tasks[0]!, id: "task_ask", state, context: { changeId: edits[1]!.changeId, editIndex: edits[1]!.spot, threadId: base.id } }] }) as Thread;
   useProjectStore.setState({ current: data, status: "ready" });
   const row = () => container.querySelectorAll<HTMLElement>(".simple-edit")[1]!;
-  const reads = () => [row().querySelector(".edit-badge")!.className, row().querySelector(".simple-edit-check")!.textContent, row().querySelector(".simple-edit-check")!.className, row().getAttribute("aria-label")];
+  const reads = () => [row().querySelector(".edit-row-time")!.className, row().querySelector(".simple-edit-check")!.textContent, row().querySelector(".simple-edit-check")!.className, row().getAttribute("aria-label")];
   await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={asked("running")} edits={edits} onPlay={() => {}} />));
-  expect(reads()).toEqual(["edit-badge", "Revising…", "simple-edit-check is-kept working-text", expect.stringMatching(/, revising$/)]);
+  expect(reads()).toEqual(["edit-row-time simple-pass-time", "Revising…", "simple-edit-check is-kept working-text", expect.stringMatching(/, revising$/)]);
   await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={asked("waiting_for_user")} edits={edits} onPlay={() => {}} />));
-  expect(reads()).toEqual(["edit-badge is-check", "Needs your answer", "simple-edit-check", expect.stringMatching(/, needs your answer$/)]);
+  expect(reads()).toEqual(["edit-row-time simple-pass-time is-need", "Needs your answer", "simple-edit-check", expect.stringMatching(/, needs your answer$/)]);
 });
 
-it("keeps every edit's number when one is rejected: 1, ×, 3, with the rejected row where it was", async () => {
+it("leads every row with its time, never a number, and keeps a rejected row where it was, with a ×", async () => {
   const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
   const [first, second, third] = threadEditList(thread) as ThreadEdit[];
   useProjectStore.setState({ current: data, status: "ready" });
-  const reads = () => [...container.querySelectorAll(".simple-edit")].map(row => [row.querySelector(".edit-badge")!.textContent, row.querySelector(".simple-edit-title")!.textContent]);
+  const reads = () => [...container.querySelectorAll(".simple-edit")].map(row => [row.querySelector(".edit-row-time")?.textContent ?? "×", row.querySelector(".simple-edit-title")!.textContent]);
+  const [one, two, three] = [first!, second!, third!].map(edit => clock(edit.range.start));
   await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={[first!, second!, third!]} onPlay={() => {}} />));
-  expect(reads()).toEqual([["1", first!.label], ["2", second!.label], ["3", third!.label]]);
+  expect(reads()).toEqual([[one, first!.label], [two, second!.label], [three, third!.label]]);
+  expect(container.querySelector(".simple-edits .edit-badge:not(.is-rejected)")).toBeNull();
   // The engine's put-back stands where the edit was: a new change's row, which replaced the edit it took out.
   const gone = (edit: ThreadEdit): ThreadEdit => ({ ...edit, changeId: "chg_back", spot: 0, previous: [{ changeId: edit.changeId, spot: edit.spot }], rejected: true });
   await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={[first!, third!]} rejected={[gone(second!)]} onPlay={() => {}} />));
-  expect(reads()).toEqual([["1", first!.label], ["", second!.label], ["3", third!.label]]);
-  // The first one rejected, at the very time the second starts or not: the others are still 2 and 3.
+  expect(reads()).toEqual([[one, first!.label], ["×", second!.label], [three, third!.label]]);
+  // The first one rejected, at the very time the second starts or not: the others keep their times.
   await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={[second!, third!]} rejected={[gone({ ...first!, range: second!.range })]} onPlay={() => {}} />));
-  expect(reads()).toEqual([["", first!.label], ["2", second!.label], ["3", third!.label]]);
+  expect(reads()).toEqual([["×", first!.label], [two, second!.label], [three, third!.label]]);
   // The last one rejected leaves the rest as they were, and its row at the end.
   await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={[first!, second!]} rejected={[gone(third!)]} onPlay={() => {}} />));
-  expect(reads()).toEqual([["1", first!.label], ["2", second!.label], ["", third!.label]]);
+  expect(reads()).toEqual([[one, first!.label], [two, second!.label], ["×", third!.label]]);
 });
 
 it("words the request to add a to-do with what it asks for", () => {
@@ -211,7 +254,7 @@ it("scrolls the selected edit row into view across stepping, tab switches, and r
     expect(scrolled).toHaveLength(1);
     expect(scrolled.at(-1)?.textContent).toContain(edits[1]!.label);
 
-    // Switching from For you to See all with the same edit selected scrolls it back into view in the full list.
+    // Switching from Needs review to See all with the same edit selected scrolls it back into view in the full list.
     await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} rejected={rejected} showing={edits[1]} onPlay={() => {}} />));
     expect(scrolled).toHaveLength(2);
     expect(scrolled.at(-1)?.textContent).toContain(edits[1]!.label);
@@ -224,4 +267,52 @@ it("scrolls the selected edit row into view across stepping, tab switches, and r
     if (orig) Object.defineProperty(Element.prototype, "scrollIntoView", orig);
     else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   }
+});
+
+it("offers Unkeep on kept edit rows and takes back Keep without opening the edit", async () => {
+  const { keepEdits } = await import("../../lib/keptEdits");
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const edits = threadEditList(thread) as ThreadEdit[];
+  const rejected: ThreadEdit[] = [{ ...edits[2]!, spot: 99, label: "removed cut", rejected: true, wasCheck: true }];
+  useProjectStore.setState({ current: data, status: "ready" });
+  vi.spyOn(api, "keepEdits").mockResolvedValue(undefined as never);
+  const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined as never);
+  const onPlay = vi.fn();
+  keepEdits(PRJ, thread.id, [edits[0]!]);
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} rejected={rejected} only={() => true} onPlay={onPlay} />));
+
+  // Only the kept edit row gets Unkeep, never an unkept or rejected row.
+  const buttons = [...container.querySelectorAll<HTMLButtonElement>(".simple-unkeep")];
+  expect(buttons).toHaveLength(1);
+  expect(buttons[0]!.textContent).toBe("Unkeep");
+  expect(buttons[0]!.closest("li")?.classList.contains("has-unkeep")).toBe(true);
+
+  await click(buttons[0]!);
+  expect(onPlay).not.toHaveBeenCalled();
+  expect(unkeep).toHaveBeenCalledWith(PRJ, { threadId: thread.id, edits: [{ changeId: edits[0]!.changeId, spot: edits[0]!.spot }] });
+  expect(container.querySelector(".simple-unkeep")).toBeNull();
+});
+
+it("keeps a consistent type tag on every row, including cuts and v2 revisions", async () => {
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const edits: ThreadEdit[] = [
+    { changeId: "chg_v2", spot: 0, label: "Open Opus with “absolute banger”", range: { start: 13, end: 13 }, at: 13, kind: "cut",
+      beforeCut: { version: "ver_2", removed: { start: 13, end: 14 } }, previous: [{ changeId: "chg_v1", spot: 0 }], check: REVISED_CHECK },
+    { changeId: "chg_v2", spot: 1, label: "Re-timed intro", range: { start: 0, end: 3 }, kind: "other",
+      previous: [{ changeId: "chg_v1", spot: 1 }] },
+    { changeId: "chg_v2", spot: 2, label: "Quiet music bed", range: { start: 5, end: 10 }, kind: "audio", previous: [] },
+  ];
+  useProjectStore.setState({ current: data, status: "ready" });
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} inRail onPlay={() => {}} />));
+  const rows = [...container.querySelectorAll<HTMLElement>(".simple-edit")];
+  expect(rows.map(r => [
+    r.querySelector(".edit-version")?.textContent ?? null,
+    r.querySelector(".simple-edit-value")?.textContent ?? null,
+    r.querySelector(".simple-edit-check")?.textContent ?? null,
+    r.querySelector(".edit-row-time")?.classList.contains("is-need"),
+  ])).toEqual([
+    ["v2", "Cut", null, true],
+    ["v2", "Edit", null, false],
+    [null, "Audio", null, false],
+  ]);
 });

@@ -506,7 +506,7 @@ export class RenderQueue {
         }
         const upgradeAssembly = assembly && !render.key.endsWith(assembly);
         if (upgradeAssembly || currentKey !== previousKey) {
-          const rekeyed = this.update(id, r => ({ key: upgradeAssembly ? r.key.replace(/-mix3$/, "") + assembly : r.key, previewContentKey: currentKey }));
+          const rekeyed = this.update(id, r => ({ key: upgradeAssembly ? r.key.replace(/(?:-mix3|-pts1)$/, "") + assembly : r.key, previewContentKey: currentKey }));
           if (!rekeyed) return;
           render = rekeyed;
         }
