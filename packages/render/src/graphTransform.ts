@@ -215,7 +215,7 @@ export function transformChain(tf: AnimatedTransform, W: number, H: number): str
   const s = tf.scale ? `(${tf.scale.replaceAll(T, "t")})` : fnum(base.scale);
   const eval_ = tf.scale ? ":eval=frame" : "";
   chain.push(
-    `scale=w='max(2,trunc(iw*sar*${fit}*${s}/2)*2)':h='max(2,trunc(ih*${fit}*${s}/2)*2)'${eval_}:flags=bicubic`,
+    `scale=w='max(2,trunc(iw*sar*${fit}*${s}/2+1e-9)*2)':h='max(2,trunc(ih*${fit}*${s}/2+1e-9)*2)'${eval_}:flags=bicubic`,
   );
   chain.push("format=yuva420p");
   if (base.cornerRadius) {

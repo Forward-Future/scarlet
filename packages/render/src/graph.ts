@@ -272,6 +272,8 @@ async function writeFilterGraph(
     // An HDR picture becomes SDR before anything else is done to it, so effects, looks and the canvas see what a normal screen shows.
     chain.push(...toneMap);
     chain.push(...effectFilters(clip.effects, "video", effectCtx));
+    // A still's pixel-aspect tag is ignored as image viewers do, so the fit and the cover check agree.
+    if (still) chain.push("setsar=1");
     chain.push(...transformChain(tf, W, H));
     if (clip.videoFadeIn > 0) chain.push(`fade=t=in:st=0:d=${fnum(clip.videoFadeIn)}:alpha=1`);
     if (clip.videoFadeOut > 0) {

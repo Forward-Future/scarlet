@@ -905,8 +905,8 @@ describe("render", () => {
         { id: "v2", kind: "video", name: "V2", muted: false, hidden: false, clips: [makeMediaClip("b", 2, 6 - start, start, { id: "over", ...top })] },
       ],
     });
-    const layers = async (timeline: Timeline, range = { start: 0, end: 2 }) => {
-      const graph = await buildFilterGraph(project, timeline, range, { mediaRoot: dir, width: 160, height: 90 });
+    const layers = async (timeline: Timeline, range = { start: 0, end: 2 }, size = { width: 160, height: 90 }) => {
+      const graph = await buildFilterGraph(project, timeline, range, { mediaRoot: dir, ...size });
       try {
         return { pictures: graph.graph.match(/overlay=/g)?.length ?? 0, sounds: graph.graph.match(/\[\d+:a\]/g)?.length ?? 0 };
       } finally { await graph.cleanup(); }
@@ -955,6 +955,47 @@ describe("render", () => {
     }
     expect(await layers(cut({ mediaId: "narrow-sar", sourceIn: 0, sourceOut: 3 }))).toEqual({ pictures: 2, sounds: 1 });
     expect(await layers(cut({ mediaId: "wide-sar", sourceIn: 0, sourceOut: 3 }))).toEqual({ pictures: 1, sounds: 1 });
+
+    // A quarter-turn display rotation inverts SAR as shown: 240x180 SAR 4:3 rotated 90° displays as
+    // 180x240 SAR 3:4 (135x240), so on a square canvas it leaves bars and must keep V1.
+    const rotatedSar = path.join(dir, "rotated-sar.mp4");
+    await runCapture(resolveFfmpeg(), [
+      "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+      "-display_rotation", "90", "-i", path.join(dir, "wide-sar.mp4"), "-c", "copy", rotatedSar,
+    ]);
+    expect(await probeMedia(rotatedSar)).toMatchObject({ width: 180, height: 240, rotation: 90 });
+    project.media.push({
+      id: "rotated-sar", kind: "video", name: "rotated-sar.mp4", path: "rotated-sar.mp4",
+      duration: 3, fps: 30, width: 180, height: 240, hasAudio: false, hasAlpha: false,
+    });
+    expect(await layers(cut({ mediaId: "rotated-sar", sourceIn: 0, sourceOut: 3 }), { start: 0, end: 2 }, { width: 120, height: 120 }))
+      .toEqual({ pictures: 2, sounds: 1 });
+
+    // Stills ignore non-square pixel-aspect tags (matching image viewers), so an opaque 320x180 PNG with
+    // SAR 8:9 covers a 16:9 canvas and renders full width without background bars at the sides.
+    const sarPng = path.join(dir, "sar-still.png");
+    await runCapture(resolveFfmpeg(), [
+      "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+      "-f", "lavfi", "-i", "color=c=red:s=320x180,setsar=8/9", "-frames:v", "1", sarPng,
+    ]);
+    const pngProbe = await probeMedia(sarPng);
+    expect((pngProbe.raw as { streams?: Array<{ sample_aspect_ratio?: string }> }).streams?.[0]?.sample_aspect_ratio).toBe("8:9");
+    project.media.push({
+      id: "sar-still", kind: "image", name: "sar-still.png", path: "sar-still.png",
+      width: 320, height: 180, hasAudio: false, hasAlpha: false,
+    });
+    const stillTimeline = cut({ mediaId: "sar-still", sourceIn: 0, sourceOut: 3 });
+    expect(await layers(stillTimeline)).toEqual({ pictures: 1, sounds: 1 });
+    const stillOut = path.join(dir, "sar-still-covered.mp4");
+    await renderRange(project, stillTimeline, { start: 0, end: 0.2 }, stillOut, {
+      mediaRoot: dir, quality: "preview", height: 90, hwaccel: "none", pictureOnly: true,
+    });
+    const { stdout: stillRgb } = await runCapture(resolveFfmpeg(), [
+      "-v", "error", "-i", stillOut, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+    ]);
+    const midRow = 45 * 160 * 3;
+    expect(stillRgb[midRow]).toBeGreaterThan(200);
+    expect(stillRgb[midRow + 159 * 3]).toBeGreaterThan(200);
 
     const out = path.join(dir, "covered.mp4");
     await renderRange(project, cut(), { start: 0, end: 2 }, out, { mediaRoot: dir, quality: "preview", height: 90 });
@@ -1246,7 +1287,7 @@ describe("render", () => {
           return { reads, graph: graph.graph };
         } finally { await graph.cleanup(); }
       };
-      const fit = "scale=w='max(2,trunc(iw*sar*min(64/(iw*sar),64/ih)*1/2)*2)':h='max(2,trunc(ih*min(64/(iw*sar),64/ih)*1/2)*2)':flags=bicubic,format=yuva420p";
+      const fit = "scale=w='max(2,trunc(iw*sar*min(64/(iw*sar),64/ih)*1/2+1e-9)*2)':h='max(2,trunc(ih*min(64/(iw*sar),64/ih)*1/2+1e-9)*2)':flags=bicubic,format=yuva420p";
       const over = "overlay=x='(W-w)/2':y='(H-h)/2':eof_action=pass";
       const sound = (seconds: string) => `aresample=first_pts=0,atrim=start=0:duration=${seconds},asetpts=PTS-STARTPTS`;
       const stereo = "aformat=sample_rates=48000:channel_layouts=stereo";
@@ -1287,7 +1328,7 @@ describe("render", () => {
             `[2:a]${sound("1.266667")},${stereo},adelay=131200S:all=1[a14]`,
             `color=c=0x00FF00@0.5:s=64x64:r=30:d=0.333333,format=yuva420p,${fit},setpts=PTS+round(0.166667/TB)[c15]`,
             `[s13][c15]${over}:enable='between(t,0.165667,0.5)'[s16]`,
-            `[3:v]trim=duration=0.333333,setpts=(PTS-STARTPTS),${fit},setpts=PTS+round(0.833333/TB)[v17]`,
+            `[3:v]trim=duration=0.333333,setpts=(PTS-STARTPTS),setsar=1,${fit},setpts=PTS+round(0.833333/TB)[v17]`,
             `[s16][v17]${over}:enable='between(t,0.832333,1.166667)'[s18]`,
             `[4:v]trim=duration=0.333333,setpts=(PTS-STARTPTS),${fit},fade=t=out:st=0.233333:d=0.1:alpha=1,setpts=PTS+3.166667/TB[v19]`,
             `[s18][v19]${over}:enable='between(t,3.165667,3.5)'[s20]`,
@@ -1306,11 +1347,11 @@ describe("render", () => {
           "-ss 1.433333 -t 0.833333 -i red.mp4 -ss 2 -t 0.333333 -i red.mp4",
         ]);
         expect(parts.map(part => createHash("sha256").update(part.graph).digest("hex"))).toEqual([
-          "cee55d0f5b7b5bc19c65e5fdec89b3f48570c837c47053537b93ebed8131c652",
-          "f4e3db743be7329e4ec39ee8aa7b8df19fe7bba7f1d117fcf281c9bb52d1ad80",
-          "03afb5df98974ff3c0d10e827501f4d83a4b483b7d90f728dda2648c6a3c9097",
-          "471e44f09a4fda7efa6126d1bf2b36f78f7babe6be799d685953009d01fc5871",
-          "dbb619ef95e4e9ec2d79ed46878f1c5f3723301f91308e647603c7547c4ce7a8",
+          "25781bfa069564cc43f63d8c2039f7c916da721d98cfda2658b7b7dbc60f9a4c",
+          "b1bb8ad2d606fb022446d194b5a1b0f0f3570610dec62450bfd089f749cd300a",
+          "cf903040fc1a174830db5acd32ddc11c1a4146c064c4f46f5619dbc7f26c31ff",
+          "93924223109fcfa16be39529d5f26e8466053e8a03e0f7c5585ce02c1badc309",
+          "8e8ceef9ceb9a7ce028a6e438a01579509c7da28d6bcd780be65e4f0624ab248",
         ]);
       };
       await unchanged();
@@ -2409,22 +2450,22 @@ it("encodes multi-split batches cleanly when an adelay audio clip precedes an ea
 }, 60_000);
 
 it("fits anamorphic footage by its displayed shape rather than its stored pixels", async () => {
-  const renderBounds = async (name: string, sar: string) => {
+  const renderBounds = async (name: string, sar: string, srcW = 144, srcH = 108, outW = 96, outH = 54) => {
     const clipFile = path.join(dir, `${name}.mp4`);
     const outFile = path.join(dir, `${name}-out.mp4`);
     await runCapture(resolveFfmpeg(), [
       "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-      "-f", "lavfi", "-i", `color=c=white:s=144x108:r=25:d=1,setsar=${sar}`,
+      "-f", "lavfi", "-i", `color=c=white:s=${srcW}x${srcH}:r=25:d=0.2,setsar=${sar}`,
       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", clipFile,
     ]);
-    const project = createProject("Anamorphic", { width: 96, height: 54, fps: 25, aspect: "custom" });
+    const project = createProject("Anamorphic", { width: outW, height: outH, fps: 25, aspect: "custom" });
     project.media.push({
       id: "m1", kind: "video", name: path.basename(clipFile), path: path.basename(clipFile),
-      duration: 1, fps: 25, width: 144, height: 108, hasAudio: false,
+      duration: 0.2, fps: 25, width: srcW, height: srcH, hasAudio: false,
     });
     const timeline: Timeline = {
       version: "draft", parent: null, projectId: project.id, name: "Main", background: "#000000", markers: [],
-      tracks: [{ id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [makeMediaClip("m1", 0, 1, 0)] }],
+      tracks: [{ id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [makeMediaClip("m1", 0, 0.2, 0)] }],
     };
     await renderRange(project, timeline, { start: 0, end: 0.2 }, outFile, {
       mediaRoot: dir, quality: "delivery", hwaccel: "none", pictureOnly: true,
@@ -2432,11 +2473,11 @@ it("fits anamorphic footage by its displayed shape rather than its stored pixels
     const { stdout } = await runCapture(resolveFfmpeg(), [
       "-v", "error", "-i", outFile, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-",
     ]);
-    expect(stdout.length).toBe(96 * 54);
-    let left = 96, right = -1, top = 54, bottom = -1;
-    for (let y = 0; y < 54; y++) {
-      for (let x = 0; x < 96; x++) {
-        if (stdout[y * 96 + x]! > 200) {
+    expect(stdout.length).toBe(outW * outH);
+    let left = outW, right = -1, top = outH, bottom = -1;
+    for (let y = 0; y < outH; y++) {
+      for (let x = 0; x < outW; x++) {
+        if (stdout[y * outW + x]! > 200) {
           if (x < left) left = x;
           if (x > right) right = x;
           if (y < top) top = y;
@@ -2449,4 +2490,6 @@ it("fits anamorphic footage by its displayed shape rather than its stored pixels
 
   expect(await renderBounds("anamorphic-4-3", "4/3")).toEqual({ left: 0, width: 96, top: 0, height: 54 });
   expect(await renderBounds("square-1-1", "1")).toEqual({ left: 12, width: 72, top: 0, height: 54 });
+  // Exact 16:9 NTSC DV (720x480 SAR 32:27): float rounding of iw*sar*fit must not drop 2 px.
+  expect(await renderBounds("ntsc-dv-16-9", "32/27", 720, 480, 960, 540)).toEqual({ left: 0, width: 960, top: 0, height: 540 });
 });

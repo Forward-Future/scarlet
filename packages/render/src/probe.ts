@@ -86,7 +86,7 @@ interface FfprobeStream {
   bits_per_raw_sample?: string;
   tags?: { rotate?: string; alpha_mode?: string; ALPHA_MODE?: string } & Record<string, string | undefined>;
 }
-export interface FfprobeOutput {
+interface FfprobeOutput {
   streams?: FfprobeStream[];
   format?: { start_time?: string; duration?: string; bit_rate?: string; format_name?: string; tags?: Record<string, string | undefined> };
 }
@@ -122,6 +122,14 @@ export function parseRate(rate: string | undefined): number {
  */
 export const storedAsShown = (probe: Pick<ProbeResult, "rotation" | "displayMatrix" | "isStillImage">) =>
   !probe.isStillImage && !probe.displayMatrix && Math.abs(probe.rotation) % 360 === 0;
+
+/** The video stream's sample aspect ratio as shown (what FFmpeg's `sar` is after autorotate): 1 when absent or unknown. */
+export function sampleAspectRatio(probe: ProbeResult | undefined): number {
+  const stream = (probe?.raw as FfprobeOutput | undefined)?.streams?.find(s => s.codec_type === "video" && !s.disposition?.attached_pic);
+  const parsed = parseRate(stream?.sample_aspect_ratio?.replace(":", "/"));
+  const sar = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  return probe && Math.abs(probe.rotation) % 180 === 90 ? 1 / sar : sar;
+}
 
 /** The unaltered source must carry the same picture and display properties as the compositor's square-pixel canvas. */
 export function matchesCanvasFormat(probe: ProbeResult): boolean {

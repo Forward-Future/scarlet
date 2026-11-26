@@ -7,7 +7,7 @@ import type { Clip, MediaAsset, MediaClip, Timeline, TimeRange } from "@scarlet/
 import { effectKind } from "./effects.js";
 import { fnum } from "./exec.js";
 import { clipPlacement, type Placement } from "./graphTransform.js";
-import { hasIndexedAvc, matchesCanvasFormat, parseRate, type FfprobeOutput, type ProbeResult } from "./probe.js";
+import { hasIndexedAvc, matchesCanvasFormat, sampleAspectRatio, type ProbeResult } from "./probe.js";
 import type { TransitionMotion } from "./transitions.js";
 
 export function hasIndexedClock(source: ProbeResult | undefined, fps: number | undefined): source is ProbeResult {
@@ -71,13 +71,7 @@ export async function adjacentPictureReads(
 function fittedSize(iw: number, ih: number, W: number, H: number, scale: number) {
   const fit = Math.min(W / iw, H / ih);
   const s = Number(fnum(scale));
-  return { w: Math.max(2, Math.trunc(iw * fit * s / 2) * 2), h: Math.max(2, Math.trunc(ih * fit * s / 2) * 2) };
-}
-
-/** The video stream's sample aspect ratio, as FFmpeg's `sar`: 1 when absent or unknown ("0:1"). */
-function sampleAspectRatio(probe: ProbeResult | undefined): number {
-  const stream = (probe?.raw as FfprobeOutput | undefined)?.streams?.find(s => s.codec_type === "video" && !s.disposition?.attached_pic);
-  return parseRate(stream?.sample_aspect_ratio?.replace(":", "/")) || 1;
+  return { w: Math.max(2, Math.trunc(iw * fit * s / 2 + 1e-9) * 2), h: Math.max(2, Math.trunc(ih * fit * s / 2 + 1e-9) * 2) };
 }
 
 /**
