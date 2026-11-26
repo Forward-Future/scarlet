@@ -171,8 +171,16 @@ function opsOnWholeFrames(ctx: Ctx, projectId: string, body: ProposeChangeReques
     }
     if (op.op === "moveClip") return near(op, ["timelineIn"]);
     if (op.op === "splitClip") return near(op, ["at"]);
-    if (op.op === "addClip" && op.clip && typeof op.clip === "object") return { ...op, clip: near(op.clip, clipTimes) };
-    if (op.op === "updateClip" && op.patch && typeof op.patch === "object") return { ...op, patch: near(op.patch, clipTimes) };
+    // Crossfaded audio clips carry sub-frame fade overhangs centered on a cut join; snapping timelineIn/sourceIn/sourceOut
+    // independently shifts the overlap away from audioFadeIn/audioFadeOut and throws sound slightly out of sync.
+    const hasAudioFade = (o: Record<string, unknown>) =>
+      (typeof o.audioFadeIn === "number" && o.audioFadeIn > 0) || (typeof o.audioFadeOut === "number" && o.audioFadeOut > 0);
+    if (op.op === "addClip" && op.clip && typeof op.clip === "object") {
+      return hasAudioFade(op.clip as Record<string, unknown>) ? op : { ...op, clip: near(op.clip, clipTimes) };
+    }
+    if (op.op === "updateClip" && op.patch && typeof op.patch === "object") {
+      return hasAudioFade(op.patch as Record<string, unknown>) ? op : { ...op, patch: near(op.patch, clipTimes) };
+    }
     return op;
   }) };
 }

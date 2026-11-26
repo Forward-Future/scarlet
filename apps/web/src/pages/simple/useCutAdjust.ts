@@ -185,6 +185,8 @@ export function useCutAdjust({
     const ownRemoved = reviewingEdit.beforeCut.removed;
     const ownLen = ownRemoved.end - ownRemoved.start;
     if (ownLen <= 0.5 / fps) return;
+    // A rearranged interior cut that mapped onto 0:00 isn't an opening cut: its `before` footage doesn't start at 0:00.
+    if (reviewingEdit.at <= 0.5 / fps && ownRemoved.start > 1 / fps) return;
     const raw = cutAdjustBounds(timeline, reviewingEdit.at, ownLen, fps, media);
     if (!raw) return;
     const beforeDur = timelineDuration(beforeTimeline);
