@@ -598,14 +598,8 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const preparing = current.media.find(isPreparingMedia);
 
   const stage = useRef<HTMLElement>(null);
-  const [controlsIdle, setControlsIdle] = useState(true);
+  const [controlsIdle, setControlsIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => {
-    setControlsIdle(true);
-    return () => {
-      if (idleTimer.current !== undefined) { clearTimeout(idleTimer.current); idleTimer.current = undefined; }
-    };
-  }, [expanded]);
   const wakeFullscreenControls = useCallback(() => {
     if (!expanded) return;
     setControlsIdle(false);
@@ -615,6 +609,13 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       setControlsIdle(true);
     }, FULLSCREEN_IDLE_MS);
   }, [expanded]);
+  useEffect(() => {
+    if (expanded) wakeFullscreenControls();
+    else setControlsIdle(false);
+    return () => {
+      if (idleTimer.current !== undefined) { clearTimeout(idleTimer.current); idleTimer.current = undefined; }
+    };
+  }, [expanded, wakeFullscreenControls]);
   useEffect(() => {
     const sync = () => setExpanded(document.fullscreenElement === stage.current);
     const escape = (event: KeyboardEvent) => {
@@ -670,7 +671,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
     <section ref={stage} className="cut-preview" aria-label={view} data-expanded={expanded || undefined}
       data-idle={(expanded && controlsIdle) || undefined}
       onPointerMove={expanded ? wakeFullscreenControls : undefined}
-      onPointerDown={expanded && !controlsIdle ? wakeFullscreenControls : undefined}>
+      onPointerDown={expanded ? wakeFullscreenControls : undefined}>
       {!expanded && <AmbientLight stage={stage} monitor={monitor} />}
       {!expanded && simple.onPick && (source || cut || change || draftVersion) && <PictureMarkTools projectId={current.id} enabled={canMark} onStart={markFrame} />}
       <div className="watch-viewport">
@@ -744,7 +745,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
           </div>}
         </div>
       </div>
-      {(source || cut || change || draftVersion) && <div className="cut-transport" hidden={expanded}>
+      {(source || cut || change || draftVersion) && <div className="cut-transport">
         {selectedEdit && simple.compareHost && !original.unavailable && createPortal(editCompare, simple.compareHost)}
         {selectedEdit && simple.compareHost === undefined && <div className="thread-review-tools">
           <p className="timeline-edit-description" role="status">{selectedEdit.label}</p>
@@ -752,7 +753,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         </div>}
         {simple.above}
         <div>
-          <PlayerTimeline activeShortcuts={active} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
+          <PlayerTimeline activeShortcuts={active && !expanded} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: laneTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? laneTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             onAddTime={simple.shiftTimes && simple.onPick ? time => { seekFull(time); selectTime(time, "add"); } : undefined}

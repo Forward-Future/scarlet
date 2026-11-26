@@ -13708,31 +13708,52 @@ it("shows only the video in full screen, hides the transport and marking tools, 
   expect(editPanel()).not.toBeNull();
   const stage = container.querySelector<HTMLElement>(".cut-preview")!;
   const transport = container.querySelector<HTMLElement>(".cut-transport")!;
-  expect(transport.hidden).toBe(false);
+  const zoomText = () => container.querySelector<HTMLElement>(".timeline-zoom-level")?.textContent;
+  expect(container.contains(transport)).toBe(true);
   expect(container.querySelector(".picture-mark-tools")).not.toBeNull();
   expect(container.querySelector(".ambient-light")).not.toBeNull();
+
+  // Start marking and place a mark on the frame so full screen hiding `.picture-marks` is non-vacuous.
+  await press("m");
+  await act(async () => { usePictureMarksStore.getState().add(PRJ, { kind: "point", box: { x: 0.5, y: 0.5, w: 0, h: 0 } }); });
+  expect(usePictureMarksStore.getState().marking).toBe(PRJ);
+  expect(container.querySelector(".picture-marks")).not.toBeNull();
+  expect(container.querySelector(".picture-mark-point")).not.toBeNull();
+  const zoomBefore = zoomText();
+  expect(zoomBefore).toMatch(/^\d+%$/);
 
   vi.useFakeTimers();
   try {
     await click(container.querySelector('button[aria-label="Full screen"]')!);
     await act(async () => {});
     expect(stage.dataset.expanded).toBe("true");
-    expect(stage.dataset.idle).toBe("true");
-    // The edit card and timeline stay mounted so their state and shortcuts survive, while hidden from view.
-    expect(transport.hidden).toBe(true);
+    // Entering full screen shows the pills first, then fades them after 2 s of stillness.
+    expect(stage.dataset.idle).toBeUndefined();
+    // The transport, edit card and timeline stay mounted (laid out, hidden by CSS).
+    expect(container.contains(transport)).toBe(true);
     expect(editPanel()).not.toBeNull();
     expect(container.querySelector(".timeline-panel")).not.toBeNull();
-    // Ambient light, drawing tools and drawn marks are out of full screen, and M does nothing while it is on.
+    // Ambient light, drawing tools and drawn marks step aside, marking stops, and M does nothing.
     expect(container.querySelector(".ambient-light")).toBeNull();
     expect(container.querySelector(".picture-mark-tools")).toBeNull();
     expect(container.querySelector(".picture-marks")).toBeNull();
+    expect(usePictureMarksStore.getState().marking).toBeNull();
     await press("m");
     expect(usePictureMarksStore.getState().marking).toBeNull();
     expect(container.querySelector(".picture-marks")).toBeNull();
+    // Hidden timeline shortcuts do not act while full screen is on.
+    await press("+");
+    expect(zoomText()).toBe(zoomBefore);
 
-    // Moving the pointer brings the player's pills back, and 2 s of stillness hides them again.
+    // 2 s of stillness fades the pills.
+    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    expect(stage.dataset.idle).toBeUndefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(stage.dataset.idle).toBe("true");
+
+    // A press while idle wakes the pills again and restarts the 2 s timer.
     await act(async () => {
-      stage.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 120, clientY: 80 }));
+      stage.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 120, clientY: 80 }));
     });
     expect(stage.dataset.idle).toBeUndefined();
     await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
@@ -13740,16 +13761,30 @@ it("shows only the video in full screen, hides the transport and marking tools, 
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(stage.dataset.idle).toBe("true");
 
-    // Leaving full screen brings the transport, drawing tools and ambient light back, and M marks again.
+    // Moving the pointer also wakes the pills, and 2 s of stillness hides them again.
+    await act(async () => {
+      stage.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 120, clientY: 80 }));
+    });
+    expect(stage.dataset.idle).toBeUndefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(stage.dataset.idle).toBe("true");
+
+    // Leaving full screen brings the drawing tools, ambient light and resting mark back, and timeline zoom + M work again.
     await click(container.querySelector('button[aria-label="Exit full screen"]')!);
     await act(async () => {});
     expect(stage.dataset.expanded).toBeUndefined();
     expect(stage.dataset.idle).toBeUndefined();
-    expect(transport.hidden).toBe(false);
+    expect(container.contains(transport)).toBe(true);
     expect(editPanel()).not.toBeNull();
     expect(container.querySelector(".timeline-panel")).not.toBeNull();
     expect(container.querySelector(".picture-mark-tools")).not.toBeNull();
     expect(container.querySelector(".ambient-light")).not.toBeNull();
+    // Marking ended on unmount, while the drawn mark resting on the frame returns.
+    expect(usePictureMarksStore.getState().marking).toBeNull();
+    expect(container.querySelector(".picture-marks")).not.toBeNull();
+    expect(container.querySelector(".picture-mark-point")).not.toBeNull();
+    await press("+");
+    expect(zoomText()).not.toBe(zoomBefore);
     await press("m");
     expect(usePictureMarksStore.getState().marking).toBe(PRJ);
   } finally {
