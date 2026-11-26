@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { desktop } from "../../lib/desktop";
+import { ReportProblemDialog } from "./ReportProblem";
 
 export function StartupRecovery({ title, detail, showLogs = false }: { title: string; detail: string; showLogs?: boolean }) {
   const [feedback, setFeedback] = useState("");
+  const [reporting, setReporting] = useState(false);
 
   async function openLogs() {
     try {
@@ -31,9 +33,11 @@ export function StartupRecovery({ title, detail, showLogs = false }: { title: st
         <div className="flex flex-wrap gap-2">
           {showLogs && <button className="btn-ghost" onClick={openLogs}>Open logs</button>}
           <button className="btn-ghost" onClick={copyDiagnostics}>Copy diagnostics</button>
+          <button className="btn-ghost" onClick={() => setReporting(true)}>Report this problem</button>
         </div>
         {feedback && <p role="status" className="text-muted">{feedback}</p>}
       </section>
+      <ReportProblemDialog open={reporting} onClose={() => setReporting(false)} context={`${title}\n${detail}`} />
     </main>
   );
 }

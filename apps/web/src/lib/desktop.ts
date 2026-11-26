@@ -143,6 +143,17 @@ function listenFor<T>(name: string, event: string, cb: (payload: T) => void) {
   });
 }
 
+/** A saved problem report: where its .zip is, and what the issue quotes. */
+export interface ProblemReport {
+  path: string;
+  version: string;
+  os: string;
+  osVersion: string | null;
+  arch: string;
+  /** The newest warning and error lines from the log, already cleaned, oldest first. */
+  recentProblems: string[];
+}
+
 export interface StorageSize { bytes: number; files: number; estimated: boolean }
 export interface DeveloperStorage extends StorageSize { kind: "cargo" | "scratch"; path: string }
 
@@ -201,6 +212,8 @@ export const desktop = {
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   /** Save the logs and a system report as one .zip the editor picks a place for. Null when cancelled. */
   exportLogs: () => invoke<string | null>("export_logs"),
+  /** Save a problem report (the logs with the editor's words) in Downloads, and say what to quote in the issue. */
+  reportProblem: (description: string) => invoke<ProblemReport>("report_problem", { description }),
   pickFile: (title: string) => invoke<string | null>("plugin:dialog|open", { options: { title, multiple: false, directory: false } }),
   pickFolder: (title: string) => invoke<string | null>("plugin:dialog|open", { options: { title, directory: true, multiple: false } }),
   installCrisperModel: (directory: string) => invoke<void>("install_crisper_model", { directory }),
@@ -223,6 +236,10 @@ export const desktop = {
   },
   async onHostStatus(cb: (s: HostStatus) => void): Promise<Unlisten> {
     return listenFor("host-status", "host://status", cb);
+  },
+  /** Help → Report a Problem… in the menu bar. */
+  async onReportProblem(cb: () => void): Promise<Unlisten> {
+    return listenFor("report-problem", "report-problem://open", () => cb());
   },
 };
 

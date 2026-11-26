@@ -1,5 +1,8 @@
 //! "Export logs…" (Settings → Advanced): one .zip a tester can send to whoever is helping them.
 //! It holds the log folder and a short system report. No media, projects or database.
+//!
+//! "Report a problem…" (Help menu, Settings → Advanced, and the screen a crash leaves) saves the same bundle with the
+//! editor's own words in it, straight to Downloads, and hands the window a short summary for the issue it opens.
 
 mod sanitize;
 mod zip;
@@ -15,13 +18,26 @@ use zip::Zip;
 const README: &str = "Scarlet logs\n\n\
 system.json: Scarlet version, OS, engine and CLI status, and desktop settings.\n\
 logs/: UTC event times, operations, and allowlisted diagnostic fields from the desktop log.\n\
+report.txt (in a problem report): what the editor wrote about the problem.\n\
 Search for a task id (tsk_...) to follow an edit, or for a request id to follow a transfer.\n\n\
 Not included: videos, projects, transcripts, the project database or sign-in tokens.\n";
 
+/// Lines of the newest warnings and errors a problem report quotes in the issue it opens.
+const RECENT_PROBLEMS: usize = 12;
+/// A line quoted there is cut to this many characters: the whole line is in the .zip.
+const PROBLEM_LINE_CHARS: usize = 300;
+/// What the editor wrote is kept to this many characters.
+const DESCRIPTION_CHARS: usize = 5000;
+
+/// A dated file name (UTC): `scarlet-logs-2026-11-06-1432.zip`.
+fn dated_name(prefix: &str) -> String {
+    let (y, mo, d, h, mi, _) = crate::util::civil_from_unix(crate::util::unix_now().as_secs() as i64);
+    format!("{prefix}-{y:04}-{mo:02}-{d:02}-{h:02}{mi:02}.zip")
+}
+
 /// File name suggested in the Save dialog: `scarlet-logs-2026-11-06-1432.zip` (UTC).
 fn suggested_name() -> String {
-    let (y, mo, d, h, mi, _) = crate::util::civil_from_unix(crate::util::unix_now().as_secs() as i64);
-    format!("scarlet-logs-{y:04}-{mo:02}-{d:02}-{h:02}{mi:02}.zip")
+    dated_name("scarlet-logs")
 }
 
 /// Regular files in the log folder, oldest first (rotated logs before the live one).
@@ -38,34 +54,60 @@ fn log_files(dir: &Path) -> Vec<PathBuf> {
     files.into_iter().map(|(_, p)| p).collect()
 }
 
-fn build_bundle(log_dir: &Path, system: &serde_json::Value, token: Option<&str>) -> std::io::Result<Vec<u8>> {
+/// A bundle, and the newest warning and error lines in it (already cleaned), oldest first.
+struct Bundle {
+    bytes: Vec<u8>,
+    recent_problems: Vec<String>,
+}
+
+fn is_problem(line: &str) -> bool {
+    line.contains("][ERROR] ") || line.contains("][WARN] ")
+}
+
+fn clip(line: &str, max: usize) -> String {
+    match line.char_indices().nth(max) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line.to_string(),
+    }
+}
+
+fn build_bundle(log_dir: &Path, system: &serde_json::Value, token: Option<&str>, description: Option<&str>) -> std::io::Result<Bundle> {
     let mut zip = Zip::new();
+    let mut recent_problems = std::collections::VecDeque::with_capacity(RECENT_PROBLEMS);
     zip.add("README.txt", README.as_bytes())?;
     let report = serde_json::to_string_pretty(system).unwrap_or_default();
     zip.add("system.json", redact(&report, token).as_bytes())?;
+    if let Some(words) = description.map(str::trim).filter(|w| !w.is_empty()) {
+        let text = format!("What happened, in the editor's words:\n\n{}\n", clip(words, DESCRIPTION_CHARS));
+        zip.add("report.txt", redact(&text, token).as_bytes())?;
+    }
     for path in log_files(log_dir) {
         let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
         match std::fs::read(&path) {
             Ok(bytes) => {
-                let events = support_log(&String::from_utf8_lossy(&bytes));
-                zip.add(&format!("logs/{name}"), redact(&events, token).as_bytes())?;
+                let events = redact(&support_log(&String::from_utf8_lossy(&bytes)), token);
+                for line in events.lines().filter(|l| is_problem(l)) {
+                    if recent_problems.len() == RECENT_PROBLEMS {
+                        recent_problems.pop_front();
+                    }
+                    recent_problems.push_back(clip(line, PROBLEM_LINE_CHARS));
+                }
+                zip.add(&format!("logs/{name}"), events.as_bytes())?;
             }
             Err(e) => zip.add(&format!("logs/{name}.unreadable.txt"), e.to_string().as_bytes())?,
         }
     }
-    Ok(zip.finish())
+    Ok(Bundle { bytes: zip.finish(), recent_problems: recent_problems.into() })
 }
 
-/// Ask where to save, then write the bundle there. Returns the saved path, or None when cancelled.
-#[tauri::command]
-pub async fn export_logs(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let Some(path) = crate::commands::pick_destination(&app, "Export logs", &suggested_name()).await? else { return Ok(None) };
+/// The system report both bundles carry, and the engine token to take out of everything in them.
+async fn system_report(state: &AppState, exported_at: &str) -> (serde_json::Value, Option<String>) {
     let mut engine = state.engine.status();
     let token = engine.token.take();
     let host = state.host.status().await;
     let config = std::fs::read_to_string(&state.paths.config_file).ok().and_then(|t| support_settings(&t));
     let system = serde_json::json!({
-        "exportedAt": crate::util::now_iso(),
+        "exportedAt": exported_at,
         "version": env!("CARGO_PKG_VERSION"),
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
@@ -75,15 +117,23 @@ pub async fn export_logs(app: AppHandle, state: State<'_, AppState>) -> Result<O
             "agents": host.agents.iter().map(|a| serde_json::json!({ "id": a.id, "installed": a.installed, "loggedIn": a.logged_in })).collect::<Vec<_>>() },
         "desktopConfig": config,
     });
+    (system, token)
+}
+
+/// Ask where to save, then write the bundle there. Returns the saved path, or None when cancelled.
+#[tauri::command]
+pub async fn export_logs(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let Some(path) = crate::commands::pick_destination(&app, "Export logs", &suggested_name()).await? else { return Ok(None) };
+    let (system, token) = system_report(&state, &crate::util::now_iso()).await;
     let log_dir = state.paths.log_dir.clone();
     // Never where to: the editor typed the file's name.
     log::info!("exporting logs");
     let saved = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let bytes = build_bundle(&log_dir, &system, token.as_deref()).map_err(|e| e.to_string())?;
+        let bundle = build_bundle(&log_dir, &system, token.as_deref(), None).map_err(|e| e.to_string())?;
         if path.parent().is_none() {
             return Err("Unsupported save destination".to_string());
         }
-        crate::util::write_file_atomic(&path, &bytes, false).map_err(|e| e.to_string())?;
+        crate::util::write_file_atomic(&path, &bundle.bytes, false).map_err(|e| e.to_string())?;
         Ok(path.to_string_lossy().into_owned())
     })
     .await
@@ -95,6 +145,50 @@ pub async fn export_logs(app: AppHandle, state: State<'_, AppState>) -> Result<O
         Err(e) => log::warn!("log export failed: {}", e.split(" at path ").next().unwrap_or(e)),
     }
     saved.map(Some)
+}
+
+/// What the window needs to open the issue: where the .zip went, and a short summary to quote.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemReport {
+    path: String,
+    version: &'static str,
+    os: &'static str,
+    os_version: Option<String>,
+    arch: &'static str,
+    recent_problems: Vec<String>,
+}
+
+/// Where a problem report is saved: Downloads, where the editor looks for a file to attach, else Scarlet's data folder.
+fn report_folder(data_dir: &Path) -> PathBuf {
+    dirs::download_dir().filter(|d| d.is_dir()).unwrap_or_else(|| data_dir.join("reports"))
+}
+
+/// Save a problem report (the log bundle with the editor's words) without asking where, and say what's in it.
+#[tauri::command]
+pub async fn report_problem(state: State<'_, AppState>, description: String) -> Result<ProblemReport, String> {
+    let (system, token) = system_report(&state, &crate::util::now_iso()).await;
+    let os_version = system["osVersion"].as_str().map(str::to_string);
+    let log_dir = state.paths.log_dir.clone();
+    let folder = report_folder(&state.paths.data_dir);
+    // Never the words: they are the editor's own, and they are in the .zip.
+    log::info!("saving a problem report ({} characters written)", description.trim().chars().count());
+    let saved = tauri::async_runtime::spawn_blocking(move || -> Result<(String, Vec<String>), String> {
+        let bundle = build_bundle(&log_dir, &system, token.as_deref(), Some(&description)).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+        let path = folder.join(dated_name("scarlet-report"));
+        crate::util::write_file_atomic(&path, &bundle.bytes, false).map_err(|e| e.to_string())?;
+        Ok((path.to_string_lossy().into_owned(), bundle.recent_problems))
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|saved| saved);
+    match &saved {
+        Ok((_, recent)) => log::info!("problem report saved with {} recent warnings and errors", recent.len()),
+        Err(e) => log::warn!("problem report failed: {}", e.split(" at path ").next().unwrap_or(e)),
+    }
+    let (path, recent_problems) = saved?;
+    Ok(ProblemReport { path, version: env!("CARGO_PKG_VERSION"), os: std::env::consts::OS, os_version, arch: std::env::consts::ARCH, recent_problems })
 }
 
 fn os_version() -> Option<String> {
@@ -146,7 +240,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("scarlet-desktop.log"), format!("{RECORD} [engine] [task] tsk_123456789abc running → queued · “spoken request sct_secret12345”\nprivate continuation\n").repeat(100)).unwrap();
         std::fs::write(dir.path().join("scarlet-desktop_2026-11-05.log"), format!("{RECORD} [engine] [activity] note.added by editor: private note\n{RECORD} task tsk_123456789abc (edit, codex): historical request\n{RECORD} [ui] [error] 02:03:04.123 +2ms alert message=\"private edit\"")).unwrap();
-        let bytes = build_bundle(dir.path(), &serde_json::json!({ "version": "test" }), None).unwrap();
+        let bytes = build_bundle(dir.path(), &serde_json::json!({ "version": "test" }), None, None).unwrap().bytes;
         // End of central directory: 4 entries (README, system.json, two logs).
         let eocd = &bytes[bytes.len() - 22..];
         assert_eq!(&eocd[..4], &0x06054b50u32.to_le_bytes());
@@ -196,7 +290,7 @@ mod tests {
     fn a_bundle_without_logs_still_has_the_report_with_the_token_removed() {
         let dir = tempfile::tempdir().unwrap();
         let system = serde_json::json!({ "version": "test", "engine": { "url": "http://127.0.0.1:5123/?token=abcdefgh1234" }, "desktopConfig": null });
-        let bytes = build_bundle(&dir.path().join("no-logs-yet"), &system, Some("abcdefgh1234")).unwrap();
+        let bytes = build_bundle(&dir.path().join("no-logs-yet"), &system, Some("abcdefgh1234"), None).unwrap().bytes;
         assert_eq!(entry_names(&bytes), ["README.txt", "system.json"]);
         let report = entry(&bytes, "system.json");
         assert!(report.contains("\"version\": \"test\"") && report.contains("token=[redacted]") && !report.contains("abcdefgh1234"), "{report}");
@@ -217,7 +311,7 @@ mod tests {
         if std::fs::read(&locked).is_ok() {
             return;
         }
-        let bytes = build_bundle(dir.path(), &serde_json::json!({}), None).unwrap();
+        let bytes = build_bundle(dir.path(), &serde_json::json!({}), None, None).unwrap().bytes;
         let mut names = entry_names(&bytes);
         names.sort();
         assert_eq!(names, ["README.txt", "logs/scarlet-desktop.log", "logs/scarlet-desktop_2026-11-05.log.unreadable.txt", "system.json"]);
@@ -240,7 +334,7 @@ mod tests {
         // Invalid UTF-8 and unstructured output from an older process are omitted.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("scarlet-desktop.log"), b"before \xff\xfe after sct_secret12345\n").unwrap();
-        let text = entry(&build_bundle(dir.path(), &serde_json::json!({}), None).unwrap(), "logs/scarlet-desktop.log");
+        let text = entry(&build_bundle(dir.path(), &serde_json::json!({}), None, None).unwrap().bytes, "logs/scarlet-desktop.log");
         assert!(text.is_empty());
     }
 
@@ -249,5 +343,42 @@ mod tests {
         let name = suggested_name();
         let shape = regex::Regex::new(r"^scarlet-logs-20\d\d-[01]\d-[0-3]\d-[0-2]\d[0-5]\d\.zip$").unwrap();
         assert!(shape.is_match(&name), "{name}");
+    }
+
+    #[test]
+    fn a_problem_report_carries_the_editors_words_and_quotes_the_newest_problems() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = String::new();
+        for i in 0..20 {
+            log += &format!("[2026-11-05][02:03:{i:02}][scarlet_desktop_lib::engine][WARN] [engine] [render] render failed code={i}\n");
+            log += &format!("[2026-11-05][02:03:{i:02}][scarlet_desktop_lib::engine][INFO] [engine] [http] GET /api/projects → 200 in 1ms\n");
+        }
+        log += "[2026-11-05][02:04:00][scarlet_desktop_lib::engine][ERROR] [ui] [error] 02:04:00.123 +2ms uncaught name=TypeError\n";
+        std::fs::write(dir.path().join("scarlet-desktop.log"), log).unwrap();
+        let words = "The export froze at 80% with key sk-ant-api03-AbCdEfGh1234 pasted";
+        let bundle = build_bundle(dir.path(), &serde_json::json!({ "version": "test" }), None, Some(words)).unwrap();
+        assert_eq!(entry_names(&bundle.bytes), ["README.txt", "system.json", "report.txt", "logs/scarlet-desktop.log"]);
+        let report = entry(&bundle.bytes, "report.txt");
+        assert!(report.contains("The export froze at 80%") && report.contains("[redacted]") && !report.contains("AbCdEfGh1234"), "{report}");
+        // Only warnings and errors, the newest twelve, oldest first, and never an ordinary request.
+        assert_eq!(bundle.recent_problems.len(), RECENT_PROBLEMS);
+        assert!(bundle.recent_problems.iter().all(|l| l.contains("[WARN]") || l.contains("[ERROR]")));
+        assert!(bundle.recent_problems[0].starts_with("[2026-11-05][02:03:09][WARN] [render]"), "{:?}", bundle.recent_problems);
+        assert!(bundle.recent_problems.last().unwrap().contains("[ui] [error] 02:04:00.123 +2ms uncaught"));
+        // Nothing written leaves report.txt out, and an export of logs never has one.
+        let blank = build_bundle(dir.path(), &serde_json::json!({}), None, Some("   ")).unwrap();
+        assert!(!entry_names(&blank.bytes).contains(&"report.txt".to_string()));
+    }
+
+    #[test]
+    fn a_quoted_line_is_cut_on_a_character_boundary() {
+        assert_eq!(clip("short", 10), "short");
+        assert_eq!(clip("ééééé", 3), "ééé…");
+    }
+
+    #[test]
+    fn suggests_a_dated_report_name() {
+        let shape = regex::Regex::new(r"^scarlet-report-20\d\d-[01]\d-[0-3]\d-[0-2]\d[0-5]\d\.zip$").unwrap();
+        assert!(shape.is_match(&dated_name("scarlet-report")));
     }
 }

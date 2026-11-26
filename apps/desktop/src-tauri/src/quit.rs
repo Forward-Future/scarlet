@@ -14,6 +14,8 @@ use crate::AppState;
 /// The menu item that stands in for the standard Quit, which ends Scarlet without a word.
 #[cfg(target_os = "macos")]
 pub const QUIT_MENU_ID: &str = "scarlet-quit";
+/// Help → Report a Problem…: the window opens its report form.
+pub const REPORT_PROBLEM_MENU_ID: &str = "scarlet-report-problem";
 
 /// What the engine says quitting would stop (GET /api/under-way).
 #[derive(Debug, Default, Deserialize, PartialEq)]
@@ -133,7 +135,7 @@ pub fn ask_before_quitting(app: &AppHandle) {
     });
 }
 
-/// The standard Mac menu, with a Quit that asks first in place of the standard one.
+/// The standard Mac menu, with a Quit that asks first in place of the standard one, and Report a Problem… under Help.
 #[cfg(target_os = "macos")]
 pub fn menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, MenuItemKind};
@@ -145,6 +147,12 @@ pub fn menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
             scarlet.remove(standard)?;
             scarlet.append(&quit)?;
         }
+    }
+    // Help gets one item: a way to tell the team what went wrong, with the logs to show it.
+    let report = MenuItem::with_id(app, REPORT_PROBLEM_MENU_ID, "Report a Problem…", true, None::<&str>)?;
+    match menu.get(tauri::menu::HELP_SUBMENU_ID) {
+        Some(MenuItemKind::Submenu(help)) => help.append(&report)?,
+        _ => menu.append(&tauri::menu::Submenu::with_items(app, "Help", true, &[&report])?)?,
     }
     Ok(menu)
 }

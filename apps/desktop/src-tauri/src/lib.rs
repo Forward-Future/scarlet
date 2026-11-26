@@ -119,6 +119,9 @@ pub fn run() {
     let builder = builder.menu(quit::menu).on_menu_event(|app, event| {
         if event.id() == quit::QUIT_MENU_ID {
             quit::ask_before_quitting(app);
+        } else if event.id() == quit::REPORT_PROBLEM_MENU_ID {
+            use tauri::Emitter;
+            let _ = app.emit("report-problem://open", ());
         }
     });
     let app = builder
@@ -180,6 +183,7 @@ pub fn run() {
             commands::desktop_info,
             commands::save_editor_model,
             logs::export_logs,
+            logs::report_problem,
             storage::measure_project_storage,
             storage::developer_storage,
             updates::update_status,

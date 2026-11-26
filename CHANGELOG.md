@@ -4,6 +4,11 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 26, 2026
+
+- When something goes wrong, you can now report it from Help › Report a Problem…, from Settings › Advanced, or from the screen Scarlet shows when a page breaks. Say what happened and Scarlet saves its logs (no videos, projects, transcripts or sign-ins) and opens a filled-in report on GitHub for you to check, attach the file to and post.
+- A page that breaks now says so with Reload and Report this problem, instead of an empty or technical error screen.
+
 ## November 24, 2026
 
 - Scarlet can now edit with models running on your own computer through Ollama or LM Studio, or with hosted models through OpenRouter. Set them up under Other providers in Settings › Models: each shows up in the model selector only once it has models ready, and OpenRouter's models stay out of the selector until you turn on the ones you want.

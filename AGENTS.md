@@ -52,6 +52,8 @@ Use “model” in the interface for what the editor picks to run their requests
 
 Apply requested edits to the working timeline. Keep review and follow-up replies in their edit thread. “File this thread” files the entire thread. Each timeline marker and inline chat link previews an individual edit on the full project timeline.
 
+Report a problem (`ReportProblem.tsx`, the `report_problem` command in `apps/desktop/src-tauri/src/logs/`) is how an editor sends diagnostics when something goes wrong. It opens from Help › Report a Problem… in the Mac menu bar, Settings › Advanced, the screen a broken page leaves (`RouteErrorScreen`, Reload and Report this problem) and the startup problem screen. The editor writes what happened; Scarlet saves the Export logs bundle with their words in it to Downloads without asking where, shows it in the folder, and opens a GitHub issue on `Forward-Future/scarlet` filled in with their words, the error on screen, the version and system, and the newest cleaned warning and error lines (`problemIssueUrl`). Nothing is sent without the editor: they check the issue, drag the .zip in and post it. The bundle and the quoted lines go through the same allowlist and redaction as Export logs: no videos, projects, transcripts or sign-ins.
+
 ## Changelog
 
 `CHANGELOG.md` is what the editor reads in Settings › About and in the update button's hover. When a change alters what the editor sees or can do, add one plain sentence for it at the top of today's date section (`## November 14, 2026`), in the editor's words, with no file names or internals. Leave out tests, builds and tooling. Keep a line's words once written: the hover finds what an update brings by the lines this build doesn't have.

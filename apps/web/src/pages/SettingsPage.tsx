@@ -18,6 +18,7 @@ import { ModelSettings } from "../components/shell/ModelSettings";
 import { ProviderSettings } from "../components/shell/ProviderSettings";
 import { TaskModelsSettings } from "../components/shell/TaskModelsSettings";
 import { DesktopAgents, DesktopDiagnostics, ExportLogs } from "../components/shell/DesktopSettings";
+import { ReportProblemCard } from "../components/shell/ReportProblem";
 import { FfmpegSetupCard } from "../components/shell/FfmpegSetup";
 import { EditingToolsSettings } from "../components/shell/EditingToolsSettings";
 import { useUiStore } from "../stores/ui";
@@ -348,6 +349,7 @@ export function SettingsPage() {
         {tab === "about" && <AboutSettings />}
         {tab === "advanced" && (
           <>
+            <ReportProblemCard />
             <ExportLogs />
             <ServerSettingsForm section="advanced" />
             <DesktopDiagnostics />
