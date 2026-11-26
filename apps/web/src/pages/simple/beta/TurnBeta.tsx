@@ -474,8 +474,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     const stop = stoppable(run) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
     // Scarlet has a request under one of this block's rows: the band reads as the one it works on, on two lines.
     const worksUnder = !inside && !!request && run === owner && runs.some(r => nested.has(r.root) && isProjectEditTask(r.task) && stoppable(r));
-    // Project-wide Pause lives beside "Scarlet is editing" under the timeline. Stop stays on the message since it only
-    // stops this request.
+    // Stop stays on the message since it only stops this request.
     const stops = editsProject && !!stop;
     const editActions = stops ?
       <div className="unit-actions">

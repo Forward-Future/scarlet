@@ -120,18 +120,9 @@ it("finds and lights revisions inside the beta edits rail, open or folded, and d
   }
 });
 
-it("renders project-wide Pause beside Scarlet is editing and Resume when paused", async () => {
-  const onToggle = vi.fn();
-  await act(async () => root.render(<TimelineWorking tasks={[task("a")]} pause={{ paused: false, onToggle }} />));
-  const pauseBtn = container.querySelector<HTMLButtonElement>(".timeline-working-pause")!;
-  expect(pauseBtn.textContent).toBe("Pause");
-  await act(async () => pauseBtn.click());
-  expect(onToggle).toHaveBeenCalledTimes(1);
-
-  await act(async () => root.render(<TimelineWorking tasks={[]} pause={{ paused: true, onToggle }} />));
-  expect(container.querySelector(".timeline-working-paused")?.textContent).toBe("Editing paused");
-  const resumeBtn = container.querySelector<HTMLButtonElement>(".timeline-working-pause.is-resume")!;
-  expect(resumeBtn.textContent).toBe("Resume");
-  await act(async () => resumeBtn.click());
-  expect(onToggle).toHaveBeenCalledTimes(2);
+it("renders only the editing status button with no pause control on the timeline", async () => {
+  await act(async () => root.render(<TimelineWorking tasks={[task("a")]} />));
+  expect(container.querySelector(".timeline-working")?.textContent).toBe("Scarlet is editing");
+  expect(container.querySelector(".timeline-working-pause")).toBeNull();
+  expect(container.querySelectorAll("button")).toHaveLength(1);
 });
