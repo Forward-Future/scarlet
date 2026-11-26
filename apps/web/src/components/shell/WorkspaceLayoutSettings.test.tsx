@@ -278,20 +278,15 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".timeline-working-pause")).toBeNull();
     expect(container.querySelector(".queue-editing-action")?.textContent).toBe("Resume");
 
-    // #13: Clicking the Working edit ("captions") shows the slim Working card with Stop.
+    // #13: Clicking the Working edit ("captions") shows no card above the timeline until its new version lands, as in
+    // the default layout: its row in Working says what Scarlet is doing with it.
     const workingBtn = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot button.simple-edit")]
       .find(b => b.textContent?.includes("captions"))!;
     expect(workingBtn).toBeTruthy();
     await act(async () => workingBtn.click());
     await act(async () => {});
-    const workingCard = container.querySelector(".edit-card.is-working")!;
-    expect(workingCard).not.toBeNull();
-    expect(workingCard.textContent).toContain("captions");
-    expect(workingCard.textContent).toContain("Scarlet is revising this");
-    const stopBtn = workingCard.querySelector<HTMLButtonElement>(".working-card-btn")!;
-    expect(stopBtn.textContent).toBe("Stop");
-    await act(async () => stopBtn.click());
-    expect(cancelSpy).toHaveBeenCalledWith("task_beta_revise");
+    expect(container.querySelector(".edit-card")).toBeNull();
+    expect(container.textContent).not.toContain("Scarlet is revising this");
 
     // #14 & #3: Safe edits sit directly below flagged edits with no filter bar, and Keep lingers briefly before moving cleanly to Done without duplicating.
     expect(container.querySelector(".review-filter-bar")).toBeNull();

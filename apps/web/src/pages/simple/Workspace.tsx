@@ -65,7 +65,7 @@ import { SimpleHeader } from "./SimpleHeader";
 import { TRANSCRIPT_RAIL_MIN, TranscriptRail } from "./TranscriptRail";
 import { savedRewording, saveRewording } from "./rewordingStorage";
 import { savedCollapsed, savedDockList, savedOpenLists, saveCollapsed, saveDockList, saveOpenLists } from "./openListsStorage";
-import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError, WorkingEditCard } from "./ReviewCards";
+import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError } from "./ReviewCards";
 import { ReviewDock } from "./ReviewDock";
 import { REVIEW_RAIL_MIN, ReviewRail, sideRailWidth } from "./ReviewRail";
 import { RailStore, ReviewRailContext, type RailSection, type UnifiedRailRow } from "./railStore";
@@ -2629,17 +2629,6 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   const queueHint = !editingPaused && queued[0] ? waitHint(queued[0]) : undefined;
   const queueWaitsOn = !editingPaused && queued[0] ? waitsOnEditor(queued[0]) : undefined;
   const nextQueuedId = !editingPaused && queued[0] && !queueWaitsOn ? queued[0].id : undefined;
-  // Opening an edit Scarlet is currently revising shows a slim status card above the timeline with its name and Stop.
-  const workingCard = beta && reviewingEdit && !reviewingEdit.rejected && !leavingNow && shownChange && focusThread && editSentBack
-    ? (() => {
-      const label = (reviewingEdit.reason && reviewingEdit.summary) || reviewingEdit.label;
-      const status = editRevisionTask?.state === "waiting_for_user" ? "Needs your answer"
-        : editRevisionTask?.state === "queued" ? (editRevision?.id === nextQueuedId ? "Up next" : "Queued")
-        : "Scarlet is revising this";
-      return <WorkingEditCard label={label} status={status} asking={editRevisionTask?.state === "waiting_for_user"}
-        onAnswer={editRevisionTask?.state === "waiting_for_user" ? () => actions.reply(focusThread) : undefined}
-        onStop={editRevisionTask && runIsActive(editRevisionTask) ? () => void queueAction(cancelTask(editRevisionTask.id)).catch(() => {}) : undefined} />;
-    })() : undefined;
   // Exporting is the next step once the video has edits and nothing waits: no question, no pass, no flagged edit the
   // editor hasn't decided, and no request Scarlet is on or has waiting its turn. The header's Export is white until
   // this version of the video is exported (the editor approved it on 2026-11-23).
@@ -2977,7 +2966,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
         <div className="workspace-stage simple-stage">
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}
-          <CutPreview simple={{ seekFromMessage, typedTimes, marks: source ? [] : beforeCut ? (leavingNow ? [] : batchCutDots) : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? workingCard ?? editCard ?? callCard ?? suggestCard, foot: <><TimelineWorking tasks={timelineWork} rootOf={rootOf} />{undoFoot}</>,
+          <CutPreview simple={{ seekFromMessage, typedTimes, marks: source ? [] : beforeCut ? (leavingNow ? [] : batchCutDots) : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? editCard ?? callCard ?? suggestCard, foot: <><TimelineWorking tasks={timelineWork} rootOf={rootOf} />{undoFoot}</>,
             gaps: cutKey ? [...gaps, ...stagedGaps] : callGaps ?? (stagedGaps.length ? stagedGaps : undefined),
             skippedRanges: cutKey || callView || !stagedCalls.length
               ? joinedPlayer?.clock.removed && playedListen !== appliedListen ? [...joinedPlayer.clock.removed, ...stagedAround.map(c => c.removed)]

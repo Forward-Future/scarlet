@@ -293,26 +293,3 @@
 [data-new-layout] .simple-need-link { align-self: flex-start; display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 0; border: 0; background: none; color: var(--color-fg);
   font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 
-/* Slim card above the timeline when opening an edit Scarlet is currently revising. */
-[data-new-layout] .edit-card.is-working { padding: 10px 14px; }
-[data-new-layout] .working-card-bar { display: flex; align-items: center; gap: 8px; min-width: 0; }
-[data-new-layout] .working-card-badge { flex: none; position: relative; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
-  background: var(--color-raised); color: var(--color-fg); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-[data-new-layout] .working-card-badge.is-ring { background: none; }
-[data-new-layout] .working-card-badge::after { content: ""; position: absolute; inset: -1.2px; border-radius: 50%;
-  border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-[data-new-layout] .working-card-badge.is-ask::after { border-color: var(--color-warn); }
-@media (prefers-reduced-motion: no-preference) {
-  [data-new-layout] .working-card-badge:not(.is-ask)::after { animation: req-mark-turn 1s linear infinite; }
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-new-layout] .working-card-badge:not(.is-ask)::after { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
-}
-[data-new-layout] .working-card-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--color-fg); }
-[data-new-layout] .working-card-status { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--color-muted); }
-[data-new-layout] .working-card-status.is-ask { color: var(--color-warn); }
-[data-new-layout] .working-card-actions { flex: none; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
-[data-new-layout] .working-card-btn { height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--color-raised); color: var(--color-fg);
-  font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
-[data-new-layout] .working-card-btn:is(:hover, :focus-visible) { background: #343230; }
-[data-new-layout] .working-card-btn.is-ask { background: rgba(237, 194, 133, .16); color: var(--color-warn); }

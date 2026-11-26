@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- In the beta layout, an edit you send back to Scarlet to revise no longer shows a "Scarlet is revising this" card above the timeline; as in the default layout, its card comes back once the new version is ready.
 - In the beta layout, keeping, rejecting, or revising an edit now keeps its row briefly in place with its new status before smoothly fading and moving it to Working or Done.
 - In the beta layout, the chat and the Needs review column now start at the same width (until you drag either one).
 - When you stop talking to Scarlet, your words now wait in the message box so you can read and fix them before pressing Enter. Turn off "Review dictation before sending" in Settings › General to send them right away, as before.
