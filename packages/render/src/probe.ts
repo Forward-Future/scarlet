@@ -96,7 +96,7 @@ const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".
 const IMAGE_FORMATS = /(^|,)(image2|png_pipe|jpeg_pipe|webp_pipe|bmp_pipe|tiff_pipe|gif|heif|avif)($|,)/;
 
 /** MP4 carries the sample index and AVC decoder configuration in its headers. */
-export function hasIndexedAvc(asset: MediaAsset) {
+export function hasIndexedAvc(asset: Pick<MediaAsset, "kind" | "hasAlpha" | "originalPlaybackType">) {
   return asset.kind === "video" && asset.hasAlpha === false &&
     /^video\/mp4; codecs="avc1[.,"]/i.test(asset.originalPlaybackType ?? "");
 }

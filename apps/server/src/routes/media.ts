@@ -247,8 +247,10 @@ export function mediaRoutes(ctx: Ctx) {
     requireProjectHeader(ctx, c.req.param("id"));
     const { path } = await jsonBody(c, z.object({ path: z.string() }));
     if (!isAbsolute(path) || !(await stat(path).catch(() => null))?.isFile()) throw notFound("source file");
-    const hdr = (await ctx.render.probeMedia(path, c.req.raw.signal).catch(() => undefined))?.color?.hdr;
-    const jpeg = await ctx.render.extractFrame(path, 0, { width: 960, signal: c.req.raw.signal, hdr });
+    const probed = await ctx.render.probeMedia(path, c.req.raw.signal).catch(() => undefined);
+    // An MP4 camera original's index is read as the frame route reads it: the same picture, without scanning the file first.
+    const indexedMp4 = !!probed?.previewClock && hasIndexedAvc({ kind: probed.kind, hasAlpha: probed.hasAlpha, originalPlaybackType: probed.originalPlaybackType });
+    const jpeg = await ctx.render.extractFrame(path, 0, { width: 960, signal: c.req.raw.signal, hdr: probed?.color?.hdr, indexedMp4, fps: probed?.fps });
     return new Response(new Uint8Array(jpeg), { headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-store" } });
   });
 

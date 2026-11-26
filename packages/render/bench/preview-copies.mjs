@@ -1,8 +1,8 @@
 // How fast new footage becomes smooth to play: the 8 s 480p source chunk, the checkpointed 540p
 // source proxy, six thumbnails from the original and from the proxy, and the full waveform.
 //
-//   node packages/render/bench/preview-copies.mjs make-source <file.mp4>
-//     Writes a 32 s 3840x2160 30000/1001 H.264/AAC camera-like test recording (grain keeps it from
+//   node packages/render/bench/preview-copies.mjs make-source <file.mp4> [seconds]
+//     Writes a 32 s (or longer) 3840x2160 30000/1001 H.264/AAC camera-like test recording (grain keeps it from
 //     compressing like a flat test card). Keep it outside the repo.
 //   node packages/render/bench/preview-copies.mjs pass <source> [--dist <render dist dir>]
 //     One cold pass in this process; prints timings and fingerprints of every output as JSON.
@@ -82,9 +82,10 @@ const stats = values => {
 
 if (mode === "make-source") {
   assert(source, "Give the output file");
+  const seconds = String(Number(rest[0] ?? 32.07));
   await run("ffmpeg", ["-v", "error", "-nostdin", "-y",
-    "-f", "lavfi", "-i", "testsrc2=s=3840x2160:r=30000/1001:d=32.07,noise=alls=12:allf=t",
-    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=32.07",
+    "-f", "lavfi", "-i", `testsrc2=s=3840x2160:r=30000/1001:d=${seconds},noise=alls=12:allf=t`,
+    "-f", "lavfi", "-i", `sine=frequency=440:sample_rate=48000:duration=${seconds}`,
     "-c:v", "libx264", "-preset", "veryfast", "-b:v", "30M", "-maxrate", "40M", "-bufsize", "60M", "-g", "60",
     "-pix_fmt", "yuv420p", "-profile:v", "high", "-c:a", "aac", "-ac", "2", "-movflags", "+faststart", source], { maxBuffer: 1 << 26 });
   console.log(JSON.stringify(await frames(source)));
@@ -124,6 +125,28 @@ if (mode === "make-source") {
     sameOutputWithinA: stable(sides.A), sameOutputWithinB: stable(sides.B),
     outputsA: JSON.parse(sides.A.outs[0]), outputsB: JSON.parse(sides.B.outs[0]),
     distinctA: [...new Set(sides.A.outs)].map(o => JSON.parse(o)), distinctB: [...new Set(sides.B.outs)].map(o => JSON.parse(o)) }, null, 2));
+} else if (mode === "import-frame") {
+  // The import's first frame as the engine asks for it: probe, then the 960 px frame at 0 s, read by scanning the file
+  // ("scan") or through the MP4 index the probe found ("indexed"). One cold call per process.
+  const R = await import(pathToFileURL(fileURLToPath(new URL("../dist/index.js", import.meta.url))).href);
+  const start = performance.now();
+  const probe = await R.probeMedia(source);
+  const fields = R.probeToAssetFields(probe);
+  const indexed = rest[0] === "indexed" && !!probe.previewClock && probe.videoCodec === "h264" && probe.hasAlpha === false;
+  const jpeg = await R.extractFrame(source, 0, { width: 960, hdr: fields.color?.hdr, ...(indexed ? { indexedMp4: true, fps: fields.fps } : {}) });
+  console.log(JSON.stringify({ ms: performance.now() - start, indexed, jpeg: createHash("sha256").update(jpeg).digest("hex").slice(0, 16) }));
+} else if (mode === "import-frame-ab") {
+  const rounds = Number(rest[0] ?? 10);
+  const self = fileURLToPath(import.meta.url);
+  const sides = { scan: [], indexed: [] }, hashes = new Set();
+  for (let i = 0; i < rounds; i++) {
+    for (const side of i % 2 ? ["indexed", "scan"] : ["scan", "indexed"]) {
+      const { ms, jpeg } = JSON.parse((await run(process.execPath, [self, "import-frame", source, side])).stdout);
+      sides[side].push(ms);
+      hashes.add(jpeg);
+    }
+  }
+  console.log(JSON.stringify({ rounds, scan: stats(sides.scan), indexed: stats(sides.indexed), sameFrame: hashes.size === 1 }));
 } else {
   throw new Error("Usage: preview-copies.mjs make-source|pass|ab ...");
 }
