@@ -36,9 +36,9 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
     : need > 0 ? `${need} ${need === 1 ? "needs" : "need"} you`
     : optional > 0 ? `${optional} safe ${optional === 1 ? "edit" : "edits"}` : undefined;
   return <div className="simple-review-tabs" role="group" aria-label="Edit lists">
-    <button type="button" className="simple-review-tab simple-pass-need" aria-label="For you" aria-pressed={tab === "you"}
+    <button type="button" className="simple-review-tab simple-pass-need" aria-label="Needs review" aria-pressed={tab === "you"}
       title={forYouTitle} onClick={letGo(showNeeded)}>
-      For you
+      Needs review
       {total > 0 && (need > 0 && optional > 0
         ? <><span className="simple-review-tab-total" aria-hidden="true">{total}</span><span className="simple-review-tab-sep" aria-hidden="true">·</span><span className="simple-review-tab-count" aria-hidden="true">{need}</span></>
         : need > 0
@@ -58,7 +58,7 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
 
 /**
  * The fixed bottom review lists dock for the non-beta workspace.
- * Sits between `.simple-chat` (above) and `.composer-dock` (below) so the combined For you
+ * Sits between `.simple-chat` (above) and `.composer-dock` (below) so the combined Needs review
  * Priority list (flagged edits pinned on top, confident edits right below), Working, Done,
  * and See all lists stay fixed at the bottom while new messages flow above them.
  */
@@ -66,7 +66,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   store: ReviewDockStore;
   /** Thread ids in conversation order (oldest first) for deterministic tie-breaking. */
   threadIds: readonly string[];
-  /** Active tab/filter state (`undefined`/`"all"` = For you All, `"need"` = For you Needs you only, `"working"`, `"done"`). */
+  /** Active tab/filter state (`undefined`/`"all"` = Needs review All, `"need"` = Needs review Needs you only, `"working"`, `"done"`). */
   list: PassList;
   /** Number of requests in the chat above; an increase collapses held blank tab space. */
   laterRequests?: number;

@@ -91,7 +91,7 @@ function prepareFirstDecision(ctx: Ctx, change: Change, review: CutReview, index
 }
 
 /**
- * The waiting call the editor reaches after deciding `decided`, as Keep moves on For you: the next by number, else
+ * The waiting call the editor reaches after deciding `decided`, as Keep moves on Needs review: the next by number, else
  * the first by number. A call they have decided, or sent back to Scarlet, isn't waiting.
  */
 function nextWaitingCall(change: Change, decided?: number, sentBack: ReadonlySet<number> = new Set()): number | undefined {
@@ -305,7 +305,7 @@ function forwardChoicesToLivePass(ctx: Ctx, user: User, change: Change, body: Sa
     return saveCutChoices(ctx, user, live, { fromVersion: live.fromVersion, toVersion: live.toVersion,
       choices: [...choices].map(([index, choice]) => ({ index, choice })), applyWhenDone: schedule });
   }
-  throw conflict("cut_review_moved", "This pass has changed since. Open the call again from For you.");
+  throw conflict("cut_review_moved", "This pass has changed since. Open the call again from Needs review.");
 }
 
 /**

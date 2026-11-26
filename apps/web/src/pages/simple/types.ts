@@ -121,7 +121,7 @@ export interface ChatActions {
   /** Show the whole timeline, from a press on any request's band. */
   fitTimeline?(): void;
   /**
-   * The new layout's column of edits hears how many rows a request draws under For you. That can be more than it
+   * The new layout's column of edits hears how many rows a request draws under Needs review. That can be more than it
    * counts as waiting on the editor: a request about a cut or edit that stopped early keeps its row there, with its
    * Resume or Retry.
    */
@@ -170,8 +170,8 @@ export interface ChatActions {
 
 /**
  * Which of a request's lists is open. A request with nothing for the editor to review has one list, every edit
- * ("all"). One with review rows has three tabs: For you ("need", or none: it is the one shown until another is
- * pressed), Working and Done. There "all" is For you with low risk edits included, the edits Scarlet didn't flag listed
+ * ("all"). One with review rows has three tabs: Needs review ("need", or none: it is the one shown until another is
+ * pressed), Working and Done. There "all" is Needs review with low risk edits included, the edits Scarlet didn't flag listed
  * among the ones that wait, each in its place in the video: the timeline shows them as it does for a list of every edit.
  */
 export type OpenList = "all" | "need" | "working" | "done" | undefined;
@@ -180,7 +180,7 @@ export type PassList = [open: OpenList, setOpen: Dispatch<SetStateAction<OpenLis
 /**
  * A request about one cut or edit that is still in the chat, drawn directly under the row it is about. `key` is that
  * row's. `needs`: the request itself waits on the editor (it asks a question, or stopped early and offers Resume or
- * Retry), so its row stays in For you with it.
+ * Retry), so its row stays in Needs review with it.
  */
 export interface Nest { key: string; node: ReactNode; needs?: boolean; version?: string }
 export const noNests: readonly Nest[] = [];
@@ -188,7 +188,7 @@ export const noNests: readonly Nest[] = [];
 export type Spent = ReadonlyMap<string, string>;
 export const noSpent: Spent = new Map();
 
-/** Whether For you has listed this edit, or a version of it it replaced, so it keeps its row there once decided. */
+/** Whether Needs review has listed this edit, or a version of it it replaced, so it keeps its row there once decided. */
 export const listedBefore = (listed: ReadonlySet<string>, e: Omit<ThreadEdit, "at">) =>
   listed.has(editKey(e)) || e.previous.some(p => listed.has(editKey(p)));
 

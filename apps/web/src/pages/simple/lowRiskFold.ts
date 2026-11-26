@@ -1,11 +1,11 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { LINGER_FADE_MS } from "../../lib/reviewTabs";
 
-/** How long a low risk row takes to open into For you's list, or to close out of it. */
+/** How long a low risk row takes to open into Needs review's list, or to close out of it. */
 export const FOLD_MS = 220;
 const EASE = "cubic-bezier(.2, 0, 0, 1)";
 
-/** The rows that are in For you's list only while low risk edits are included. */
+/** The rows that are in Needs review's list only while low risk edits are included. */
 const LOW_ROWS = "li[data-low-risk]";
 
 const canMove = () => typeof window !== "undefined" && typeof Element !== "undefined" && typeof Element.prototype.animate === "function"
@@ -99,14 +99,14 @@ function fold(host: HTMLElement | null, way: "in" | "out", held: Held | undefine
 }
 
 /**
- * Low risk edits open into For you's list and close out of it, and nothing else moves: each row grows from nothing in
+ * Low risk edits open into Needs review's list and close out of it, and nothing else moves: each row grows from nothing in
  * its place, the row the editor was on stays where it was, and unticked the rows close before they leave. `shown` is
- * whether the list still draws them. Switching away from For you and back (`visible` false -> true) reloads the
- * existing list immediately without replaying the open animation, and leaving For you stops any close animation at
+ * whether the list still draws them. Switching away from Needs review and back (`visible` false -> true) reloads the
+ * existing list immediately without replaying the open animation, and leaving Needs review stops any close animation at
  * once. With motion reduced they are there or gone at once.
  */
 /**
- * A row on its way out of For you or Done closes as it fades, so the rows under it don't jump up when it goes. One that
+ * A row on its way out of Needs review or Done closes as it fades, so the rows under it don't jump up when it goes. One that
  * stays after all (⌘Z took its Keep back or a revision restarted it while it faded) is its own height again.
  */
 export function useLeavingRows(host: RefObject<HTMLElement | null>) {
@@ -137,7 +137,7 @@ export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean,
   useLayoutEffect(() => {
     const before = was.current;
     was.current = { on, visible };
-    // Animate only when low risk edits are opened into an already-visible For you list, never on a tab switch back.
+    // Animate only when low risk edits are opened into an already-visible Needs review list, never on a tab switch back.
     const opened = visible && before.visible && on && !before.on;
     if (!opened) return;
     const keep = held.current;
@@ -164,7 +164,7 @@ export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean,
 /**
  * The low risk line goes once there is no such edit left, as once the last of them is kept. It closes rather than vanishing, so the
  * rows under it glide up: `count` is what the line still says while it closes, and `leaving` that it is on its way out.
- * Switching away from For you (`shown = false`) hides the line immediately without animating.
+ * Switching away from Needs review (`shown = false`) hides the line immediately without animating.
  */
 export function useLowRiskLine(host: RefObject<HTMLElement | null>, count: number, shown = true) {
   const [left, setLeft] = useState<number>();
