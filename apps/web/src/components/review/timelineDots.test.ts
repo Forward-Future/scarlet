@@ -161,15 +161,15 @@ describe("gapLabel", () => {
 
 describe("bandLabel", () => {
   it("keeps the open edit's label whole while it fits its band, then just the amount, then nothing", () => {
-    expect(bandLabel("Took out · 7.2 s", 320)).toBe("Took out · 7.2 s");
+    expect(bandLabel("Cut · 7.2 s", 320)).toBe("Cut · 7.2 s");
     // A one-second cut zoomed with five seconds either side is a band a few dozen pixels wide.
-    expect(bandLabel("Took out · 1.4 s", 60)).toBe("1.4 s");
-    expect(bandLabel("Took out · 0.5 s", 30)).toBe("");
+    expect(bandLabel("Cut · 1.4 s", 60)).toBe("1.4 s");
+    expect(bandLabel("Cut · 0.5 s", 30)).toBe("");
     // A label with no amount is whole or absent, never cut off mid-word.
     expect(bandLabel("Audio", 60)).toBe("Audio");
     expect(bandLabel("Audio", 20)).toBe("");
     // Before the track is measured there is nothing to fit it to.
-    expect(bandLabel("Took out · 1.4 s", 0)).toBe("Took out · 1.4 s");
+    expect(bandLabel("Cut · 1.4 s", 0)).toBe("Cut · 1.4 s");
   });
 });
 

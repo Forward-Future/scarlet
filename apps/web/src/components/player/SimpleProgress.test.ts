@@ -2,8 +2,8 @@ import { expect, it } from "vitest";
 import { focusAround } from "./SimpleProgress";
 
 it("zooms to a change and shades it", () => {
-  expect(focusAround({ start: 100, end: 104 }, 3000, "Took out · 4.0 s")).toEqual({
-    view: { start: 95, end: 109 }, band: { start: 100, end: 104 }, bandLabel: "Took out · 4.0 s",
+  expect(focusAround({ start: 100, end: 104 }, 3000, "Cut · 4.0 s")).toEqual({
+    view: { start: 95, end: 109 }, band: { start: 100, end: 104 }, bandLabel: "Cut · 4.0 s",
   });
 });
 

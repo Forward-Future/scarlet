@@ -87,11 +87,11 @@ function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { c
   </div>;
 }
 
-/** Over a card's row while Before plays footage another cut took out: whose it is. */
+/** Over a card's row while Before plays footage another cut removed: whose it is. */
 function PlayingTakenOut({ at }: { at: string }) {
   return <div className="edit-card-switched" role="status">
     <span className="edit-card-switched-side">Before</span>
-    <span className="edit-card-switched-text">The cut at {at} took this part out.</span>
+    <span className="edit-card-switched-text">This part was cut at {at}.</span>
   </div>;
 }
 
@@ -312,7 +312,7 @@ export function CallCard({ projectId, pass, openCall, listening, callAt, callHis
         title={`v${callHistory.length}: ${callHistory.at(-1)!.reason ?? "Scarlet’s earlier version."}${callHistory.at(-1)!.note ? `\nYou: “${callHistory.at(-1)!.note}”` : ""}`} />}
       {/* What Keep would take out, struck, over Scarlet's reason. A revision that leaves the footage in has no such line. */}
       {callWords && !conflict && approves(openCall) === "cut" ? <div className="edit-card-text">
-        <CutWordsLine key={`what ${callKey}`} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength} verb="Takes out" />
+        <CutWordsLine key={`what ${callKey}`} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength} verb="Cut" />
         <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} /></div>
         : <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} />}
       {pass.handedOff && <MadeBy by={pass.handedOff} />}

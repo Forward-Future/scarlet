@@ -93,10 +93,10 @@ function LowRisk({ count, on, onToggle, leaving }: { count: number; on: boolean;
   leaving?: boolean }) {
   const edits = count === 1 ? "edit" : "edits";
   return <div className="simple-low-risk" inert={leaving || undefined} aria-hidden={leaving || undefined}>
-    <button type="button" role="switch" className="simple-low-risk-toggle" aria-checked={on} aria-label={`Include ${count} low risk ${edits}`}
+    <button type="button" role="switch" className="simple-low-risk-toggle" aria-checked={on} aria-label={`Include ${count} safe ${edits}`}
       aria-description={LOW_RISK_TIP} title={LOW_RISK_TIP} data-log-control="include-low-risk" onClick={letGo(onToggle)}>
       <span className="simple-low-risk-switch" aria-hidden="true" />
-      <span className="simple-low-risk-words">{count} low risk {edits}</span>
+      <span className="simple-low-risk-words">{count} safe {edits}</span>
     </button>
   </div>;
 }

@@ -13,7 +13,7 @@ type ExportQuality = RenderRequest["quality"] | "best";
 
 /** The export's quality levels, smallest first. Original quality encodes in software; High uses the computer's video encoder. */
 /** While the loaded timeline is behind the project's head, caption export waits for it. */
-export const LOADING_LATEST_EDIT = "Loading the latest edit before exporting captions…";
+export const LOADING_LATEST_EDIT = "Loading the latest version of the video before exporting captions…";
 
 const QUALITY: Record<ExportQuality, { label: string; hint: string }> = {
   preview: { label: "Compressed", hint: "A smaller file for sharing a draft. Softer picture." },
@@ -202,7 +202,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     {exported && <p className="mt-3 flex items-center gap-2 text-xs" role="status">
       {exportedCurrentEdit && <Icon name="check" />}
       <span className="truncate" title={exported.path} data-log-private>{fileBaseName(exported.path)}</span>
-      {!exportedCurrentEdit && <span className="shrink-0 text-muted">· Earlier edit</span>}
+      {!exportedCurrentEdit && <span className="shrink-0 text-muted">· Earlier version</span>}
       <button className="btn-quiet shrink-0" data-log-control="reveal-export" onClick={() => { setRevealError(""); void desktop.revealPath(exported.path).catch(e => setRevealError(errorMessage(e))); }}>Show in folder</button>
     </p>}
     <InlineError>{(failed || revealError) && <span data-log-private>{failed ? job.error : revealError}</span>}</InlineError>
@@ -216,7 +216,7 @@ function HandoffSummary({ summary }: { summary?: { bytes?: number; files: number
   if (!summary) return null;
   const { losses } = summary;
   return <div className="text-xs">
-    <p className="text-muted">A folder for finishing the edit in DaVinci Resolve, Final Cut Pro or Premiere Pro.</p>
+    <p className="text-muted">A folder for finishing the video in DaVinci Resolve, Final Cut Pro or Premiere Pro.</p>
     <ul className="mt-2 list-disc space-y-1 pl-4">
       <li>The timeline: cuts, tracks, zooms, volume, fades, markers and graphics</li>
       <li>A copy of the footage{summary.files ? <span className="text-muted"> · {summary.files} {summary.files === 1 ? "file" : "files"}{summary.bytes !== undefined ? `, ${fmtBytes(summary.bytes)}` : ""}</span> : null}</li>

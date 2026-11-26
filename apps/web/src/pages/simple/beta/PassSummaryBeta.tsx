@@ -218,7 +218,7 @@ export function OptionalLine({ count, open, onToggle, inPass }: { count: number;
       aria-description={LOW_RISK_TIP} onClick={letGo(onToggle)}
       onFocus={e => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}>
       <span className="simple-review-rest-chev" aria-hidden="true"><Icon name="chevron" size={11} /></span>
-      <span className="simple-review-rest-label">{count} low risk {count === 1 ? "edit" : "edits"}<span ref={mark} className="simple-review-rest-checks" aria-hidden="true"
+      <span className="simple-review-rest-label">{count} safe {count === 1 ? "edit" : "edits"}<span ref={mark} className="simple-review-rest-checks" aria-hidden="true"
         onPointerEnter={e => { if (e.pointerType !== "touch") setTip(true); }} onPointerLeave={() => setTip(false)}><Icon name="checks" size={13} /></span></span>
     </button>
     {tip && createPortal(<span ref={note} className="button-tip is-wrapping" aria-hidden>{LOW_RISK_TIP}</span>, document.body)}
@@ -585,13 +585,13 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const youLabel = pass && calls.length ? "Calls that need you" : "Edits that need you";
   const drawn: Drawn[] = rail ? [
       { id: "you", label: youLabel, rows: inListOrder(inPlace("you"), order) },
-      { id: "optional", label: "Low risk edits", rows: inListOrder(optional, order) },
+      { id: "optional", label: "Safe edits", rows: inListOrder(optional, order) },
       { id: "working", label: "With Scarlet", rows: inListOrder(inPlace("working"), order) },
       { id: "done", label: "Decided", rows: inListOrder(inPlace("done"), order) },
     ] : !tabbed ? (listed ? [{ id: "all", label: "Every edit", rows: entries }] : [])
     : tab === "you" ? [
       { id: "you", label: pass && calls.length ? "Calls that need you" : "Edits that need you", rows: inListOrder([...inPlace("you"), ...heldFrom("you")], order) },
-      ...(optionalOpen ? [{ id: "optional" as const, label: "Low risk edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
+      ...(optionalOpen ? [{ id: "optional" as const, label: "Safe edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
     ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided",
       rows: inListOrder(tab === "done" ? [...inPlace("done"), ...heldFrom("done")] : inPlace(tab), order) }];
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
@@ -1189,7 +1189,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       {some(inYou) ? rows("Edits that need you", inYou, "you", "you") : optional === 0 && <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
       {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
       {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
-      {optionalOpen && some(inOptional) && rows("Low risk edits", inOptional, "optional", "optional")}
+      {optionalOpen && some(inOptional) && rows("Safe edits", inOptional, "optional", "optional")}
     </>}
     {tabbed && tab === "working" && (countOf("working") > 0 ? rows("With Scarlet", e => place(e) === "working", undefined, "working")
       : <p className="simple-review-empty">{EMPTY_TAB.working}</p>)}

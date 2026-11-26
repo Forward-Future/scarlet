@@ -4436,7 +4436,7 @@ it("applies verified trims once and offers uncertain cuts at their remapped time
   const first = await call(); expect(first.status).toBe(201);
   const { changes } = await first.json();
   expect(changes.map((c: Change)=>c.state)).toEqual(["approved","ready"]);
-  expect(changes[0].description).toBe("Removed 2 s at 0:01.");
+  expect(changes[0].description).toBe("Cut 2 s at 0:01.");
   const saved = ctx.repos.changes.get(changes[1].id)!;
   expect(saved.cutReasons).toMatchObject([{ start: 5, end: 6, reason: "may be a demonstration", originalRange: { start:4.7, end:expect.closeTo(6.2) } }]);
   expect(saved.description).toBe("Review 1 optional dialogue cut");
@@ -4484,7 +4484,7 @@ it("applies verified trims once and offers uncertain cuts at their remapped time
   expect(ctx.repos.projects.get(project.id)!.head).toBe(head);
   await checkPassAudio(task.id);
   const completion = await api("POST", `/tasks/${task.id}/complete`, { state: "done", summary: "Removed the demonstration." });
-  expect((await completion.json()).task.summary).toContain("Removed 2 s at 0:01. Dialogue cuts are pending review.");
+  expect((await completion.json()).task.summary).toContain("Cut 2 s at 0:01. Dialogue cuts are pending review.");
   expect(ctx.repos.tasks.get(task.id)!.summary).not.toContain("Removed the demonstration");
   // What Scarlet said as it finished is kept beside the receipt, for the editor.
   expect(ctx.repos.tasks.get(task.id)!.reply).toBe("Removed the demonstration.");
@@ -4505,7 +4505,7 @@ it.each(["dialogue cuts", "whole timeline"])("finishes a first cut with its own 
   // Done the first time it says so: no second run of the request in between to replace its words.
   expect((await ended.json()).task).toMatchObject({ state: "done", repeatAudit: { remaining: 0, noFindings: true } });
   const done = ctx.repos.tasks.get(pass.id)!;
-  if (kind === "dialogue cuts") expect(done).toMatchObject({ reply: said, summary: expect.stringContaining("Removed 1 s") });
+  if (kind === "dialogue cuts") expect(done).toMatchObject({ reply: said, summary: expect.stringContaining("Cut 1 s") });
   else expect(done).toMatchObject({ summary: said });
 });
 
@@ -4546,7 +4546,7 @@ it("carries a part's staged cuts and their recommendations into the next part of
   expect(ctx.repos.changes.get(review.id)!.replacedBy).toBe(three.changes[1]!.id);
   await checkPassAudio(task.id);
   const completion = await api("POST", `/tasks/${task.id}/complete`, { state: "done" });
-  expect((await completion.json()).task.summary).toBe("Applied “Assemble”. Removed 3 s across 2 cuts. Dialogue cuts are pending review.");
+  expect((await completion.json()).task.summary).toBe("Applied “Assemble”. Cut 3 s across 2 cuts. Dialogue cuts are pending review.");
 });
 
 it("keeps the editor's calls through the pass's next part and applies them as soon as the pass finishes", async () => {

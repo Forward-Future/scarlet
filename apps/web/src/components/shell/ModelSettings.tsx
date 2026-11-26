@@ -154,7 +154,7 @@ export function ModelSettings({ onSignIn }: { onSignIn?: () => void } = {}) {
 
   return (
     <section className="card p-5">
-      <SectionTitle right={<ModelRefreshButton action={refresh} />}>Model picker</SectionTitle>
+      <SectionTitle right={<ModelRefreshButton action={refresh} />}>Model selector</SectionTitle>
       <ModelRefreshFeedback action={refresh} loadError={error} />
       {!choices.length && (status === "loading" ? <Loading label="Reading models…" /> :
         // Every model a signed-in agent offers is listed, so none at all means its list couldn't be read.

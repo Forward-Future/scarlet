@@ -57,7 +57,7 @@ impl HostManager {
         self.stop().await;
         let Some(mcp) = self.mcp.lock().unwrap().clone() else {
             log::error!("host not started: no MCP launcher (engine binary missing)");
-            let _ = self.app.emit("host://status", &HostStatus { error: Some("engine binary missing; agent host disabled".into()), ..Default::default() });
+            let _ = self.app.emit("host://status", &HostStatus { error: Some("engine binary missing; model host disabled".into()), ..Default::default() });
             return;
         };
         let (models, (timeout, stall), max_parallel) = {
@@ -179,7 +179,7 @@ impl HostManager {
             }
         };
         if !status.connected && status.error.is_none() {
-            status.error = Some("The local agent host is offline. Try again when it connects.".into());
+            status.error = Some("The local model host is offline. Try again when it connects.".into());
         }
         status
     }

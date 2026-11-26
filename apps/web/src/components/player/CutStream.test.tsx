@@ -175,7 +175,7 @@ it("starts a proposed draft by itself, from its top, wherever the editor was in 
   const { opened } = streams();
   usePlayerStore.setState({ time: 7 });
   await show(true);
-  expect(video().getAttribute("aria-label")).toBe("Proposed draft");
+  expect(video().getAttribute("aria-label")).toBe("Suggested video");
   expect(onStart).toHaveBeenCalledTimes(1);
   expect(opened.map(o => o.start)).toEqual([0]);
   expect(waiting()).toBe(true);
