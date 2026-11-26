@@ -244,7 +244,8 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
         stopHardware.abort();
         await hardwareLane;
         await sound?.stop();
-        return retry(error);
+        // Awaited here, so the finally below doesn't leave its rejection unheard while it stops the sound.
+        return await retry(error);
       }
       await hardwareLane;
       const parts: Part[] = [];
