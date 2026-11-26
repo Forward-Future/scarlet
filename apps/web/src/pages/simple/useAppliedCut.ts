@@ -207,6 +207,10 @@ export function useAppliedCut({ current, reviewingEdit, focusThread, threadTimel
   // isn't a cut: an edit that changes from one to the other when its revision lands isn't started again either.
   const playedApplied = useRef<{ pick: string; chosen: string }>(undefined);
   const heardPick = useRef<string>(undefined);
+  // The version the listen last played on. Taken up again on another one (the cut opens on an earlier or later version
+  // once a pass saves its next batch, or an earlier batch's cut beside it comes or goes), the playhead goes to the same
+  // footage there: its time on the version it was on is another moment on this one, and was often past the cut (#686).
+  const playedOn = useRef<{ pick: string; timeline: NonNullable<typeof beforeTimeline> }>(undefined);
   useLayoutEffect(() => {
     if (playedApplied.current?.pick !== openPick) playedApplied.current = undefined;
     if (heardPick.current !== openPick) heardPick.current = undefined;
@@ -217,6 +221,14 @@ export function useAppliedCut({ current, reviewingEdit, focusThread, threadTimel
       quietOpen.current = false;
       playedApplied.current = { pick: openPick, chosen };
       heardPick.current = openPick;
+      const was = playedOn.current?.pick === openPick ? playedOn.current.timeline : undefined;
+      if (again && was && beforeTimeline && was.version !== beforeTimeline.version) {
+        const time = usePlayerStore.getState().time;
+        const onto = makeTimeMap(was, beforeTimeline, fps);
+        const at = onto(time, "right") ?? onto(time, "left") ?? playedListen.from ?? playedListen.start;
+        if (Math.abs(at - time) > 1e-6) player.seek(at, true);
+      }
+      playedOn.current = beforeTimeline && { pick: openPick, timeline: beforeTimeline };
       return again ? player.audition(playedListen, fps, true) : player.audition(playedListen, fps);
     });
   }, [playedListen, fps, joinPending, appliedJoined?.version, openPick, shownSide?.take]); // eslint-disable-line react-hooks/exhaustive-deps
