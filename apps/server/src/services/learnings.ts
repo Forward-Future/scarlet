@@ -7,6 +7,7 @@ import { now } from "../db.js";
 import { clip } from "../logText.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { actorFor, logActivity, quote } from "./activity.js";
+import { flaggedCheckOf } from "./changes/editReviews.js";
 import { latestSkillEdit } from "./skills.js";
 import { createTask, editsDialogue, FINISHED_TASK } from "./tasks.js";
 import { taskFailureReason } from "../telemetry/failureReason.js";
@@ -104,6 +105,8 @@ const RECENT_DECISIONS = 40;
 const CITABLE_DECISIONS = 200;
 /** How many changes of each kind are read for decisions, newest first. */
 const DECISION_CHANGES = 40;
+/** How many unreviewed rules a single request can put in front of the editor at once. */
+const MAX_SUGGESTED_PER_REQUEST = 2;
 
 /** A decision as a check reads it: what it was about, what Scarlet measured, which skills made it and when it was made. */
 interface Decided extends LearningDecision { at: string; details: string[]; changeId?: string }
@@ -134,9 +137,12 @@ function recentDecisions(ctx: Ctx, limit: number): Decided[] {
   for (const change of recent("json_extract(json, '$.kept') IS NOT NULL")) {
     for (const k of change.kept ?? []) {
       const edit = edits(change)?.[k.spot];
+      const check = flaggedCheckOf(change, k.spot, k.check);
+      // Keeping an unflagged safe edit only clears the review list; it isn't a decision on a doubt Scarlet raised.
+      if (!check && !k.recheck) continue;
       out.push({ id: `kept:${change.id}:${k.spot}`, decision: "kept", label: k.label ?? edit?.label ?? change.description, projectId: change.projectId,
         threadId: k.threadId, ref: { changeId: change.id, spot: k.spot }, time: k.place?.range.start ?? edit?.range.start, at: k.at, changeId: change.id,
-        details: editDetails({ reason: edit?.reason, check: k.check ?? edit?.check }) });
+        details: editDetails({ reason: edit?.reason, check }) });
     }
   }
   for (const rejection of recent("json_extract(json, '$.rejects') = 1")) {
@@ -324,6 +330,9 @@ export function requireApprovedLearningEdit(skill: Skill, draft: TaskSkillDraft,
     "Save the rule in the editor’s approved wording, keeping the rest of the skill except for approved quotations. If another passage must change, quote it in your closing message for the editor to approve. If the rule needs different wording, ask the editor to reword it in Learnings.");
 }
 
+/** A rule normalized for duplicate checks: ignores case, quote styles, whitespace and trailing punctuation. */
+const ruleKey = (text: string) => plain(text).replace(/[.!?]+$/, "").trim();
+
 /**
  * A learning check offers a rule from the request it reads; the rule is that request's, with the editor's words and
  * what the skill already says that it would change. Offering the same rule again returns the first offer.
@@ -338,13 +347,35 @@ export function suggestLearning(ctx: Ctx, from: Task, body: SuggestLearningReque
   if (!skill) throw notFound(`a skill named "${body.skill}". Use skills_list to find the editor's skills`);
   const replaces = quotedFrom(skill, body.replaces);
   // The editor's decline stands: the same rule isn't put to them again for the same skill.
-  const rule = plain(body.rule);
-  if (ctx.repos.learnings.select("state = 'declined' AND json_extract(json, '$.skillId') = ?", [skill.id]).some(l => plain(l.rule) === rule))
+  const rule = ruleKey(body.rule);
+  const forSkill = ctx.repos.learnings.select("json_extract(json, '$.skillId') = ?", [skill.id]);
+  if (forSkill.some(l => l.state === "declined" && ruleKey(l.rule) === rule))
     throw conflict("declined", `The editor declined this rule for ${skill.name}. Don’t offer it again.`);
   const same = ctx.repos.learnings.select("project_id = ? AND json_extract(json, '$.taskId') = ?", [task.projectId, task.id])
-    .find(l => l.rule.toLowerCase() === body.rule.toLowerCase());
+    .find(l => ruleKey(l.rule) === rule);
   if (same) return { learning: same, skill: ctx.repos.skills.get(same.skillId) ?? skill };
+  const duplicate = forSkill.find(l => ruleKey(l.rule) === rule);
+  if (duplicate)
+    throw conflict("already_offered", `This rule is already ${duplicate.state === "saved" ? "saved in" : "offered for"} ${skill.name}. Don’t offer it again.`);
+  const waiting = ctx.repos.learnings.count("project_id = ? AND state = 'suggested' AND json_extract(json, '$.taskId') = ?", [task.projectId, task.id]);
+  if (waiting >= MAX_SUGGESTED_PER_REQUEST) {
+    throw conflict("too_many_learnings",
+      `Already offered ${MAX_SUGGESTED_PER_REQUEST} rules for this request. Combine related points into one rule, or keep only the clearest standing rules.`);
+  }
   const learnedFrom = body.from && citedDecisions(ctx, body.from);
+  if (learnedFrom) {
+    const incoming = new Set(learnedFrom.decisions.map(d => d.id));
+    const covered = forSkill.find(existing => {
+      const ids = existing.learnedFrom?.decisions.map(d => d.id) ?? [];
+      if (!ids.length) return false;
+      const overlap = ids.filter(id => incoming.has(id)).length;
+      return overlap > 0 && overlap * 2 >= Math.min(ids.length, incoming.size);
+    });
+    if (covered) {
+      throw conflict("decisions_already_covered",
+        `A rule for ${skill.name} already covers those decisions (“${clip(covered.rule, 120)}”). Don’t offer another rule from the same pattern.`);
+    }
+  }
   const learning = save(ctx, {
     id: newId("lrn"), projectId: task.projectId, rule: body.rule, said: wordsOf(task), taskId: task.id, skillId: skill.id,
     ...(learnedFrom && { learnedFrom }), ...(replaces && { replaces }), state: "suggested", createdAt: now(),
