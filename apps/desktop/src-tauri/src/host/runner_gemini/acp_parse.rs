@@ -479,8 +479,8 @@ pub fn acp_mcp_server(mcp: &McpSpec) -> Value {
 }
 
 /// agy reads Scarlet's prompt from the session's own system prompt, not a `GEMINI.md`: it cuts a rule file off at
-/// 24,000 bytes, and a pass's prompt with the editor's skill runs past that (28.5 KB on 2026-11-19, losing the skill's
-/// pace, demo and punch-in sections).
+/// 24,000 bytes, and a pass's prompt with the editor's skill runs past that (28.5 KB on 2026-11-19, losing the last
+/// three sections of the skill).
 ///
 /// `--gemini-dir` gives agy the run's own folder for its settings, rules, plugins and sessions (`gemini_dir`), so the
 /// editor's personal `~/.gemini/GEMINI.md` and plugin rules, written for their own chats with Gemini, don't reach

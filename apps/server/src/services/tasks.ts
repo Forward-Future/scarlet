@@ -33,6 +33,7 @@ import { actorFor, agentName, logActivity, quote } from "./activity.js";
 import { applyChoicesWhenDone, applySettledCuts, retireStaleSaves } from "./changes.js";
 import { finishBatchSummaryTask } from "./batchSummaries.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
+import { renamedTo } from "./skillSeed.js";
 import { notify } from "./notify.js";
 import { restoreUnreplacedProposal } from "./revisionState.js";
 import { runAttemptIds } from "./runAttempts.js";
@@ -107,8 +108,16 @@ export function stagesCut(kind: TaskKind, change: Change): boolean {
 }
 
 function requestedDialogue(ctx: Ctx, text: string) {
-  const names = skillCommands(text).map(command => command.name).filter(Boolean);
-  if (names.length) return dialogueCommand(text, ctx.repos.skills.select("name IN (SELECT value FROM json_each(?))", [JSON.stringify(names)]));
+  const commands = skillCommands(text).filter(command => command.name);
+  if (!commands.length) return;
+  const library = ctx.repos.skills.select("1=1");
+  // A command sent under a skill's former name (skills/retired.json) means the one it goes by now, unless a skill
+  // has taken the old name since.
+  const current = commands.reduceRight((said, { name, start, end }) => {
+    const to = renamedTo(name);
+    return to && !library.some(skill => skill.name === name) ? `${said.slice(0, start)}/${to}${said.slice(end)}` : said;
+  }, text);
+  return dialogueCommand(current, library);
 }
 
 /** Upgrade old requests and their answers once, before a host or the renderer reads them. */

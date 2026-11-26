@@ -4,7 +4,7 @@
  * and record each change Scarlet makes for the agent's gate report. The MCP tool supplies live reads;
  * offline replay (evals/src/replay.ts) supplies stored ones, so both run the same code.
  */
-import { cutScope, type DialogueDetections } from "@scarlet/shared";
+import { builtInCommand, cutScope, type DialogueDetections } from "@scarlet/shared";
 import { clipDuration, clipsAt, indexClipsAt, timelineDuration, timelineToSource, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { round2 } from "./analysis.js";
 import {
@@ -110,7 +110,7 @@ async function resolveAndValidatePlanCuts(req: DialoguePlanRequest, sources: Dia
   const { tl, cuts: requested, range, only, localPauses } = req;
   const otherKinds = [...new Set(requested.filter(c => c.kind !== "pause").map(c => c.kind))];
   if (localPauses && ((only && only !== "pause") || otherKinds.length))
-    throw new Error(`The editor requested only pauses in the local passage (/tighten-pauses-here). Remove the ${otherKinds.join(" and ") || only} decisions.`);
+    throw new Error(`The editor requested only pauses in the local passage (/${builtInCommand("local-pauses").name}). Remove the ${otherKinds.join(" and ") || only} decisions.`);
   if (only && requested.some(c => c.kind !== only)) throw new Error(`only is "${only}", so every decision must be kind "${only}".`);
   // Word references become timeline seconds first; everything after is the same plan.
   const unplaced: Array<{ reason: string; cuts: number[] }> = [];

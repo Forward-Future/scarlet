@@ -8,7 +8,7 @@
  *   so transitions, framing, brief-picture checks, thumbnails and direct-picture
  *   export all work at full speed without multi-stream decode.
  * - `mc_1`, `mc_2`, ... (hidden, muted video tracks): one full synced reference
- *   track per camera angle. Global `rippleDelete` (such as `/dialogue-pass`)
+ *   track per camera angle. Global `rippleDelete` (such as a dialogue pass)
  *   cuts every angle track in exact lockstep with Program and Audio, so switching
  *   or re-switching angles remains exact and non-destructive before or after
  *   dialogue cuts.

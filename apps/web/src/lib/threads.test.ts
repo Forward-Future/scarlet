@@ -46,8 +46,12 @@ function note(id: string, extra: Partial<Note> = {}): Note {
 }
 
 describe("buildThreads", () => {
-  it.each(["/dialogue-pass", "/first-cut-dialogue"])("keeps a saved %s result tied to its pass across a resume and an unrelated follow-up", command => {
-    const context = { threadId: "thread", message: command, version: "input" };
+  it.each([
+    ["/dialogue-pass", {}],
+    // A request sent under a skill's former name, as the engine's upgrade records it.
+    ["/first-cut-dialogue", { dialogueOperation: "first-cut" as const }],
+  ])("keeps a saved %s result tied to its pass across a resume and an unrelated follow-up", (command, recorded) => {
+    const context = { threadId: "thread", message: command, version: "input", ...recorded };
     const tasks = [task("pass", "failed", { context, changeIds: ["setup"] }),
       task("resume", "done", { context, resumeRootId: "pass", changeIds: ["applied", "draft"], createdAt: at(2) }),
       task("captions", "done", { context: { threadId: "thread", message: "Add captions" }, changeIds: ["later"], createdAt: at(5) })];

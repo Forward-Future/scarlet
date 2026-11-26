@@ -1,5 +1,15 @@
+import { builtInCommand, skillRuns } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
-import { createSkill, updateSkill } from "./skills.js";
+import { BUNDLED_SKILLS } from "../bundledSkills.js";
+import { createSkill, parseFrontmatter, updateSkill } from "./skills.js";
+import { formerNames } from "./skillSeed.js";
+
+/** The shipped skills that guide the dialogue pass, by the names they go and went by: what their files say, not a name in code. */
+function dialogueGuideNames() {
+  const pass = builtInCommand("first-cut").name;
+  const current = BUNDLED_SKILLS.filter(s => skillRuns(s).includes(pass)).map(s => parseFrontmatter(s.content).name ?? s.folder);
+  return { current, all: [...current, ...current.flatMap(formerNames)] };
+}
 
 /** The single JSON settings row written by earlier releases, before these choices moved to skills. */
 interface LegacyDialogueSettings {
@@ -52,7 +62,9 @@ export function migrateDialogueSettings(ctx: Ctx) {
     const legacy: LegacyDialogueSettings = JSON.parse(row.dialogue);
     preservePendingSuggestions(ctx, legacy.aiCuts);
     const lines = editorialPreferences(legacy);
-    const guides = ctx.repos.skills.select(`name = 'dialogue-pass' OR json_extract(json, '$.bundledName') IN ('first-cut-dialogue', 'dialogue-pass')`);
+    const names = dialogueGuideNames();
+    const marks = (list: string[]) => list.map(() => "?").join(", ") || "NULL";
+    const guides = ctx.repos.skills.select(`name IN (${marks(names.current)}) OR json_extract(json, '$.bundledName') IN (${marks(names.all)})`, [...names.current, ...names.all]);
     // Scarlet used to add the default two-frame crossfade at every join by itself, and no longer does: a join is a
     // straight cut unless a skill asks for a crossfade. An editor's own guide that says nothing about crossfades would
     // lose the one they had, so it is written into that guide. The stock guide states its own.
