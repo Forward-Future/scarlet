@@ -15246,9 +15246,14 @@ it("lights the row of the call Scarlet's question is about in the new layout's c
     // The first call is the one asked about: its row is lit, and no other.
     expect(lit()).toEqual([["A clean retake.", true], ["Breath before the price.", false], ["Repeated aside.", false]]);
     // Answered, the first call is with Scarlet again. The box is on the second question, and so is the light.
-    await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_first" ? { ...t, state: "running" as const, question: null } : t) }));
-    await act(async () => {});
-    expect(lit()).toEqual([["Breath before the price.", true], ["Repeated aside.", false]]);
+    // The answered call lingers briefly in Needs review before fading cleanly into Working.
+    await onTestClock(async wait => {
+      await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_first" ? { ...t, state: "running" as const, question: null } : t) }));
+      await wait(0);
+      expect(lit()).toEqual([["A clean retake.", false], ["Breath before the price.", true], ["Repeated aside.", false]]);
+      await wait(2800);
+      expect(lit()).toEqual([["Breath before the price.", true], ["Repeated aside.", false]]);
+    });
   });
 });
 
@@ -15266,10 +15271,14 @@ it("keeps ↑ and ↓ within Done in the new layout's column: past its last row 
     await act(async () => {});
     // The pass has two calls that wait (0:18, 0:48) and a later request has a flagged edit (0:11): unified Needs review sorts them by video time.
     expect(columnRows("Needs review").map(columnWords)).toEqual(["wrap", "Breath before the price.", "The corrected image-input take belongs here."]);
-    // The first call is kept: it is Done's only row, and the card went on to the next waiting row.
+    // The first call is kept: it lingers briefly marked Kept in Needs review, then moves to Done while the card goes on to the next waiting row.
     await click(columnRows("Needs review").find(row => columnWords(row) === "Breath before the price.")!);
-    await press("k");
-    await act(async () => {});
+    await onTestClock(async wait => {
+      await press("k");
+      await wait(0);
+      expect(columnRows("Done")).toHaveLength(0);
+      await wait(2800);
+    });
     await click(columnPart("Done"));
     expect(columnRows("Done").map(columnWords)).toEqual(["Breath before the price."]);
     await click(columnRows("Done")[0]!);
@@ -15286,8 +15295,11 @@ it("keeps ↑ and ↓ within Done in the new layout's column: past its last row 
     // ↓ steps to the later Done row ("Breath before the price.", 0:18), and ↓ again stays at Done's bottom.
     await click(columnRows("Needs review").find(row => columnWords(row) === "wrap")!);
     await act(async () => {});
-    await press("k");
-    await act(async () => {});
+    await onTestClock(async wait => {
+      await press("k");
+      await wait(0);
+      await wait(2800);
+    });
     expect(columnRows("Done").map(columnWords)).toEqual(["wrap", "Breath before the price."]);
     await click(columnRows("Done").find(row => columnWords(row) === "wrap")!);
     await act(async () => {});
@@ -15452,10 +15464,16 @@ it("goes on from the last edit kept to another request's edit that says Needs yo
     await click(columnRows("Needs review")[0]!);
     await act(async () => {});
     expect(columnOpen()).toBe("false start");
-    // Kept, it is the last that simply waits. The card goes on to the one row left in Needs review, which asks for an answer.
-    await press("k");
-    await act(async () => {});
-    expect([rows(), columnOpen()]).toEqual([[["wrap", "Needs your answer"]], "wrap"]);
+    // Kept, it is the last that simply waits. The card goes on to the one row left in Needs review, which asks for an answer,
+    // while the kept row lingers briefly in place before moving cleanly to Done.
+    await onTestClock(async wait => {
+      await press("k");
+      await wait(0);
+      expect(columnOpen()).toBe("wrap");
+      expect(rows()).toEqual([["false start", undefined], ["wrap", "Needs your answer"]]);
+      await wait(2800);
+      expect([rows(), columnOpen()]).toEqual([[["wrap", "Needs your answer"]], "wrap"]);
+    });
   });
 });
 
@@ -15484,11 +15502,17 @@ it("keeps the new layout's column of edits, and no \u201cNothing waits on you.\u
     // Its row is in Needs review with the stopped request and Resume under it. The column is there to show it, and doesn't
     // say nothing waits beside the row. Nothing is counted: only calls and flagged edits are.
     expect(says()).toEqual([false, ["captions"], "Resume", undefined, undefined]);
-    // Picked up again, the edit is with Scarlet: Needs review is empty and says so, and the column stays for Working's row.
-    await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_fix" ? { ...t, state: "running" as const, finishedAt: undefined } : t) }));
-    await act(async () => {});
-    expect(says()).toEqual([false, [], undefined, "Nothing waits on you.", undefined]);
-    expect(columnRows("Working").map(columnWords)).toEqual(["captions"]);
+    // Picked up again, the edit lingers briefly in Needs review showing Scarlet working, then moves cleanly to Working
+    // while Needs review shows "Nothing waits on you." and the column stays for Working's row.
+    await onTestClock(async wait => {
+      await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_fix" ? { ...t, state: "running" as const, finishedAt: undefined } : t) }));
+      await wait(0);
+      expect(columnRows("Needs review").map(columnWords)).toEqual(["captions"]);
+      expect(columnRows("Working")).toHaveLength(0);
+      await wait(2800);
+      expect(says()).toEqual([false, [], undefined, "Nothing waits on you.", undefined]);
+      expect(columnRows("Working").map(columnWords)).toEqual(["captions"]);
+    });
     localStorage.clear();
   });
 });

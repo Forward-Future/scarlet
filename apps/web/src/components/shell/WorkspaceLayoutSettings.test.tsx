@@ -11,6 +11,7 @@ import { api } from "../../lib/client";
 import { useProjectStore, type ProjectData } from "../../stores/project";
 import { useUiStore } from "../../stores/ui";
 import { SimpleWorkspace } from "../../pages/SimpleWorkspace";
+import { LINGER_FADE_MS, LINGER_MS } from "../../pages/simple/beta/reviewTabsBeta";
 import { WorkspaceLayoutSettings } from "./WorkspaceLayoutSettings";
 
 function stubMedia() {
@@ -173,7 +174,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-rail")).toBeNull();
   });
 
-  it("covers beta pass polish: kept edit moves straight to Done, low-risk auto-unfolds, working card shows Stop, paused queue drops Up next, and question names its edit", async () => {
+  it("covers beta pass polish: kept edit lingers in place before smoothly moving to Done, low-risk auto-unfolds, working card shows Stop, paused queue drops Up next, and question names its edit", async () => {
     const db = buildDb();
     const project = db.projects.find(p => p.id === PRJ)!;
     const change = db.changes.find(c => c.id === "chg_approved_2") ?? db.changes[0]!;
@@ -292,7 +293,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => stopBtn.click());
     expect(cancelSpy).toHaveBeenCalledWith("task_beta_revise");
 
-    // #14 & #3: Safe edits sit directly below flagged edits with no filter bar, and Keep moves straight to Done.
+    // #14 & #3: Safe edits sit directly below flagged edits with no filter bar, and Keep lingers briefly before moving cleanly to Done without duplicating.
     expect(container.querySelector(".review-filter-bar")).toBeNull();
     // They start folded under their heading; a press on it unfolds them.
     expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(true);
@@ -302,15 +303,32 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       .find(b => b.textContent?.includes("music bed"))!;
     await act(async () => musicRow.click());
     await act(async () => {});
-    // Keep music bed -> moves straight to Done without lingering in confident edits.
     const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")]
       .find(b => b.textContent?.trim() === "Keep")!;
-    await act(async () => keepBtn.click());
-    await act(async () => {});
-    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(true);
-    const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")]
-      .find(b => b.textContent?.includes("Done"))!;
-    expect(doneHead.textContent).toContain("1");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => keepBtn.click());
+      await act(async () => {});
+      // Immediately after Keep: row stays in Safe edits showing Kept, and is NOT duplicated in Done yet.
+      expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(false);
+      const lingeringMusic = container.querySelector<HTMLElement>(".review-low-body ol > li")!;
+      expect(lingeringMusic.textContent).toContain("music bed");
+      expect(lingeringMusic.textContent).toContain("Kept");
+      expect(lingeringMusic.classList.contains("is-leaving")).toBe(false);
+      const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")]
+        .find(b => b.textContent?.includes("Done"))!;
+      expect(doneHead.textContent).toContain("0");
+      // After LINGER_MS: row starts fading out alongside the departing Safe edits divider.
+      await act(async () => { vi.advanceTimersByTime(LINGER_MS); });
+      expect(container.querySelector(".review-low-body ol > li")?.classList.contains("is-leaving")).toBe(true);
+      expect(container.querySelector(".review-tier-sep")?.classList.contains("is-leaving")).toBe(true);
+      // After LINGER_FADE_MS: row leaves Safe edits and lands in Done.
+      await act(async () => { vi.advanceTimersByTime(LINGER_FADE_MS); });
+      expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(true);
+      expect(doneHead.textContent).toContain("1");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the Working banner above the Done banner even when no edits are working", async () => {
@@ -357,14 +375,22 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
     await act(async () => {});
 
-    // Keep the flagged edit so Done has 1 edit while Working stays at 0.
+    // Keep the flagged edit: it lingers briefly marked Kept in Needs review, then moves to Done while Working stays at 0.
     const row = container.querySelector<HTMLButtonElement>(".review-rail-list button.simple-edit")!;
     await act(async () => row.click());
     await act(async () => {});
     const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")]
       .find(b => b.textContent?.trim() === "Keep")!;
-    await act(async () => keepBtn.click());
-    await act(async () => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => keepBtn.click());
+      await act(async () => {});
+      expect(container.querySelector('.review-rail-list ol[aria-label="Edits that need you"] > li')?.textContent).toContain("Kept");
+      expect([...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")].map(b => b.textContent)).toEqual(["Working0", "Done0"]);
+      await act(async () => { vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS); });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const sections = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];
     expect(sections.map(b => b.textContent)).toEqual(["Working0", "Done1"]);
@@ -801,12 +827,20 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".edit-card-step-count")?.textContent).toBe("1 of 2");
     const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")].find(b => b.textContent?.trim() === "Keep all 2")!;
     expect(keepBtn).toBeTruthy();
-    await act(async () => keepBtn.click());
-    await act(async () => {});
-    expect(keepSpy).toHaveBeenCalledTimes(2);
-    expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("1");
-    const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")].find(b => b.textContent?.includes("Done"))!;
-    expect(doneHead.textContent).toContain("2");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => keepBtn.click());
+      await act(async () => {});
+      expect(keepSpy).toHaveBeenCalledTimes(2);
+      expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("1");
+      const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")].find(b => b.textContent?.includes("Done"))!;
+      // Lingers in Safe edits as Kept before moving cleanly to Done.
+      expect(doneHead.textContent).toContain("0");
+      await act(async () => { vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS); });
+      expect(doneHead.textContent).toContain("2");
+    } finally {
+      vi.useRealTimers();
+    }
 
     // ⌘Z undoes BOTH threads' Keep together so the combined batch returns cleanly to Safe edits.
     await act(async () => {
@@ -920,11 +954,21 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".edit-card-step-count")?.textContent).toBe("2 of 3");
     expect(container.querySelector(".composer-aim-row")?.textContent).toContain("Sonnet 5.5 title");
 
-    // Click Keep all 3 -> all 3 move to Done as one "3 Graphics" Kept row beside the individual Rejected row.
-    await act(async () => keepAllBtn.click());
-    await act(async () => {});
+    // Click Keep all 3 -> the "3 Graphics" batch lingers in place marked Kept, then moves to Done as one collapsed Kept row beside the individual Rejected row.
     const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")].find(b => b.textContent?.includes("Done"))!;
-    expect(doneHead.textContent).toContain("4");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => keepAllBtn.click());
+      await act(async () => {});
+      const lingeringBatch = container.querySelector<HTMLButtonElement>('.review-low-body[aria-label="Safe edits"] ol > li > button')!;
+      expect(lingeringBatch.dataset.batchCount).toBe("3");
+      expect(lingeringBatch.querySelector(".simple-edit-value")?.textContent).toBe("Kept");
+      expect(doneHead.textContent).toContain("1");
+      await act(async () => { vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS); });
+      expect(doneHead.textContent).toContain("4");
+    } finally {
+      vi.useRealTimers();
+    }
     await act(async () => doneHead.click());
     await act(async () => {});
 

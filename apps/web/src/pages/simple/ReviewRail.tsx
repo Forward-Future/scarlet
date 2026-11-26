@@ -8,6 +8,7 @@ import { api } from "../../lib/client";
 import { clock as clockLabel } from "../../lib/format";
 import { editKey, unkeepEdits } from "../../lib/keptEdits";
 import { recordUndo } from "../../lib/undo";
+import { useArrivingRows, useLeavingRows } from "./lowRiskFold";
 import { useProjectStore } from "../../stores/project";
 import type { RailSection, RailStore, UnifiedRailRow } from "./railStore";
 import { letGo, type HoveredReviewRow } from "./types";
@@ -86,11 +87,15 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
   reserve?: number;
 }) {
   useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
+  store.setLowOpen(!!open.low);
+  store.setDoneOpen(open.done);
   const batchSummaries = useProjectStore(s => s.current?.id === projectId ? s.current.batchSummaries : undefined);
   useEffect(() => {
     store.setBatchSummaries(batchSummaries);
   }, [store, batchSummaries]);
   const host = useRef<HTMLElement>(null);
+  useLeavingRows(host);
+  useArrivingRows(host);
   const tipEl = useRef<HTMLDivElement>(null);
   const tipId = useId();
   const [tip, setTip] = useState<RowTooltip | null>(null);
@@ -100,17 +105,22 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
     requestedSummaries.current = { projectId, keys: new Set() };
   }
   const view = store.view();
-  const { need, forYouRows, optional, working, done, pastHour, sections } = view;
+  const { need, optional, pastHour, display } = view;
+  const sections = display.sections;
+  const working = display.working;
+  const done = display.done;
   const total = need + optional;
-  const nothing = need + forYouRows + optional + working + done === 0;
-  const showConfident = optional > 0;
+  const hasYouRows = sections.you.length > 0;
+  const showConfident = optional > 0 || sections.low.length > 0;
   // Safe edits start folded under their heading; a press on it (or opening one of them) unfolds them.
   const lowShown = showConfident && !!open.low;
+  const sepLeaving = showConfident && optional === 0 && sections.low.every(r => !!r.leaving);
+  const nothing = need + sections.you.length + optional + sections.low.length + working + done === 0;
 
   // Ask the engine for AI-generated titles for any settled collapsed batches that don't have one cached yet.
   const unsummarized: BatchSummaryItem[] = [];
   const seenKeys = new Set<string>();
-  for (const row of [...sections.low, ...sections.done]) {
+  for (const row of [...view.sections.low, ...view.sections.done]) {
     const input = row.batchSummaryInput;
     if (!input || seenKeys.has(input.key) || batchSummaries?.[input.key] || requestedSummaries.current.keys.has(input.key)) continue;
     seenKeys.add(input.key);
@@ -274,13 +284,19 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
     const rows = sections[key];
     if (!rows.length) return null;
     const listClass = pastHour ? "simple-pass-list simple-edits has-hours" : "simple-pass-list simple-edits";
+    const freshRow = (rowKey: string) => {
+      const latest = store.view();
+      return latest.display.findByKey(rowKey) ?? latest.findByKey(rowKey);
+    };
     return <ol className={listClass} aria-label={SECTION_LABELS[key]}>
       {rows.map(row => {
         const batchCount = row.batch && row.batch.length > 1 ? row.batch.length : 0;
         const activeRow = row.batch?.find(r => r.on) ?? row;
-        const canUnkeepRow = key === "done" && !row.rejected && !row.skipped && !row.isMarker
+        const leaving = !!row.leaving;
+        const arriving = !!row.arriving;
+        const canUnkeepRow = key === "done" && !leaving && !row.pending && !row.rejected && !row.skipped && !row.isMarker
           && (!!row.unkeepCall || row.members.some(m => m.canUnkeep));
-        const value = key === "done" ? (row.decision ?? row.value) : row.value;
+        const value = row.decision ?? row.value;
         const rowTime = clockLabel(row.displayAt);
         const needTime = row.needs || row.asks;
         const lead = <span className={needTime ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
@@ -298,7 +314,8 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
           : row.rejected ? `${rowTime} ${row.label}, rejected`
           : `${rowTime}: ${row.label}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : row.decided ? (row.isMarker ? ", done" : ", kept") : needTime ? ", needs you" : ""}`);
         const flashed = !!flashedThreadId && row.threadIds.includes(flashedThreadId);
-        return <li key={row.key} className={canUnkeepRow ? "has-unkeep" : undefined} data-flash={flashed ? "" : undefined}>
+        const itemClass = [leaving && "is-leaving", arriving && "is-arriving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined;
+        return <li key={row.key} className={itemClass} data-flash={flashed ? "" : undefined}>
           <button type="button"
             className={["simple-edit", row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", row.isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ")}
             aria-current={row.on || undefined}
@@ -310,7 +327,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
             data-row-meta={tipMeta}
             data-row-detail={tipDetail}
             aria-label={ariaLabel}
-            onClick={letGo(() => store.view().findByKey(row.key)?.open?.())}
+            onClick={letGo(() => freshRow(row.key)?.open?.())}
             onPointerEnter={() => onHover?.(row.mark, row.hover)}
             onPointerLeave={() => onHover?.()}>
             {lead}
@@ -321,7 +338,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
               {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
               {row.fresh && <small className="edit-version is-new">New</small>}
               {moment && <span className="simple-pass-more" aria-expanded={moment.unfolded} title={moment.unfolded ? "Hide its edits" : "Show its edits"}
-                onClick={e => { e.stopPropagation(); store.view().findByKey(row.key)?.moment?.toggle(); }}>{moment.more}</span>}
+                onClick={e => { e.stopPropagation(); freshRow(row.key)?.moment?.toggle(); }}>{moment.more}</span>}
             </span>
             {!statusWord && value && <span className={row.busy ? "simple-edit-value simple-pass-value working-text" : "simple-edit-value simple-pass-value"} title={row.spent}>{value}</span>}
             {statusWord && <span className={`simple-edit-check simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={row.spent}>{statusWord}</span>}
@@ -330,7 +347,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
             onPointerEnter={() => onHover?.(row.mark, row.hover)} onPointerLeave={() => onHover?.()}>
             <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
               aria-label={`Unkeep ${row.label}`} title={unkeepTip}
-              onClick={letGo(() => { const fresh = store.view().findByKey(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
+              onClick={letGo(() => { const fresh = freshRow(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
           </span>}
           <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span></AimRow>
           {row.nests.map(nest => nest.node)}
@@ -340,7 +357,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
                 data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open}
                 data-row-tip={m.label} data-row-meta={m.tipMeta}
                 data-row-detail={m.tipDetail ?? (m.title && m.title !== m.label ? m.title : undefined)}
-                onClick={letGo(() => { const fresh = store.view().findByKey(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.open?.(); })}
+                onClick={letGo(() => { const fresh = freshRow(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.open?.(); })}
                 onPointerEnter={() => onHover?.(m.mark, m.hover)} onPointerLeave={() => onHover?.()}>
                 <span className="simple-pass-label">
                   {m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
@@ -354,7 +371,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
                 onPointerEnter={() => onHover?.(m.mark, m.hover)} onPointerLeave={() => onHover?.()}>
                 <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
                   aria-label={`Unkeep ${m.label}`} title={m.unkeepTip ?? "Unkeep"}
-                  onClick={letGo(() => { const fresh = store.view().findByKey(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.unkeep?.(); })}>Unkeep</button>
+                  onClick={letGo(() => { const fresh = freshRow(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.unkeep?.(); })}>Unkeep</button>
               </span>}
               {m.nests?.map(nest => nest.node)}
             </li>)}
@@ -390,14 +407,18 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
     <div className="review-rail-scroll">
       <div className="review-rail-list" role="group" aria-label="Needs review">
         {renderSectionList("you")}
-        {showConfident && <div className={need > 0 || forYouRows > 0 ? "review-tier-sep" : "review-tier-sep is-first"}>
+        {showConfident && <div className={[
+          "review-tier-sep",
+          need === 0 && !hasYouRows && "is-first",
+          sepLeaving && "is-leaving",
+        ].filter(Boolean).join(" ")}>
           <button type="button" className="review-tier-label review-tier-toggle" aria-expanded={lowShown} aria-controls={`${tipId}-low`}
-            onClick={letGo(() => onOpen("low", !open.low))}><span>Safe edits ({optional})</span><Icon name="chevron" size={10} /></button>
-          {onDoneLow && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
+            onClick={letGo(() => onOpen("low", !open.low))}><span>{optional > 0 ? `Safe edits (${optional})` : "Safe edits"}</span><Icon name="chevron" size={10} /></button>
+          {onDoneLow && optional > 0 && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
             onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
         </div>}
         <div id={`${tipId}-low`} className="review-low-body" role="group" aria-label="Safe edits" hidden={!lowShown}>{renderSectionList("low")}</div>
-        {forYouRows === 0 && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
+        {!hasYouRows && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
       </div>
     </div>
     <div className="review-rail-foot">

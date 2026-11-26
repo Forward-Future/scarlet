@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThreadEdit } from "@scarlet/shared";
-import { RailStore, type RailRow } from "./railStore";
+import { LINGER_FADE_MS, LINGER_MS } from "./beta/reviewTabsBeta";
+import { ARRIVE_MS, RailStore, type RailRow } from "./railStore";
 
 function makeEdit(changeId: string, spot: number, label: string, start: number, end: number, extra: Partial<Omit<ThreadEdit, "at">> = {}): Omit<ThreadEdit, "at"> {
   return { changeId, spot, label, range: { start, end }, previous: [], ...extra };
@@ -431,5 +432,191 @@ describe("RailStore", () => {
     store.view().sections.low[0]!.open!();
     expect(firstOpen).not.toHaveBeenCalled();
     expect(secondOpen).toHaveBeenCalledTimes(1);
+  });
+
+  describe("lingering transitions", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("holds kept and revised rows in place without duplicating them in Done or Working, then fades and moves them over", () => {
+      vi.useFakeTimers();
+      const store = new RailStore();
+      store.report("t1", {
+        you: 2, optional: 0, working: 0, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "c/0", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged cut", place: "you" }),
+          makeRow({ key: "c/1", threadId: "t1", threadOrder: 0, at: 15, label: "Flagged graphic", place: "you" }),
+        ],
+      });
+
+      // Keep c/0 -> Done, revise c/1 -> Working.
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 1, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "c/0", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged cut", place: "done", value: "Kept", decision: "Kept" }),
+          makeRow({ key: "c/1", threadId: "t1", threadOrder: 0, at: 15, label: "Flagged graphic", place: "working", word: "Revising…", busy: true }),
+        ],
+      });
+
+      // Logical sections updated at once; display sections keep both rows in Needs review without duplicating them in Working/Done.
+      let v = store.view();
+      expect([v.need, v.working, v.done]).toEqual([0, 1, 1]);
+      expect(v.display.sections.you.map(r => [r.label, r.decision ?? r.word, !!r.leaving])).toEqual([
+        ["Flagged cut", "Kept", false],
+        ["Flagged graphic", "Revising…", false],
+      ]);
+      expect(v.display.sections.working).toHaveLength(0);
+      expect(v.display.sections.done).toHaveLength(0);
+      expect([v.display.working, v.display.done]).toEqual([0, 0]);
+
+      // After LINGER_MS both enter their fade-out phase.
+      vi.advanceTimersByTime(LINGER_MS);
+      v = store.view();
+      expect(v.display.sections.you.map(r => r.leaving)).toEqual([true, true]);
+      expect([v.display.working, v.display.done]).toEqual([0, 0]);
+
+      // After LINGER_FADE_MS both leave Needs review and arrive cleanly in Working and Done with arriving flag.
+      vi.advanceTimersByTime(LINGER_FADE_MS);
+      v = store.view();
+      expect(v.display.sections.you).toHaveLength(0);
+      expect(v.display.sections.working.map(r => [r.label, !!r.arriving])).toEqual([["Flagged graphic", true]]);
+      expect(v.display.sections.done.map(r => [r.label, !!r.arriving])).toEqual([["Flagged cut", true]]);
+      expect([v.display.working, v.display.done]).toEqual([1, 1]);
+
+      // After ARRIVE_MS the arriving flag clears.
+      vi.advanceTimersByTime(ARRIVE_MS);
+      v = store.view();
+      expect(v.display.sections.working[0]!.arriving).toBeFalsy();
+      expect(v.display.sections.done[0]!.arriving).toBeFalsy();
+      store.dispose();
+    });
+
+    it("keeps a Done -> Working revision lingering in Done only when Done is expanded, and resets timer when queued work becomes busy", () => {
+      vi.useFakeTimers();
+      const store = new RailStore();
+      store.setDoneOpen(true);
+      store.report("t1", {
+        you: 0, optional: 0, working: 0, done: 2, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 5, label: "Kept A", place: "done", value: "Kept", decision: "Kept" }),
+          makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 15, label: "Kept B", place: "done", value: "Kept", decision: "Kept" }),
+        ],
+      });
+
+      // Revise d/0 while queued (busy: false) -> lingers in Done, not duplicated in Working.
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 1, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 5, label: "Kept A", place: "working", word: "Up next", busy: false }),
+          makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 15, label: "Kept B", place: "done", value: "Kept", decision: "Kept" }),
+        ],
+      });
+      expect(store.view().display.sections.done.map(r => r.label)).toEqual(["Kept A", "Kept B"]);
+      expect(store.view().display.working).toBe(0);
+
+      // 1.5s later Scarlet starts working (busy: true) -> linger timer restarts so editor sees active work for a full window.
+      vi.advanceTimersByTime(1500);
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 1, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 5, label: "Kept A", place: "working", word: "Revising…", busy: true }),
+          makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 15, label: "Kept B", place: "done", value: "Kept", decision: "Kept" }),
+        ],
+      });
+      vi.advanceTimersByTime(1500);
+      expect(store.view().display.sections.done.find(r => r.label === "Kept A")?.leaving).toBe(false);
+
+      vi.advanceTimersByTime(LINGER_MS - 1500 + LINGER_FADE_MS);
+      expect(store.view().display.sections.done.map(r => r.label)).toEqual(["Kept B"]);
+      expect(store.view().display.sections.working.map(r => r.label)).toEqual(["Kept A"]);
+
+      // When Done is closed, revising d/1 moves straight to Working without lingering unseen in Done.
+      store.setDoneOpen(false);
+      store.report("t1", {
+        you: 0, optional: 0, working: 2, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 5, label: "Kept A", place: "working", word: "Revising…", busy: true }),
+          makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 15, label: "Kept B", place: "working", word: "Revising…", busy: true }),
+        ],
+      });
+      expect(store.view().display.sections.done).toHaveLength(0);
+      expect(store.view().display.sections.working.map(r => r.label)).toEqual(["Kept A", "Kept B"]);
+      store.dispose();
+    });
+
+    it("preserves the same batch key when keeping a safe batch together while unfolded, splits out a revised edit, and skips lingering while Safe edits is folded", () => {
+      vi.useFakeTimers();
+      const store = new RailStore();
+      store.report("t1", {
+        you: 0, optional: 3, working: 0, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "optional", editKind: "graphic", value: "Graphic" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "optional", editKind: "graphic", value: "Graphic" }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "optional", editKind: "graphic", value: "Graphic" }),
+        ],
+      });
+      // Safe edits starts folded -> unfolding marks rows visible so subsequent actions linger cleanly.
+      store.setLowOpen(true);
+      const initialKey = store.view().display.sections.low[0]!.key;
+
+      // Revise just s/1 out of the batch -> s/0+s/2 remain a 2-graphic batch, s/1 lingers as its own Revising row in Safe edits.
+      store.report("t1", {
+        you: 0, optional: 2, working: 1, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "optional", editKind: "graphic", value: "Graphic" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "working", editKind: "graphic", word: "Revising…", busy: true }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "optional", editKind: "graphic", value: "Graphic" }),
+        ],
+      });
+      expect(store.view().display.sections.low.map(r => [r.label, r.batch?.length ?? 1, r.word ?? r.value])).toEqual([
+        ["2 Graphics: Gfx 1, Gfx 3", 2, "Graphic"],
+        ["Gfx 2", 1, "Revising…"],
+      ]);
+      expect(store.view().display.working).toBe(0);
+      vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS);
+      expect(store.view().display.working).toBe(1);
+
+      // Keep the remaining batch together -> preserves the exact batch key in Safe edits while lingering as Kept.
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 2, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "done", editKind: "graphic", value: "Kept", decision: "Kept" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "working", editKind: "graphic", word: "Revising…", busy: true }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "done", editKind: "graphic", value: "Kept", decision: "Kept" }),
+        ],
+      });
+      const keptBatch = store.view().display.sections.low[0]!;
+      expect(keptBatch.key).toBe(initialKey);
+      expect(keptBatch.decision).toBe("Kept");
+      expect(keptBatch.batch).toHaveLength(2);
+      expect(store.view().display.done).toBe(0);
+
+      // ⌘Z undo returns both to Safe edits immediately without waiting for the timer.
+      store.report("t1", {
+        you: 0, optional: 2, working: 1, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "optional", editKind: "graphic", value: "Graphic" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "working", editKind: "graphic", word: "Revising…", busy: true }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "optional", editKind: "graphic", value: "Graphic" }),
+        ],
+      });
+      expect(store.view().display.sections.low[0]!.decided).toBe(false);
+      expect(store.view().display.sections.low[0]!.leaving).toBeFalsy();
+
+      // Folding Safe edits and keeping them moves them straight to Done without lingering unseen.
+      store.setLowOpen(false);
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 2, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "done", editKind: "graphic", value: "Kept", decision: "Kept" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "working", editKind: "graphic", word: "Revising…", busy: true }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "done", editKind: "graphic", value: "Kept", decision: "Kept" }),
+        ],
+      });
+      expect(store.view().display.sections.low).toHaveLength(0);
+      expect(store.view().display.done).toBe(2);
+      store.dispose();
+    });
   });
 });

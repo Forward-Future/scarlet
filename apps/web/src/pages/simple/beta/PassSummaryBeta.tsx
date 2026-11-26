@@ -695,6 +695,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     })) : undefined;
     return {
       key: row.key,
+      was: row.was,
       threadId: thread.id,
       threadOrder,
       at: entry.at,
@@ -755,7 +756,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   useEffect(() => {
     rail?.report(thread.id, empty ? undefined : {
       you: need, optional: optional.length, working: inPlace("working").length, done: inPlace("done").length,
-      threadOrder, rows: railRows, edits,
+      threadOrder, rows: railRows, edits, listLoaded,
     });
   });
   useEffect(() => () => { rail?.report(thread.id); }, [rail, thread.id]);
@@ -1108,6 +1109,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       });
       return {
         key,
+        was: rowEdits.flatMap(e => e.previous.map(editKey)),
         threadId: thread.id,
         threadOrder,
         at,
@@ -1165,6 +1167,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       const goneTip = editRowTooltip(e, { change: changeForEdit(thread, e.changeId), timeline, media, fps });
       return {
         key,
+        was: e.previous.map(editKey),
         threadId: thread.id,
         threadOrder,
         at: e.range.start,
@@ -1206,7 +1209,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   useEffect(() => {
     rail?.report(thread.id, !edits.length && !gone.length ? undefined : {
       you: need, optional, working: countOf("working"), done: countOf("done"),
-      threadOrder, rows: railRows, edits,
+      threadOrder, rows: railRows, edits, listLoaded,
     });
   });
   useEffect(() => () => { rail?.report(thread.id); }, [rail, thread.id]);
