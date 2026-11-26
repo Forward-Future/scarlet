@@ -105,23 +105,22 @@ describe("RailStore", () => {
     store.report("t_old", {
       you: 0, optional: 2, working: 0, done: 0, threadOrder: 0,
       rows: [
-        makeRow({ key: "c1/0", threadId: "t_old", threadOrder: 0, at: 5, label: "Old cut at 0:05", place: "optional" }),
-        makeRow({ key: "c1/1", threadId: "t_old", threadOrder: 0, at: 20, label: "Old cut at 0:20", place: "optional" }),
+        makeRow({ key: "c1/0", threadId: "t_old", threadOrder: 0, at: 5, label: "Old cut at 0:05", place: "optional", editKind: "cut" }),
+        makeRow({ key: "c1/1", threadId: "t_old", threadOrder: 0, at: 20, label: "Old cut at 0:20", place: "optional", editKind: "cut" }),
       ],
     });
     store.report("t_new", {
       you: 0, optional: 2, working: 0, done: 0, threadOrder: 1,
       rows: [
-        makeRow({ key: "c2/0", threadId: "t_new", threadOrder: 1, at: 180, label: "New title at 3:00", place: "optional" }),
-        makeRow({ key: "c2/1", threadId: "t_new", threadOrder: 1, at: 90, label: "New title at 1:30", place: "optional" }),
+        makeRow({ key: "c2/0", threadId: "t_new", threadOrder: 1, at: 180, label: "New title at 3:00", place: "optional", editKind: "graphic" }),
+        makeRow({ key: "c2/1", threadId: "t_new", threadOrder: 1, at: 90, label: "New title at 1:30", place: "optional", editKind: "graphic" }),
       ],
     });
     const view = store.view();
-    expect(view.sections.low.map(r => r.label)).toEqual([
-      "New title at 1:30",
-      "New title at 3:00",
-      "Old cut at 0:05",
-      "Old cut at 0:20",
+    expect(view.optional).toBe(4);
+    expect(view.sections.low.map(r => [r.label, r.batch?.map(b => b.label)])).toEqual([
+      ["New title at 1:30", ["New title at 1:30", "New title at 3:00"]],
+      ["Old cut at 0:05", ["Old cut at 0:05", "Old cut at 0:20"]],
     ]);
   });
 
@@ -151,7 +150,13 @@ describe("RailStore", () => {
 
     const view = store.view();
     expect(view.optional).toBe(2);
-    expect(view.sections.low.map(r => [r.label, r.value, r.at, r.members.length])).toEqual([
+    // Both distinct combined graphics belong to t_hold and collapse into one +1 Graphic batch row.
+    expect(view.sections.low).toHaveLength(1);
+    const batchRow = view.sections.low[0]!;
+    expect(batchRow.label).toBe("Held the Opus 5.5 title two seconds longer.");
+    expect(batchRow.value).toBe("Graphic");
+    expect(batchRow.members).toHaveLength(6);
+    expect(batchRow.batch?.map(r => [r.label, r.value, r.at, r.members.length])).toEqual([
       ["Held the Opus 5.5 title two seconds longer.", "Graphic", 18.92, 3],
       ["Held the Muse Ember title two seconds longer.", "Graphic", 648.11, 3],
     ]);
@@ -159,6 +164,54 @@ describe("RailStore", () => {
       ["t_add", 2],
       ["t_move", 2],
       ["t_hold", 2],
+    ]);
+  });
+
+  it("batches repeated safe and kept Done edits inline while leaving Needs you, Working, Rejected, Markers, and v2 rows individual", () => {
+    const store = new RailStore();
+    store.report("t1", {
+      you: 2, optional: 4, working: 2, done: 5, threadOrder: 0,
+      rows: [
+        // Needs you: never batched even with identical kind & thread.
+        makeRow({ key: "n/0", threadId: "t1", threadOrder: 0, at: 10, label: "Flagged cut 1", place: "you", editKind: "cut", value: "Cut" }),
+        makeRow({ key: "n/1", threadId: "t1", threadOrder: 0, at: 20, label: "Flagged cut 2", place: "you", editKind: "cut", value: "Cut" }),
+        // Working: never batched.
+        makeRow({ key: "w/0", threadId: "t1", threadOrder: 0, at: 30, label: "Revising gfx 1", place: "working", editKind: "graphic", value: "Graphic" }),
+        makeRow({ key: "w/1", threadId: "t1", threadOrder: 0, at: 40, label: "Revising gfx 2", place: "working", editKind: "graphic", value: "Graphic" }),
+        // Safe edits: 3 graphics collapse into 1 (+2), while 1 v2 graphic stays its own row.
+        makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 50, label: "Opus title", place: "optional", editKind: "graphic", value: "Graphic" }),
+        makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 70, label: "Fable title", place: "optional", editKind: "graphic", value: "Graphic" }),
+        makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 90, label: "Haiku title", place: "optional", editKind: "graphic", value: "Graphic" }),
+        makeRow({ key: "s/3", threadId: "t1", threadOrder: 0, at: 60, label: "Revised title", place: "optional", editKind: "graphic", value: "Graphic", version: 2 }),
+        // Done: 2 kept cuts collapse into 1 (+1), while rejected, marker, and v2 stay individual.
+        makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 100, label: "Cut silence 1", place: "done", editKind: "cut", value: "Kept", decision: "Kept" }),
+        makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 120, label: "Cut silence 2", place: "done", editKind: "cut", value: "Kept", decision: "Kept" }),
+        makeRow({ key: "d/2", threadId: "t1", threadOrder: 0, at: 110, label: "Rejected cut", place: "done", editKind: "cut", value: "Rejected", decision: "Rejected", decided: false, rejected: true }),
+        makeRow({ key: "d/3", threadId: "t1", threadOrder: 0, at: 130, label: "Add B-roll marker", place: "done", value: "Done", decision: "Done", isMarker: true }),
+        makeRow({ key: "d/4", threadId: "t1", threadOrder: 0, at: 140, label: "Kept v2 cut", place: "done", editKind: "cut", value: "Kept", decision: "Kept", version: 2 }),
+      ],
+    });
+
+    const view = store.view();
+    expect(view.sections.you).toHaveLength(2);
+    expect(view.sections.you.every(r => !r.batch)).toBe(true);
+    expect(view.sections.working).toHaveLength(2);
+    expect(view.sections.working.every(r => !r.batch)).toBe(true);
+
+    // Safe edits: total count = 4, rendered rows = 2 (1 batch of 3 + 1 v2 row).
+    expect(view.optional).toBe(4);
+    expect(view.sections.low.map(r => [r.label, r.batch?.length ?? 1, r.version])).toEqual([
+      ["Opus title", 3, 0],
+      ["Revised title", 1, 2],
+    ]);
+
+    // Done: total count = 5, rendered rows = 4 (1 batch of 2 + 1 rejected + 1 marker + 1 v2).
+    expect(view.done).toBe(5);
+    expect(view.sections.done.map(r => [r.label, r.batch?.length ?? 1, r.rejected, !!r.isMarker, r.unkeepTip])).toEqual([
+      ["Cut silence 1", 2, false, false, "Unkeep all 2"],
+      ["Rejected cut", 1, true, false, undefined],
+      ["Add B-roll marker", 1, false, true, undefined],
+      ["Kept v2 cut", 1, false, false, undefined],
     ]);
   });
 

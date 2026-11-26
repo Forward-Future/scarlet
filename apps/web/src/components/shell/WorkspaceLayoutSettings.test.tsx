@@ -754,39 +754,177 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
     await act(async () => {});
 
-    // One unified <ol> inside Safe edits, ordered newest request first (0:18, 1:02, 1:59), with add + move combined into one row.
+    // One unified <ol> inside Safe edits, ordered newest request first, combining add+move on Opus AND collapsing
+    // moveThread's 2 graphics (Opus + Fable) into one +1 row while addThread's Haiku stays its own row.
     const lowBody = container.querySelector<HTMLElement>('.review-low-body[aria-label="Safe edits"]')!;
     expect(lowBody.querySelectorAll("ol")).toHaveLength(1);
     const lowRows = [...lowBody.querySelectorAll<HTMLButtonElement>("ol > li > button")];
     expect(lowRows.map(r => [
       r.querySelector(".edit-row-time")?.textContent,
       r.querySelector(".simple-pass-words")?.textContent,
+      r.querySelector(".edit-batch-plus")?.textContent ?? null,
       r.querySelector(".simple-edit-value")?.textContent,
     ])).toEqual([
-      ["0:18", "Moved the Opus 5.5 title to the bottom left.", "Graphic"],
-      ["1:02", "Fable 5.2 title", "Graphic"],
-      ["1:59", "Haiku 5.5 title", "Graphic"],
+      ["0:18", "Moved the Opus 5.5 title to the bottom left.", "+1", "Graphic"],
+      ["1:59", "Haiku 5.5 title", null, "Graphic"],
     ]);
     expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("3");
     expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
 
-    // Keeping the combined row keeps BOTH underlying thread edits together and moves one combined row into Done.
+    // Clicking the +1 batch row opens the card with a 1 of 2 stepper and "Keep all 2", keeping all underlying thread edits together.
     await act(async () => lowRows[0]!.click());
     await act(async () => {});
-    const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")].find(b => b.textContent?.trim() === "Keep")!;
+    expect(container.querySelector(".edit-card-step-count")?.textContent).toBe("1 of 2");
+    const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")].find(b => b.textContent?.trim() === "Keep all 2")!;
+    expect(keepBtn).toBeTruthy();
     await act(async () => keepBtn.click());
     await act(async () => {});
     expect(keepSpy).toHaveBeenCalledTimes(2);
-    expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("2");
+    expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("1");
     const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")].find(b => b.textContent?.includes("Done"))!;
-    expect(doneHead.textContent).toContain("1");
+    expect(doneHead.textContent).toContain("2");
 
-    // ⌘Z undoes BOTH threads' Keep together so the combined row returns cleanly to Confident edits.
+    // ⌘Z undoes BOTH threads' Keep together so the combined batch returns cleanly to Safe edits.
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true }));
     });
     await act(async () => {});
     expect(unkeepSpy).toHaveBeenCalledTimes(2);
     expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("3");
+  });
+
+  it("groups repeated safe and kept Done edits inline with +N, lights all batch marks on the timeline, steps via card/hotkeys, and unkeeps Done batches together", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const baseTimeline = structuredClone(db.timelines[project.head!]!);
+    const leadClip = baseTimeline.tracks[0]!.clips[0]!;
+    if (leadClip.kind === "media") leadClip.sourceOut = leadClip.sourceIn + 180;
+    const baseApproved = db.changes.find(c => c.state === "approved") ?? db.changes[0]!;
+    const batchChange = {
+      ...baseApproved,
+      id: "chg_batch_gfx",
+      state: "approved" as const,
+      taskId: "task_batch_gfx",
+      appliedVersion: project.head!,
+      appliedReview: undefined,
+      approvedSpots: undefined,
+      cutChoices: undefined,
+      noteIds: [],
+      createdAt: "2026-11-24T10:00:00.000Z",
+      description: "Added model titles and audio cleanups.",
+      ops: [],
+    };
+    const batchTask = Task.parse({
+      id: "task_batch_gfx", projectId: PRJ, kind: "edit", agent: "claude",
+      instruction: "Add titles for every model", state: "done", createdBy: { type: "human", name: "Editor" },
+      changeIds: [batchChange.id], createdAt: "2026-11-24T10:00:00.000Z",
+    });
+    const threads = buildThreads({ changes: [batchChange], tasks: [batchTask], notes: [] });
+    const batchThread = threads[0]!;
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: baseTimeline,
+      media: project.media,
+      changes: [batchChange],
+      notes: [],
+      renders: db.renders,
+      tasks: [batchTask],
+      taskEvents: {},
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+    const unkeepSpy = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined as never);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === batchThread.id ? [
+        { changeId: batchChange.id, spot: 0, label: "Flagged Opus title", range: { start: 5, end: 8 }, kind: "graphic", previous: [], check: "Check framing." },
+        { changeId: batchChange.id, spot: 1, label: "Flagged Fable title", range: { start: 12, end: 15 }, kind: "graphic", previous: [], check: "Check overlap." },
+        { changeId: batchChange.id, spot: 2, label: "Haiku 5.5 title", range: { start: 25, end: 28 }, kind: "graphic", previous: [] },
+        { changeId: batchChange.id, spot: 3, label: "Sonnet 5.5 title", range: { start: 60, end: 63 }, kind: "graphic", previous: [] },
+        { changeId: batchChange.id, spot: 4, label: "Hydrogen title", range: { start: 100, end: 103 }, kind: "graphic", previous: [] },
+        { changeId: batchChange.id, spot: 5, label: "Rejected Neon title", range: { start: 130, end: 133 }, kind: "graphic", previous: [], rejected: true },
+      ] : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // Needs you stays individual (2 rows, no +N); Safe edits (3 graphics) collapses to 1 row with +2.
+    const needRows = [...container.querySelectorAll<HTMLButtonElement>('.review-rail-list ol[aria-label="Edits that need you"] > li > button')];
+    expect(needRows).toHaveLength(2);
+    expect(needRows.every(r => !r.querySelector(".edit-batch-plus"))).toBe(true);
+
+    const safeRows = [...container.querySelectorAll<HTMLButtonElement>('.review-low-body[aria-label="Safe edits"] ol > li > button')];
+    expect(safeRows).toHaveLength(1);
+    expect(safeRows[0]!.querySelector(".simple-pass-words")?.textContent).toBe("Haiku 5.5 title");
+    expect(safeRows[0]!.querySelector(".edit-batch-plus")?.textContent).toBe("+2");
+    expect(safeRows[0]!.querySelector(".simple-edit-value")?.textContent).toBe("Graphic");
+    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
+
+    // Click the +2 row: opens card with stepper 1 of 3, Keep all 3, Reject just this edit, and shows all 3 batch marks on the timeline.
+    await act(async () => safeRows[0]!.click());
+    await act(async () => {});
+    expect(container.querySelector(".edit-card-step-count")?.textContent).toBe("1 of 3");
+    const keepAllBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")].find(b => b.textContent?.trim() === "Keep all 3")!;
+    expect(keepAllBtn).toBeTruthy();
+    const rejectBtn = container.querySelector<HTMLButtonElement>(".edit-card-reject")!;
+    expect(rejectBtn.getAttribute("aria-label")).toBe("Reject just this edit");
+    expect(container.querySelectorAll(".simple-timeline-mark").length).toBeGreaterThanOrEqual(3);
+
+    // Step forward with ] hotkey -> 2 of 3, and composer aim row follows edit #2.
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "]", bubbles: true, cancelable: true }));
+    });
+    await act(async () => {});
+    expect(container.querySelector(".edit-card-step-count")?.textContent).toBe("2 of 3");
+    expect(container.querySelector(".composer-aim-row")?.textContent).toContain("Sonnet 5.5 title");
+
+    // Click Keep all 3 -> all 3 move to Done as one collapsed +2 Kept row beside the individual Rejected row.
+    await act(async () => keepAllBtn.click());
+    await act(async () => {});
+    const doneHead = [...container.querySelectorAll<HTMLButtonElement>(".review-sec")].find(b => b.textContent?.includes("Done"))!;
+    expect(doneHead.textContent).toContain("4");
+    await act(async () => doneHead.click());
+    await act(async () => {});
+
+    const doneRows = [...container.querySelectorAll<HTMLButtonElement>('.review-sec-body[aria-label="Done"] ol > li > button')];
+    expect(doneRows.map(r => [
+      r.querySelector(".simple-pass-words")?.textContent,
+      r.querySelector(".edit-batch-plus")?.textContent ?? null,
+      r.querySelector(".simple-edit-value")?.textContent,
+    ])).toEqual([
+      ["Haiku 5.5 title", "+2", "Kept"],
+      ["Rejected Neon title", null, "Rejected"],
+    ]);
+
+    // Clicking the Done +2 row opens the stepped card (1 of 3) with "Keep" (not "Keep all 3").
+    await act(async () => doneRows[0]!.click());
+    await act(async () => {});
+    expect(container.querySelector(".edit-card-step-count")?.textContent).toBe("1 of 3");
+    expect([...container.querySelectorAll<HTMLButtonElement>(".edit-card button")].some(b => b.textContent?.trim() === "Keep all 3")).toBe(false);
+    expect([...container.querySelectorAll<HTMLButtonElement>(".edit-card button")].some(b => b.textContent?.trim() === "Keep")).toBe(true);
+
+    // Clicking Unkeep on the Done +2 row unkeeps all 3 at once and restores the +2 row to Safe edits.
+    const unkeepBtn = container.querySelector<HTMLButtonElement>('.review-sec-body[aria-label="Done"] .simple-unkeep')!;
+    expect(unkeepBtn.getAttribute("title")).toBe("Unkeep all 3");
+    await act(async () => unkeepBtn.click());
+    await act(async () => {});
+    expect(unkeepSpy).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.review-low-body[aria-label="Safe edits"] .edit-batch-plus')?.textContent).toBe("+2");
+    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
   });
 });

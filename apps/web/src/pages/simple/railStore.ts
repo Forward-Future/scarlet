@@ -129,6 +129,8 @@ export interface UnifiedRailRow extends RailRow {
   threadIds: readonly string[];
   /** Underlying single-thread rows in chronological order (oldest first, newest last). */
   rows: readonly RailRow[];
+  /** When several same-request safe or kept edits of the same kind collapse into one row, the individual unified rows in timeline order (length >= 2). */
+  batch?: readonly UnifiedRailRow[];
 }
 
 export interface RailView {
@@ -259,10 +261,14 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
   const askingRow = group.find(r => r.asks);
   const pendingRow = group.find(r => r.pending);
   const word = askingRow?.word ?? pendingRow?.word ?? lead.word;
-  const isSpecificKind = (v?: string) => !!v && !isDecisionWord(v) && v !== "Edit";
-  const kindValue = isSpecificKind(lead.value)
+  const isSpecificValue = (v?: string) => !!v && !isDecisionWord(v) && v !== "Edit";
+  const isSpecificKind = (k?: EditKind) => !!k && k !== "other";
+  const editKind = isSpecificKind(lead.editKind)
+    ? lead.editKind
+    : [...group].reverse().find(r => isSpecificKind(r.editKind))?.editKind ?? lead.editKind;
+  const kindValue = isSpecificValue(lead.value)
     ? lead.value
-    : [...group].reverse().find(r => isSpecificKind(r.value))?.value
+    : [...group].reverse().find(r => isSpecificValue(r.value))?.value
       ?? (lead.value && !isDecisionWord(lead.value) ? lead.value : [...group].reverse().find(r => r.value && !isDecisionWord(r.value))?.value);
   const value = place === "done" ? (decision ?? lead.value) : kindValue;
   const members: RailEditMember[] = [];
@@ -284,6 +290,7 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
     latestThreadOrder: Math.max(...group.map(r => r.threadOrder)),
     threadIds: [...new Set(group.map(r => r.threadId))],
     rows: group,
+    editKind,
     value,
     word,
     decision,
@@ -321,6 +328,110 @@ const byNewestRequestThenTime = (a: UnifiedRailRow, b: UnifiedRailRow) =>
   || a.displayAt - b.displayAt
   || a.sourceOrder - b.sourceOrder
   || a.key.localeCompare(b.key);
+
+const KIND_PLURAL: Partial<Record<EditKind, string>> = {
+  cut: "cuts",
+  restore: "restores",
+  insert: "inserts",
+  audio: "audio edits",
+  dip: "music dips",
+  voice: "voice cleanups",
+  zoom: "zooms",
+  reframe: "reframes",
+  text: "text edits",
+  broll: "B-roll edits",
+  overlay: "overlays",
+  graphic: "graphics",
+  speed: "speed edits",
+  transition: "transitions",
+  split: "split edits",
+};
+
+function rowIsCut(row: UnifiedRailRow): boolean {
+  return !!row.editRef?.beforeCut || row.editKind === "cut"
+    || row.rows.some(r => !!r.editRef?.beforeCut || r.editKind === "cut");
+}
+
+function batchableRow(row: UnifiedRailRow, section: "low" | "done"): boolean {
+  if (row.isCall || row.isMarker || row.rejected || row.skipped || row.moment) return false;
+  if (row.needs || row.asks || row.pending || row.hasNeedNest) return false;
+  if (row.version > 0 || row.members.length === 0) return false;
+  if (section === "done" && !row.decided) return false;
+  return true;
+}
+
+function batchBucket(row: UnifiedRailRow): string {
+  const threadKey = `${row.latestThreadOrder}:${row.threadId}`;
+  if (rowIsCut(row)) return `${threadKey}:cut`;
+  if (row.editKind && row.editKind !== "other") return `${threadKey}:kind:${row.editKind}`;
+  const changeId = row.editRef?.changeId ?? row.members.at(-1)?.edit.changeId;
+  return changeId ? `${threadKey}:change:${changeId}` : `${threadKey}:key:${row.key}`;
+}
+
+function batchPluralWord(row: UnifiedRailRow): string {
+  if (rowIsCut(row)) return "cuts";
+  return (row.editKind && KIND_PLURAL[row.editKind]) ?? "edits";
+}
+
+/**
+ * Collapse repeated safe or kept edits of the same kind within a request into one regular row with a `+N` count,
+ * keeping flagged, revising, rejected, marker, and revised (`v2`) edits as individual rows.
+ */
+function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" | "done"): UnifiedRailRow[] {
+  const byBucket = new Map<string, UnifiedRailRow[]>();
+  const passthrough: UnifiedRailRow[] = [];
+  for (const row of rows) {
+    if (!batchableRow(row, section)) {
+      passthrough.push(row);
+      continue;
+    }
+    const bucket = batchBucket(row);
+    const list = byBucket.get(bucket);
+    if (list) list.push(row);
+    else byBucket.set(bucket, [row]);
+  }
+  const result: UnifiedRailRow[] = [...passthrough];
+  for (const [bucket, items] of byBucket) {
+    if (items.length === 1) {
+      result.push(items[0]!);
+      continue;
+    }
+    const ordered = [...items].sort(byVideoTime);
+    const first = ordered[0]!;
+    const active = ordered.find(r => r.on);
+    const members: RailEditMember[] = [];
+    const seenMembers = new Set<string>();
+    for (const item of ordered) {
+      for (const m of item.members) {
+        const mk = `${m.threadId}:${editKey(m.edit)}`;
+        if (seenMembers.has(mk)) continue;
+        seenMembers.add(mk);
+        members.push(m);
+      }
+    }
+    const pluralWord = batchPluralWord(first);
+    result.push({
+      ...first,
+      key: `batch:${section}:${bucket}`,
+      threadIds: [...new Set(ordered.flatMap(r => r.threadIds))],
+      rows: ordered.flatMap(r => r.rows),
+      members,
+      on: !!active,
+      fresh: ordered.some(r => r.fresh),
+      hadCheck: ordered.some(r => r.hadCheck),
+      open: (active ?? first).open,
+      tipText: first.tipText ?? first.label,
+      tipDetail: section === "done"
+        ? `${ordered.length} kept ${pluralWord} · click to view all on the timeline`
+        : `${ordered.length} ${pluralWord} · click to review all on the timeline`,
+      unkeepTip: section === "done" ? `Unkeep all ${ordered.length}` : first.unkeepTip,
+      batch: ordered,
+    });
+  }
+  return result.sort(section === "low" ? byNewestRequestThenTime : byVideoTime);
+}
+
+const rowEditCount = (row: UnifiedRailRow) => row.batch ? row.batch.length : 1;
 
 /**
  * Combine cross-request edits that modify the same clip/stretch and sort every section of the beta edits column into
@@ -383,23 +494,24 @@ export function buildUnifiedRail(infos: ReadonlyMap<string, RailInfo>): RailView
   for (const group of groups) {
     const unified = synthesizeRow(group.rows);
     sections[unified.section].push(unified);
-    byKey.set(unified.key, unified);
     if (Math.floor(Math.max(0, unified.displayAt)) >= 3600) pastHour = true;
   }
 
   sections.you.sort(byVideoTime);
-  sections.low.sort(byNewestRequestThenTime);
+  sections.low = collapseSectionBatches(sections.low, "low");
   sections.working.sort(byVideoTime);
-  sections.done.sort(byVideoTime);
+  sections.done = collapseSectionBatches(sections.done, "done");
 
   const orderedSections: readonly UnifiedRailRow[][] = [sections.you, sections.low, sections.working, sections.done];
+  for (const list of orderedSections) for (const row of list) byKey.set(row.key, row);
+
   return {
     sections,
     need: sections.you.filter(r => r.countsAsNeed).length,
     forYouRows: sections.you.length,
-    optional: sections.low.length,
+    optional: sections.low.reduce((sum, r) => sum + rowEditCount(r), 0),
     working: sections.working.length,
-    done: sections.done.length,
+    done: sections.done.reduce((sum, r) => sum + rowEditCount(r), 0),
     pastHour,
     findByKey: key => byKey.get(key),
     findOpen: () => {
