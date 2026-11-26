@@ -5,7 +5,6 @@ import type { MessageTimestamp } from "../../lib/messageTimestamps";
 import { isComposing } from "../../lib/hotkeys";
 import { skillCommands, useSkillsStore } from "../../stores/skills";
 import { styleGuideCommands, useStyleGuidesStore } from "../../stores/styleGuides";
-import { useUiStore } from "../../stores/ui";
 import { Icon } from "../ui/primitives";
 import { useTokenList } from "./useTokenList";
 
@@ -38,13 +37,12 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, ti
   const activeRow = useRef<HTMLButtonElement>(null);
   const status = useSkillsStore(s => s.status);
   const load = useSkillsStore(s => s.load);
-  const styleGuidesBeta = useUiStore(s => s.styleGuidesBeta);
   const styleGuides = useStyleGuidesStore(s => s.styleGuides);
   const styleStatus = useStyleGuidesStore(s => s.status);
   const loadStyleGuides = useStyleGuidesStore(s => s.load);
 
   const skillToken = caret === null || plain ? undefined : skillCommands(value).find(t => t.start < caret && caret <= t.end);
-  const styleToken = caret === null || plain || skillToken || !styleGuidesBeta ? undefined : styleGuideCommands(value).find(t => t.start < caret && caret <= t.end);
+  const styleToken = caret === null || plain || skillToken ? undefined : styleGuideCommands(value).find(t => t.start < caret && caret <= t.end);
   const mode: "skill" | "style" | null = skillToken ? "skill" : styleToken ? "style" : null;
   const token = skillToken ?? styleToken;
   const open = list.focused && !list.dismissed && !!token;

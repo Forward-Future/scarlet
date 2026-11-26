@@ -9,7 +9,6 @@ import {
 } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
 import { changedDuringLoad } from "./changedDuringLoad";
-import { useUiStore } from "./ui";
 
 interface StyleGuidesState {
   styleGuides: StyleGuideRecord[];
@@ -31,7 +30,6 @@ export { styleGuideCommands, styleGuideMentions };
 
 /** Resolve known @style-name mentions in a message draft. Unknown @handles stay plain text. */
 export async function commandStyleGuideIds(draft: string): Promise<string[] | undefined> {
-  if (!useUiStore.getState().styleGuidesBeta) return;
   const names = styleGuideMentions(draft);
   if (!names.length) return;
   const store = useStyleGuidesStore.getState();

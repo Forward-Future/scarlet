@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Style guides are out of beta and always on: find them in Settings › Style guides and use @name in chat or skills without turning on a beta switch.
 - Keeping safe edits no longer floods a message with repeated learnings; Scarlet now checks one at a time and caps each message at two waiting rules.
 - Pulling a suggested cut down to nothing to put it back now always keeps the footage, even on a cut Scarlet had suggested keeping.
 - Dragging the edge of a suggested cut now stops short of the next suggested cut, even after the video changed while the cuts waited.

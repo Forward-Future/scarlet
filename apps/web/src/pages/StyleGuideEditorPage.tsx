@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { slugifyStyleGuideName, type StyleGuideAsset, type StyleGuideRecord, type Task, type TaskEvent } from "@scarlet/shared";
 import { AgentChip, useAgentAvailability } from "../components/agent/AgentChip";
 import { SkillCommandInput } from "../components/agent/SkillCommandInput";
@@ -13,7 +13,6 @@ import { taskActivityLabel } from "../lib/taskActivity";
 import { isActiveTask } from "../lib/taskRun";
 import { useEscapeToLeave, useFileDropTarget } from "../lib/uiHooks";
 import { useStyleGuidesStore } from "../stores/styleGuides";
-import { useUiStore } from "../stores/ui";
 import "../simple.css";
 
 interface StagedFile {
@@ -35,7 +34,6 @@ function uniqueSlug(base: string, existing: readonly StyleGuideRecord[]): string
 }
 
 export function StyleGuideEditorPage() {
-  const styleGuidesBeta = useUiStore(s => s.styleGuidesBeta);
   const { styleGuideId } = useParams();
   const isNew = !styleGuideId;
   const navigate = useNavigate();
@@ -328,7 +326,6 @@ export function StyleGuideEditorPage() {
     return "Updating the style guide…";
   }, [activeEvents]);
 
-  if (!styleGuidesBeta) return <Navigate replace to="/settings" />;
   if (!isNew && loadError) {
     return (
       <div className="flex-1 min-h-0 flex flex-col">

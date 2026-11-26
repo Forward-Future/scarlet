@@ -520,7 +520,6 @@ export interface ResolvedPromptStyleGuide {
  * 3. Otherwise, the library's Default style guide (if one is set).
  */
 export function resolvePromptStyleGuides(ctx: Ctx, task: Task, activeSkills: readonly Skill[]): ResolvedPromptStyleGuide[] {
-  if (!ctx.settings().styleGuidesBeta) return [];
   const all = listStyleGuides(ctx);
   if (!all.length) return [];
 
