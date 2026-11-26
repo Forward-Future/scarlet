@@ -286,14 +286,6 @@
 [data-new-layout] .simple-need-link { align-self: flex-start; display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 0; border: 0; background: none; color: var(--color-fg);
   font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 
-/* Project-wide Pause / Resume pill beside "Scarlet is editing" under the timeline. */
-[data-new-layout] .timeline-working-group { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-[data-new-layout] .timeline-working-paused { font-size: 12px; color: var(--color-warn); white-space: nowrap; }
-[data-new-layout] .timeline-working-pause { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border: 1px solid var(--color-line);
-  border-radius: 999px; background: rgba(255, 255, 255, .05); color: var(--color-muted); font: inherit; font-size: 11.5px; font-weight: 500; cursor: pointer; }
-[data-new-layout] .timeline-working-pause:is(:hover, :focus-visible) { border-color: var(--color-muted); background: rgba(255, 255, 255, .09); color: var(--color-fg); }
-[data-new-layout] .timeline-working-pause.is-resume { border-color: rgba(237, 194, 133, .38); color: var(--color-fg); }
-
 /* Slim card above the timeline when opening an edit Scarlet is currently revising. */
 [data-new-layout] .edit-card.is-working { padding: 10px 14px; }
 [data-new-layout] .working-card-bar { display: flex; align-items: center; gap: 8px; min-width: 0; }

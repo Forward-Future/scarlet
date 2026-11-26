@@ -259,9 +259,10 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".queue-next")).toBeNull();
     expect(container.querySelector(".queue-paused")?.textContent).toBe("Editing paused");
 
-    // #12: Pause/Resume lives under the timeline (not on chat bubbles).
+    // No Pause/Resume button on the timeline or chat bubbles; paused projects can still resume from the chat queue.
     expect(container.querySelector("#simple-chat .unit-pause-edit")).toBeNull();
-    expect(container.querySelector(".timeline-working-pause.is-resume")?.textContent).toBe("Resume");
+    expect(container.querySelector(".timeline-working-pause")).toBeNull();
+    expect(container.querySelector(".queue-editing-action")?.textContent).toBe("Resume");
 
     // #13: Clicking the Working edit ("captions") shows the slim Working card with Stop.
     const workingBtn = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot button.simple-edit")]

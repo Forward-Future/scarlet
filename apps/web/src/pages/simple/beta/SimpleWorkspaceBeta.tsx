@@ -2285,7 +2285,6 @@ export function SimpleWorkspaceBeta() {
   // The requests waiting their turn, in the order Scarlet will run them: a note on a call of the pass that waits goes
   // ahead of a new edit asked before it, which the calls hold back. An interrupted request keeps its place here.
   const cancelTask = useProjectStore(s => s.cancelTask);
-  const stopEditing = useProjectStore(s => s.stopEditing);
   const resumeEditing = useProjectStore(s => s.resumeEditing);
   const holdForRewording = useProjectStore(s => s.holdForRewording);
   const rewordTask = useProjectStore(s => s.rewordTask);
@@ -2493,10 +2492,6 @@ export function SimpleWorkspaceBeta() {
   };
   const { effective } = useAgentAvailability();
   const resumeRunWith = resumeRunChoice(tasks, effective);
-  const toggleEditingPause = () => {
-    if (editingPaused) void queueAction(resumeRunWith ? resumeEditing(current.id, resumeRunWith) : resumeEditing(current.id)).catch(() => {});
-    else void queueAction(stopEditing(current.id)).catch(() => {});
-  };
   // Requests waiting their turn are the editor's messages too: bubbles in the chat, right at the end of the conversation.
   const queueRows = queuedItems.length > 0 || editingPaused ? <QueueInChat items={queuedItems} hint={queueHint} waits={queueWaitsOn} rewording={rewordingItem?.id}
       onRemove={id => void removeQueued(id)}
@@ -2609,7 +2604,7 @@ export function SimpleWorkspaceBeta() {
         <div className="workspace-stage simple-stage">
           {/* An applied cut plays on the version before it, where the working cut's times don't hold, and a suggestion's
               dots are all its own: neither has dots beside its band. */}
-          <CutPreview simple={{ seekFromMessage, typedTimes, marks: source ? [] : beforeCut ? (leavingNow ? [] : batchCutDots) : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? workingCard ?? editCard ?? callCard ?? suggestCard, foot: <><TimelineWorking tasks={timelineWork} rootOf={rootOf} pause={editing || editingPaused ? { paused: !!editingPaused, onToggle: toggleEditingPause } : undefined} />{undoFoot}</>,
+          <CutPreview simple={{ seekFromMessage, typedTimes, marks: source ? [] : beforeCut ? (leavingNow ? [] : batchCutDots) : suggestion && lineFocus ? marks : leavingMarks, fit: fitTimeline, focus: leavingNow && lineFocus ? { ...lineFocus, leaving: true } : lineFocus, label: onVideo, compareHost: reviewingEdit ? compareHost : undefined, above: rejectedCard ?? workingCard ?? editCard ?? callCard ?? suggestCard, foot: <><TimelineWorking tasks={timelineWork} rootOf={rootOf} />{undoFoot}</>,
             gaps: cutKey ? [...gaps, ...stagedGaps] : callGaps ?? (stagedGaps.length ? stagedGaps : undefined),
             skippedRanges: cutKey || callView || !stagedCalls.length
               ? joinedPlayer?.clock.removed && playedListen !== appliedListen ? [...joinedPlayer.clock.removed, ...stagedAround.map(c => c.removed)]
