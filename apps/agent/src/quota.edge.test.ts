@@ -116,7 +116,7 @@ describe("probeSubscriptionQuota for Codex", () => {
     const calls = peer(answer());
     const quota = await probeSubscriptionQuota("codex", "codex", {});
     expect(quota).toMatchObject({ plan: "Plus", buckets: [{ id: "5h", remainingPercent: 60 }] });
-    expect(calls[0]!.args).toEqual(["app-server"]);
+    expect(calls[0]!.args).toEqual(["app-server", "-c", "analytics.enabled=false"]);
     expect(calls[0]!.requests.map(r => r.method)).toEqual(["initialize", "initialized", "account/rateLimits/read", "account/read"]);
     expect(calls[0]!.killed).toBe(true);
   });
