@@ -77,6 +77,8 @@ try {
       const pages = ctx.db.prepare("SELECT count(*) AS n FROM dialogue_scan_pages WHERE media_id = ?").get(m.id).n;
       const name = label[m.id], all = pagesOf(m);
       if (t) mark(`${name}: words`);
+      // A pass reads a page with the transcript's word numbers once its words are placed through that page.
+      if (t && (t.through === null || t.through >= Math.min(60, m.duration))) mark(`${name}: words placed through the first page`);
       if (t && t.through === null) mark(`${name}: words placed on the audio`);
       if (pages >= 1) mark(`${name}: first scan page`);
       if (pages >= Math.ceil(all / 2)) mark(`${name}: half the scan pages`);
