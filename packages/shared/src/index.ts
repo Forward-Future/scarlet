@@ -8,6 +8,7 @@ export * from "./usage.js";
 export * from "./graphics.js";
 export * from "./skills.js";
 export * from "./styleGuides.js";
+export * from "./youtube.js";
 export * from "./wsEvents.js";
 export * from "./checkIn.js";
 export * from "./telemetry.js";

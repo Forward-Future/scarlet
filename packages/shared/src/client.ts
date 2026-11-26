@@ -32,6 +32,13 @@ import type {
   TaskStyleGuideDraft,
   UpdateStyleGuideRequest,
 } from "./styleGuides.js";
+import type {
+  YouTubeChaptersResponse,
+  YouTubeConfigRequest,
+  YouTubeConnectionStatus,
+  YouTubePublishRequest,
+  YouTubeUploadJob,
+} from "./youtube.js";
 
 /**
  * File extension for a recorded clip. Chromium (Windows) records webm/opus;
@@ -789,5 +796,42 @@ export class ScarletClient extends ClientTransport {
   }
   updateSettings(body: Partial<ServerSettings>) {
     return this.patch<{ settings: ServerSettings }>("/settings", body);
+  }
+
+  // YouTube connection, final-cut chapters & direct upload
+  youtubeStatus() {
+    return this.get<{ status: YouTubeConnectionStatus }>("/settings/youtube");
+  }
+  youtubeUpdateConfig(body: YouTubeConfigRequest) {
+    return this.put<{ status: YouTubeConnectionStatus }>("/settings/youtube/config", body);
+  }
+  youtubeConnect() {
+    return this.post<{ authUrl: string; status: YouTubeConnectionStatus }>("/settings/youtube/connect", {});
+  }
+  youtubeCancelConnect() {
+    return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/cancel", {});
+  }
+  youtubeDisconnect() {
+    return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/disconnect", {});
+  }
+  youtubeChapters(projectId: string, version?: string, signal?: AbortSignal) {
+    return this.request<YouTubeChaptersResponse>(
+      "GET",
+      withQuery(`/projects/${apiPathId(projectId)}/youtube/chapters`, { version }),
+      undefined,
+      { signal },
+    );
+  }
+  youtubePublish(projectId: string, body: YouTubePublishRequest) {
+    return this.post<{ upload: YouTubeUploadJob }>(`/projects/${apiPathId(projectId)}/youtube/publish`, body);
+  }
+  youtubeUploads(projectId: string) {
+    return this.get<{ uploads: YouTubeUploadJob[] }>(`/projects/${apiPathId(projectId)}/youtube/uploads`);
+  }
+  youtubeUpload(uploadId: string) {
+    return this.get<{ upload: YouTubeUploadJob }>(`/youtube/uploads/${apiPathId(uploadId)}`);
+  }
+  youtubeCancelUpload(uploadId: string) {
+    return this.post<{ upload: YouTubeUploadJob }>(`/youtube/uploads/${apiPathId(uploadId)}/cancel`, {});
   }
 }
