@@ -86,7 +86,7 @@ interface FfprobeStream {
   bits_per_raw_sample?: string;
   tags?: { rotate?: string; alpha_mode?: string; ALPHA_MODE?: string } & Record<string, string | undefined>;
 }
-interface FfprobeOutput {
+export interface FfprobeOutput {
   streams?: FfprobeStream[];
   format?: { start_time?: string; duration?: string; bit_rate?: string; format_name?: string; tags?: Record<string, string | undefined> };
 }

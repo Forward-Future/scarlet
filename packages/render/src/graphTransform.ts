@@ -209,12 +209,13 @@ export function transformChain(tf: AnimatedTransform, W: number, H: number): str
       `crop=w='trunc(iw*${fnum(w)})':h='trunc(ih*${fnum(h)})':x='trunc(iw*${fnum(base.cropLeft)})':y='trunc(ih*${fnum(base.cropTop)})'`,
     );
   }
-  const fit = `min(${W}/iw,${H}/ih)`;
+  // Contain-fit uses the displayed width (iw*sar) so non-square pixels keep their true shape.
+  const fit = `min(${W}/(iw*sar),${H}/ih)`;
   // In scale expressions `t` is the input frame's timestamp (clip-local after setpts).
   const s = tf.scale ? `(${tf.scale.replaceAll(T, "t")})` : fnum(base.scale);
   const eval_ = tf.scale ? ":eval=frame" : "";
   chain.push(
-    `scale=w='max(2,trunc(iw*${fit}*${s}/2)*2)':h='max(2,trunc(ih*${fit}*${s}/2)*2)'${eval_}:flags=bicubic`,
+    `scale=w='max(2,trunc(iw*sar*${fit}*${s}/2)*2)':h='max(2,trunc(ih*${fit}*${s}/2)*2)'${eval_}:flags=bicubic`,
   );
   chain.push("format=yuva420p");
   if (base.cornerRadius) {

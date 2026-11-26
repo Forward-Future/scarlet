@@ -7,7 +7,7 @@ import type { Clip, MediaAsset, MediaClip, Timeline, TimeRange } from "@scarlet/
 import { effectKind } from "./effects.js";
 import { fnum } from "./exec.js";
 import { clipPlacement, type Placement } from "./graphTransform.js";
-import { hasIndexedAvc, matchesCanvasFormat, type ProbeResult } from "./probe.js";
+import { hasIndexedAvc, matchesCanvasFormat, parseRate, type FfprobeOutput, type ProbeResult } from "./probe.js";
 import type { TransitionMotion } from "./transitions.js";
 
 export function hasIndexedClock(source: ProbeResult | undefined, fps: number | undefined): source is ProbeResult {
@@ -74,6 +74,12 @@ function fittedSize(iw: number, ih: number, W: number, H: number, scale: number)
   return { w: Math.max(2, Math.trunc(iw * fit * s / 2) * 2), h: Math.max(2, Math.trunc(ih * fit * s / 2) * 2) };
 }
 
+/** The video stream's sample aspect ratio, as FFmpeg's `sar`: 1 when absent or unknown ("0:1"). */
+function sampleAspectRatio(probe: ProbeResult | undefined): number {
+  const stream = (probe?.raw as FfprobeOutput | undefined)?.streams?.find(s => s.codec_type === "video" && !s.disposition?.attached_pic);
+  return parseRate(stream?.sample_aspect_ratio?.replace(":", "/")) || 1;
+}
+
 /**
  * True only when every output pixel of the clip's visible window is an opaque
  * pixel of this clip: no alpha source, fade, opacity, keyframe, visual effect,
@@ -102,7 +108,7 @@ function coversCanvas(clip: Clip, p: Placement, media: Map<string, MediaAsset>, 
     if (picture?.videoStart === undefined || !picture.videoDuration || !asset.duration ||
         sourceStart < picture.videoStart - 1e-6 || sourceEnd > Math.min(asset.duration, picture.videoStart + picture.videoDuration) + 1e-6) return false;
   }
-  const { w, h } = fittedSize(asset.width, asset.height, W, H, tf.scale);
+  const { w, h } = fittedSize(asset.width * sampleAspectRatio(picture), asset.height, W, H, tf.scale);
   return w >= W && h >= H;
 }
 
