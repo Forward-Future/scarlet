@@ -105,7 +105,7 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
   };
   const args = {
     claude: ["--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"],
-    codex: ["app-server"],
+    codex: ["app-server", "-c", "analytics.enabled=false"],
     gemini: ["acp", "--disable-telemetry"],
   };
   let requestId = 1;

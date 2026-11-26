@@ -133,6 +133,8 @@ export class Browser {
       "--headless=new", "--remote-debugging-pipe", `--user-data-dir=${profile}`,
       "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--disable-default-apps",
       "--disable-background-networking", "--disable-component-update", "--disable-domain-reliability", "--metrics-recording-only",
+      "--disable-breakpad", "--disable-crash-reporter", "--no-pings", "--disable-client-side-phishing-detection",
+      "--safebrowsing-disable-auto-update",
       "--mute-audio", "--hide-scrollbars", "--force-color-profile=srgb", "--font-render-hinting=none",
       "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
       "--allow-file-access-from-files", "--disable-features=Translate,MediaRouter,OptimizationHints,DialMediaRouteProvider",

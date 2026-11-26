@@ -21,6 +21,7 @@ import { newId } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, HttpError, notFound } from "../errors.js";
+import { recordYouTubeUploadFinished } from "../telemetry/events.js";
 import { actorFor, logActivity } from "./activity.js";
 import { getValidYouTubeAccessToken, getYouTubeStatus, markYouTubeNeedsReconnect } from "./youtubeAuth.js";
 
@@ -402,6 +403,7 @@ async function runPublishPipeline(
       finishedAt: now(),
     });
     ctx.log(`[youtube] upload complete id=${entry.job.id} visibility=${req.visibility}${entry.job.reusedRender ? " reusedRender=true" : ""}`);
+    recordYouTubeUploadFinished(ctx, { state: "done", visibility: req.visibility, reusedRender: !!entry.job.reusedRender });
     logActivity(ctx, {
       projectId: entry.job.projectId,
       actor: actorFor(user),
@@ -421,6 +423,7 @@ async function runPublishPipeline(
         entry.job = { ...entry.job, phase: "cancelled", finishedAt: now() };
         emitUpload(ctx, entry.job);
       }
+      recordYouTubeUploadFinished(ctx, { state: "cancelled", visibility: req.visibility, reusedRender: !!entry.job.reusedRender });
       return;
     }
     let code = "youtube_upload_failed";
@@ -433,6 +436,7 @@ async function runPublishPipeline(
       message = "Couldn’t reach YouTube. Check your internet connection and try again.";
     }
     ctx.log(`[youtube] upload failed id=${entry.job.id} code=${code}`);
+    recordYouTubeUploadFinished(ctx, { state: "failed", visibility: req.visibility, reusedRender: !!entry.job.reusedRender, failureCode: code });
     update({
       phase: "failed",
       error: message,

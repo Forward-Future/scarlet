@@ -11,10 +11,16 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - A style guide saved from a graphic now lists fonts whose names are in quotes, such as "Brand Serif", instead of an empty line.
 - Built-in style guide sounds now play correctly when only their ending is asked for.
 - Accented names in Settings › Models › Task models keep their letters together, so "Étalonnage" no longer becomes "e-talonnage".
+- In the beta layout, the Working and Done headings in the edits column now stay pinned in view while their lists scroll.
+- Style guides now also keep transitions, sound effects and a camera color look, each on its own tab beside Graphics: replay a transition between two sample shots, play sound effects or add them from a built-in starter library with a mix level and a note on when to use them, and describe a color look in chat or drop a .cube or .3dl look file. Scarlet follows them when it edits.
+- Drop a .json style file on Settings › Style guides or on a style guide, or use Import file, to load all its settings at once. Export on a style guide saves them all as a .style.json file. Other files, such as a .md, .yaml, .pdf or .cube, open in the style guide's chat for Scarlet to read.
+- A new Color matching skill evens out exposure, white balance and contrast across cameras, or applies your style guide's color look across the edit.
+- A new Multi-camera editing skill lets Scarlet line up several cameras and separate microphones, work out which camera shows each speaker, and switch between angles at a natural pace for podcasts and interviews.
+- Turning off Send usage reports now also forgets this computer's anonymous ID, and Claude Code and Codex no longer send their own usage data while Scarlet runs them.
 - Rejecting an edit now moves straight to the next edit in line instead of staying on the rejected card.
 - Taking back a rejected edit with ⌘Z now simply brings the edit back, without an extra "Undo · Rejected" line in the chat or a second row for it.
 - After an export, the Export window still offers the folder for Resolve, Final Cut or Premiere, and Back from it.
-- Exporting only captions no longer marks the video as exported.
+- Saving only captions or a timeline file no longer marks the video as exported.
 - Music and other files with no speech no longer get made-up words like "Thank you." in their transcript.
 - Connect your YouTube channel in Settings › General, then open Export › Publish to YouTube to upload finished cuts with final-cut chapter timestamps straight to YouTube Studio (starting as a Private draft by default).
 - Style guides now cover captions alongside lower thirds, callout boxes, and graphics — including custom fonts, weights, and built-in starter presets in Settings › Style guides — and are easier to reach from the `/` and `@` pickers and Project settings.
@@ -25,6 +31,15 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- The Show → link after a request's summary in the chat is gone; its edits are in Needs review.
+- In the beta layout, Safe edits now start folded under their heading. Press it to open them; opening one of them from the timeline, the chat or the arrows opens it too.
+- Keep N safe edits now sits on the Safe edits divider in Needs review, right above the edits it keeps, instead of in the heading.
+- In the beta layout, "Scarlet is editing" under the timeline no longer has a Pause button beside it.
+- Opening a project no longer briefly shows edits that were undone or replaced before its list of edits settles.
+- Pausing the video now puts playback back to normal speed, so it doesn't start fast again when you play on.
+- L now switches between normal speed and a fast speed you choose in the player's playback speed menu (1.5× unless you pick 1.25×, 1.75× or 2×), instead of stepping up a little each press.
+- Requests no longer fail on an older Claude Code that doesn't know some of the options Scarlet starts it with: Scarlet tries again without them.
+- Downloading the Whisper model for local transcription now tries again after a dropped or stalled connection, and on Windows waits out antivirus briefly locking the file, instead of failing.
 - In the beta layout, an edit you send back to Scarlet to revise no longer shows a "Scarlet is revising this" card above the timeline; as in the default layout, its card comes back once the new version is ready.
 - In the beta layout, keeping, rejecting, or revising an edit now keeps its row briefly in place with its new status before smoothly fading and moving it to Working or Done.
 - In the beta layout, the chat and the Needs review column now start at the same width (until you drag either one).
