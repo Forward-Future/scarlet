@@ -24,6 +24,7 @@ import { useUiStore } from "../../../stores/ui";
 import { PassSummary, ThreadResult } from "./PassSummaryBeta";
 import { useReviewRail } from "../railStore";
 import { callRowKey, isWorking, letGo, noop, PAUSED_HINT, tagOf, type ChatActions, type Nest, type PassList, type ReportReviewMarkers } from "../types";
+import { ReportLink } from "../../../components/shell/ReportProblem";
 
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
 const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|Scarlet couldn’t finish this edit\.)$/;
@@ -90,6 +91,8 @@ function ChangeReply({ thread, entry, actions }: { thread: Thread; entry: Extrac
     {pending && !pass ? <button type="button" className={reviewing ? "simple-suggest is-on" : "simple-suggest"} aria-pressed={reviewing}
       title={reviewing ? "Stop showing this suggestion" : "Play this suggestion"} onClick={letGo(() => reviewing ? actions.stopShowing() : actions.review(change))}>
       <Icon name="play" size={11} /><span title={entry.text}>{entry.text}</span></button> : <Said text={entry.text} />}
+    {/* An edit whose version couldn't be prepared can be reported from here, with what went wrong. */}
+    {change.state === "failed" && <ReportLink className="simple-link" about={change.error ? `${entry.text}\n${change.error}` : entry.text} />}
   </div>;
 }
 

@@ -1,11 +1,14 @@
 //! "Export logs…" (Settings → Advanced): one .zip a tester can send to whoever is helping them.
 //! It holds the log folder and a short system report. No media, projects or database.
 //!
-//! "Report a problem…" (Help menu, Settings → Advanced, and the screen a crash leaves) saves the same bundle with the
-//! editor's own words in it, straight to Downloads, and hands the window a short summary for the issue it opens.
+//! "Report a problem" (beside an error where it shows, the Help menu, Settings → Advanced and the screen a crash leaves)
+//! sends the same cleaned logs with the editor's own words straight to the Scarlet team (`send.rs`). Should that fail,
+//! it saves them as a bundle in Downloads instead.
 
 mod sanitize;
+pub mod send;
 mod zip;
+
 
 use std::path::{Path, PathBuf};
 
@@ -18,16 +21,20 @@ use zip::Zip;
 const README: &str = "Scarlet logs\n\n\
 system.json: Scarlet version, OS, engine and CLI status, and desktop settings.\n\
 logs/: UTC event times, operations, and allowlisted diagnostic fields from the desktop log.\n\
-report.txt (in a problem report): what the editor wrote about the problem.\n\
+report.txt (in a problem report): what the editor wrote about the problem, and what was on screen.\n\
 Search for a task id (tsk_...) to follow an edit, or for a request id to follow a transfer.\n\n\
 Not included: videos, projects, transcripts, the project database or sign-in tokens.\n";
 
-/// Lines of the newest warnings and errors a problem report quotes in the issue it opens.
+/// Lines of the newest warnings and errors a problem report quotes on its own, beside the whole log.
 const RECENT_PROBLEMS: usize = 12;
-/// A line quoted there is cut to this many characters: the whole line is in the .zip.
+/// A line quoted there is cut to this many characters: the whole line is in the log.
 const PROBLEM_LINE_CHARS: usize = 300;
 /// What the editor wrote is kept to this many characters.
 const DESCRIPTION_CHARS: usize = 5000;
+/// The error a report was asked about is kept to this many characters.
+const ABOUT_CHARS: usize = 2000;
+/// The newest errors the window showed that a report carries.
+const ON_SCREEN_LINES: usize = 5;
 
 /// A dated file name (UTC): `scarlet-logs-2026-11-06-1432.zip`.
 fn dated_name(prefix: &str) -> String {
@@ -57,7 +64,47 @@ fn log_files(dir: &Path) -> Vec<PathBuf> {
 /// A bundle, and the newest warning and error lines in it (already cleaned), oldest first.
 struct Bundle {
     bytes: Vec<u8>,
-    recent_problems: Vec<String>,
+}
+
+/// What the editor wrote, and the error they were looking at when they asked to report it.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ReportWords {
+    pub description: String,
+    /// The error on screen where the report was asked for ("Couldn't finish: Claude Code stopped responding.").
+    pub about: Option<String>,
+    /// The page, as the window's log names it: its path and the names of its query parameters.
+    pub page: Option<String>,
+    /// The newest errors the window showed, oldest first, as its log records them.
+    pub on_screen: Vec<String>,
+}
+
+impl ReportWords {
+    fn description(&self) -> Option<String> {
+        Some(self.description.trim()).filter(|w| !w.is_empty()).map(|w| clip(w, DESCRIPTION_CHARS))
+    }
+    fn about(&self) -> Option<String> {
+        self.about.as_deref().map(str::trim).filter(|w| !w.is_empty()).map(|w| clip(w, ABOUT_CHARS))
+    }
+    fn on_screen(&self) -> Vec<String> {
+        let start = self.on_screen.len().saturating_sub(ON_SCREEN_LINES);
+        self.on_screen[start..].iter().map(|l| clip(l.trim(), PROBLEM_LINE_CHARS)).filter(|l| !l.is_empty()).collect()
+    }
+    /// The words as report.txt has them.
+    fn text(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if let Some(words) = self.description() {
+            parts.push(format!("What happened, in the editor's words:\n\n{words}\n"));
+        }
+        if let Some(about) = self.about() {
+            parts.push(format!("The error on screen:\n\n{about}\n"));
+        }
+        let shown = self.on_screen();
+        if !shown.is_empty() {
+            parts.push(format!("Errors the window showed before it:\n\n{}\n", shown.join("\n")));
+        }
+        (!parts.is_empty()).then(|| parts.join("\n"))
+    }
 }
 
 fn is_problem(line: &str) -> bool {
@@ -71,33 +118,45 @@ fn clip(line: &str, max: usize) -> String {
     }
 }
 
-fn build_bundle(log_dir: &Path, system: &serde_json::Value, token: Option<&str>, description: Option<&str>) -> std::io::Result<Bundle> {
+/// Each log file, oldest first, by name: its cleaned events, or why it couldn't be read.
+fn cleaned_logs(log_dir: &Path, token: Option<&str>) -> Vec<(String, Result<String, String>)> {
+    log_files(log_dir)
+        .into_iter()
+        .filter_map(|path| {
+            let name = path.file_name()?.to_string_lossy().into_owned();
+            let text = std::fs::read(&path).map(|bytes| redact(&support_log(&String::from_utf8_lossy(&bytes)), token)).map_err(|e| e.to_string());
+            Some((name, text))
+        })
+        .collect()
+}
+
+/// The newest warning and error lines across the logs, oldest first, each cut to a readable length.
+fn recent_problems(logs: &[(String, Result<String, String>)]) -> Vec<String> {
+    let mut recent = std::collections::VecDeque::with_capacity(RECENT_PROBLEMS);
+    for line in logs.iter().filter_map(|(_, text)| text.as_ref().ok()).flat_map(|t| t.lines()).filter(|l| is_problem(l)) {
+        if recent.len() == RECENT_PROBLEMS {
+            recent.pop_front();
+        }
+        recent.push_back(clip(line, PROBLEM_LINE_CHARS));
+    }
+    recent.into()
+}
+
+fn build_bundle(log_dir: &Path, system: &serde_json::Value, token: Option<&str>, words: Option<&ReportWords>) -> std::io::Result<Bundle> {
     let mut zip = Zip::new();
-    let mut recent_problems = std::collections::VecDeque::with_capacity(RECENT_PROBLEMS);
     zip.add("README.txt", README.as_bytes())?;
     let report = serde_json::to_string_pretty(system).unwrap_or_default();
     zip.add("system.json", redact(&report, token).as_bytes())?;
-    if let Some(words) = description.map(str::trim).filter(|w| !w.is_empty()) {
-        let text = format!("What happened, in the editor's words:\n\n{}\n", clip(words, DESCRIPTION_CHARS));
+    if let Some(text) = words.and_then(ReportWords::text) {
         zip.add("report.txt", redact(&text, token).as_bytes())?;
     }
-    for path in log_files(log_dir) {
-        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                let events = redact(&support_log(&String::from_utf8_lossy(&bytes)), token);
-                for line in events.lines().filter(|l| is_problem(l)) {
-                    if recent_problems.len() == RECENT_PROBLEMS {
-                        recent_problems.pop_front();
-                    }
-                    recent_problems.push_back(clip(line, PROBLEM_LINE_CHARS));
-                }
-                zip.add(&format!("logs/{name}"), events.as_bytes())?;
-            }
-            Err(e) => zip.add(&format!("logs/{name}.unreadable.txt"), e.to_string().as_bytes())?,
+    for (name, text) in cleaned_logs(log_dir, token) {
+        match text {
+            Ok(events) => zip.add(&format!("logs/{name}"), events.as_bytes())?,
+            Err(e) => zip.add(&format!("logs/{name}.unreadable.txt"), e.as_bytes())?,
         }
     }
-    Ok(Bundle { bytes: zip.finish(), recent_problems: recent_problems.into() })
+    Ok(Bundle { bytes: zip.finish() })
 }
 
 /// The system report both bundles carry, and the engine token to take out of everything in them.
@@ -147,48 +206,35 @@ pub async fn export_logs(app: AppHandle, state: State<'_, AppState>) -> Result<O
     saved.map(Some)
 }
 
-/// What the window needs to open the issue: where the .zip went, and a short summary to quote.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProblemReport {
-    path: String,
-    version: &'static str,
-    os: &'static str,
-    os_version: Option<String>,
-    arch: &'static str,
-    recent_problems: Vec<String>,
-}
-
-/// Where a problem report is saved: Downloads, where the editor looks for a file to attach, else Scarlet's data folder.
+/// Where a saved problem report goes: Downloads, where the editor looks for a file to send, else Scarlet's data folder.
 fn report_folder(data_dir: &Path) -> PathBuf {
     dirs::download_dir().filter(|d| d.is_dir()).unwrap_or_else(|| data_dir.join("reports"))
 }
 
-/// Save a problem report (the log bundle with the editor's words) without asking where, and say what's in it.
+/// Save a problem report (the log bundle with the editor's words) to Downloads without asking where, when it couldn't
+/// be sent. Returns where it went.
 #[tauri::command]
-pub async fn report_problem(state: State<'_, AppState>, description: String) -> Result<ProblemReport, String> {
+pub async fn save_problem_report(state: State<'_, AppState>, report: ReportWords) -> Result<String, String> {
     let (system, token) = system_report(&state, &crate::util::now_iso()).await;
-    let os_version = system["osVersion"].as_str().map(str::to_string);
     let log_dir = state.paths.log_dir.clone();
     let folder = report_folder(&state.paths.data_dir);
     // Never the words: they are the editor's own, and they are in the .zip.
-    log::info!("saving a problem report ({} characters written)", description.trim().chars().count());
-    let saved = tauri::async_runtime::spawn_blocking(move || -> Result<(String, Vec<String>), String> {
-        let bundle = build_bundle(&log_dir, &system, token.as_deref(), Some(&description)).map_err(|e| e.to_string())?;
+    log::info!("saving a problem report ({} characters written)", report.description.trim().chars().count());
+    let saved = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let bundle = build_bundle(&log_dir, &system, token.as_deref(), Some(&report)).map_err(|e| e.to_string())?;
         std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
         let path = folder.join(dated_name("scarlet-report"));
         crate::util::write_file_atomic(&path, &bundle.bytes, false).map_err(|e| e.to_string())?;
-        Ok((path.to_string_lossy().into_owned(), bundle.recent_problems))
+        Ok(path.to_string_lossy().into_owned())
     })
     .await
     .map_err(|e| e.to_string())
     .and_then(|saved| saved);
     match &saved {
-        Ok((_, recent)) => log::info!("problem report saved with {} recent warnings and errors", recent.len()),
-        Err(e) => log::warn!("problem report failed: {}", e.split(" at path ").next().unwrap_or(e)),
+        Ok(_) => log::info!("problem report saved"),
+        Err(e) => log::warn!("problem report couldn't be saved: {}", e.split(" at path ").next().unwrap_or(e)),
     }
-    let (path, recent_problems) = saved?;
-    Ok(ProblemReport { path, version: env!("CARGO_PKG_VERSION"), os: std::env::consts::OS, os_version, arch: std::env::consts::ARCH, recent_problems })
+    saved
 }
 
 fn os_version() -> Option<String> {
@@ -346,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn a_problem_report_carries_the_editors_words_and_quotes_the_newest_problems() {
+    fn a_saved_report_carries_the_editors_words_and_what_was_on_screen() {
         let dir = tempfile::tempdir().unwrap();
         let mut log = String::new();
         for i in 0..20 {
@@ -355,18 +401,27 @@ mod tests {
         }
         log += "[2026-11-05][02:04:00][scarlet_desktop_lib::engine][ERROR] [ui] [error] 02:04:00.123 +2ms uncaught name=TypeError\n";
         std::fs::write(dir.path().join("scarlet-desktop.log"), log).unwrap();
-        let words = "The export froze at 80% with key sk-ant-api03-AbCdEfGh1234 pasted";
-        let bundle = build_bundle(dir.path(), &serde_json::json!({ "version": "test" }), None, Some(words)).unwrap();
+        let words = ReportWords {
+            description: "The export froze at 80% with key sk-ant-api03-AbCdEfGh1234 pasted".into(),
+            about: Some("Export stopped: ffmpeg exited".into()),
+            page: Some("/p/prj_demo?thread".into()),
+            on_screen: (0..8).map(|i| format!("alert {i}")).collect(),
+        };
+        let bundle = build_bundle(dir.path(), &serde_json::json!({ "version": "test" }), None, Some(&words)).unwrap();
         assert_eq!(entry_names(&bundle.bytes), ["README.txt", "system.json", "report.txt", "logs/scarlet-desktop.log"]);
         let report = entry(&bundle.bytes, "report.txt");
         assert!(report.contains("The export froze at 80%") && report.contains("[redacted]") && !report.contains("AbCdEfGh1234"), "{report}");
+        assert!(report.contains("The error on screen:\n\nExport stopped: ffmpeg exited"), "{report}");
+        // Only the newest five errors the window showed.
+        assert!(report.contains("alert 3\nalert 4") && report.contains("alert 7") && !report.contains("alert 2"), "{report}");
         // Only warnings and errors, the newest twelve, oldest first, and never an ordinary request.
-        assert_eq!(bundle.recent_problems.len(), RECENT_PROBLEMS);
-        assert!(bundle.recent_problems.iter().all(|l| l.contains("[WARN]") || l.contains("[ERROR]")));
-        assert!(bundle.recent_problems[0].starts_with("[2026-11-05][02:03:09][WARN] [render]"), "{:?}", bundle.recent_problems);
-        assert!(bundle.recent_problems.last().unwrap().contains("[ui] [error] 02:04:00.123 +2ms uncaught"));
+        let recent = recent_problems(&cleaned_logs(dir.path(), None));
+        assert_eq!(recent.len(), RECENT_PROBLEMS);
+        assert!(recent.iter().all(|l| l.contains("[WARN]") || l.contains("[ERROR]")));
+        assert!(recent[0].starts_with("[2026-11-05][02:03:09][WARN] [render]"), "{recent:?}");
+        assert!(recent.last().unwrap().contains("[ui] [error] 02:04:00.123 +2ms uncaught"));
         // Nothing written leaves report.txt out, and an export of logs never has one.
-        let blank = build_bundle(dir.path(), &serde_json::json!({}), None, Some("   ")).unwrap();
+        let blank = build_bundle(dir.path(), &serde_json::json!({}), None, Some(&ReportWords { description: "   ".into(), ..Default::default() })).unwrap();
         assert!(!entry_names(&blank.bytes).contains(&"report.txt".to_string()));
     }
 

@@ -37,7 +37,7 @@ export function StartupRecovery({ title, detail, showLogs = false }: { title: st
         </div>
         {feedback && <p role="status" className="text-muted">{feedback}</p>}
       </section>
-      <ReportProblemDialog open={reporting} onClose={() => setReporting(false)} context={`${title}\n${detail}`} />
+      <ReportProblemDialog open={reporting} onClose={() => setReporting(false)} about={`${title}: ${detail}`} />
     </main>
   );
 }

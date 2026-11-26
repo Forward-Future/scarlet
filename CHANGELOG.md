@@ -6,7 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
-- When something goes wrong, you can now report it from Help › Report a Problem…, from Settings › Advanced, or from the screen Scarlet shows when a page breaks. Say what happened and Scarlet saves its logs (no videos, projects, transcripts or sign-ins) and opens a filled-in report on GitHub for you to check, attach the file to and post.
+- When something goes wrong, you can now report it right where you see it: a Report beside the error, on the screen Scarlet shows when a page breaks, under Help › Report a Problem…, or in Settings › Advanced. Say what happened if you like, press Send report, and Scarlet sends it to the Scarlet team with its logs (no videos, projects, transcripts or sign-ins) and gives you a reference.
 - A page that breaks now says so with Reload and Report this problem, instead of an empty or technical error screen.
 
 ## November 24, 2026

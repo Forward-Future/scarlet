@@ -143,15 +143,15 @@ function listenFor<T>(name: string, event: string, cb: (payload: T) => void) {
   });
 }
 
-/** A saved problem report: where its .zip is, and what the issue quotes. */
-export interface ProblemReport {
-  path: string;
-  version: string;
-  os: string;
-  osVersion: string | null;
-  arch: string;
-  /** The newest warning and error lines from the log, already cleaned, oldest first. */
-  recentProblems: string[];
+/** What a problem report says, beside the logs Scarlet adds. */
+export interface ProblemReportWords {
+  description: string;
+  /** The error on screen the report is about. */
+  about?: string;
+  /** The page, as the log names it. */
+  page?: string;
+  /** The newest errors the window showed. */
+  onScreen?: string[];
 }
 
 export interface StorageSize { bytes: number; files: number; estimated: boolean }
@@ -212,8 +212,10 @@ export const desktop = {
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   /** Save the logs and a system report as one .zip the editor picks a place for. Null when cancelled. */
   exportLogs: () => invoke<string | null>("export_logs"),
-  /** Save a problem report (the logs with the editor's words) in Downloads, and say what to quote in the issue. */
-  reportProblem: (description: string) => invoke<ProblemReport>("report_problem", { description }),
+  /** Send a problem report to the Scarlet team now: the editor's words, the error on screen and the cleaned logs. */
+  sendProblemReport: (report: ProblemReportWords) => invoke<{ reference: string }>("send_problem_report", { report }),
+  /** Save a problem report that couldn't be sent in Downloads. Returns where it went. */
+  saveProblemReport: (report: ProblemReportWords) => invoke<string>("save_problem_report", { report }),
   pickFile: (title: string) => invoke<string | null>("plugin:dialog|open", { options: { title, multiple: false, directory: false } }),
   pickFolder: (title: string) => invoke<string | null>("plugin:dialog|open", { options: { title, directory: true, multiple: false } }),
   installCrisperModel: (directory: string) => invoke<void>("install_crisper_model", { directory }),

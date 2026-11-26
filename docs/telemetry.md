@@ -72,6 +72,25 @@ The engine generates `editId` using HMAC-SHA-256 with the installation’s priva
 
 The ingest host sees the source IP when it receives a request. Scarlet disables GeoIP enrichment on each event.
 
+## Problem reports
+
+A problem report is separate from usage reports. Scarlet sends one only when the editor presses **Send report** in Report a problem, which opens from a Report beside an error, the screen a crash leaves, Help › Report a Problem… or Settings › Advanced. It is sent whether or not usage reports are on, because the editor asked to send it. The desktop app sends it straight away, itself, so a report still goes when the engine has stopped.
+
+It goes to the same PostHog project and host as usage reports (`SCARLET_POSTHOG_KEY` and `SCARLET_POSTHOG_HOST` apply) as one `bug.reported` event with:
+
+| Property | What it is |
+| --- | --- |
+| `reference` | A short code the editor is shown, such as `3F2A-91BC` |
+| `description` | What the editor wrote, up to 5,000 characters |
+| `about` | The error on screen the report was opened from, up to 2,000 characters |
+| `page` | The page's path and the names of its query parameters |
+| `onScreen` | Up to five errors the window showed in the last 15 minutes, as the log records them |
+| `system` | The system report from Export logs: version, OS, engine and agent status, desktop settings |
+| `recentProblems` | The newest 12 warning and error lines from the cleaned log |
+| `log` | The newest 300 KB of the cleaned log, and `logTruncated` when older lines were left out |
+
+Plus `installId` (when the engine has made one, so a report can be read beside usage), `platform`, `arch`, `scarletVersion` and `channel`. The log is the one Export logs saves: the same allowlist of operations and fields, with keys and tokens removed. Unlike usage reports, a problem report can carry the editor's own words, the error text on screen and the raw IDs in the log. It never carries media, frames, audio, transcripts, prompts or sign-ins. If it can't be sent, the editor can save the same report as a `.zip` in Downloads.
+
 ## Identity
 
 On first use the engine writes a random id to `telemetry-id` in the Scarlet data folder, next to `scarlet.db`. It is not derived from the machine, the account or the library. Events carry the SHA-256 of that id as `installId`, never the id itself. Delete the file to start over as a new install. The empty `telemetry-exported` file beside it only records that this install has exported.

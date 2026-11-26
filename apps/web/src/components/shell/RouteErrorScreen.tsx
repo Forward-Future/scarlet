@@ -33,7 +33,7 @@ export function RouteErrorScreen() {
           <button className="btn-ghost" onClick={() => window.location.reload()}>Reload</button>
         </div>
       </section>
-      <ReportProblemDialog open={reporting} onClose={() => setReporting(false)} context={message} />
+      <ReportProblemDialog open={reporting} onClose={() => setReporting(false)} about={`Something went wrong: ${message}`} />
     </main>
   );
 }

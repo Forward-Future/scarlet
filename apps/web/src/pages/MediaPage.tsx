@@ -16,6 +16,7 @@ import { cacheLabel, cachePercent, useSourceCaches } from "../components/media/s
 import { useMediaProcessing } from "../components/media/useMediaProcessing";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { ConfirmDialog, EmptyState, Icon, InlineError } from "../components/ui/primitives";
+import { ReportLink } from "../components/shell/ReportProblem";
 
 function Thumb({ m }: { m: MediaAsset }) {
   const [failed, setFailed] = useState(false);
@@ -250,7 +251,8 @@ export function MediaPage({ uploads, onPlay }: {
                 <div className="font-medium truncate" title={m.name}>{m.name}</div>
                 <div className="media-meta">
                   {m.status === "failed" ? (
-                    <span className="text-bad">{m.preparation?.stage === "waveform" ? "Couldn’t read the waveform" : "Couldn’t read this file"}{m.error ? `: ${m.error}` : ""}</span>
+                    <><span className="text-bad">{m.preparation?.stage === "waveform" ? "Couldn’t read the waveform" : "Couldn’t read this file"}{m.error ? `: ${m.error}` : ""}</span>
+                    <ReportLink className="simple-link ml-2" about={`${m.preparation?.stage === "waveform" ? "Couldn’t read the waveform" : "Couldn’t read this file"}${m.error ? `: ${m.error}` : ""}`} /></>
                   ) : (
                     // A length reads as the player and History write it: 0:20, 1:02:07.
                     m.duration ? clock(m.duration) : m.width && m.height ? `${m.width}×${m.height}` : KIND_LABEL[m.kind]

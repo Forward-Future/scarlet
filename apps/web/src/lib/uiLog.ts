@@ -6,6 +6,7 @@
  * Caught on the document, so nothing needs wiring into a component and new controls are covered as they're added.
  */
 import { appLog, flushAppLog, logPath, withoutAddresses } from "./appLog";
+import { noteOnScreenError } from "./problemReportStore";
 
 const clip = (text: string, max = 70) => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -148,7 +149,10 @@ function onAlerts(records: MutationRecord[]) {
     if (said.get(el) === message) continue;
     said.set(el, message);
     const place = el.parentElement?.closest(PLACE);
-    if (message) appLog("error", "alert", { message, in: place ? placeName(place) : undefined }, { level: "warn" });
+    if (!message) continue;
+    appLog("error", "alert", { message, in: place ? placeName(place) : undefined }, { level: "warn" });
+    // A report sent later says what was on screen.
+    noteOnScreenError(message);
   }
 }
 

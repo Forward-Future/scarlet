@@ -8,6 +8,7 @@ import { clock, fileBaseName, fmtBytes, pct, playbackClock } from "../../lib/for
 import { useProjectStore, type ProjectData } from "../../stores/project";
 import { ActivityProgress, Field, Icon, InlineError, Modal } from "../ui/primitives";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
+import { ReportLink } from "../shell/ReportProblem";
 
 type ExportQuality = RenderRequest["quality"] | "best";
 
@@ -195,6 +196,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
       <button className="btn-quiet shrink-0" data-log-control="reveal-export" onClick={() => { setRevealError(""); void desktop.revealPath(exported.path).catch(e => setRevealError(errorMessage(e))); }}>Show in folder</button>
     </p>}
     <InlineError>{(failed || revealError) && <span data-log-private>{failed ? job.error : revealError}</span>}</InlineError>
+    {failed && <ReportLink className="btn-quiet mt-1 -ml-3" label="Report this problem" about={`Export failed${job.error ? `: ${job.error}` : ""}`} />}
   </Modal>;
 }
 
