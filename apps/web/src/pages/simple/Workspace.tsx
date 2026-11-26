@@ -2263,16 +2263,21 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
           onNext: () => openBatchItems[openBatchIndex + 1]?.open?.(),
         } : undefined}
         // Add asks Scarlet to make or find what the to-do says to add. Its row says Adding… meanwhile, ⌘Z takes the request
-        // back as it does a revision, and the card goes on as Keep does, so a run of to-dos is one press each.
-        onSentAdd={shownMarker && !reviewed(reviewingEdit) ? task => {
+        // back as it does a revision, and the card goes on as Keep does, so a run of to-dos is one press each. It goes on
+        // at the press, not once the request is in, so a quick run of A presses adds every to-do and skips none.
+        onPressAdd={shownMarker && !reviewed(reviewingEdit) ? () => {
           follow.current = true;
           appLog("action", "add-todo", { edit: shownIndex + 1, of: threadEdits.length, change: reviewingEdit.changeId });
+          if (openEditNow.current === openEditKey) moveOnFromShown();
+        } : undefined}
+        onSentAdd={shownMarker && !reviewed(reviewingEdit) ? task => {
           const named = rejectTarget && (cutName(rejectTarget) ?? targetName(rejectTarget));
           recordUndo({ kind: "revision", word: "Add", projectId: current.id, taskId: task.id, threadId: focusThread.id,
             edit: { changeId: reviewingEdit.changeId, spot: reviewingEdit.spot, ...(threadTimeline.single && { single: true }) },
             ...(named && { name: tagOf(named) }) });
-          if (openEditNow.current === openEditKey) moveOnFromShown();
         } : undefined}
+        // An Add that couldn't be sent brings its to-do's card back, with the reason, so it isn't lost behind the next one.
+        onFailedAdd={() => latestActions.current.openEdit(focusThread, reviewingEdit)}
         appliedTarget={appliedTarget} rejectTarget={rejectTarget} openEditKey={openEditKey} rejectedEdits={rejectedEdits}
         // From the press, hold the card steady while the engine puts the edit back and remember the next edit in line.
         onEngineReject={asked => asked ? beginEngineReject() : cancelEngineReject()}

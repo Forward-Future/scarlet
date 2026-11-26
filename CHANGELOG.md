@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Pressing A quickly on several to-dos now adds every one: the card moves to the next to-do at the press, and one that couldn't be sent comes back with the reason.
 - In the beta layout, the Working and Done headings in the edits column now stay pinned in view while their lists scroll.
 - Style guides now also keep transitions, sound effects and a camera color look, each on its own tab beside Graphics: replay a transition between two sample shots, play sound effects or add them from a built-in starter library with a mix level and a note on when to use them, and describe a color look in chat or drop a .cube or .3dl look file. Scarlet follows them when it edits.
 - Drop a .json style file on Settings › Style guides or on a style guide, or use Import file, to load all its settings at once. Export on a style guide saves them all as a .style.json file. Other files, such as a .md, .yaml, .pdf or .cube, open in the style guide's chat for Scarlet to read.
