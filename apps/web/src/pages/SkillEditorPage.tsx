@@ -486,9 +486,7 @@ export function SkillEditorPage({ onReturnToEdit }: { onReturnToEdit?: () => voi
             {find.controls}
           </div>
           {isNew && <p id="skill-style-help" className="px-4 pt-3 text-[13px] leading-5 text-muted">
-            A skill tells Scarlet how you like to edit your videos. Describe what to keep, cut, or change in your own words. For fonts, colors, captions, lower thirds, boxes, and graphics,{" "}
-            <button type="button" className="underline underline-offset-2 text-fg" onClick={() => navigate("/settings/style-guides")}>set up a style guide</button>{" "}
-            and mention <span className="font-mono text-fg">@name</span> here or in chat.
+            A skill tells Scarlet how you like to edit your videos. Describe what to keep, cut, or change in your own words.
           </p>}
           {shownVersion ? <div ref={changesPane} className="flex-1 min-h-0 w-full overflow-y-auto bg-bg p-3 font-mono text-[12.5px] leading-5 skill-version-text max-md:min-h-[250px]"
             aria-label={`Skill markdown, v${picked!.version}`}>

@@ -91,21 +91,6 @@
   @keyframes scan-pending { from { background-position: 100%; } to { background-position: 0%; } }
 }
 .composer-dock { --model-row-gap: 9px; flex: none; padding: 12px; border-top: 1px solid var(--color-line); }
-.composer-dock:has(.composer-style-bar) { padding-bottom: 8px; }
-.composer-style-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; padding: 0 2px; min-height: 18px; font-size: 11.5px; line-height: 16px; color: var(--color-dim); }
-.composer-style-trigger { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; padding: 1px 4px; margin-left: -4px; border: 0; border-radius: 5px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: color .12s ease, background .12s ease; }
-.composer-style-trigger:hover, .composer-style-trigger:focus-visible { color: var(--color-fg); background: var(--color-raised); }
-.composer-style-at { font-family: var(--font-mono, monospace); color: var(--color-muted); }
-.composer-style-trigger:hover .composer-style-at { color: var(--color-fg); }
-.composer-style-label { flex: none; color: var(--color-muted); }
-.composer-style-trigger:hover .composer-style-label { color: var(--color-fg); }
-.composer-style-name { font-family: var(--font-mono, monospace); color: var(--color-fg); opacity: .88; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.composer-style-trigger:hover .composer-style-name { opacity: 1; }
-.composer-style-sep { flex: none; color: var(--color-dim); }
-.composer-style-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-dim); }
-.composer-style-trigger:hover .composer-style-hint { color: var(--color-muted); }
-.composer-style-manage { flex: none; padding: 1px 5px; border: 0; border-radius: 5px; background: none; color: var(--color-dim); font: inherit; cursor: pointer; transition: color .12s ease, background .12s ease; }
-.composer-style-manage:hover, .composer-style-manage:focus-visible { color: var(--color-fg); background: var(--color-raised); }
 .composer-input { position: relative; --text-inset: 10px; display: grid; grid-template-columns: minmax(0,1fr); gap: var(--model-row-gap); width: 100%; min-width: 0; }
 .composer-context-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .composer-context-row:not(:has(.composer-scope, .composer-model > *)), .composer-model:empty { display: none; }

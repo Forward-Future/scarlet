@@ -866,6 +866,121 @@
   border: 1px solid var(--color-line);
   color: var(--color-fg);
 }
+.style-guide-focus-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-line);
+  color: var(--color-muted);
+}
+.style-guide-starter {
+  padding: 0;
+  cursor: pointer;
+}
+.style-guide-starter:disabled { opacity: .65; cursor: default; }
+.style-guides-empty .empty-state {
+  padding: 22px 20px;
+}
+.style-guides-empty .empty-glyph {
+  width: 40px;
+  height: 40px;
+  margin-bottom: 2px;
+}
+.style-guides-builtins {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 640px) { .style-guides-builtins { grid-template-columns: 1fr; } }
+
+/* Miniature 16:9 specimen for built-in style guide cards */
+.style-specimen {
+  width: 100%;
+  height: 100%;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  user-select: none;
+}
+.style-specimen-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.style-specimen-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+.style-specimen-kicker {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.style-specimen-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid;
+  border-radius: 6px;
+  min-width: 82px;
+}
+.style-specimen-callout-kicker {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.style-specimen-callout-val {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+.style-specimen-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.style-specimen-lower {
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 8px;
+  border: 1px solid;
+  border-left-width: 2.5px;
+  border-radius: 4px;
+}
+.style-specimen-lower-name {
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+.style-specimen-lower-role {
+  font-size: 8.5px;
+  line-height: 1.15;
+}
+.style-specimen-caption {
+  align-self: center;
+  padding: 3px 9px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
 .style-guide-desc {
   margin: 0;
   font-size: 12px;

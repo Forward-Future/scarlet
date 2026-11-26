@@ -1,5 +1,4 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
 import { agentTarget, type PictureMarks, type Task, type TaskAttachment } from "@scarlet/shared";
 import { canStartCutReview, cutSummary, type Project } from "@scarlet/timeline";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
@@ -19,7 +18,7 @@ import { useSpeech } from "../../lib/speech";
 import type { Thread } from "../../lib/threads";
 import { useProjectStore } from "../../stores/project";
 import { commandSkillIds, enabledSkills, useSkillsStore } from "../../stores/skills";
-import { commandStyleGuideIds, styleGuideMentions, useStyleGuidesStore } from "../../stores/styleGuides";
+import { commandStyleGuideIds } from "../../stores/styleGuides";
 import { draftInserter, editTargetAt, markedRangeOf, pointOf, playheadPoints, spliceDraft, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { Icon, Spinner, InlineError } from "../ui/primitives";
 import { AgentChip, CONNECTING_REASON, runChoiceDiffers, useAgentAvailability, useModelsConnecting } from "./AgentChip";
@@ -139,10 +138,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const caretToEnd = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
-  const navigate = useNavigate();
   const library = useSkillsStore(s => s.skills);
   const skills = useMemo(() => enabledSkills(library), [library]);
-  const styleGuides = useStyleGuidesStore(s => s.styleGuides);
   // Files dropped or pasted on the box ride on the next message, in a line on top of the box.
   const attached = useAttachmentsStore(s => s.byProject[project.id]) ?? NO_FILES;
   const attach = useAttachmentsStore(s => s.add);
@@ -633,36 +630,9 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     const caret = caretAfter.current, field = inputRef.current;
     caretAfter.current = undefined;
     if (caret === undefined || !field) return;
-    field.setSelectionRange(caret, caret);
     field.focus();
     field.setSelectionRange(caret, caret);
   }, [value]);
-  const mentionedStyleGuide = useMemo(() => {
-    const names = styleGuideMentions(draft);
-    if (!names.length || !styleGuides.length) return undefined;
-    const byName = new Map(styleGuides.map(g => [g.name.toLowerCase(), g]));
-    for (const name of names) {
-      const found = byName.get(name);
-      if (found) return found;
-    }
-    return undefined;
-  }, [draft, styleGuides]);
-  const defaultStyleGuide = useMemo(() => styleGuides.find(g => g.isDefault), [styleGuides]);
-  const activeStyleGuide = mentionedStyleGuide ?? defaultStyleGuide;
-  const openStylePicker = () => {
-    const field = inputRef.current;
-    if (!field) return;
-    const current = useUiStore.getState().agentDraft;
-    const next = /(?:^|\s)@$/.test(current) ? current : !current ? "@" : /\s$/.test(current) ? `${current}@` : `${current} @`;
-    if (next !== current) {
-      caretAfter.current = next.length;
-      changeText(next);
-    } else {
-      field.setSelectionRange(current.length, current.length);
-      field.focus();
-      field.setSelectionRange(current.length, current.length);
-    }
-  };
   const editor = (
     <div className="composer-input">
       <div className="composer-context-row">
@@ -790,54 +760,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   return <div {...dropProps} className={none ? "composer-dock needs-agent" : "composer-dock"}>
     <InlineError>{error || (refused && unavailable && unavailableReason)}</InlineError>
     {editor}
-    {!rewording && <div className="composer-style-bar">
-      {activeStyleGuide ? (
-        <>
-          <button
-            type="button"
-            className="composer-style-trigger"
-            title={`Style guide @${activeStyleGuide.name}${activeStyleGuide.description ? ` — ${activeStyleGuide.description}` : ""}. Applies to captions, lower thirds, callout boxes, and graphics. Click to pick another with @.`}
-            onClick={openStylePicker}
-          >
-            <span className="composer-style-label">Style</span>
-            <span className="composer-style-sep" aria-hidden="true">·</span>
-            <span className="composer-style-name">@{activeStyleGuide.name}</span>
-          </button>
-          <button
-            type="button"
-            className="composer-style-manage"
-            title={`Edit @${activeStyleGuide.name} style guide`}
-            onClick={() => navigate(`/settings/style-guides/${activeStyleGuide.id}`)}
-          >
-            Edit
-          </button>
-        </>
-      ) : styleGuides.length > 0 ? (
-        <button
-          type="button"
-          className="composer-style-trigger"
-          title="Choose a style guide for captions, lower thirds, callout boxes, and graphics"
-          onClick={openStylePicker}
-        >
-          <span className="composer-style-at">@</span>
-          <span className="composer-style-label">Style guide</span>
-          <span className="composer-style-sep" aria-hidden="true">·</span>
-          <span className="composer-style-hint">Captions, lower thirds &amp; graphics</span>
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="composer-style-trigger"
-          title="Create a style guide for captions, lower thirds, callout boxes, and graphics"
-          onClick={() => navigate("/settings/style-guides/new")}
-        >
-          <span className="composer-style-at">@</span>
-          <span className="composer-style-label">Style guide</span>
-          <span className="composer-style-sep" aria-hidden="true">·</span>
-          <span className="composer-style-hint">Captions, lower thirds &amp; graphics</span>
-        </button>
-      )}
-    </div>}
     {dropping && <div className="composer-drop" aria-hidden="true">Attach to your message</div>}
   </div>;
 }

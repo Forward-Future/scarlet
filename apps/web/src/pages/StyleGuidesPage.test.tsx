@@ -16,7 +16,6 @@ import { useSkillsStore } from "../stores/skills";
 import { useStyleGuidesStore } from "../stores/styleGuides";
 import { useUiStore } from "../stores/ui";
 import { SettingsPage } from "./SettingsPage";
-import { SkillsPage } from "./SkillsPage";
 import { StyleGuideEditorPage } from "./StyleGuideEditorPage";
 import { StyleGuidesPage } from "./StyleGuidesPage";
 
@@ -325,9 +324,8 @@ it("handles empty @ cleanly by highlighting Create a style guide, switches from 
   try {
     await act(async () => root.render(<RouterProvider router={router} />));
 
-    // Composer shows quiet style bar explaining captions, lower thirds & graphics when 0 guides exist.
-    expect(el.querySelector(".composer-style-bar")?.textContent).toContain("Style guide");
-    expect(el.querySelector(".composer-style-bar")?.textContent).toContain("Captions, lower thirds & graphics");
+    // Composer stays clean with no extra style text below the input box.
+    expect(el.querySelector(".composer-style-bar")).toBeNull();
 
     // Typing "/" shows the @ Style guides switch button, which switches directly into the @ picker.
     await setBox("/");
@@ -349,16 +347,6 @@ it("handles empty @ cleanly by highlighting Create a style guide, switches from 
     });
     expect(createTask).not.toHaveBeenCalled();
     expect(el.textContent).toContain("New Style Guide Page");
-
-    // Navigate back with an active Default style guide: bar shows Style · @channel-brand and opens @ picker on click.
-    const guide = sampleGuide({ name: "channel-brand", isDefault: true });
-    useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
-    useUiStore.setState({ agentDraft: "" });
-    await act(async () => { await router.navigate("/"); });
-    expect(el.querySelector(".composer-style-bar")?.textContent).toContain("@channel-brand");
-    await act(async () => el.querySelector<HTMLButtonElement>(".composer-style-trigger")!.click());
-    expect(el.querySelector<HTMLTextAreaElement>(".composer-input textarea")!.value).toBe("@");
-    expect(el.querySelector('[role="listbox"][aria-label="Style guides"]')).not.toBeNull();
   } finally {
     await act(async () => root.unmount());
     el.remove();
@@ -373,11 +361,64 @@ it("handles empty @ cleanly by highlighting Create a style guide, switches from 
   }
 });
 
-it("links to Style guides from Skills settings and Project settings drawer", async () => {
+it("keeps empty Style guides intro inside the box and lets editors add a built-in starter style", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  useStyleGuidesStore.setState({ styleGuides: [], status: "ready", error: null });
+  const createSpy = vi.spyOn(api, "createStyleGuide").mockImplementation(async body => ({
+    styleGuide: sampleGuide({
+      id: "sg_builtin_1",
+      name: body.name,
+      description: body.description ?? "",
+      instructions: body.instructions ?? "",
+      captionStyle: body.captionStyle,
+      isDefault: Boolean(body.isDefault),
+      preview: undefined,
+    }),
+  }));
+
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const router = createMemoryRouter([
+    { path: "/settings/style-guides", element: <StyleGuidesPage /> },
+    { path: "/settings/style-guides/:styleGuideId", element: <p>Opened Builtin Editor</p> },
+  ], { initialEntries: ["/settings/style-guides"] });
+
+  try {
+    await act(async () => root.render(<RouterProvider router={router} />));
+    // No separate subtitle paragraph above the empty-state box; explanation lives inside the box.
+    expect(el.querySelector("section > p")).toBeNull();
+    expect(el.textContent).toContain("No style guides yet");
+    expect(el.textContent).toContain("captions, lower thirds, callout boxes, and graphics");
+    // Built-in styles cover captions, lower thirds, callout boxes, and graphics.
+    expect(el.textContent).toContain("Built-in styles");
+    expect(el.textContent).toContain("@clean-captions");
+    expect(el.textContent).toContain("@editorial-lower-thirds");
+    expect(el.textContent).toContain("@tech-callouts");
+    expect(el.textContent).toContain("@bold-creator");
+
+    const starterBtn = [...el.querySelectorAll<HTMLButtonElement>(".style-guide-starter")]
+      .find(b => b.textContent?.includes("@clean-captions"))!;
+    await act(async () => starterBtn.click());
+    expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
+      name: "clean-captions",
+      captionStyle: expect.objectContaining({ fontFamily: "Inter", fontWeight: "semibold" }),
+    }));
+    expect(el.textContent).toContain("Opened Builtin Editor");
+  } finally {
+    await act(async () => root.unmount());
+    el.remove();
+    router.dispose();
+    useStyleGuidesStore.setState(useStyleGuidesStore.getInitialState());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("links to Style guides from the Project settings drawer", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const db = buildDb();
   const project = db.projects.find(p => p.id === PRJ)!;
-  useSkillsStore.setState({ skills: db.skills, status: "ready", error: null });
   useStyleGuidesStore.setState({ styleGuides: [sampleGuide()], status: "ready", error: null });
   useProjectStore.setState({
     current: {
@@ -399,14 +440,12 @@ it("links to Style guides from Skills settings and Project settings drawer", asy
   document.body.append(el);
   const root = createRoot(el);
   const router = createMemoryRouter([
-    { path: "/settings/skills", element: <><SkillsPage /><ProjectSettingsDrawer onDeleted={vi.fn()} /></> },
+    { path: "/", element: <ProjectSettingsDrawer onDeleted={vi.fn()} /> },
     { path: "/settings/style-guides", element: <p>Style Guides Gallery</p> },
-  ], { initialEntries: ["/settings/skills"] });
+  ], { initialEntries: ["/"] });
 
   try {
     await act(async () => root.render(<RouterProvider router={router} />));
-    expect(el.textContent).toContain("captions, lower thirds, boxes, or graphics");
-    expect(el.querySelector('a[href="/settings/style-guides"]')?.textContent).toBe("Style guides");
     expect(el.textContent).toContain("Visual style");
     expect(el.textContent).toContain("@channel-brand");
 
@@ -419,7 +458,6 @@ it("links to Style guides from Skills settings and Project settings drawer", asy
     el.remove();
     router.dispose();
     useProjectStore.setState(useProjectStore.getInitialState());
-    useSkillsStore.setState(useSkillsStore.getInitialState());
     useStyleGuidesStore.setState(useStyleGuidesStore.getInitialState());
     useUiStore.setState(useUiStore.getInitialState());
     vi.restoreAllMocks();
