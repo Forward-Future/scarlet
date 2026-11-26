@@ -57,6 +57,8 @@ export interface PromptContext {
   task?: Pick<Task, "instruction" | "kind" | "context" | "agent" | "model"> & Partial<Task>;
   /** Review notes the task responds to. */
   notes?: Note[];
+  /** How many review notes are open in the project, for a request that names none: zero spares a turn listing them. */
+  openNotes?: number;
   /** Change being revised, with its diff. */
   change?: { change: Change; diff?: TimelineDiff; description?: string[] };
   /** The pass a request about one staged cut named, when revisions or later parts of the pass have replaced it with `change` since it was sent. */
@@ -227,7 +229,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 
 ## Project context
 
-- The project summary, task, selected position or range, and supplied feedback are below. \`project_get\` returns current state and the recorded edit context. \`timeline_get\` shows clip placement, tracks, transforms, effects, markers and version. \`skills_list\` provides the enabled skill library.
+- The project summary, task, selected position or range, and supplied feedback are below, current as this run starts: begin from them. \`project_get\` reads the project's state and the recorded edit context again later in the run. \`timeline_get\` shows clip placement, tracks, transforms, effects, markers and version. \`skills_list\` provides the enabled skill library.
 - \`transcript_get\`, \`transcript_search\`, \`dialogue_scan\`, \`media_profile\`, waveform data, and the available picture and audio inspection tools give different views of the footage. Source times refer to the recording. Timeline times refer to a version of the edit. \`timeline_at\` maps between them. Requesting missing transcript or waveform data starts or joins preparation. Transcript word times are approximate. Waveform silences, dialogue scan pauses and \`dialogue_check_join\` measure the recorded audio.
 - \`timeline_transcript\`, \`timeline_join_audit\` and \`timeline_diff\` show what a version plays, measure how each join sounds and compare versions, so you can check an edit from measurements.
 - \`notes_list\`, \`change_list\`, and \`change_get\` give feedback, change states and affected versions. \`change_review_cut\` compares a saved edit.
@@ -572,6 +574,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
       return `- Note ${n.id} [${n.state}] by ${n.author.name} at ${where}${clips}${about}:\n  "${n.text.trim()}"${n.voiceTranscript && n.voiceTranscript !== n.text ? `\n  (raw voice transcript: "${n.voiceTranscript.trim()}")` : ""}${(n.replies ?? []).map(r => `\n  (${r.author.name} replied: "${r.text.trim()}")`).join("")}`;
     });
     parts.push(`# Review notes to address\n\n${lines.join("\n")}`);
+  } else if (ctx.openNotes !== undefined) {
+    // 62 runs listed the notes of a library that held two, each a turn that re-read the whole run (2026-11-24).
+    parts.push(`# Review notes\n\n${ctx.openNotes ? `The project has ${ctx.openNotes} open review note${ctx.openNotes === 1 ? "" : "s"}; \`notes_list\` reads them.` : "The project has no open review notes."}`);
   }
 
   // Change being revised

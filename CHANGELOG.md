@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Long edits use fewer tokens and finish a little sooner: Scarlet reads the timeline in smaller pieces, no longer has frame requests turned away, and starts each edit already knowing whether there are open review notes (about a fifth fewer tokens on a 27-minute talking-head edit).
 - Combined For you and low-risk edits into one unified Priority list in both the default and beta layouts: edits that need your call stay pinned at the top, confident edits sit right below under a thin Confident edits divider (newest request first), with an inline All / Needs you filter, a Keep N confident button (with ⌘Z undo), and Show → links in chat to jump straight to a request's edits.
 - In the default layout, For you, Working, Done, and edit lists now stay fixed at the bottom above the message box while new messages appear above them.
 - Exported Final Cut Pro XML files now include standard format names (such as 4K 30p and 1080p 29.97p) so Final Cut Pro imports them cleanly.
