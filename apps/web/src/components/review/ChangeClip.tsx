@@ -248,7 +248,11 @@ export function ChangeClip({ change, active = true, loading, clock: pageClock, p
       if (!e.repeat) toggle();
     } else if (matchesShortcut(e, "shuttleStop")) {
       e.preventDefault();
-      if (!e.repeat && video.current && !video.current.paused) toggle();
+      if (!e.repeat) {
+        wantPlay.current = false;
+        video.current?.pause();
+        player.resetRateOnPause();
+      }
     } else if (matchesShortcut(e, "shuttleForward")) {
       e.preventDefault();
       if (!e.repeat && video.current?.paused) toggle();

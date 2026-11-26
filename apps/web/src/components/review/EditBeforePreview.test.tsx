@@ -203,9 +203,13 @@ it("honors the J/K/L preset and a custom play/pause shortcut while previewing Be
   const press = (key: string, code: string) => act(async () => {
     document.body.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true }));
   });
+  // K before the section is in keeps the clip from starting once its metadata arrives.
+  await press("k", "KeyK");
   await sectionIn(4);
+  expect(video.paused).toBe(true);
+  // L plays it, K pauses it, and L plays it again.
+  await press("l", "KeyL");
   expect(video.paused).toBe(false);
-  // K pauses the Before clip, and L plays it again.
   await press("k", "KeyK");
   expect(video.paused).toBe(true);
   await press("k", "KeyK");

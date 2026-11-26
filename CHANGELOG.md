@@ -9,7 +9,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - When something goes wrong, you can now report it in one click right where you see it: press Report beside the error, or on the screen Scarlet shows when a page breaks, and Scarlet sends it to the Scarlet team with its logs (no videos, projects, transcripts or sign-ins). Add details afterwards if you like. Help › Report a Problem… and Settings › About let you write a report yourself.
 - A page that breaks now says so with Reload and Report this problem, instead of an empty or technical error screen.
 - In the beta layout, taking a marked stretch off the timeline no longer deletes its times from the message you're writing.
-- Custom keyboard shortcuts and the J/K/L preset now work while previewing Before, modified shortcuts for stepping between edits work on edit and call cards, and shortcuts assigned to + work as expected.
+- The J/K/L keys and a changed play key now work while you preview Before, next and previous edit keys set with ⌘ or ⌥ work on edit and call cards, and a shortcut set to + shows its key and works with ⌘ or ⌥.
 
 ## November 25, 2026
 
