@@ -523,9 +523,37 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     }
   });
 
-  it("shows up to three lines for Scarlet replies in the beta layout while keeping default layout and editor bubbles at two lines", async () => {
+  it("always shows full text in beta editor bubbles while keeping Scarlet replies at three lines and default layout unchanged", async () => {
     const db = buildDb(true);
     const project = db.projects.find(p => p.id === PRJ)!;
+    const now = new Date().toISOString();
+    const baseTask = db.tasks.find(t => t.id === "task_chat_direct")!;
+    const answeredTask = {
+      ...baseTask,
+      id: "task_answered_beta",
+      state: "running" as const,
+      createdAt: now,
+      startedAt: now,
+      finishedAt: undefined,
+      summary: null,
+      changeIds: [],
+      question: null,
+      instruction: "Always make sure the b-roll suggestions cover a large portion of the part that I am talking about, even when it wraps past two lines.",
+      context: { version: project.head! },
+    };
+    const queuedTask = {
+      ...baseTask,
+      id: "task_queued_beta",
+      state: "queued" as const,
+      createdAt: now,
+      startedAt: undefined,
+      finishedAt: undefined,
+      summary: null,
+      changeIds: [],
+      question: null,
+      instruction: "Also add subtle punch-ins whenever a key stat appears on screen and tighten any dead air around those transitions.",
+      context: { version: project.head! },
+    };
     const data: ProjectData = {
       id: PRJ,
       project,
@@ -534,8 +562,14 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       changes: db.changes,
       notes: db.notes,
       renders: db.renders,
-      tasks: db.tasks.filter(t => t.state !== "waiting_for_user"),
-      taskEvents: db.taskEvents,
+      tasks: [...db.tasks.filter(t => t.state !== "waiting_for_user"), answeredTask, queuedTask],
+      taskEvents: {
+        ...db.taskEvents,
+        task_answered_beta: [
+          { id: "ev_q_beta", taskId: "task_answered_beta", at: now, type: "question", text: "How much coverage?" },
+          { id: "ev_a_beta", taskId: "task_answered_beta", at: now, type: "answer", text: "Cover at least two thirds of each spoken passage so the visual stays anchored to the story." },
+        ],
+      },
       versions: db.versions[PRJ]!,
       fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
     };
@@ -559,15 +593,16 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8"),
     ].join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
     const foldsAt = (el: Element) => {
-      let best: { lines: number; weight: number } | undefined;
+      let best: { lines: number | undefined; weight: number } | undefined;
       for (const [, selectors, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-        const lines = /-webkit-line-clamp:\s*(\d+)/.exec(body!)?.[1];
-        if (!lines) continue;
+        const match = /-webkit-line-clamp:\s*(\d+|unset|none)/.exec(body!);
+        if (!match) continue;
+        const lines = /^\d+$/.test(match[1]!) ? Number(match[1]) : undefined;
         for (const selector of selectors!.split(",").map(part => part.trim())) {
           let matches = false;
           try { matches = el.matches(selector); } catch { /* Ignore selectors happy-dom cannot match. */ }
           const weight = (selector.match(/[.#[:]/g) ?? []).length;
-          if (matches && (!best || weight >= best.weight)) best = { lines: Number(lines), weight };
+          if (matches && (!best || weight >= best.weight)) best = { lines, weight };
         }
       }
       return best?.lines;
@@ -583,15 +618,35 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(scarletReq).not.toBeNull();
     expect([foldsAt(scarletClosing), foldsAt(scarletReq)]).toEqual([3, 3]);
 
-    // Editor bubbles remain clamped at 2 lines.
-    const userBubble = container.querySelector<HTMLElement>(".unit-msg .unit-bubble > p")!;
-    expect(foldsAt(userBubble)).toBe(2);
+    // Every editor text bubble shape in the beta layout shows its full text without clamping (finished, live, collapsed, loose, answer, and queued).
+    const requestBubbles = [...container.querySelectorAll<HTMLElement>(".unit-msg .unit-bubble > p")];
+    expect(requestBubbles.length).toBeGreaterThan(0);
+    for (const bubble of requestBubbles) expect(foldsAt(bubble)).toBeUndefined();
+    const firstUnit = container.querySelector<HTMLElement>(".unit")!;
+    firstUnit.classList.add("is-collapsed");
+    expect(foldsAt(firstUnit.querySelector(".unit-bubble > p")!)).toBeUndefined();
+    firstUnit.classList.remove("is-collapsed");
+    const looseBubble = container.querySelector<HTMLElement>(".simple-turn > .simple-msg.from-you p")!;
+    expect(looseBubble).not.toBeNull();
+    expect(foldsAt(looseBubble)).toBeUndefined();
+    const answerBubble = container.querySelector<HTMLElement>(".req-say.is-yours")!;
+    expect(answerBubble).not.toBeNull();
+    expect(foldsAt(answerBubble)).toBeUndefined();
+    const queueBubble = container.querySelector<HTMLElement>(".queue-bubble")!;
+    expect(queueBubble).not.toBeNull();
+    expect(foldsAt(queueBubble)).toBeUndefined();
 
-    // Turning off the beta layout leaves Scarlet's replies at the legacy 2-line clamp.
+    // Turning off the beta layout leaves Scarlet's replies and legacy editor bands at their legacy clamp.
     await act(async () => useUiStore.getState().setNewLayout(false));
     await act(async () => {});
     const legacyReply = container.querySelector<HTMLElement>(".simple-msg.from-scarlet .said, .req-say.said:not(.is-yours)")!;
     expect(foldsAt(legacyReply)).toBe(2);
+    const legacyUser = container.querySelector<HTMLElement>(".unit > .unit-msg p")!;
+    expect(foldsAt(legacyUser)).toBe(2);
+    const legacyUnit = legacyUser.closest<HTMLElement>(".unit")!;
+    legacyUnit.classList.add("is-collapsed");
+    expect(foldsAt(legacyUser)).toBe(1);
+    legacyUnit.classList.remove("is-collapsed");
   });
 
   it("omits the fold arrow in the beta layout and anchors finished token usage stats to the message bubble instead of the top-left corner", async () => {
