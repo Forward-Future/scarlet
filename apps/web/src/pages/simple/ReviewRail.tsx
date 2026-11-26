@@ -69,7 +69,7 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   };
 }
 
-export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow, onHover, flashedThreadId, compact = false, reserve = 0 }: {
+export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow, onHover, compact = false, reserve = 0 }: {
   projectId: string;
   store: RailStore;
   open: { working: boolean; done: boolean; low?: boolean };
@@ -80,8 +80,6 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
   onDoneLow?(): void;
   /** Light the timeline's marker while hovering a row. */
   onHover?(time?: number, target?: HoveredReviewRow): void;
-  /** Thread whose rows briefly flash after clicking Show → in chat. */
-  flashedThreadId?: string;
   compact?: boolean;
   /** Extra horizontal room to keep free beyond the player's minimum (e.g. an open Transcript column). */
   reserve?: number;
@@ -313,9 +311,8 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
           ? `${rowTime} ${row.label}, ${moment.more.replace("+ ", "and ")}`
           : row.rejected ? `${rowTime} ${row.label}, rejected`
           : `${rowTime}: ${row.label}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : row.decided ? (row.isMarker ? ", done" : ", kept") : needTime ? ", needs you" : ""}`);
-        const flashed = !!flashedThreadId && row.threadIds.includes(flashedThreadId);
         const itemClass = [leaving && "is-leaving", arriving && "is-arriving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined;
-        return <li key={row.key} className={itemClass} data-flash={flashed ? "" : undefined}>
+        return <li key={row.key} className={itemClass}>
           <button type="button"
             className={["simple-edit", row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", row.isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ")}
             aria-current={row.on || undefined}

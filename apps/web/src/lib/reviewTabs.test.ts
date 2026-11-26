@@ -29,6 +29,13 @@ it("lists a tab's rows top to bottom: Needs review's waiting rows, with the low 
   expect(keys(rowsOfTab(rows, "done", false, undefined))).toEqual(["d"]);
 });
 
+it("lists the low risk rows after all of Needs review's waiting rows with optionalAfter (the new layout)", () => {
+  const rows = [row("a", "optional", 1), row("b", "you", 2), row("c", "working", 3), row("e", "you", 5), row("f", "optional", 6)];
+  expect(keys(rowsOfTab(rows, "you", true, undefined, true))).toEqual(["b", "e", "a", "f"]);
+  expect(keys(rowsOfTab(rows, "you", false, undefined, true))).toEqual(["b", "e"]);
+  expect(keys(rowsOfTab(rows, "working", true, undefined, true))).toEqual(["c"]);
+});
+
 it("orders a pass's list by number while every row has one, else by time, and leaves any other list as given", () => {
   const numbered = [row("cut 3", "you", 6, 3), row("edit 2", "you", 15, 2), row("cut 1", "you", 12, 1)];
   expect(keys(inListOrder(numbered, { numbers: true }))).toEqual(["cut 1", "edit 2", "cut 3"]);
@@ -168,4 +175,18 @@ it("holds a row moving from Done (or a just-kept row lingering in Needs review) 
   vi.advanceTimersByTime(LINGER_FADE_MS);
   expect(linger.of("e")).toBeUndefined();
   linger.dispose();
+});
+
+it("with bySeen holds a low risk row by whether it was on screen, not whether its rows are shown now", () => {
+  const seen = new ReviewLinger(true), shown = new ReviewLinger();
+  for (const linger of [seen, shown]) {
+    linger.track([{ key: "a", place: "optional" }, { key: "b", place: "optional" }], true);
+    // Folded while "b" was never drawn among them: "b" stays unseen.
+    linger.track([{ key: "a", place: "optional" }, { key: "b", place: "optional" }, { key: "c", place: "optional" }], false);
+    linger.track([{ key: "a", place: "done" }, { key: "c", place: "done" }], false);
+  }
+  expect([seen.of("a")?.from, seen.of("c")]).toEqual(["optional", undefined]);
+  expect([shown.of("a"), shown.of("c")]).toEqual([undefined, undefined]);
+  seen.dispose();
+  shown.dispose();
 });
