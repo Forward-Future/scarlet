@@ -254,7 +254,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, editPla
           approve={shownMarker ? undefined : onKeep}
           approveLabel={inBatch && !batch.kept ? `Keep all ${batch.count}` : "Keep"} approveKey="K" />
         {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
-            a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A to-do marked for the editor has it too:
+            a moment's card, and moves straight to the next edit in line. A to-do marked for the editor has it too:
             its marker comes off. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
         {appliedTarget && rejectTarget && <RejectEdit key={`reject ${openEditKey}`} projectId={projectId} thread={focusThread} target={rejectTarget}
           edits={rejectedEdits} editsOn={appliedTarget.version}

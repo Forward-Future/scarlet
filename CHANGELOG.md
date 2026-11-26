@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Rejecting an edit now moves straight to the next edit in line instead of staying on the rejected card.
 - Taking back a rejected edit with ⌘Z now simply brings the edit back, without an extra "Undo · Rejected" line in the chat or a second row for it.
 - After an export, the Export window still offers the folder for Resolve, Final Cut or Premiere, and Back from it.
 - Exporting only captions no longer marks the video as exported.
