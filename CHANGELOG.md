@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Opening a cut from the list now keeps its section lit on the timeline and plays from just before the cut, even when the video changes underneath it while you review.
 - Dragging the playhead past the left end of the timeline now lands it on 0:00, and past the right end on the last frame, even when the timeline is zoomed in; the timeline scrolls to show it there.
 - In the beta layout, hovering an edit in the edits column now shows a plain summary underneath its title, such as how much a cut removes or the caption words, file, zoom, audio change, speed, or transition for other edits.
 - In the beta layout, the edits column now stays visible right away when you open a project with no edits yet, instead of hiding until Scarlet makes an edit.

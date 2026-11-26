@@ -8922,6 +8922,50 @@ it("opens a cut on the version before an earlier batch's cut beside it, so that 
   expect(gaps.map(g => g.querySelector(".simple-timeline-gap-label")?.textContent)).toEqual(["Cut at 0:13"]);
 });
 
+it("keeps an open cut's listen on the same footage, and its band in view, when it moves onto another version (#686)", async () => {
+  // The pass's first batch took out 2–4 s; its next took out 8.5–9.5 s of what was left, which is 10.5–11.5 s before
+  // the first batch. The open cut is the second, shown on the version before both, where the first is a gap beside it.
+  const first = { op: "rippleDelete" as const, start: 2, end: 4 };
+  const next = { op: "rippleDelete" as const, start: 8.5, end: 9.5 };
+  const before = { ...data.timeline!, version: "v_before" };
+  const batch = { ...applyOps(before, [first]), version: "v_batch" };
+  const working = { ...applyOps(batch, [next]), version: data.project.head! };
+  const approved = data.changes.find(c => c.id === "chg_approved_2")!;
+  data = { ...data, timeline: working, changes: [...data.changes.map(c => c.id === "chg_approved_2"
+    ? { ...c, threadId: "thr_batches", ops: [first], fromVersion: "v_before", toVersion: batch.version, appliedVersion: batch.version,
+      timelineEdits: undefined, approvedSpots: undefined, appliedReview: undefined, cutReasons: [{ ...first, reason: "Drop the retake" }] } : c),
+  { ...approved, id: "chg_approved_2b", threadId: "thr_batches", ops: [next], fromVersion: batch.version, toVersion: working.version, appliedVersion: working.version,
+    createdAt: new Date(Date.parse(approved.createdAt!) + 60_000).toISOString(),
+    timelineEdits: undefined, approvedSpots: undefined, appliedReview: undefined, cutReasons: [{ ...next, reason: "Drop the long pause" }] }] };
+  useProjectStore.setState({ current: data });
+  const retake = { changeId: "chg_approved_2", spot: 0, label: "Drop the retake", range: { start: 2, end: 2 }, at: 2,
+    beforeCut: { version: "v_before", removed: { start: 2, end: 4 } }, previous: [] };
+  const pause = { changeId: "chg_approved_2b", spot: 0, label: "Drop the long pause", range: { start: 8.5, end: 8.5 }, at: 8.5,
+    beforeCut: { version: "v_batch", removed: { start: 8.5, end: 9.5 } }, previous: [] };
+  vi.spyOn(api, "threadEdits").mockResolvedValue({ version: working.version, edits: [pause, retake] });
+  vi.spyOn(api, "timeline").mockImplementation(async (_, version) => ({ timeline: version === "v_before" ? before : version === "v_batch" ? batch : working }));
+  const audition = vi.spyOn(player, "audition");
+  await show();
+  await click([...editRowsIn(turnFor("chg_approved_2"))].find(r => r.textContent?.includes("Drop the long pause"))!);
+  await act(async () => {});
+  const band = () => container.querySelector<HTMLElement>(".simple-timeline-band");
+  expect(band()?.textContent).toBe("Cut · 1.0 s");
+  // Two seconds before the cut, as it sits on the version before both batches.
+  expect(audition.mock.lastCall![0].start).toBeCloseTo(8.5, 2);
+  // The listen plays to a second before the cut.
+  await act(async () => player.seek(9.5, true));
+  // The first batch's cut is undone, so the cut is shown on its own version, where it sits at 8.5 s.
+  vi.mocked(api.threadEdits).mockResolvedValue({ version: working.version, edits: [pause, { ...retake, rejected: true }] });
+  await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_approved_2" ? { ...c, state: "rejected" as const } : c) }));
+  await act(async () => {});
+  expect(container.querySelector(".simple-timeline-gap")).toBeNull();
+  // The listen goes on from the same footage, still a second before the cut. It stayed at 9.5 s, which on this
+  // version is the end of the cut: the editor heard what came after it, and never the moment before.
+  expect(audition).toHaveBeenLastCalledWith(expect.objectContaining({ start: 6.5 }), expect.any(Number), true);
+  expect(playhead()).toBeCloseTo(7.5, 2);
+  expect(band()?.textContent).toBe("Cut · 1.0 s");
+});
+
 it("waits for the latest version with captions when opening an older cut, and retries when that version fails to load", async () => {
   const cut = { op: "rippleDelete" as const, start: 10, end: 12.4 };
   const before = { ...data.timeline!, version: "v_before" };
