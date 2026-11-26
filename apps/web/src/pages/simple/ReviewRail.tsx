@@ -63,14 +63,11 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   };
 }
 
-export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onFilter, selected, onDoneLow, onHover, flashedThreadId, compact = false, reserve = 0 }: {
+export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow, onHover, flashedThreadId, compact = false, reserve = 0 }: {
   projectId: string;
   store: RailStore;
   open: { working: boolean; done: boolean; low?: boolean };
   onOpen(section: "working" | "done" | "low", open: boolean): void;
-  /** Priority list filter: All unreviewed edits (flagged pinned on top + confident below) or Needs you only. */
-  filter?: "all" | "need";
-  onFilter?(next: "all" | "need"): void;
   /** What is open on the card, so its row is kept in view. */
   selected?: string;
   /** Keep all confident edits at once. */
@@ -93,12 +90,11 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
   const { need, forYouRows, optional, working, done, pastHour, sections } = view;
   const total = need + optional;
   const nothing = need + forYouRows + optional + working + done === 0;
-  const effectiveFilter: "all" | "need" = need > 0 && optional > 0 ? filter : "all";
-  const showConfident = optional > 0 && effectiveFilter === "all";
-  // The row of the cut or edit that's open stays in view as Keep, ↑ ↓, or filtering reveals it.
+  const showConfident = optional > 0;
+  // The row of the cut or edit that's open stays in view as Keep or ↑ ↓ reveals it.
   useEffect(() => {
     if (selected) host.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" });
-  }, [selected, effectiveFilter, open.working, open.done]);
+  }, [selected, open.working, open.done]);
 
   // Show Scarlet's own dark floating tooltip with the full line on hover or keyboard focus of any edit row.
   useEffect(() => {
@@ -184,7 +180,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
   // Never leave a floating tooltip orphaned if its row unmounts (e.g. via K shortcut or live update).
   useEffect(() => {
     setTip(cur => (cur && (nothing || !cur.row.isConnected) ? null : cur));
-  }, [nothing, need, optional, working, done, effectiveFilter, open.working, open.done]);
+  }, [nothing, need, optional, working, done, open.working, open.done]);
 
   // Tie aria-describedby to the hovered/focused row while the tooltip is open, and clamp its horizontal edge in view.
   useLayoutEffect(() => {
@@ -348,12 +344,6 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
       {onDoneLow && optional > 0 && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
         onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
     </header>
-    {need > 0 && optional > 0 && onFilter && <div className="review-filter-bar" role="group" aria-label="Filter edits">
-      <button type="button" className="review-filter-chip" aria-pressed={effectiveFilter === "all"}
-        onClick={letGo(() => onFilter("all"))}>All {total}</button>
-      <button type="button" className="review-filter-chip is-warn" aria-pressed={effectiveFilter === "need"}
-        onClick={letGo(() => onFilter("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
-    </div>}
     <div className="review-rail-scroll">
       <div className="review-rail-list" role="group" aria-label="Needs review">
         {renderSectionList("you")}

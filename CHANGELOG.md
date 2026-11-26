@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Removed the "All" and "Needs you" filter buttons from Needs review so flagged edits and safe edits always appear together in one list.
 - The "For you" list of edits waiting on you is now called "Needs review".
 - In the beta layout, hovering an edit in the edits column now shows a plain summary underneath its title, such as how much a cut removes or the caption words, file, zoom, audio change, speed, or transition for other edits.
 - In the beta layout, the edits column now stays visible right away when you open a project with no edits yet, instead of hiding until Scarlet makes an edit.

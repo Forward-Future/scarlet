@@ -145,9 +145,6 @@ const tabs = (shown: "Needs review" | "Working" | "Done" = "Needs review") => ["
 const tabNamed = (scope: Element, name: "Needs review" | "Working" | "Done") => dockFor(scope).querySelector<HTMLButtonElement>(`.simple-review-tab[aria-label="${name}"]`)!;
 /** The Needs review tab button in the fixed bottom dock. */
 const forYouTab = (scope?: Element) => (scope ? dockFor(scope) : reviewDock() ?? container).querySelector<HTMLButtonElement>(".simple-pass-need");
-/** The inline Priority list filter pills (`All N`, `Needs you M`) under the Needs review tab. */
-const filterChips = (scope?: Element) => [...(scope ? dockFor(scope) : reviewDock() ?? container).querySelectorAll<HTMLButtonElement>(".review-filter-bar > .review-filter-chip")].map(b => [b.textContent, b.getAttribute("aria-pressed")]);
-const filterChip = (kind: "all" | "need", scope?: Element) => (scope ? dockFor(scope) : reviewDock() ?? container).querySelector<HTMLButtonElement>(kind === "need" ? ".review-filter-chip.is-warn" : ".review-filter-chip:not(.is-warn)");
 /** The right-aligned `Keep N confident` button in the dock tab bar. */
 const keepConfidentBtn = (scope?: Element) => (scope ? dockFor(scope) : reviewDock() ?? container).querySelector<HTMLButtonElement>(".review-head-keep");
 /** Each list a request shows, top to bottom: its name and its rows' words. */
@@ -165,14 +162,10 @@ const reviewModes = (scope: Element) => [...dockFor(scope).querySelectorAll(".si
   button.getAttribute("aria-label") ?? button.textContent,
   button.getAttribute("aria-pressed"),
 ]);
-/** Most tests work on the rows. Expand untabbed list disclosures; in the tabbed Priority list, ensure All is active. */
+/** Most tests work on the rows. Expand untabbed list disclosures; the tabbed Priority list already shows all rows. */
 const openEdits = async () => {
   const dock = reviewDock();
-  if (dock?.querySelector('.simple-review-tab[aria-label="Needs review"]')) {
-    const allChip = filterChip("all");
-    if (allChip?.getAttribute("aria-pressed") === "false") await click(allChip);
-    return;
-  }
+  if (dock?.querySelector('.simple-review-tab[aria-label="Needs review"]')) return;
   for (const toggle of container.querySelectorAll<HTMLElement>('[aria-label="Edits"] :is(.simple-pass-toggle[aria-expanded="false"], .simple-review-tab:only-child[aria-pressed="false"])')) await click(toggle);
 };
 const showFolded = () => act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
@@ -597,21 +590,19 @@ it("keeps the list a request had open across a restart, so a request about one e
     await showFolded();
     await act(async () => {});
   };
-  // Priority list opens on Needs review with All active by default, and Needs you filter available.
-  expect([reviewModes(turnFor("chg_approved_2")), filterChips(turnFor("chg_approved_2"))]).toEqual([tabs(), [["All 3", "true"], ["Needs you 1", "false"]]]);
-  await click(filterChip("need", turnFor("chg_approved_2"))!);
-  expect([reviewModes(turnFor("chg_approved_2")), filterChips(turnFor("chg_approved_2"))]).toEqual([tabs(), [["All 3", "false"], ["Needs you 1", "true"]]]);
-  // Scarlet restarts: the chat is drawn again from nothing, and the Needs you filter stays active.
+  // Priority list opens on Needs review with no filter chips, and tab selection persists across a restart.
+  expect([reviewModes(turnFor("chg_approved_2")), dockFor(turnFor("chg_approved_2")).querySelector(".review-filter-bar")]).toEqual([tabs(), null]);
+  await click(tabNamed(turnFor("chg_approved_2"), "Working"));
   await restart();
-  expect([reviewModes(turnFor("chg_approved_2")), filterChips(turnFor("chg_approved_2"))]).toEqual([tabs(), [["All 3", "false"], ["Needs you 1", "true"]]]);
+  expect(reviewModes(turnFor("chg_approved_2"))).toEqual(tabs("Working"));
   // On Done, a restart leaves it there.
   await click(tabNamed(turnFor("chg_approved_2"), "Done"));
   await restart();
   expect(reviewModes(turnFor("chg_approved_2"))).toEqual(tabs("Done"));
-  // Back on Needs review, All is active again and persists across restart.
+  // Back on Needs review, it persists across restart with flagged and safe edits together.
   await click(forYouTab(turnFor("chg_approved_2"))!);
   await restart();
-  expect([reviewModes(turnFor("chg_approved_2")), filterChips(turnFor("chg_approved_2"))]).toEqual([tabs(), [["All 3", "true"], ["Needs you 1", "false"]]]);
+  expect([reviewModes(turnFor("chg_approved_2")), editLists(turnFor("chg_approved_2"))]).toEqual([tabs(), [["Edits for you", ["wrap", "music bed", "captions"]]]]);
 });
 
 it("labels an edit a task model made with its kind of work and model, quietly in the card's row", async () => {
@@ -647,21 +638,17 @@ it("lists a thread's edits once, by time, and opens one with its decisions under
   expect([...turn.querySelectorAll(".simple-made b")].map(b => b.textContent)).toEqual(["3"]);
   expect(turn.querySelector(".simple-made-line button")?.textContent).toBe("Show →");
   // Needs review, Working and Done sit above the Priority list. Needs review shows flagged edits pinned on top and
-  // confident edits right below under a hairline divider, with All / Needs you filter chips and Keep N confident.
+  // safe edits right below under a hairline divider, with Keep N safe edits and no filter bar.
   expect(reviewModes(turn)).toEqual(tabs());
   expect(dock.querySelector(".simple-review-tab-total")?.textContent).toBe("3");
   expect(dock.querySelector(".simple-review-tab-count")?.textContent).toBe("1");
   expect(dock.querySelector(".simple-review-tab-tally")).toBeNull();
   expect(keepConfidentBtn(turn)?.textContent).toBe("Keep 2 safe edits");
-  expect(dock.querySelector(".simple-review-tabs + .review-filter-bar + .simple-pass-list")).not.toBeNull();
+  expect(dock.querySelector(".review-filter-bar")).toBeNull();
+  expect(dock.querySelector(".simple-review-tabs + .simple-pass-list")).not.toBeNull();
   expect(dock.querySelector(".review-tier-sep")?.textContent).toBe("Safe edits (2)");
-  expect([editLists(turn), filterChips(turn)]).toEqual([[["Edits for you", ["wrap", "music bed", "captions"]]], [["All 3", "true"], ["Needs you 1", "false"]]]);
-  // Filtering to Needs you narrows the list to only the flagged edit, and All brings confident edits right back.
-  await click(filterChip("need", turn)!);
-  expect([editLists(turn), filterChips(turn)]).toEqual([[["Edits for you", ["wrap"]]], [["All 3", "false"], ["Needs you 1", "true"]]]);
-  await click(filterChip("all", turn)!);
   const rows = () => [...editRowsIn(turn)];
-  expect([editLists(turn), filterChips(turn)]).toEqual([[["Edits for you", ["wrap", "music bed", "captions"]]], [["All 3", "true"], ["Needs you 1", "false"]]]);
+  expect(editLists(turn)).toEqual([["Edits for you", ["wrap", "music bed", "captions"]]]);
   expect(dock.querySelectorAll(".simple-pass-list")).toHaveLength(1);
   expect(rows().map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual(["wrap", "music bed", "captions"]);
   expect(rows().map(rowTime)).toEqual(["0:11", "0:00", "0:00"]);
@@ -879,25 +866,21 @@ it("steps between a request's edits with the arrow keys, sideways or up and down
   expect(openTitle()).toBe("wrap");
   await press("ArrowDown");
   expect(openTitle()).toBe("music bed");
-  // Filtered to Needs you, Needs review lists just the flagged edit, led by its time, and pressing Needs review opens it.
+  // Pressing Needs review opens the flagged edit pinned at top, with safe edits listed right below it.
   const need = () => forYouTab(turn);
-  await click(filterChip("need", turn)!);
   await click(need()!);
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   expect(dockFor(turn).querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Edits for you");
-  expect(rows().map(r => [rowTime(r), r.querySelector(".simple-pass-words")?.textContent])).toEqual([["0:11", "wrap"]]);
-  // With one row there, ↑ and ↓ have nowhere to go.
+  expect(rows().map(r => [rowTime(r), r.querySelector(".simple-pass-words")?.textContent])).toEqual([["0:11", "wrap"], ["0:00", "music bed"], ["0:00", "captions"]]);
+  // ↓ steps from the flagged edit into the safe edits below, and ↑ returns to wrap.
   await press("ArrowDown");
+  expect(openTitle()).toBe("music bed");
+  await press("ArrowUp");
   expect(openTitle()).toBe("wrap");
-  // Switching back to All shows confident edits right below, Needs review still active; Needs you filters them out again.
-  await click(filterChip("all", turn)!);
-  expect([rows().length, need()!.getAttribute("aria-pressed")]).toEqual([3, "true"]);
-  await click(filterChip("need", turn)!);
-  expect(rows().length).toBe(1);
-  // K keeps the edit on screen. With Needs you active and nothing else waiting, the card closes and wrap is Done's.
+  // K keeps wrap, moves on to the first safe edit (music bed), and wrap is Done's.
   await press("k");
-  expect(editPanel()).toBeNull();
+  expect(openTitle()).toBe("music bed");
   expect(need()?.getAttribute("title")).toBe("2 safe edits");
   await click(tabNamed(turn, "Done"));
   expect(rows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided"), ticked(r), r.querySelector(".simple-pass-value")?.textContent]))
@@ -1191,26 +1174,16 @@ const twoFlagged = () => appliedEdits().mockImplementation(async (_project, thre
   ] }));
 const cardCount = () => editPanel()?.querySelector(".edit-card-count")?.textContent;
 
-it("steps ↑ and ↓ among the flagged edits from one that still waits, and through the low risk ones among them once included", async () => {
+it("steps ↑ and ↓ through flagged edits first, then safe edits below them", async () => {
   twoFlagged();
   await showFolded();
   const turn = turnFor("chg_approved_2");
-  // Filtered to Needs you, Needs review lists just the two flagged edits and opens the first: its card leads with its place among them.
-  await click(filterChip("need", turn)!);
+  // Needs review opens the first flagged edit, with flagged edits pinned on top and safe edits below.
   await click(forYouTab(turn)!);
   await act(async () => {});
   expect([openTitle(), cardCount(), dockFor(turn).querySelector(".simple-pass-list")?.getAttribute("aria-label")]).toEqual(["music bed", "1 of 2", "Edits for you"]);
-  // ↓ goes to the next one that still waits, over the confident edit, and the list keeps a row lit.
-  await press("ArrowDown");
-  expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
-  // That is the last of them: ↓ stays, and ↑ goes back.
-  await press("ArrowDown");
-  expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
-  await press("ArrowUp");
-  expect([openTitle(), cardCount()]).toEqual(["music bed", "1 of 2"]);
-  // Switched to All, the arrows go through the Priority list: flagged edits pinned on top, then confident edits below.
-  await click(filterChip("all", turn)!);
   expect(editLists(turn)).toEqual([["Edits for you", ["music bed", "wrap", "captions"]]]);
+  // ↓ goes to the next flagged edit, then into safe edits, and stays at the end; ↑ goes back.
   await press("ArrowDown");
   expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
   await press("ArrowDown");
@@ -1219,6 +1192,8 @@ it("steps ↑ and ↓ among the flagged edits from one that still waits, and thr
   expect(openTitle()).toBe("captions");
   await press("ArrowUp");
   expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
+  await press("ArrowUp");
+  expect([openTitle(), cardCount()]).toEqual(["music bed", "1 of 2"]);
 });
 
 it("keeps a flagged edit made in separate places as separate rows, steps through each, and keeps only the open one", async () => {
@@ -1233,12 +1208,11 @@ it("keeps a flagged edit made in separate places as separate rows, steps through
   await showFolded();
   const turn = turnFor("chg_approved_2");
   const need = () => forYouTab(turn)?.getAttribute("title");
-  // Three separate edits need the editor (pinned on top) plus 1 confident edit below.
+  // Three separate edits need the editor (pinned on top) plus 1 safe edit below.
   expect(need()).toBe("4 unreviewed (3 need you)");
-  await click(filterChip("need", turn)!);
   await click(forYouTab(turn)!);
   await act(async () => {});
-  expect(editRowsIn(turn).map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual(["captions", "captions", "wrap"]);
+  expect(editRowsIn(turn).map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual(["captions", "captions", "wrap", "music bed"]);
   expect([openTitle(), cardCount()]).toEqual(["captions", "1 of 3"]);
   // ↓ steps to the second caption spot, then to the wrap, and ↑ comes back.
   await press("ArrowDown");
@@ -1271,7 +1245,6 @@ it("takes back the last Keep with ⌘Z, then the one before, with no undo displa
   await showFolded();
   const turn = turnFor("chg_approved_2");
   const need = () => forYouTab(turn)?.getAttribute("title");
-  await click(filterChip("need", turn)!);
   await click(forYouTab(turn)!);
   await act(async () => {});
   expect(undoDisplay()).toBeNull();
@@ -1387,7 +1360,6 @@ it("steps among a pass's flagged cuts with its lists closed, where the timeline 
   await act(async () => {});
   const pass = dockFor(turnFor("chg_approved_2"));
   const need = () => forYouTab(pass)!;
-  await click(filterChip("need", pass)!);
   await click(need());
   await act(async () => {});
   expect([openTitle(), cardCount()]).toEqual(["music bed", "1 of 2"]);
@@ -1395,14 +1367,11 @@ it("steps among a pass's flagged cuts with its lists closed, where the timeline 
   await press("ArrowDown");
   expect(pass.querySelector(".simple-pass-list [aria-current='true'] .simple-pass-label")?.textContent).toBe("wrap");
   expect(cardCount()).toBe("2 of 2");
-  // Pressed again the list stays: the cut stays open and the arrows still go to the other one that waits.
+  // Pressed again the list stays: the cut stays open and the arrows still go through the Priority list.
   await click(need());
   expect(pass.querySelector(".simple-pass-list")?.getAttribute("aria-label")).toBe("Edits for you");
   await press("ArrowUp");
   expect([editPanel()?.querySelector(".edit-card-title")?.textContent, cardCount()]).toEqual(["music bed. The bed may sit too loud under the intro", "1 of 2"]);
-  // Switched to All, the arrows go through the Priority list: flagged first, then confident edits below.
-  await click(filterChip("all", pass)!);
-  await act(async () => {});
   expect([...pass.querySelectorAll(".simple-pass-list")].map(list => list.getAttribute("aria-label"))).toEqual(["Edits for you"]);
   await press("ArrowDown");
   expect([pass.querySelector(".simple-pass-list [aria-current='true'] .simple-pass-label")?.textContent, cardCount()]).toEqual(["wrap", "2 of 2"]);
@@ -1428,19 +1397,17 @@ it("lists what needs the editor for a flagged edit opened from the timeline, so 
     await act(async () => { strip.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, button: 0, pointerId: 1, clientX: parseFloat(dot.style.left) * 10 })); });
     await act(async () => {});
   };
-  // Filter to Needs you: opening a flagged dot keeps Needs you active and ↓ goes to the next flagged edit.
+  // Opening a flagged dot keeps Needs review active and ↓ goes to the next flagged edit.
   expect(listed()).toBe("Edits for you");
-  await click(filterChip("need", turn)!);
   await pressDot(0);
   expect([openTitle(), cardCount(), listed(), forYouTab(turn)?.getAttribute("title")]).toEqual(["music bed", "1 of 2", "Edits for you", "3 unreviewed (2 need you)"]);
   await press("ArrowDown");
   expect([openTitle(), cardCount()]).toEqual(["wrap", "2 of 2"]);
-  // Closing the card keeps Needs you active. Clicking a confident edit's dot on the timeline switches back to All
-  // so its row is visible and highlighted in the Priority list.
+  // Closing the card keeps Needs review active; clicking a safe edit's dot opens it in the same Priority list.
   await press("Escape");
-  expect([editPanel(), listed(), filterChips(turn)]).toEqual([null, "Edits for you", [["All 3", "false"], ["Needs you 2", "true"]]]);
+  expect([editPanel(), listed()]).toEqual([null, "Edits for you"]);
   await pressDot(1);
-  expect([openTitle(), cardCount(), reviewModes(turn), filterChips(turn)]).toEqual(["captions", undefined, tabs(), [["All 3", "true"], ["Needs you 2", "false"]]]);
+  expect([openTitle(), cardCount(), reviewModes(turn)]).toEqual(["captions", undefined, tabs()]);
   expect(editLists(turn)).toEqual([["Edits for you", ["music bed", "wrap", "captions"]]]);
 });
 
@@ -1491,16 +1458,15 @@ it("keeps a flagged edit's row to its amber time and its name: the reason is on 
   expect([amber(kept), ticked(kept), kept.textContent, kept.title]).toEqual([false, true, "0:11wrapKept", CHECK]);
 });
 
-it("reviews only the edits Scarlet flagged, then lists them under Done marked as handled", async () => {
+it("reviews flagged edits first, then lists them under Done marked as handled", async () => {
   appliedEdits();
   await show();
   const turn = turnFor("chg_approved_2");
-  await click(filterChip("need", turn)!);
   await click(forYouTab(turn)!);
   await act(async () => {});
   expect(openTitle()).toBe("wrap");
   await click(buttonIn(editPanel()!, "Keep")!);
-  expect(editPanel()).toBeNull();
+  expect(openTitle()).toBe("music bed");
   expect(forYouTab(turn)?.getAttribute("title")).toBe("2 safe edits");
   expect(dockFor(turn).querySelector(".simple-review-tab-count")).toBeNull();
   await click(tabNamed(turn, "Done"));
@@ -2987,7 +2953,6 @@ it("has Scarlet add what a to-do asks for with Add (A): one request about that t
   const createTask = vi.fn((..._request: unknown[]) => new Promise(resolve => { sent = () => resolve({ id: "task_add" }); }));
   useProjectStore.setState({ createTask: createTask as never });
   await show();
-  await click(filterChip("need", turnFor("chg_approved_2"))!);
   await click(rowNamedIn(turnFor("chg_approved_2"), "Boat comparison footage"));
   await act(async () => {});
   const add = () => editPanel()!.querySelector<HTMLButtonElement>('.edit-card-acts button[data-key="A"]')!;
@@ -3003,8 +2968,8 @@ it("has Scarlet add what a to-do asks for with Add (A): one request about that t
   expect(request.context).toMatchObject({ changeId: "chg_approved_2", editIndex: 1, threadId: threadWith("chg_approved_2").id, message: "Add it" });
   expect(request.instruction).toContain("“Add the other boat renders”");
   await act(async () => { sent(); });
-  // Filtered to Needs you, nothing else waits on the editor, so the card closes.
-  expect([openTitle(), editPanel()]).toEqual([undefined, null]);
+  // Moves on to the next edit in Needs review (music bed).
+  expect(openTitle()).toBe("music bed");
 });
 
 it("has no menu on a request for now: Undo these edits and File this thread aren't in the chat", async () => {
@@ -3506,15 +3471,10 @@ it("marks an applied pass's cuts on the timeline while it has the timeline, as w
   await press("Escape");
   await act(async () => {});
   expect(drawn()).toEqual([undefined, undefined, "check"]);
-  // Filtering to Needs you narrows the timeline dots to just the cut that waits; opening it and pressing Esc keeps the pass on the timeline while it waits.
-  await click(filterChip("need", pass)!);
-  await act(async () => {});
-  expect(drawn()).toEqual(["check"]);
+  // Opening the cut that waits and pressing Esc keeps the pass's cuts marked on the timeline.
   await click(forYouTab(pass)!);
   expect(drawn()).toEqual(["check"]);
   await press("Escape");
-  expect(drawn()).toEqual([undefined, undefined, "check"]);
-  await click(filterChip("all", pass)!);
   expect(drawn()).toEqual([undefined, undefined, "check"]);
 });
 
@@ -3622,9 +3582,9 @@ it("lists an applied pass under Needs review, Working and Done, with its cuts ma
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
   expect(turn.querySelector(".simple-made")?.textContent).toBe("Made 3 edits: music bed, captions, wrap.");
   expect(turn.querySelector(".simple-made-line button")?.textContent).toBe("Show →");
-  // The three tabs sit above the Priority list: All active by default with flagged edits pinned on top and confident below.
-  expect([reviewModes(pass), filterChips(pass)]).toEqual([tabs(), [["All 3", "true"], ["Needs you 1", "false"]]]);
-  expect([pass.querySelector(".simple-review-tabs + .review-filter-bar + .simple-pass-list"), lists()]).toEqual([list(), [["Edits for you", 3]]]);
+  // The three tabs sit above the Priority list with flagged edits pinned on top, safe edits below, and no filter bar.
+  expect([reviewModes(pass), pass.querySelector(".review-filter-bar")]).toEqual([tabs(), null]);
+  expect([pass.querySelector(".simple-review-tabs + .simple-pass-list"), lists()]).toEqual([list(), [["Edits for you", 3]]]);
   const need = () => forYouTab(pass)!;
   expect(need().getAttribute("title")).toBe("3 unreviewed (1 needs you)");
   await click(need());
@@ -3635,14 +3595,10 @@ it("lists an applied pass under Needs review, Working and Done, with its cuts ma
   expect(editPanel()).not.toBeNull();
   await click(need());
   expect([lists(), !!editPanel()]).toEqual([[["Edits for you", 3]], true]);
-  // Needs you narrows Needs review to just the flagged row, and All restores the confident rows right below.
-  await click(filterChip("need", pass)!);
-  expect([reviewModes(pass), filterChips(pass), lists()]).toEqual([tabs(), [["All 3", "false"], ["Needs you 1", "true"]], [["Edits for you", 1]]]);
-  expect(markStates()).toEqual(["check"]);
-  // Kept while filtered to Needs you, nothing waits on the editor so the card closes and filter resets to All.
+  // Keeping wrap moves on to the first safe edit (music bed) and clears the amber count.
   await press("k");
   await act(async () => {});
-  expect(editPanel()).toBeNull();
+  expect(openTitle()).toBe("music bed");
   expect(reviewModes(pass)).toEqual(tabs());
   expect(need().getAttribute("title")).toBe("2 safe edits");
   expect([...pass.querySelectorAll(".simple-review-tab")].map(tab => tab.textContent)).toEqual(["Needs review2", "Working", "Done1"]);
@@ -3807,13 +3763,11 @@ it("marks a settled pass's cuts while it has the timeline, and gives a request t
   await act(async () => {});
   expect(ticks()).toEqual(["dot", "dot", "dot"]);
   // A request arrives while the list is open. Once that flagged request arrives, the dock switches to tabs and
-  // keeps the pass's confident edits visible until filtered to Needs you.
+  // keeps the pass's safe edits visible in the unified Priority list.
   await event(d => ({ ...d, changes: [...d.changes, later.change] }));
   await act(async () => {});
   expect(ticks()).toEqual(["dot", "dot", "dot"]);
-  await click(filterChip("need")!);
-  await act(async () => {});
-  expect(markStates()).toEqual(["check"]);
+  expect(forYouTab()?.getAttribute("title")).toBe("4 unreviewed (1 needs you)");
 });
 
 it("widens the times of a pass's list once one of its rows is past an hour, so a time never runs into its words", async () => {
@@ -3833,9 +3787,14 @@ it("widens the times of a pass's list once one of its rows is past an hour, so a
     // words, and the words keep one edge down the block.
     expect([...lists().map(list => list.className), ...rows().map(row => styled(row, "grid-template-columns")[0])])
       .toEqual(["simple-pass-list has-hours", ...Array(3).fill("52px minmax(0, 1fr) auto")]);
-    // Filtered to Needs you, the edit that needs the editor has no time past the hour beside it, and keeps the narrow column.
-    await click(filterChip("need", dock)!);
-    await act(async () => {});
+    // Once the safe edits (including the row past an hour) are kept and finish lingering, only the flagged edit remains and keeps the narrow column.
+    vi.useFakeTimers();
+    try {
+      await click(keepConfidentBtn(dock)!);
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    } finally {
+      vi.useRealTimers();
+    }
     expect([lists().map(list => list.className), rows().length, styled(rows()[0]!, "grid-template-columns")[0]]).toEqual([["simple-pass-list"], 1, "38px minmax(0, 1fr) auto"]);
   });
 });
@@ -3855,13 +3814,13 @@ it("gives the timeline back to a pass's open list when another request's edit cl
   await press("Escape");
   await act(async () => {});
   expect(ticks()).toEqual(["dot", "dot", "check"]);
-  // A third request's edit lands while All is open. Filtering to Needs you leaves the timeline on the latest request.
+  // A third request's edit lands while Needs review is open. Switching to Done drops the pass's open list and returns the timeline to the latest request.
   const third = { ...later.change, id: "chg_third", description: "Lower the music", createdAt: new Date(Date.now() + 1000).toISOString() };
   later.lists.chg_third = [{ changeId: "chg_third", spot: 0, label: "music level", range: { start: 5, end: 9 }, previous: [], check: "It may be too quiet now" }];
   await event(d => ({ ...d, changes: [...d.changes, third] }));
   await act(async () => {});
   expect(ticks()).toEqual(["dot", "dot", "check"]);
-  await click(filterChip("need")!);
+  await click(tabNamed(turnFor("chg_third"), "Done"));
   await act(async () => {});
   expect(markStates()).toEqual(["check", "check", "check"]);
   expect(container.querySelector(".simple-timeline-mark")?.getAttribute("style")).toContain("31.25%");
@@ -9040,8 +8999,8 @@ it("gives the timeline to a request that arrived under a pass's open list once t
   await press("Escape");
   await act(async () => {});
   expect(ticks()).toEqual(["dot", "dot", "check"]);
-  // Filtering to Needs you hides confident edits, leaving only the flagged edits on the timeline.
-  await click(filterChip("need")!);
+  // Switching to Done closes the pass's safe-edits list on the timeline, leaving only the flagged edits marked.
+  await click(tabNamed(turnFor("chg_later"), "Done"));
   await act(async () => {});
   expect(forYouTab()?.getAttribute("title")).toBe("4 unreviewed (2 need you)");
   expect(markStates()).toEqual(["check", "check"]);
@@ -10266,21 +10225,16 @@ it("opens a finished request's edits from the review controls, with no chevron, 
   await showFolded();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  const listOpen = () => filterChip("all", turn)?.getAttribute("aria-pressed") === "true" && (editLists(turn)[0]?.[1] as string[] | undefined)?.length === 3;
+  const listOpen = () => dockFor(turn).querySelector(".review-filter-bar") === null && (editLists(turn)[0]?.[1] as string[] | undefined)?.length === 3;
   expect(listOpen()).toBe(true);
   expect(reviewModes(turn)).toEqual(tabs());
   expect(turn.querySelector(".simple-pass-chevron, .run-chevron")).toBeNull();
   // Scarlet's updates along the way aren't kept in the finished request.
   expect(turn.querySelector(".req-time, .req-step, .req-steps")).toBeNull();
   expect(turn.textContent).not.toContain("Laying the music under the whole edit.");
-  // The Needs you filter narrows the list to flagged rows, and All brings confident edits right back.
-  await click(filterChip("need", turn)!);
-  expect(listOpen()).toBe(false);
-  expect(reviewModes(turn)).toEqual(tabs());
   await click(forYouTab(turn)!);
-  expect(listOpen()).toBe(false);
-  await click(filterChip("all", turn)!);
   expect(listOpen()).toBe(true);
+  expect(reviewModes(turn)).toEqual(tabs());
 });
 
 /** What was scrolled into view while `during` ran. */
@@ -10294,22 +10248,17 @@ const scrolledIntoView = async (during: (scrolled: Element[]) => Promise<void>) 
   }
 };
 
-it("moves nothing when filtering the Priority list between All and Needs you", async () => {
+it("moves nothing on initial open and keeps only the opened edit in view when clicking Needs review", async () => {
   madeRequest();
   await scrolledIntoView(async scrolled => {
     await showFolded();
     await act(async () => {});
     const turn = turnFor("chg_approved_2");
     const dock = dockFor(turn);
-    // Nothing moves until the editor asks: the chat opens at its latest message with All active.
-    expect([editRowsIn(turn).length, scrolled]).toEqual([3, []]);
-    // Confident rows below the flagged row are marked with data-low-risk for quieter styling.
+    // Nothing moves until the editor asks: the chat opens at its latest message with all unreviewed rows visible.
+    expect([editRowsIn(turn).length, scrolled, dock.querySelector(".review-filter-bar")]).toEqual([3, [], null]);
+    // Safe rows below the flagged row are marked with data-low-risk for quieter styling.
     expect([...dock.querySelectorAll(".simple-pass-list > li:not(.review-tier-sep)")].map(li => li.hasAttribute("data-low-risk"))).toEqual([false, true, true]);
-    // Filtering between Needs you and All scrolls nothing.
-    await click(filterChip("need", turn)!);
-    expect([editRowsIn(turn).length, scrolled]).toEqual([1, []]);
-    await click(filterChip("all", turn)!);
-    expect([editRowsIn(turn).length, scrolled]).toEqual([3, []]);
     // Needs review moves nothing but the edit it opens, kept in view.
     await click(forYouTab(turn)!);
     expect([scrolled.length, scrolled.at(-1)?.textContent]).toEqual([1, expect.stringContaining("wrap")]);
@@ -10485,7 +10434,7 @@ it("keeps the selected edit row in view when stepping with Keep and doesn't let 
   });
 });
 
-it("keeps the selected pass row in view across Keep, and selected when filtering the Priority list", async () => {
+it("keeps the selected pass row in view across Keep in the Priority list", async () => {
   const { lists } = appliedPass(true);
   lists[threadWith("chg_approved_2").id] = [
     { changeId: "chg_approved_2", spot: 0, label: "Cut 1", range: { start: 1, end: 2 }, previous: [], check: CHECK },
@@ -10501,11 +10450,7 @@ it("keeps the selected pass row in view across Keep, and selected when filtering
     expect(scrolled.at(-1)?.textContent).toContain("Cut 1");
     await press("k");
     expect(scrolled.at(-1)?.textContent).toContain("Cut 2");
-    // Filtering to Needs you and back to All leaves Cut 2 selected where it is, above confident rows.
-    await click(filterChip("need", pass)!);
-    await click(filterChip("all", pass)!);
     expect(pass.querySelector('.simple-pass-list > li > button[aria-current="true"]')?.textContent).toContain("Cut 2");
-    expect(scrolled.at(-1)?.textContent).toContain("Cut 2");
   });
 });
 
@@ -12645,11 +12590,10 @@ it("keeps the list of what needs the editor, and only that, once one of its edit
   const dock = () => dockFor(owner());
   const list = () => dock().querySelector<HTMLElement>(".simple-pass-list");
   const rows = () => [...editRowsIn(owner())].map(r => [r.querySelector(".simple-pass-words")?.textContent, r.querySelector(".simple-pass-check")?.textContent]);
-  // "Needs review" opens the flagged edit; filtering to "Needs you" lists the flagged edit alone.
+  // "Needs review" opens the flagged edit pinned at the top of the list.
   await click(forYouTab(owner())!);
-  await click(filterChip("need", owner())!);
   await act(async () => {});
-  expect([list()?.getAttribute("aria-label"), rows(), openTitle()]).toEqual(["Edits for you", [["wrap", undefined]], "wrap"]);
+  expect([list()?.getAttribute("aria-label"), rows()[0], openTitle()]).toEqual(["Edits for you", ["wrap", undefined], "wrap"]);
   // The editor sends a revision of it. Scarlet takes it up; the request stays in the chat and its row stays in the dock.
   const now = new Date().toISOString();
   await event(d => ({ ...d, tasks: [...d.tasks, { ...base, id: "task_fix", kind: "edit" as const, state: "running" as const, summary: null, changeIds: [], instruction: "Keep the last word.",
@@ -12704,11 +12648,9 @@ it("keeps a request about an unflagged place of a repeated edit apart from a fla
   await act(async () => {});
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   expect(forYouTab(block())?.getAttribute("title")).toBe("2 unreviewed (1 needs you)");
-  // Filtering to "Needs you" lists only the flagged place, not both places combined.
-  await click(filterChip("need", block())!);
-  await act(async () => {});
+  // Needs review lists only the flagged place at top and the unflagged music bed below, not both caption places combined.
   expect([...editRowsIn(block())].map(row => [row.querySelector(".simple-pass-words")?.textContent, row.querySelector(".simple-pass-value")?.textContent]))
-    .toEqual([["captions", "Edit"]]);
+    .toEqual([["captions", "Edit"], ["music bed", "Edit"]]);
   // The place that wasn't flagged was sent back: it and the request about it are Working's, on a row of its own.
   const under = () => [...dockFor(block()).querySelectorAll<HTMLElement>(".subunit[data-run]")];
   expect(under()).toEqual([]);
@@ -12726,11 +12668,9 @@ it("keeps a request about an edit that isn't among the ones that need the editor
   await showFolded();
   await act(async () => {});
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
-  await click(filterChip("need", block())!);
-  await act(async () => {});
   const titles = () => [...dockFor(block()).querySelectorAll(".simple-pass-list .simple-pass-words")].map(title => title.textContent);
   const under = () => [...dockFor(block()).querySelectorAll<HTMLElement>(".subunit[data-run]")];
-  expect(titles()).toEqual(["wrap"]);
+  expect(titles()).toEqual(["wrap", "music bed"]);
   // The captions have no row in Needs review, and neither has the request about them: both are Working's.
   expect(under()).toEqual([]);
   await click(tabNamed(block(), "Working"));
@@ -12777,22 +12717,21 @@ it("keeps decided edits in Needs review marked as handled even after nothing nee
   const need = () => forYouTab(turn);
   const rows = () => [...editRowsIn(turn)].map(r =>
     [rowTime(r), r.querySelector(".simple-pass-words")?.textContent, ticked(r), r.classList.contains("is-decided"), r.querySelector(".simple-pass-value")?.textContent]);
-  // In the Priority list, both flagged edits are pinned on top and music bed sits below; filtering to Needs you shows just the two flagged edits.
-  await click(filterChip("need", turn)!);
-  expect([need()?.getAttribute("title"), rows()]).toEqual(["3 unreviewed (2 need you)", [["0:00", "captions", false, false, "Edit"], ["0:11", "wrap", false, false, "Edit"]]]);
+  // In the Priority list, both flagged edits are pinned on top and music bed sits below.
+  expect([need()?.getAttribute("title"), rows()]).toEqual(["3 unreviewed (2 need you)", [["0:00", "captions", false, false, "Edit"], ["0:11", "wrap", false, false, "Edit"], ["0:00", "music bed", false, false, "Edit"]]]);
   await click(need()!);
   await act(async () => {});
-  expect(rows()).toEqual([["0:00", "captions", false, false, "Edit"], ["0:11", "wrap", false, false, "Edit"]]);
+  expect(rows()).toEqual([["0:00", "captions", false, false, "Edit"], ["0:11", "wrap", false, false, "Edit"], ["0:00", "music bed", false, false, "Edit"]]);
   expect(openTitle()).toBe("captions");
   // Kept, it stays in its place, ticked and dimmed as Kept, while the count goes down and the next one opens.
   await press("k");
   await act(async () => {});
   expect([need()?.getAttribute("title"), openTitle()]).toEqual(["2 unreviewed (1 needs you)", "wrap"]);
-  expect(rows()).toEqual([["0:00", "captions", true, true, "Kept"], ["0:11", "wrap", false, false, "Edit"]]);
-  // The last one kept while filtered to Needs you: the card closes, the amber count clears, filter resets to All, and both stay lingering marked Kept above music bed.
+  expect(rows()).toEqual([["0:00", "captions", true, true, "Kept"], ["0:11", "wrap", false, false, "Edit"], ["0:00", "music bed", false, false, "Edit"]]);
+  // The last flagged one kept: the card advances to music bed, the amber count clears, and both stay lingering marked Kept above music bed.
   await press("k");
   await act(async () => {});
-  expect([need()?.getAttribute("title"), need()?.querySelector(".simple-review-tab-count"), editPanel()]).toEqual(["1 safe edit", null, null]);
+  expect([need()?.getAttribute("title"), need()?.querySelector(".simple-review-tab-count"), openTitle()]).toEqual(["1 safe edit", null, "music bed"]);
   expect(rows()).toEqual([["0:00", "captions", true, true, "Kept"], ["0:11", "wrap", true, true, "Kept"], ["0:00", "music bed", false, false, "Edit"]]);
 });
 
@@ -13549,21 +13488,21 @@ it("takes Scarlet's closing words out of the chat with a revision that has left,
   expect(block.nextElementSibling?.textContent).toContain("Check edit 3 to hear how the ending lands.");
 });
 
-it("leaves Scarlet's reply where it is when filtering the Priority list, so nothing over the list moves", async () => {
+it("leaves Scarlet's reply where it is when switching tabs in the dock, so nothing over the list moves", async () => {
   madeRequest();
   await showFolded();
   await act(async () => {});
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   const reply = () => block().nextElementSibling?.classList.contains("from-scarlet") ? block().nextElementSibling!.querySelector(".said")?.textContent : undefined;
-  // Priority list opens on All (3 edits), and Scarlet's reply follows the block.
+  // Priority list opens on Needs review (3 edits), and Scarlet's reply follows the block.
   expect(reply()).toBe("Check edit 3 to hear how the ending lands.");
   const drawn = block();
   const lists = () => editLists(block()).map(([name, rows]) => [name, (rows as string[]).length]);
   expect([lists(), reply()]).toEqual([[["Edits for you", 3]], "Check edit 3 to hear how the ending lands."]);
-  await click(filterChip("need", block())!);
-  expect([lists(), reply()]).toEqual([[["Edits for you", 1]], "Check edit 3 to hear how the ending lands."]);
+  await click(tabNamed(block(), "Done"));
+  expect([lists(), reply()]).toEqual([[], "Check edit 3 to hear how the ending lands."]);
   expect(block()).toBe(drawn);
-  await click(filterChip("all", block())!);
+  await click(tabNamed(block(), "Needs review"));
   expect([lists(), reply()]).toEqual([[["Edits for you", 3]], "Check edit 3 to hear how the ending lands."]);
 });
 
@@ -13598,27 +13537,24 @@ it("moves a request's closing words with its block to the place above the messag
   expect(block().nextElementSibling?.textContent).toContain("Check edit 3 to hear how the ending lands.");
 });
 
-it("keeps the active Priority list filter when a revision of one of its edits starts and when it lands", async () => {
+it("keeps Needs review active when a revision of one of its edits starts and when it lands", async () => {
   const { base, thread } = madeRequest();
   await showFolded();
   await act(async () => {});
   const block = () => container.querySelector<HTMLElement>('.unit[data-run="task_made"]')!;
   expect(editRowsIn(block()).length).toBe(3);
-  await click(filterChip("need", block())!);
-  expect(editRowsIn(block()).length).toBe(1);
-  // While Scarlet revises captions, the Needs you filter stays active.
+  // While Scarlet revises captions, Needs review stays active (captions lingers briefly showing Revising… while Working counts it).
   await event(d => ({ ...d, tasks: [...d.tasks, captionFix(base, thread.id)] }));
   await act(async () => {});
-  expect([reviewModes(block()), filterChips(block())]).toEqual([tabs(), [["All 2", "false"], ["Needs you 1", "true"]]]);
-  expect(editRowsIn(block()).length).toBe(1);
-  // Once the revision lands, switching back to All shows all 3 rows again.
+  expect([reviewModes(block()), dockFor(block()).querySelector(".review-filter-bar")]).toEqual([tabs(), null]);
+  expect([tabNamed(block(), "Working").textContent, rowNamedIn(block(), "captions").querySelector(".simple-pass-check")?.textContent]).toEqual(["Working1", "Revising…"]);
+  // Once the revision lands, Needs review shows all 3 rows again with Working cleared.
   await event(d => ({ ...d, tasks: d.tasks.map(t => t.id === "task_fix" ? { ...t, state: "done" as const, finishedAt: new Date().toISOString(), changeIds: ["chg_fixed"] } : t),
     changes: [...d.changes, { ...d.changes.find(c => c.id === "chg_approved_2")!, id: "chg_fixed", taskId: "task_fix", threadId: thread.id, createdAt: new Date().toISOString(),
       timelineEdits: [{ label: "captions", range: { start: 0.2, end: 2.4 } }] }] }));
   await act(async () => {});
   expect(block().closest(".simple-chat")).not.toBeNull();
-  await click(filterChip("all", block())!);
-  expect(editRowsIn(block()).length).toBe(3);
+  expect([editRowsIn(block()).length, tabNamed(block(), "Working").textContent]).toEqual([3, "Working"]);
 });
 
 it("keeps a request that is tried again in its one block, and out of the queue", async () => {
@@ -14892,8 +14828,8 @@ it("keeps a dialogue pass's decided calls in Done after the pass applies, and op
   await click(passRows()[0]!);
   await act(async () => {});
   expect(editPanel()).not.toBeNull();
-  // Every row is decided, so there are no filter chips or Keep confident button under Needs review.
-  expect([filterChips(pass), keepConfidentBtn(pass)]).toEqual([[], null]);
+  // Every row is decided, so there is no filter bar or Keep safe edits button under Needs review.
+  expect([pass.querySelector(".review-filter-bar"), keepConfidentBtn(pass)]).toEqual([null, null]);
 });
 
 it("ticks in Done the cuts that went in with a pass through its calls, Scarlet's own picks too, and not an edit that still waits, a doubt raised since or a cut sent back", async () => {
@@ -15133,9 +15069,8 @@ it("steps with the arrow keys within the tab shown: a kept or rejected edit is D
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
   const forYouRows = () => [...editRowsIn(turn)];
-  // Filtering to Needs you narrows Needs review to the two flagged edits; the rejected edit is Done's row.
-  await click(filterChip("need", turn)!);
-  expect(forYouRows().map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual(["captions", "wrap"]);
+  // Needs review lists the two flagged edits pinned on top and safe edits below; the rejected edit is Done's row.
+  expect(forYouRows().map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual(["captions", "wrap", "music bed", "zoom"]);
 
   // Keep captions -> advances directly to wrap.
   await click(forYouRows()[0]!);
@@ -15164,15 +15099,14 @@ it("steps with the arrow keys within the tab shown: a kept or rejected edit is D
   await press("ArrowUp");
   expect(openTitle()).toBe("captions");
 
-  // Back on Needs review (still filtered to Needs you), wrap is the only stop there.
+  // Back on Needs review, wrap is pinned at top (↑ stays on wrap, ↓ steps into safe edits below).
   await click(tabNamed(turn, "Needs review"));
   await act(async () => {});
-  await click(filterChip("need", turn)!);
   expect(openTitle()).toBe("wrap");
   await press("ArrowUp");
   expect(openTitle()).toBe("wrap");
   await press("ArrowDown");
-  expect(openTitle()).toBe("wrap");
+  expect(openTitle()).toBe("music bed");
 });
 
 it("dashes every undecided Needs review cut and edit on the timeline, and draws decided or unflagged ones solid", async () => {
@@ -15401,19 +15335,18 @@ it("opens a row's room again when ⌘Z takes its Keep back while it fades out of
   });
 });
 
-it("leaves the Priority list filter as it was when the editor looks at Working or Done and comes back to Needs review", async () => {
+it("keeps flagged and safe edits together in Needs review when switching to Working or Done and back", async () => {
   appliedEdits();
   await showFolded();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  const forYou = () => [reviewModes(turn), filterChips(turn), editLists(turn)];
-  const all = [tabs(), [["All 3", "true"], ["Needs you 1", "false"]], [["Edits for you", ["wrap", "music bed", "captions"]]]];
-  const needs = [tabs(), [["All 3", "false"], ["Needs you 1", "true"]], [["Edits for you", ["wrap"]]]];
-  // Default (All): flagged pinned at top, confident edits right below.
+  const forYou = () => [reviewModes(turn), dockFor(turn).querySelector(".review-filter-bar"), editLists(turn)];
+  const all = [tabs(), null, [["Edits for you", ["wrap", "music bed", "captions"]]]];
+  // Flagged pinned at top, safe edits right below, with no filter bar.
   expect(forYou()).toEqual(all);
-  // Done and back: All stays active.
+  // Done and back: Needs review stays unified.
   await click(tabNamed(turn, "Done"));
-  expect([reviewModes(turn), filterChips(turn)]).toEqual([tabs("Done"), []]);
+  expect(reviewModes(turn)).toEqual(tabs("Done"));
   await click(tabNamed(turn, "Needs review"));
   await act(async () => {});
   expect(forYou()).toEqual(all);
@@ -15423,16 +15356,9 @@ it("leaves the Priority list filter as it was when the editor looks at Working o
   await click(tabNamed(turn, "Needs review"));
   await act(async () => {});
   expect(forYou()).toEqual(all);
-  // Needs you filter stays active across Done/Working and back too.
-  await click(filterChip("need", turn)!);
-  expect(forYou()).toEqual(needs);
-  await click(tabNamed(turn, "Done"));
-  await click(tabNamed(turn, "Needs review"));
-  await act(async () => {});
-  expect(forYou()).toEqual(needs);
 });
 
-it("leaves a pass's Priority list filter as it was through a look at Done", async () => {
+it("keeps a pass's flagged and safe edits together in Needs review through a look at Done", async () => {
   runningPass();
   const ready = data.changes.find(c => c.id === "chg_ready")!;
   const part = { ...ready, id: "chg_part", intent: "requested" as const, state: "approved" as const, cutAssessments: undefined, cutChoices: undefined,
@@ -15451,14 +15377,12 @@ it("leaves a pass's Priority list filter as it was through a look at Done", asyn
   const words = () => passRows().map(r => r.querySelector(".simple-pass-words")?.textContent);
   const included = words();
   expect(included).toContain("Settled zoom");
-  await click(filterChip("need", passCard())!);
-  const waiting = words();
-  expect([filterChip("need", passCard())?.getAttribute("aria-pressed"), waiting.includes("Settled zoom"), waiting.length]).toEqual(["true", false, included.length - 1]);
+  expect(passCard().querySelector(".review-filter-bar")).toBeNull();
   await click(tabNamed(passCard(), "Done"));
   expect(reviewModes(passCard())).toEqual(tabs("Done"));
   await click(tabNamed(passCard(), "Needs review"));
   await act(async () => {});
-  expect([reviewModes(passCard()), filterChip("need", passCard())?.getAttribute("aria-pressed"), words()]).toEqual([tabs(), "true", waiting]);
+  expect([reviewModes(passCard()), words()]).toEqual([tabs(), included]);
 });
 
 it("goes on from the last edit kept to another request's edit that says Needs your answer, in the new layout", async () => {
@@ -15982,15 +15906,14 @@ it("surfaces a newer request's confident edits at the top of Confident edits and
     .toEqual(["wrap", "Model A title", "Model B title", "music bed", "captions"]);
   expect(forYouTab()?.getAttribute("title")).toBe("5 unreviewed (1 needs you)");
 
-  // Even while filtered to Needs you, clicking Show → on the mographs request clears the filter, opens its first graphic, and flashes its rows.
-  await click(filterChip("need")!);
-  expect(dockRows().map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual(["wrap"]);
+  // Even while on Done, clicking Show → on the mographs request switches back to Needs review, opens its first graphic, and flashes its rows.
+  await click(tabNamed(dock, "Done"));
   const showLink = buttonIn(turnFor("chg_mographs"), "Show →")!;
   expect(showLink).toBeDefined();
   await click(showLink);
   await act(async () => {});
   expect(openTitle()).toBe("Model A title");
-  expect(filterChips()).toEqual([["All 5", "true"], ["Needs you 1", "false"]]);
+  expect([reviewModes(dock), dock.querySelector(".review-filter-bar")]).toEqual([tabs(), null]);
   expect([...dock.querySelectorAll("li[data-flash]")].map(li => li.getAttribute("data-thread")))
     .toEqual([mographThread, mographThread]);
 });
@@ -16026,22 +15949,20 @@ it("keeps all confident edits across requests with Keep N confident and restores
   expect(reviewDock()!.querySelector(".review-tier-sep")?.textContent).toBe("Safe edits (4)");
 });
 
-it("automatically resets the Needs you filter back to All once the last flagged edit is kept", async () => {
+it("advances to safe edits once the last flagged edit is kept, with no filter bar", async () => {
   appliedEdits();
   await showFolded();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  await click(filterChip("need", turn)!);
-  expect(editRowsIn(turn).map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual(["wrap"]);
+  expect(dockFor(turn).querySelector(".review-filter-bar")).toBeNull();
+  expect(editRowsIn(turn).map(r => r.querySelector(".simple-pass-words")?.textContent)).toEqual(["wrap", "music bed", "captions"]);
   await click(rowNamedIn(turn, "wrap"));
   await act(async () => {});
   await press("k");
   await act(async () => {});
-  // Flagged edit is gone (and card closed since Needs you was active); filter resets so confident edits are visible right away
-  // beneath the briefly lingering Kept row.
-  expect(editPanel()).toBeNull();
+  // Flagged edit is kept and advances directly to the first safe edit beneath the briefly lingering Kept row.
+  expect(openTitle()).toBe("music bed");
   expect(forYouTab(turn)?.getAttribute("title")).toBe("2 safe edits");
-  expect(filterChips(turn)).toEqual([]);
   expect(editRowsIn(turn).map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided")]))
     .toEqual([["wrap", true], ["music bed", false], ["captions", false]]);
 });
