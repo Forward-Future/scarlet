@@ -198,8 +198,11 @@ export function resolveTransform(
   return out;
 }
 
-/** crop → scale (contain-fit × scale) → round corners → rotate, as filter strings. */
-export function transformChain(tf: AnimatedTransform, W: number, H: number): string[] {
+/**
+ * crop → scale (contain-fit × scale) → round corners → rotate, as filter strings.
+ * With `round`, a layer known to be opaque at its corners' step, of one size throughout, works out its corners once.
+ */
+export function transformChain(tf: AnimatedTransform, W: number, H: number, round?: { opaque: boolean; name: () => string }): string[] {
   const { base } = tf;
   const chain: string[] = [];
   if (base.cropLeft || base.cropRight || base.cropTop || base.cropBottom) {
@@ -224,7 +227,14 @@ export function transformChain(tf: AnimatedTransform, W: number, H: number): str
     const edgeX = "min(X+0.5,W-X-0.5)", edgeY = "min(Y+0.5,H-Y-0.5)";
     const arc = `clip(${radius}+0.5-hypot(${radius}-${edgeX},${radius}-${edgeY}),0,1)`;
     const coverage = `if(lt(max(${edgeX},${edgeY}),${radius}),${arc},1)`;
-    chain.push(`geq=lum='p(X,Y)':a='alpha(X,Y)*${coverage}':i=nearest`);
+    const corners = `geq=lum='p(X,Y)':a='alpha(X,Y)*${coverage}':i=nearest`;
+    if (round?.opaque && !tf.scale) {
+      // Every frame of an opaque layer of one size gets the same alpha, so it is drawn on the first frame alone and
+      // laid on each (alphamerge repeats its last mask). geq on every frame took a tenth of a 4K picture-in-picture
+      // section's render; the pixels are the same.
+      const name = round.name();
+      chain.push(`split[${name}a][${name}b];[${name}b]trim=end_frame=1,${corners},alphaextract[${name}m];[${name}a][${name}m]alphamerge`);
+    } else chain.push(corners);
   }
   if (base.rotation) {
     const a = `${fnum(base.rotation)}*PI/180`;

@@ -143,6 +143,8 @@ interface MediaPicture {
   /** One picture on every project frame (`fillsFrames`). */
   filled: boolean;
   toneMap: string[];
+  /** Fully opaque until its corners are rounded (a picture without alpha and no effect that could give it some), over several frames. */
+  opaque: boolean;
 }
 
 export async function buildFilterGraph(
@@ -256,7 +258,7 @@ async function writeFilterGraph(
     stack = out;
   };
 
-  const videoForMedia = (clip: MediaClip, idx: number, p: Placement, { still, cudaScale, sharedStart, held, filled, toneMap }: MediaPicture) => {
+  const videoForMedia = (clip: MediaClip, idx: number, p: Placement, { still, cudaScale, sharedStart, held, filled, toneMap, opaque }: MediaPicture) => {
     const speed = clip.speed ?? 1;
     const moves = motionsOf(clip.id);
     const tf = resolveTransform(clip, warn);
@@ -277,7 +279,7 @@ async function writeFilterGraph(
     // An HDR picture becomes SDR before anything else is done to it, so effects, looks and the canvas see what a normal screen shows.
     chain.push(...toneMap);
     chain.push(...effectFilters(clip.effects, "video", effectCtx));
-    chain.push(...transformChain(tf, W, H));
+    chain.push(...transformChain(tf, W, H, { opaque, name: () => `round${labelN++}` }));
     if (clip.videoFadeIn > 0) chain.push(`fade=t=in:st=0:d=${fnum(clip.videoFadeIn)}:alpha=1`);
     if (clip.videoFadeOut > 0) {
       chain.push(`fade=t=out:st=${fnum(Math.max(0, p.clipDur - clip.videoFadeOut))}:d=${fnum(clip.videoFadeOut)}:alpha=1`);
@@ -469,6 +471,8 @@ async function writeFilterGraph(
           filled: !opts.singleFrame && fillsFrames(clip, asset, fps),
           // A preview copy of an HDR file is SDR already.
           toneMap: proxy ? [] : await toneMapFor(hdr),
+          // A single frame has no frames to share a mask with.
+          opaque: !opts.singleFrame && asset.hasAlpha === false && !clip.effects.length,
         });
         if (opts.directPicture && opts.pictureOnly && !opts.pictureFilter && !opts.singleFrame && firstLayer && !shared && !proxy && !still && !motionsOf(clip.id).length &&
             directExportPicture(clip, visible, asset, await verifiedProbe(asset), W, H, fps, D)) {
