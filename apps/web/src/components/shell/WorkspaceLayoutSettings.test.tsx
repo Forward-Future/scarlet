@@ -127,6 +127,16 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
     expect(container.querySelector(".review-tier-sep .review-tier-label")?.textContent).toBe("Safe edits (1)");
     expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 1 safe edit");
+    // Safe edits start folded under their heading; a press on it unfolds them and another folds them again.
+    const safeToggle = container.querySelector<HTMLButtonElement>(".review-tier-toggle")!;
+    const safeBody = () => container.querySelector<HTMLElement>('.review-low-body[aria-label="Safe edits"]')!;
+    expect(safeToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(safeBody().hidden).toBe(true);
+    await act(async () => safeToggle.click());
+    expect(safeToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(safeBody().hidden).toBe(false);
+    await act(async () => safeToggle.click());
+    expect(safeBody().hidden).toBe(true);
     expect(container.querySelector(".review-filter-bar")).toBeNull();
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
@@ -284,6 +294,9 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
 
     // #14 & #3: Safe edits sit directly below flagged edits with no filter bar, and Keep moves straight to Done.
     expect(container.querySelector(".review-filter-bar")).toBeNull();
+    // They start folded under their heading; a press on it unfolds them.
+    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>(".review-tier-toggle")!.click());
     expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(false);
     const musicRow = [...container.querySelectorAll<HTMLButtonElement>(".review-low-body button.simple-edit")]
       .find(b => b.textContent?.includes("music bed"))!;

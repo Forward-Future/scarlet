@@ -101,6 +101,8 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
   const total = need + optional;
   const nothing = need + forYouRows + optional + working + done === 0;
   const showConfident = optional > 0;
+  // Safe edits start folded under their heading; a press on it (or opening one of them) unfolds them.
+  const lowShown = showConfident && !!open.low;
 
   // Ask the engine for AI-generated titles for any settled collapsed batches that don't have one cached yet.
   const unsummarized: BatchSummaryItem[] = [];
@@ -134,7 +136,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
   // The row of the cut or edit that's open stays in view as Keep or ↑ ↓ reveals it.
   useEffect(() => {
     if (selected) host.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" });
-  }, [selected, open.working, open.done]);
+  }, [selected, open.working, open.done, open.low]);
 
   // Show Scarlet's own dark floating tooltip with the full line on hover or keyboard focus of any edit row.
   useEffect(() => {
@@ -220,7 +222,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
   // Never leave a floating tooltip orphaned if its row unmounts (e.g. via K shortcut or live update).
   useEffect(() => {
     setTip(cur => (cur && (nothing || !cur.row.isConnected) ? null : cur));
-  }, [nothing, need, optional, working, done, open.working, open.done]);
+  }, [nothing, need, optional, working, done, open.working, open.done, open.low]);
 
   // Tie aria-describedby to the hovered/focused row while the tooltip is open, and clamp its horizontal edge in view.
   useLayoutEffect(() => {
@@ -386,11 +388,12 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
       <div className="review-rail-list" role="group" aria-label="Needs review">
         {renderSectionList("you")}
         {showConfident && <div className={need > 0 || forYouRows > 0 ? "review-tier-sep" : "review-tier-sep is-first"}>
-          <span className="review-tier-label">Safe edits ({optional})</span>
+          <button type="button" className="review-tier-label review-tier-toggle" aria-expanded={lowShown} aria-controls={`${tipId}-low`}
+            onClick={letGo(() => onOpen("low", !open.low))}><span>Safe edits ({optional})</span><Icon name="chevron" size={10} /></button>
           {onDoneLow && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
             onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
         </div>}
-        <div className="review-low-body" role="group" aria-label="Safe edits" hidden={!showConfident}>{renderSectionList("low")}</div>
+        <div id={`${tipId}-low`} className="review-low-body" role="group" aria-label="Safe edits" hidden={!lowShown}>{renderSectionList("low")}</div>
         {forYouRows === 0 && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
       </div>
     </div>
