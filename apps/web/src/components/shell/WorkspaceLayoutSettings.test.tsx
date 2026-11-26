@@ -407,8 +407,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     vi.spyOn(api, "threadEdits").mockResolvedValue({
       version: project.head!,
       edits: [
-        { changeId: db.changes[0]!.id, spot: 0, label: longLabel, range: { start: 0, end: 2 }, previous: [], check: "Needs graphic from Alex." },
-        { changeId: db.changes[0]!.id, spot: 1, label: "Quiet music bed", range: { start: 2, end: 10 }, previous: [] },
+        { changeId: db.changes[0]!.id, spot: 0, label: longLabel, kind: "cut", range: { start: 4, end: 4 }, beforeCut: { version: "ver_1", removed: { start: 4, end: 5.8 } }, previous: [], check: "Needs graphic from Alex." },
+        { changeId: db.changes[0]!.id, spot: 1, label: "Quiet music bed", kind: "audio", range: { start: 2, end: 10 }, previous: [] },
       ],
     });
     const prevInnerWidth = window.innerWidth;
@@ -443,10 +443,11 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       expect(parseFloat(rail.style.width)).toBe(startWidth + 140);
       expect(localStorage.getItem("scarlet.simpleReviewWidth")).toBe(String(startWidth + 140));
 
-      // Rows in the edits rail use Scarlet's own hover tooltip with the full line instead of a browser title tooltip.
+      // Rows in the edits rail use Scarlet's own hover tooltip with the full line and a plain-English summary.
       const row = rail.querySelector<HTMLButtonElement>(".review-rail-list button.simple-edit")!;
       expect(row.getAttribute("title")).toBeNull();
       expect(row.dataset.rowTip).toBe(longLabel);
+      expect(row.dataset.rowMeta).toBe("Cut · −1.8 s");
       vi.useFakeTimers();
       try {
         await act(async () => {
@@ -455,16 +456,20 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
         });
         const tip = rail.querySelector<HTMLElement>('[role="tooltip"].review-rail-tip')!;
         expect(tip).not.toBeNull();
-        expect(tip.textContent).toContain(longLabel);
-        expect(tip.textContent).toContain("Needs graphic from Alex.");
+        expect(tip.querySelector(".review-rail-tip-title")?.textContent).toBe(longLabel);
+        expect(tip.querySelector(".review-rail-tip-meta")?.textContent).toBe("Cut · −1.8 s");
+        expect(tip.querySelector(".review-rail-tip-detail")?.textContent).toBe("Needs graphic from Alex.");
         expect(row.getAttribute("aria-describedby")).toBe(tip.id);
 
-        // Moving to a low-risk row updates the tooltip immediately (warm hover) and shows its full line too.
+        // Moving to a low-risk non-cut row updates the tooltip immediately (warm hover) with its plain-English summary.
         const lowRow = rail.querySelector<HTMLButtonElement>(".review-low-body button.simple-edit")!;
         await act(async () => {
           lowRow.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
         });
-        expect(rail.querySelector<HTMLElement>('[role="tooltip"].review-rail-tip')?.textContent).toBe("Quiet music bed");
+        const lowTip = rail.querySelector<HTMLElement>('[role="tooltip"].review-rail-tip')!;
+        expect(lowTip.querySelector(".review-rail-tip-title")?.textContent).toBe("Quiet music bed");
+        expect(lowTip.querySelector(".review-rail-tip-meta")?.textContent).toContain("Audio");
+        expect(lowTip.querySelector(".review-rail-tip-meta")?.textContent).not.toContain("0:02 – 0:10");
 
         // Leaving the rail dismisses the tooltip cleanly.
         await act(async () => {

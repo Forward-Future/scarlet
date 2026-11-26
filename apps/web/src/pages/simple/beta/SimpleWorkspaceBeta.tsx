@@ -854,7 +854,9 @@ export function SimpleWorkspaceBeta() {
       const past = revisionInput?.index === a.index ? history.slice(0, -1) : history;
       const edit = overrideForCall(a.index);
       const at = edit ? (edit.version === head ? edit.range.start : undefined) : placeCut(a)?.start;
-      return { index: a.index, askOrder: a.askOrder, n: callNo.get(a.index)!, start: listedAt.get(a.index)!, at, summary: a.summary || a.reason, version: past.length + 1, earlier: past.at(-1),
+      return { index: a.index, askOrder: a.askOrder, n: callNo.get(a.index)!, start: listedAt.get(a.index)!, at, summary: a.summary || a.reason,
+        reason: a.reason, length: Math.max(0, (edit?.range.end ?? a.end) - (edit?.range.start ?? a.start)),
+        version: past.length + 1, earlier: past.at(-1),
         tag: approves(a) === "cut" ? "Cut" : "Check",
         run: cutRuns.get(a.index),
         state: sentBack(a.index) ? "revising" : passChoices[a.index] === undefined ? "open" : passChoices[a.index] === approves(a) ? "approved" : "skipped" };

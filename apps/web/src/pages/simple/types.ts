@@ -50,6 +50,10 @@ interface PassCall {
   /** Where its cut is on the working cut. None while it isn't there as it was staged, so nothing on the timeline is its. */
   at?: number;
   summary: string;
+  /** Full reason from the cut assessment, shown as a quiet hover note when distinct from `summary`. */
+  reason?: string;
+  /** Duration of the staged cut/keep stretch in seconds, for the hover summary. */
+  length?: number;
   state: CallState;
   version: number;
   /** The word its row ends on while it waits: how much its cut takes out, or Check when Scarlet proposes keeping the footage. */

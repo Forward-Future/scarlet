@@ -204,6 +204,8 @@ describe("RailStore", () => {
       ["Opus title", 3, 0],
       ["Revised title", 1, 2],
     ]);
+    expect(view.sections.low[0]!.tipMeta).toBe("3 graphics");
+    expect(view.sections.low[0]!.tipDetail).toBeUndefined();
 
     // Done: total count = 5, rendered rows = 4 (1 batch of 2 + 1 rejected + 1 marker + 1 v2).
     expect(view.done).toBe(5);
@@ -213,6 +215,22 @@ describe("RailStore", () => {
       ["Add B-roll marker", 1, false, true, undefined],
       ["Kept v2 cut", 1, false, false, undefined],
     ]);
+    expect(view.sections.done[0]!.tipMeta).toBe("2 kept cuts");
+    expect(view.sections.done[0]!.tipDetail).toBeUndefined();
+  });
+
+  it("sums removed seconds into grouped cut batch tooltips without a click-to-review hint", () => {
+    const store = new RailStore();
+    store.report("t1", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 0,
+      rows: [
+        makeRow({ key: "c/0", threadId: "t1", threadOrder: 0, at: 4, label: "Cut false start", place: "optional", editKind: "cut", removedSeconds: 1.5 }),
+        makeRow({ key: "c/1", threadId: "t1", threadOrder: 0, at: 14, label: "Cut tangent", place: "optional", editKind: "cut", removedSeconds: 2.0 }),
+      ],
+    });
+    const row = store.view().sections.low[0]!;
+    expect(row.tipMeta).toBe("2 cuts · −3.5 s removed");
+    expect(row.tipDetail).toBeUndefined();
   });
 
   it("keeps a combined row in Low risk when an older request was kept but a follow-up request has not been kept yet", () => {

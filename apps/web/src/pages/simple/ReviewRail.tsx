@@ -36,6 +36,7 @@ const SECTION_LABELS: Record<RailSection, string> = {
 interface RowTooltip {
   row: HTMLButtonElement;
   text: string;
+  meta?: string;
   detail?: string;
   left: number;
   top?: number;
@@ -46,6 +47,7 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   const words = row.querySelector<HTMLElement>(".simple-edit-words, .simple-pass-words");
   const text = (row.dataset.rowTip ?? words?.textContent ?? "").trim();
   if (!text) return null;
+  const meta = row.dataset.rowMeta?.trim() || undefined;
   const detail = row.dataset.rowDetail?.trim() || undefined;
   const rowRect = row.getBoundingClientRect();
   const anchorRect = (words ?? row).getBoundingClientRect();
@@ -54,7 +56,8 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   return {
     row,
     text,
-    detail: detail && detail !== text ? detail : undefined,
+    meta: meta && meta !== text ? meta : undefined,
+    detail: detail && detail !== text && detail !== meta ? detail : undefined,
     left,
     ...(below ? { top: Math.round(rowRect.bottom + 6) } : { bottom: Math.round(window.innerHeight - rowRect.top + 6) }),
   };
@@ -242,7 +245,8 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
         const lead = <span className={needTime ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
         const activeLead = <span className={activeRow.needs || activeRow.asks ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{clockLabel(activeRow.displayAt)}</span>;
         const tipText = row.tipText ?? row.label;
-        const tipDetail = row.tipDetail && row.tipDetail !== tipText ? row.tipDetail : undefined;
+        const tipMeta = row.tipMeta && row.tipMeta !== tipText ? row.tipMeta : undefined;
+        const tipDetail = row.tipDetail && row.tipDetail !== tipText && row.tipDetail !== tipMeta ? row.tipDetail : undefined;
         const moment = row.moment;
         const unkeepTip = row.unkeepTip ?? "Move back to For you";
         const statusWord = row.word;
@@ -261,6 +265,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
             data-log-label={batchCount > 1 ? "Edit group" : row.logLabel}
             disabled={!row.open}
             data-row-tip={tipText}
+            data-row-meta={tipMeta}
             data-row-detail={tipDetail}
             aria-label={ariaLabel}
             onClick={letGo(() => store.view().findByKey(row.key)?.open?.())}
@@ -292,7 +297,8 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
             {moment.subRows.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}>
               <button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
                 data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open}
-                data-row-tip={m.label} data-row-detail={m.title && m.title !== m.label ? m.title : undefined}
+                data-row-tip={m.label} data-row-meta={m.tipMeta}
+                data-row-detail={m.tipDetail ?? (m.title && m.title !== m.label ? m.title : undefined)}
                 onClick={letGo(() => { const fresh = store.view().findByKey(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.open?.(); })}
                 onPointerEnter={() => onHover?.(m.mark, m.hover)} onPointerLeave={() => onHover?.()}>
                 <span className="simple-pass-label">
@@ -362,7 +368,8 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     </div>
     {tip && !nothing && <div ref={tipEl} id={tipId} role="tooltip" className="review-rail-tip"
       style={{ left: tipLeft ?? tip.left, ...(tip.top !== undefined ? { top: tip.top } : { bottom: tip.bottom }) }}>
-      <span>{tip.text}</span>
+      <span className="review-rail-tip-title">{tip.text}</span>
+      {tip.meta && <span className="review-rail-tip-meta">{tip.meta}</span>}
       {tip.detail && <span className="review-rail-tip-detail">{tip.detail}</span>}
     </div>}
   </ChatRail>;
