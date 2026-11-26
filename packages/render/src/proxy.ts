@@ -142,55 +142,60 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   // Phone recordings whose frame rate drifts a little are saved in parts too, so a restart keeps them; only the
   // scrub previews need a steady rate to map a part's pictures back to source frames, and they check for it.
   if (opts.checkpointDir && !opts.range && video && pictureDuration > 30 && probe.fps > 0 && probe.videoStartPts === 0 && probe.videoStart === 0) {
-    // Align each boundary to a picture frame. Mux audio from the original once
+    // Align each boundary to a picture frame. Encode audio from the original once
     // so independent AAC encodes cannot introduce gaps at those boundaries.
     const dir = join(opts.checkpointDir, encoding.cacheKey + "-" + height);
     await mkdir(dir, { recursive: true });
     const span = checkpointSpan(probe.fps);
-    // The final pass re-reads the original for its audio and rewrites the file, so it keeps a share of the bar.
+    // The final pass copies the parts and the sound into one file, so it keeps a share of the bar.
     const PARTS = 0.9;
     const parts: Array<{ name: string; start: number }> = [];
-    for (let i = 0; i * span < pictureDuration - 0.000001; i++) {
-      opts.signal?.throwIfAborted();
-      const start = i * span, end = Math.min(pictureDuration, (i + 1) * span);
-      // A VFR checkpoint can begin between pictures. Older parts after the first rounded that offset to milliseconds.
-      const name = (i > 0 && !probe.previewClock ? "pts-" : "") + i + ".mp4", path = join(dir, name);
-      if (!(await stat(path).catch(() => null))?.size) {
-        const temp = path + "." + randomUUID() + ".part.mp4";
-        try {
-          await runFfmpeg(["-y", ...video.input, "-ss", String(start), ...LOCAL_MEDIA_INPUT, "-i", input,
-            "-t", String(end - start), "-map", "0:v:0", ...video.output, "-movie_timescale", "1000000", "-an", temp], {
-            ffmpegPath: opts.ffmpegPath, signal: opts.signal,
-            onProgress: t => opts.onProgress?.(PARTS * Math.min(end, start + t) / pictureDuration),
-          });
-          await rename(temp, path);
-        } catch (error) {
-          // A cancelled encode can reject immediately on retry. Clean up before creating that promise.
-          await rm(temp, { force: true });
-          return retry(error);
-        }
-      }
-      // A VFR screen capture may hold a picture for this entire part. An empty MP4 stops concat at that point.
-      if (probe.previewClock || (await probeMedia(path, { ffprobePath: opts.ffprobePath, signal: opts.signal })).hasVideo) {
-        parts.push({ name, start });
-      }
-      opts.onProgress?.(PARTS * end / pictureDuration);
-    }
-    const manifest = join(dir, randomUUID() + ".ffconcat");
+    // The sound needs no picture decoding, so it is encoded while the parts are rather than after them.
+    const heard = { audioTrack: opts.audioTrack, audioStreamCount: probe.audioStreams?.length };
+    const sound = probe.hasAudio ? encodeSound(input, join(dir, randomUUID() + ".sound.m4a"), heard, opts) : undefined;
     try {
-      // Place each part at its source boundary, preserving the hold through any intervening empty parts.
-      const list = parts.flatMap(({ name, start }, i) => [
-        "file " + name, "inpoint 0", "duration " + ((parts[i + 1]?.start ?? pictureDuration) - start).toFixed(9),
-      ]);
-      await writeFile(manifest, list.join("\n") + "\n");
-      const heard = { audioTrack: opts.audioTrack, audioStreamCount: probe.audioStreams?.length };
-      const audio = probe.hasAudio
-        ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", ...audioMapArgs(heard, { input: 1, channelLayout: "stereo", label: "pa" }), ...PROXY_AUDIO]
-        : ["-map", "0:v:0", "-an"];
-      await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
-        "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
-        onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
-    } finally { await rm(manifest, { force: true }); }
+      for (let i = 0; i * span < pictureDuration - 0.000001; i++) {
+        opts.signal?.throwIfAborted();
+        const start = i * span, end = Math.min(pictureDuration, (i + 1) * span);
+        // A VFR checkpoint can begin between pictures. Older parts after the first rounded that offset to milliseconds.
+        const name = (i > 0 && !probe.previewClock ? "pts-" : "") + i + ".mp4", path = join(dir, name);
+        if (!(await stat(path).catch(() => null))?.size) {
+          const temp = path + "." + randomUUID() + ".part.mp4";
+          try {
+            await runFfmpeg(["-y", ...video.input, "-ss", String(start), ...LOCAL_MEDIA_INPUT, "-i", input,
+              "-t", String(end - start), "-map", "0:v:0", ...video.output, "-movie_timescale", "1000000", "-an", temp], {
+              ffmpegPath: opts.ffmpegPath, signal: opts.signal,
+              onProgress: t => opts.onProgress?.(PARTS * Math.min(end, start + t) / pictureDuration),
+            });
+            await rename(temp, path);
+          } catch (error) {
+            // A cancelled encode can reject immediately on retry. Clean up before creating that promise.
+            await rm(temp, { force: true });
+            await sound?.stop();
+            return retry(error);
+          }
+        }
+        // A VFR screen capture may hold a picture for this entire part. An empty MP4 stops concat at that point.
+        if (probe.previewClock || (await probeMedia(path, { ffprobePath: opts.ffprobePath, signal: opts.signal })).hasVideo) {
+          parts.push({ name, start });
+        }
+        opts.onProgress?.(PARTS * end / pictureDuration);
+      }
+      const manifest = join(dir, randomUUID() + ".ffconcat");
+      try {
+        // Place each part at its source boundary, preserving the hold through any intervening empty parts.
+        const list = parts.flatMap(({ name, start }, i) => [
+          "file " + name, "inpoint 0", "duration " + ((parts[i + 1]?.start ?? pictureDuration) - start).toFixed(9),
+        ]);
+        await writeFile(manifest, list.join("\n") + "\n");
+        const audio = sound
+          ? [...LOCAL_MEDIA_INPUT, "-i", await sound.ready(), "-map", "0:v:0", "-map", "1:a:0", "-c:a", "copy"]
+          : ["-map", "0:v:0", "-an"];
+        await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
+          "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
+          onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
+      } finally { await rm(manifest, { force: true }); }
+    } finally { await sound?.stop(); }
     opts.onProgress?.(1);
     return { output, duration: probe.duration, hasVideo, hasAudio: probe.hasAudio, encoder, warnings };
   }
@@ -222,4 +227,25 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   }
   opts.onProgress?.(1);
   return { output, duration, hasVideo, hasAudio: probe.hasAudio, encoder, warnings };
+}
+
+/**
+ * Encode a preview copy's sound alone from the original, as the one-pass copy does, into `file`. `ready` gives the
+ * file once it is complete; `stop` ends the encode if it still runs and removes the file.
+ */
+function encodeSound(input: string, file: string, heard: { audioTrack?: AudioTrackSelection; audioStreamCount?: number }, opts: ProxyOptions) {
+  const stopped = new AbortController();
+  const signal = opts.signal ? AbortSignal.any([opts.signal, stopped.signal]) : stopped.signal;
+  const job = runFfmpeg(["-y", ...LOCAL_MEDIA_INPUT, "-i", input, "-vn",
+    ...audioMapArgs(heard, { channelLayout: "stereo", label: "pa" }), ...PROXY_AUDIO, file], { ffmpegPath: opts.ffmpegPath, signal });
+  // Its failure is reported when the file is asked for; a copy stopped early never asks.
+  job.catch(() => {});
+  return {
+    async ready() { await job; return file; },
+    async stop() {
+      stopped.abort();
+      await job.catch(() => {});
+      await rm(file, { force: true });
+    },
+  };
 }
