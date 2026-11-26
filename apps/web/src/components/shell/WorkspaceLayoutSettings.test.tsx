@@ -469,6 +469,9 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       expect(divider.getAttribute("aria-label")).toBe("Resize edits");
       expect(divider.getAttribute("aria-controls")).toBe("simple-review-rail");
       const startWidth = parseFloat(rail.style.width);
+      // Before either divider is dragged, the chat and the edits column start at the same width.
+      expect(startWidth).toBe(389);
+      expect(parseFloat(container.querySelector<HTMLElement>("#simple-chat")!.style.width)).toBe(startWidth);
       divider.setPointerCapture = () => {};
       await act(async () => {
         divider.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0, isPrimary: true, clientX: 700 }));

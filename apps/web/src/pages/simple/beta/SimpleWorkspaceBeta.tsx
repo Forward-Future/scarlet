@@ -62,7 +62,7 @@ import { SimpleHeader } from "../SimpleHeader";
 import { TRANSCRIPT_RAIL_MIN, TranscriptRail } from "../TranscriptRail";
 import { savedRewording, saveRewording } from "../rewordingStorage";
 import { savedOpenLists, saveOpenLists } from "../openListsStorage";
-import { REVIEW_RAIL_MIN, ReviewRail } from "../ReviewRail";
+import { REVIEW_RAIL_MIN, ReviewRail, sideRailWidth } from "../ReviewRail";
 import { RailStore, ReviewRailContext, type RailSection, type UnifiedRailRow } from "../railStore";
 import { AppliedEditCard, CallCard, RejectedEditCard, SuggestionCard, UndoError, WorkingEditCard } from "../ReviewCards";
 import { TimelineWorking } from "../../../components/review/TimelineWorking";
@@ -85,8 +85,6 @@ function wholeEdit(change: Change): AgentContext {
   return { changeId: change.id, version: change.appliedVersion ?? change.toVersion, time: range?.start ?? 0, end: range?.end,
     clipIds: [], label: "Revision" };
 }
-/** The chat, until the user drags the divider: room for a conversation without crowding the video. */
-const simpleRailWidth = (available: number) => Math.max(380, Math.min(480, available * 0.32));
 /** The narrowest the chat stays usable at. */
 const SIMPLE_RAIL_MIN = 320;
 
@@ -2564,7 +2562,7 @@ export function SimpleWorkspaceBeta() {
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
         onPaths={paths => { void uploads.startPaths(paths); setPanel("media"); }}
         onFiles={files => { uploads.start(files); setPanel("media"); }}>
-        <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}
+        <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={sideRailWidth} minWidth={SIMPLE_RAIL_MIN}
           // Leave room for the edits column and an open Transcript at their narrowest, so resizing either never crowds the player.
           reserve={REVIEW_RAIL_MIN + (transcript ? TRANSCRIPT_RAIL_MIN : 0)}>
           <SimpleHeader projectName={current.project.name} importing={importing} importFailed={importFailed}
