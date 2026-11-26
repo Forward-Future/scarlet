@@ -395,9 +395,9 @@ export function StyleGuideEditorPage() {
           <div className="simple-chat" ref={threadRef}>
             {edits.length === 0 && (
               <div className="style-guide-chat-empty">
-                <p>Describe the look you want, or drop a logo, font, or reference screenshot into the message box.</p>
+                <p>Describe the look you want for captions, lower thirds, callout boxes, and graphics — or drop a logo, font, or reference screenshot into the message box.</p>
                 <p className="text-dim mt-2 text-[12px]">
-                  Scarlet will render a live 16:9 preview beside you and apply this style whenever you create graphics.
+                  Scarlet renders a live 16:9 preview beside you and applies this style automatically whenever you make captions, lower thirds, boxes, or graphics.
                 </p>
               </div>
             )}
@@ -541,8 +541,8 @@ export function StyleGuideEditorPage() {
                     plain
                     id={askId}
                     disabled={boxOff}
-                    ariaLabel={question ? "Answer Scarlet" : "Describe your style or drop a logo, font, or screenshot"}
-                    placeholder={question ? "Answer Scarlet…" : "Describe a look, or drop a logo, font, or screenshot…"}
+                    ariaLabel={question ? "Answer Scarlet" : "Describe your style for captions, lower thirds, boxes, and graphics, or drop a logo, font, or screenshot"}
+                    placeholder={question ? "Answer Scarlet…" : "Describe captions, lower thirds, boxes, and graphics — or drop a logo, font, or screenshot…"}
                     onChange={text => { setAsk(text); setAskErr(null); }}
                     onSubmit={() => void send()}
                   />

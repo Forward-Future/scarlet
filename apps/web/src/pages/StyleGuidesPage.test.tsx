@@ -4,15 +4,19 @@ import { createRoot } from "react-dom/client";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import type { StyleGuideRecord } from "@scarlet/shared";
+import { Composer } from "../components/agent/Composer";
 import { SkillCommandInput } from "../components/agent/SkillCommandInput";
 import { SkillInstructions } from "../components/agent/SkillInstructions";
+import { ProjectSettingsDrawer } from "../components/shell/ProjectSettingsDrawer";
 import { api } from "../lib/client";
-import { buildDb } from "../lib/mock/fixtures";
+import { buildDb, PRJ } from "../lib/mock/fixtures";
 import { useHostsStore } from "../stores/hosts";
+import { useProjectStore } from "../stores/project";
 import { useSkillsStore } from "../stores/skills";
 import { useStyleGuidesStore } from "../stores/styleGuides";
 import { useUiStore } from "../stores/ui";
 import { SettingsPage } from "./SettingsPage";
+import { SkillsPage } from "./SkillsPage";
 import { StyleGuideEditorPage } from "./StyleGuideEditorPage";
 import { StyleGuidesPage } from "./StyleGuidesPage";
 
@@ -93,7 +97,8 @@ it("edits name, default toggle, attached files in chat, and deletes a style guid
 
   vi.spyOn(api, "styleGuide").mockImplementation(async () => ({ styleGuide: guide, edits: [] }));
   const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => {
-    guide = { ...guide, ...patch };
+    const { captionStyle, ...rest } = patch;
+    guide = { ...guide, ...rest, ...(captionStyle ? { captionStyle } : captionStyle === null ? { captionStyle: undefined } : {}) };
     return { styleGuide: guide };
   });
   const upload = vi.spyOn(api, "uploadStyleGuideAsset").mockImplementation(async (_id, _file, name) => {
@@ -266,6 +271,156 @@ it("shows Style guides in Settings without a beta toggle", async () => {
     el.remove();
     router.dispose();
     localStorage.clear();
+    useUiStore.setState(useUiStore.getInitialState());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("handles empty @ cleanly by highlighting Create a style guide, switches from / to @, and guards bare @ in Composer", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const db = buildDb();
+  const project = db.projects.find(p => p.id === PRJ)!;
+  const createTask = vi.fn();
+  useProjectStore.setState({
+    current: {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      notes: db.notes,
+      changes: db.changes,
+      tasks: db.tasks,
+      taskEvents: db.taskEvents,
+      renders: db.renders,
+      versions: db.versions[PRJ]!,
+    },
+    createTask,
+  });
+  useHostsStore.setState({ hosts: db.hosts });
+  useSkillsStore.setState({ skills: db.skills, status: "ready", error: null });
+  useStyleGuidesStore.setState({ styleGuides: [], status: "ready", error: null });
+  useUiStore.setState({ agentDraft: "", agentContext: null });
+
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const router = createMemoryRouter([
+    { path: "/", element: <Composer /> },
+    { path: "/settings/style-guides/new", element: <p>New Style Guide Page</p> },
+    { path: "/settings/style-guides/:styleGuideId", element: <p>Edit Style Guide Page</p> },
+  ], { initialEntries: ["/"] });
+
+  const setBox = async (val: string) => {
+    const textarea = el.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+    await act(async () => {
+      textarea.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, val);
+      textarea.setSelectionRange(val.length, val.length);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return textarea;
+  };
+
+  try {
+    await act(async () => root.render(<RouterProvider router={router} />));
+
+    // Composer shows quiet style bar explaining captions, lower thirds & graphics when 0 guides exist.
+    expect(el.querySelector(".composer-style-bar")?.textContent).toContain("Style guide");
+    expect(el.querySelector(".composer-style-bar")?.textContent).toContain("Captions, lower thirds & graphics");
+
+    // Typing "/" shows the @ Style guides switch button, which switches directly into the @ picker.
+    await setBox("/");
+    const switchBtn = el.querySelector<HTMLButtonElement>(".composer-skill-switch")!;
+    expect(switchBtn.textContent).toContain("@ Style guides");
+    await act(async () => switchBtn.click());
+    const textarea = el.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+    expect(textarea.value).toBe("@");
+    expect(el.textContent).toContain("captions, lower thirds, boxes, and graphics");
+
+    // Send button is disabled for bare "@".
+    expect(el.querySelector<HTMLButtonElement>(".composer-input button.btn-primary")?.disabled).toBe(true);
+
+    // "+ Create a style guide" is pre-highlighted when no guides exist, and Enter navigates to creator instead of submitting "@".
+    const createBtn = el.querySelector<HTMLButtonElement>(".composer-skill-footer button")!;
+    expect(createBtn.getAttribute("aria-selected")).toBe("true");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(createTask).not.toHaveBeenCalled();
+    expect(el.textContent).toContain("New Style Guide Page");
+
+    // Navigate back with an active Default style guide: bar shows Style · @channel-brand and opens @ picker on click.
+    const guide = sampleGuide({ name: "channel-brand", isDefault: true });
+    useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
+    useUiStore.setState({ agentDraft: "" });
+    await act(async () => { await router.navigate("/"); });
+    expect(el.querySelector(".composer-style-bar")?.textContent).toContain("@channel-brand");
+    await act(async () => el.querySelector<HTMLButtonElement>(".composer-style-trigger")!.click());
+    expect(el.querySelector<HTMLTextAreaElement>(".composer-input textarea")!.value).toBe("@");
+    expect(el.querySelector('[role="listbox"][aria-label="Style guides"]')).not.toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    el.remove();
+    router.dispose();
+    useProjectStore.setState(useProjectStore.getInitialState());
+    useHostsStore.setState(useHostsStore.getInitialState());
+    useSkillsStore.setState(useSkillsStore.getInitialState());
+    useStyleGuidesStore.setState(useStyleGuidesStore.getInitialState());
+    useUiStore.setState(useUiStore.getInitialState());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("links to Style guides from Skills settings and Project settings drawer", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const db = buildDb();
+  const project = db.projects.find(p => p.id === PRJ)!;
+  useSkillsStore.setState({ skills: db.skills, status: "ready", error: null });
+  useStyleGuidesStore.setState({ styleGuides: [sampleGuide()], status: "ready", error: null });
+  useProjectStore.setState({
+    current: {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      notes: db.notes,
+      changes: db.changes,
+      tasks: db.tasks,
+      taskEvents: db.taskEvents,
+      renders: db.renders,
+      versions: db.versions[PRJ]!,
+    },
+  });
+  useUiStore.setState({ projectSettingsOpen: true });
+
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const router = createMemoryRouter([
+    { path: "/settings/skills", element: <><SkillsPage /><ProjectSettingsDrawer onDeleted={vi.fn()} /></> },
+    { path: "/settings/style-guides", element: <p>Style Guides Gallery</p> },
+  ], { initialEntries: ["/settings/skills"] });
+
+  try {
+    await act(async () => root.render(<RouterProvider router={router} />));
+    expect(el.textContent).toContain("captions, lower thirds, boxes, or graphics");
+    expect(el.querySelector('a[href="/settings/style-guides"]')?.textContent).toBe("Style guides");
+    expect(el.textContent).toContain("Visual style");
+    expect(el.textContent).toContain("@channel-brand");
+
+    const manageBtn = [...el.querySelectorAll("button")].find(b => b.textContent === "Manage style guides")!;
+    await act(async () => manageBtn.click());
+    expect(useUiStore.getState().projectSettingsOpen).toBe(false);
+    expect(el.textContent).toContain("Style Guides Gallery");
+  } finally {
+    await act(async () => root.unmount());
+    el.remove();
+    router.dispose();
+    useProjectStore.setState(useProjectStore.getInitialState());
+    useSkillsStore.setState(useSkillsStore.getInitialState());
+    useStyleGuidesStore.setState(useStyleGuidesStore.getInitialState());
     useUiStore.setState(useUiStore.getInitialState());
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

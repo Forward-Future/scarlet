@@ -35,6 +35,7 @@ export function FirstEditGuide({ onSignIn }: { onSignIn?: () => void }) {
       <details className="first-edit-skills">
         <summary>Teach Scarlet your editing style <Icon name="chevron" size={13} /></summary>
         <p>To reuse editing instructions, type <strong>/</strong> in chat and choose <strong>Create a skill</strong>.</p>
+        <p>To set the visual look for captions, lower thirds, callout boxes, and graphics, type <strong>@</strong> in chat (or open <strong>Settings → Style guides</strong>).</p>
         <p>Scarlet can also suggest a rule when you ask for an edit like this.</p>
         <blockquote>“For interviews, always leave a beat after a difficult question.”</blockquote>
         <p>Review the rule in <strong>More → Learnings</strong>. Choose a skill and press <strong>Approve</strong> to save it.</p>

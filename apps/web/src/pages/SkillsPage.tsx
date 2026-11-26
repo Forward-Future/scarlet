@@ -46,7 +46,11 @@ export function SkillsPage() {
       }>
         Editing skills
       </SectionTitle>
-      <p className="mb-3 text-muted">Type / in an edit message to choose one.</p>
+      <p className="mb-3 text-muted">
+        Type <span className="font-mono text-fg">/</span> in an edit message to choose a skill. Looking to set the visual look for captions, lower thirds, boxes, or graphics? Use{" "}
+        <Link className="underline underline-offset-2 text-fg hover:text-fg" to="/settings/style-guides">Style guides</Link>{" "}
+        (<span className="font-mono text-fg">@name</span>).
+      </p>
       <div className="skill-search relative">
         <span className="absolute left-2 top-1/2 -translate-y-1/2 text-dim">
           <Icon name="search" size={12} />

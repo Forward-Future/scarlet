@@ -1,6 +1,6 @@
-/** Reusable visual style guides for motion graphics and titles. */
+/** Reusable visual style guides for captions, lower thirds, boxes, and motion graphics. */
 import { z } from "zod/v3";
-import { Id } from "@scarlet/timeline";
+import { CaptionStyle, Id } from "@scarlet/timeline";
 import { RunChoice } from "./agents.js";
 import { SkillSlug } from "./skills.js";
 
@@ -31,7 +31,9 @@ export const StyleGuideRecord = z.object({
   description: z.string().default(""),
   /** Design direction, tokens, typography, and motion rules maintained by Scarlet. */
   instructions: z.string().default(""),
-  /** When true, this style applies automatically to graphics across projects unless overridden with @name. */
+  /** Structured caption style defaults (font, weight, color, box, outline, position, accent) applied by captions_generate. */
+  captionStyle: CaptionStyle.partial().optional(),
+  /** When true, this style applies automatically to captions and graphics across projects unless overridden with @name. */
   isDefault: z.boolean().default(false),
   assets: z.array(StyleGuideAsset).default([]),
   preview: StyleGuidePreview.optional(),
@@ -46,6 +48,7 @@ export const CreateStyleGuideRequest = z.object({
   name: StyleGuideSlug,
   description: z.string().max(1024).optional(),
   instructions: z.string().max(128 * 1024).optional(),
+  captionStyle: CaptionStyle.partial().optional(),
   isDefault: z.boolean().optional(),
 });
 export type CreateStyleGuideRequest = z.infer<typeof CreateStyleGuideRequest>;
@@ -54,6 +57,7 @@ export const UpdateStyleGuideRequest = z.object({
   name: StyleGuideSlug.optional(),
   description: z.string().max(1024).optional(),
   instructions: z.string().max(128 * 1024).optional(),
+  captionStyle: CaptionStyle.partial().nullable().optional(),
   isDefault: z.boolean().optional(),
 });
 export type UpdateStyleGuideRequest = z.infer<typeof UpdateStyleGuideRequest>;
@@ -82,8 +86,21 @@ export type EditStyleGuideRequest = z.infer<typeof EditStyleGuideRequest>;
 export const TaskStyleGuideDraft = z.object({
   description: z.string().trim().max(1024).regex(/^[^\r\n]*$/).optional(),
   instructions: z.string().trim().min(1).max(128 * 1024),
+  captionStyle: CaptionStyle.partial().optional().describe("Structured caption style matching this guide (fontFamily or attached font path, fontWeight, fontSize, color, backgroundColor, outlineColor, outlineWidth, y, align, maxWidth, uppercase, highlightColor)"),
 });
 export type TaskStyleGuideDraft = z.infer<typeof TaskStyleGuideDraft>;
+
+/** Active style guide resolved for a task (explicit @mention, skill @mention, or library Default). */
+export const ActiveStyleGuide = z.object({
+  id: Id,
+  name: StyleGuideSlug,
+  description: z.string(),
+  instructions: z.string(),
+  captionStyle: CaptionStyle.partial().optional(),
+  reason: z.enum(["mentioned", "default"]),
+  assets: z.array(StyleGuideAsset.extend({ path: z.string() })),
+});
+export type ActiveStyleGuide = z.infer<typeof ActiveStyleGuide>;
 
 /** Render a 16:9 still HTML style sheet preview for a style guide. */
 export const StyleGuidePreviewRenderRequest = z.object({

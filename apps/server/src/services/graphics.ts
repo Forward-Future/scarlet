@@ -312,8 +312,9 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
           const at = checkAt + t;
           const range = { start: at, end: at + 1 / project.settings.fps };
           const root = ctx.paths.media(project.id);
-          background = await renderTimelineFrame(project, timeline, range, root, signal, 960, { pictureSource: previewPictures(root, { signal }) })
-            .catch(() => renderTimelineFrame(project, timeline, range, root, signal, 960)).catch((error: unknown) => {
+          const fontDirs = [ctx.paths.styleGuidesLibrary, ctx.paths.attachments(project.id)];
+          background = await renderTimelineFrame(project, timeline, range, root, signal, 960, { pictureSource: previewPictures(root, { signal }), fontDirs })
+            .catch(() => renderTimelineFrame(project, timeline, range, root, signal, 960, { fontDirs })).catch((error: unknown) => {
               if (!signal.aborted) checkPictureFailed("background", t, error);
               return null;
             });

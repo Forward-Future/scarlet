@@ -8,8 +8,10 @@ import { basename, dirname, join } from "node:path";
 import { ChromeNotFound, findChrome, renderGraphicStill } from "@scarlet/render";
 import {
   StyleGuideRecord,
+  isAsideTask,
   isHandOff,
   styleGuideMentions,
+  type ActiveStyleGuide,
   type CreateStyleGuideRequest,
   type Skill,
   type StyleGuideAsset,
@@ -20,11 +22,12 @@ import {
   type UpdateStyleGuideRequest,
   type User,
 } from "@scarlet/shared";
-import { newId, type Author } from "@scarlet/timeline";
+import { newId, type Author, type CaptionStyle } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, HttpError, notFound } from "../errors.js";
 import { actorFor, authorName, logActivity, quote } from "./activity.js";
+import { assistantSkills } from "./skills.js";
 import {
   adoptLinkedFiles,
   attachmentName,
@@ -79,6 +82,7 @@ export function createStyleGuide(
     name: body.name,
     description: body.description?.trim() ?? "",
     instructions: body.instructions ?? "",
+    ...(body.captionStyle !== undefined && { captionStyle: body.captionStyle }),
     isDefault,
     assets: extra.assets ?? [],
     source: extra.source,
@@ -111,11 +115,17 @@ export function updateStyleGuide(
   if (dup) throw conflict("style_guide_exists", `A style guide named "@${nextName}" already exists.`, { styleGuideId: dup.id });
   const nextDefault = body.isDefault ?? existing.isDefault;
   if (nextDefault && !existing.isDefault) clearOtherDefaults(ctx, existing.id);
+  const nextCaptionStyle = body.captionStyle === null
+    ? undefined
+    : body.captionStyle !== undefined
+      ? body.captionStyle
+      : existing.captionStyle;
   const next = StyleGuideRecord.parse({
     ...existing,
     name: nextName,
     description: body.description !== undefined ? body.description.trim() : existing.description,
     instructions: body.instructions !== undefined ? body.instructions : existing.instructions,
+    captionStyle: nextCaptionStyle,
     isDefault: nextDefault,
     assets: body.assets !== undefined ? body.assets : existing.assets,
     preview: body.preview !== undefined ? body.preview : existing.preview,
@@ -394,7 +404,7 @@ function summarizeGraphicStyle(name: string, html: string, assets: StyleGuideAss
     Array.from(html.matchAll(/font-family\s*:\s*([^;}"'\n]+)/gi), m => m[1]!.trim()),
   )].slice(0, 6);
   const lines = [
-    `Saved from the project graphic "${name}". Match its visual language across lower thirds, chapter titles, callouts, and overlays.`,
+    `Saved from the project graphic "${name}". Match its visual language across captions, lower thirds, chapter titles, callout boxes, and overlays.`,
   ];
   if (fonts.length) lines.push("", "## Typography", ...fonts.map(f => `- ${f}`));
   if (colors.length) lines.push("", "## Palette", `- ${colors.join(", ")}`);
@@ -509,6 +519,7 @@ export interface ResolvedPromptStyleGuide {
   name: string;
   description: string;
   instructions: string;
+  captionStyle?: Partial<CaptionStyle>;
   reason: "mentioned" | "default";
   assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
 }
@@ -550,6 +561,7 @@ export function resolvePromptStyleGuides(ctx: Ctx, task: Task, activeSkills: rea
       name: g.name,
       description: g.description,
       instructions: g.instructions,
+      ...(g.captionStyle && { captionStyle: g.captionStyle }),
       reason,
       assets: styleGuideAssetPaths(ctx, g),
     }));
@@ -571,4 +583,30 @@ export function resolvePromptStyleGuides(ctx: Ctx, task: Task, activeSkills: rea
 
   const fallback = all.find(g => g.isDefault);
   return fallback ? format([fallback], "default") : [];
+}
+
+/**
+ * Resolve active style guides for a running task (using the same priority as prompt injection)
+ * or return the library Default when called outside a task.
+ */
+export function resolveActiveStyleGuides(ctx: Ctx, opts: { projectId?: string; taskId?: string } = {}): ActiveStyleGuide[] {
+  if (opts.taskId) {
+    const task = ctx.repos.tasks.get(opts.taskId);
+    if (task && (!opts.projectId || task.projectId === opts.projectId)) {
+      const aside = (isAsideTask(task) && !isHandOff(task)) || task.kind === "skill_from_change";
+      const activeSkills = aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), task.context.skillIds, true);
+      return resolvePromptStyleGuides(ctx, task, activeSkills);
+    }
+  }
+  const fallback = listStyleGuides(ctx).find(g => g.isDefault);
+  if (!fallback) return [];
+  return [{
+    id: fallback.id,
+    name: fallback.name,
+    description: fallback.description,
+    instructions: fallback.instructions,
+    ...(fallback.captionStyle && { captionStyle: fallback.captionStyle }),
+    reason: "default",
+    assets: styleGuideAssetPaths(ctx, fallback),
+  }];
 }

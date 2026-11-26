@@ -33,7 +33,7 @@ export function StyleGuidesPage() {
         Style guides
       </SectionTitle>
       <p className="mb-4 text-muted">
-        Your default style applies automatically. Type <span className="font-mono text-fg">@name</span> in chat or in a skill to use another.
+        Describe the look for captions, lower thirds, callout boxes, and graphics once. Your default style applies automatically; type <span className="font-mono text-fg">@name</span> in chat or in a skill to use another.
       </p>
 
       {styleGuides.length > 6 && (
@@ -55,7 +55,7 @@ export function StyleGuidesPage() {
         <EmptyState
           icon="image"
           title="No style guides yet"
-          body="Create a style guide in chat so Scarlet matches your look across projects."
+          body="Create a style guide in chat to set fonts, colors, and layouts for captions, lower thirds, callout boxes, and graphics across projects."
           action={
             <Link className="btn-primary" to="/settings/style-guides/new">
               <Icon name="plus" size={12} /> New style guide

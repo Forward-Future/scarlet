@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ASPECT_PRESETS, type ProjectSettings } from "@scarlet/timeline";
 import { errorMessage } from "../../lib/client";
 import { useProjectStore } from "../../stores/project";
+import { useStyleGuidesStore } from "../../stores/styleGuides";
 import { useUiStore } from "../../stores/ui";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
 import { ConfirmDialog, Drawer, Field, InlineError, Spinner } from "../ui/primitives";
@@ -16,11 +18,13 @@ const FPS_OPTIONS = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
 const fpsLabel = (fps: number) => `${Number(fps.toFixed(3))} fps`;
 
 export function ProjectSettingsDrawer({ onDeleted }: { onDeleted: () => void }) {
+  const navigate = useNavigate();
   const open = useUiStore((s) => s.projectSettingsOpen);
   const setOpen = useUiStore((s) => s.setProjectSettingsOpen);
   const project = useProjectStore(s => open ? s.current?.project : undefined);
   const updateProject = useProjectStore((s) => s.updateProject);
   const deleteProject = useProjectStore((s) => s.deleteProject);
+  const styleGuides = useStyleGuidesStore((s) => s.styleGuides);
   const [name, setName] = useState("");
   // Unset until the editor picks one: a format matched to the first clip while the drawer is open shows, and a Save
   // that only renames doesn't put the old format back.
@@ -100,7 +104,49 @@ export function ProjectSettingsDrawer({ onDeleted }: { onDeleted: () => void }) 
           </button>
         </div>
       </form>
-      <div className="mt-8 pt-4 border-t border-line">
+      <div className="mt-6 pt-4 border-t border-line">
+        <div className="eyebrow mb-2">Visual style</div>
+        {(() => {
+          const defaultGuide = styleGuides.find(g => g.isDefault);
+          const openStyleGuides = (path: string) => {
+            if (busy) return;
+            setOpen(false);
+            navigate(path);
+          };
+          return (
+            <>
+              {project.styleGuide && (
+                <p className="text-fg text-[12.5px] mb-1.5">
+                  Project guide: <span className="font-medium">{project.styleGuide.name}</span>
+                </p>
+              )}
+              {defaultGuide ? (
+                <p className="text-muted text-[12.5px] mb-2">
+                  Default style <span className="font-mono text-fg">@{defaultGuide.name}</span>
+                  {defaultGuide.description ? ` — ${defaultGuide.description}` : ""}. Applies to captions, lower thirds, callout boxes, and graphics; type <span className="font-mono text-fg">@name</span> in chat to switch.
+                </p>
+              ) : styleGuides.length > 0 ? (
+                <p className="text-muted text-[12.5px] mb-2">
+                  Type <span className="font-mono text-fg">@name</span> in chat to apply a style guide to captions, lower thirds, callout boxes, and graphics, or mark one as Default.
+                </p>
+              ) : (
+                <p className="text-muted text-[12.5px] mb-2">
+                  Describe fonts, colors, and layouts once for captions, lower thirds, callout boxes, and graphics across your projects.
+                </p>
+              )}
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={busy}
+                onClick={() => openStyleGuides(styleGuides.length > 0 ? "/settings/style-guides" : "/settings/style-guides/new")}
+              >
+                {styleGuides.length > 0 ? "Manage style guides" : "Create a style guide"}
+              </button>
+            </>
+          );
+        })()}
+      </div>
+      <div className="mt-6 pt-4 border-t border-line">
         <div className="eyebrow mb-2">Danger zone</div>
         <p className="text-muted mb-2">Moving to Trash hides the project for 30 days. Restore it from the Projects page with everything in it; after 30 days it is deleted for good.</p>
         <button className="btn-danger" onClick={() => setConfirm(true)}>
