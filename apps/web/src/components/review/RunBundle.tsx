@@ -13,6 +13,7 @@ import { toolName, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
 import { Linked } from "../ui/Linked";
 import { Icon } from "../ui/primitives";
+import { ReportLink } from "../shell/ReportLink";
 import { RequestMetrics, Tokens } from "./RequestMetrics";
 
 export { RequestMetrics };
@@ -228,6 +229,9 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
   const aside = usage?.totalTokens ? <Tokens usage={usage} /> : undefined;
   const rows = result?.(aside);
   const action = !paused && recovery && <button type="button" className="simple-link req-recover" onClick={recovery.run}>{recovery.label}</button>;
+  // A run that couldn't finish can be reported from here, with what went wrong.
+  const report = failed && <ReportLink className="simple-link req-recover" about={`Couldn’t finish${task.error ? `: ${task.error}` : ""}`} />;
+  const controls = action || report ? <>{action}{report}</> : undefined;
   const made = summary ?? (state ? stoppedSummary(task, finalChange) : runSummary(task, finalChange));
   // Scarlet's note on one cut reads on up to two lines; a count stays on one.
   const madeClass = `req-summary${state ? "" : " run-summary"}${summary ? " is-note" : ""}`;
@@ -246,7 +250,7 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
   return <div className="req" data-state={paused ? "paused" : stopped ? "stopped" : failed ? "failed" : "done"}>
     {state && !banded && <div className="req-row req-status">
       <span className={`req-state run-summary${failed ? " is-bad" : ""}`}>{state}</span>
-      <span className="req-right">{action}</span>
+      <span className="req-right">{controls}</span>
     </div>}
     {paused && <TranscriptWait task={task} onResume={onResume} onWait={onWaitForTranscripts} aside={waits && usage?.totalTokens ? aside : undefined} />}
     {say}
@@ -256,11 +260,11 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
           title={summary ? `${made}\nShow on the timeline` : "Show on the timeline"} onClick={e => { blurOnPointerClick(e); opens(); }}><span>{made}</span></button>
         : <span className={madeClass} title={summary}><span>{made}</span></span>}
       {/* What a stopped run saved is one line, and its one action follows on it. */}
-      {actsOnLine && action}
+      {actsOnLine && controls}
       <span className="req-right">{aside}</span>
     </div>)}
     {/* Under a heading that says "Stopped", the one action follows what the run left. */}
-    {state && banded && action && !actsOnLine && <div className="req-row req-act">{action}</div>}
+    {state && banded && controls && !actsOnLine && <div className="req-row req-act">{controls}</div>}
   </div>;
 }
 

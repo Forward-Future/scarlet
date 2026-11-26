@@ -12,6 +12,7 @@ import { usePlayerStore } from "../../stores/player";
 import { Progress, Spinner } from "../ui/primitives";
 import { MonitorPlayback, PlaybackTime } from "../player/MonitorPlayback";
 import { FramedVideo } from "../player/FramedVideo";
+import { ReportLink } from "../shell/ReportLink";
 
 const REVIEW_WINDOW_SECONDS = 10;
 
@@ -34,7 +35,10 @@ function Overlay({ render, label, loading, error, retry }: {
         <>
           <span className="text-bad font-medium">The {label.toLowerCase()} clip failed to render</span>
           <span className="text-muted max-w-sm break-words">{error ?? render?.error}</span>
-          {retry && <button className="btn-ghost" onClick={retry}>Retry preview</button>}
+          <div className="flex gap-2">
+            {retry && <button className="btn-ghost" onClick={retry}>Retry preview</button>}
+            <ReportLink about={`The ${label.toLowerCase()} clip failed to render${(error ?? render?.error) ? `: ${error ?? render?.error}` : ""}`} />
+          </div>
         </>
       ) : (
         <>

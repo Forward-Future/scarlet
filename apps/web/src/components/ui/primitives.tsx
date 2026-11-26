@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useId, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { errorMessage } from "../../lib/client";
+import { ReportLink } from "../shell/ReportLink";
 
 /** Render a formatted clock or range with any `.123` millisecond suffix dimmed and slightly smaller. */
 export function DimMs({ text }: { text: string }) {
@@ -42,11 +43,14 @@ export function ErrorState({ title = "Something went wrong", body, onRetry }: { 
     <div role="alert" className="m-4 rounded-lg border border-bad/40 bg-bad/5 p-4">
       <div className="text-bad font-medium">{title}</div>
       {body && <div className="text-muted mt-1 break-words">{body}</div>}
-      {onRetry && (
-        <button className="btn-ghost mt-3" onClick={onRetry}>
-          Retry
-        </button>
-      )}
+      <div className="flex flex-wrap gap-2 mt-3">
+        {onRetry && (
+          <button className="btn-ghost" onClick={onRetry}>
+            Retry
+          </button>
+        )}
+        <ReportLink about={body ? `${title}: ${body}` : title} />
+      </div>
     </div>
   );
 }
