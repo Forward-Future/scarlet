@@ -16031,3 +16031,30 @@ it("advances to safe edits once the last flagged edit is kept, with no filter ba
   expect(editRowsIn(turn).map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided")]))
     .toEqual([["wrap", true], ["music bed", false], ["captions", false]]);
 });
+
+it("switches live between the default layout and the new one, which share one workspace, each with its own list of edits", async () => {
+  flaggedPairOneAsking();
+  await showFolded();
+  await act(async () => {});
+  // The default layout: the dock of edit lists under the chat, and no column of edits.
+  expect(container.querySelector("[data-new-layout]")).toBeNull();
+  expect(container.querySelector(".simple-review-dock")).not.toBeNull();
+  expect(container.querySelector("#simple-review-rail")).toBeNull();
+  // Turned on in Settings, the new layout takes over at once: the column of edits, and no dock.
+  await act(async () => useUiStore.setState({ newLayout: true }));
+  try {
+    expect(container.querySelector("[data-new-layout]")).not.toBeNull();
+    expect(container.querySelector(".simple-review-dock")).toBeNull();
+    await click(columnRows("Needs review").find(row => columnWords(row) === "wrap")!);
+    await act(async () => {});
+    expect(columnOpen()).toBe("wrap");
+    await press("k");
+    await act(async () => {});
+    expect(columnOpen()).toBe("captions");
+  } finally { await act(async () => useUiStore.setState({ newLayout: false })); }
+  // Turned off again, the default layout is back as it was.
+  expect(container.querySelector("[data-new-layout]")).toBeNull();
+  expect(container.querySelector("#simple-review-rail")).toBeNull();
+  expect(container.querySelector(".simple-review-dock")).not.toBeNull();
+  localStorage.clear();
+});
