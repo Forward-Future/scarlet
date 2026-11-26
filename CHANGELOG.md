@@ -7,6 +7,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 25, 2026
 
 - Long edits use fewer tokens and finish a little sooner: Scarlet reads the timeline in smaller pieces, no longer has frame requests turned away, and starts each edit already knowing whether there are open review notes (about a fifth fewer tokens on a 27-minute talking-head edit).
+- The working indicator under the timeline now shows only "Scarlet is editing", without trailing activity text.
+- The "For you" list of edits waiting on you is now called "Needs review".
 - In the beta layout, hovering an edit in the edits column now shows a plain summary underneath its title, such as how much a cut removes or the caption words, file, zoom, audio change, speed, or transition for other edits.
 - In the beta layout, the edits column now stays visible right away when you open a project with no edits yet, instead of hiding until Scarlet makes an edit.
 - Standardized wording across Scarlet so cuts always say "Cut" (instead of "Took out", "Takes out", "Removed", or "Trimmed") on timeline bands, edit cards, chat summaries, and drag readouts, and aligned remaining labels like "Safe edits", "Model selector", "Model host", "Suggestion", and "the video".
@@ -148,6 +150,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - When the model you chose for a kind of work, such as Cutting, isn't sure about an edit, the edit now waits for you to check it, as when the chat's model flags one.
 - With Cutting given to another model in Task models, that model can now read the dialogue and check its cuts for repeats, instead of being refused.
 - With a model that can't see pictures, such as one from Ollama or LM Studio, Scarlet no longer has it look at a frame to find what viewers may see of a screen recording.
+- Report a problem's log zip now includes which copies of Scarlet started and stopped and what became of each message sent, instead of an empty file.
 
 ## November 23, 2026
 

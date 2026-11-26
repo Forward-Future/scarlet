@@ -254,7 +254,7 @@ it("scrolls the selected edit row into view across stepping, tab switches, and r
     expect(scrolled).toHaveLength(1);
     expect(scrolled.at(-1)?.textContent).toContain(edits[1]!.label);
 
-    // Switching from For you to See all with the same edit selected scrolls it back into view in the full list.
+    // Switching from Needs review to See all with the same edit selected scrolls it back into view in the full list.
     await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} rejected={rejected} showing={edits[1]} onPlay={() => {}} />));
     expect(scrolled).toHaveLength(2);
     expect(scrolled.at(-1)?.textContent).toContain(edits[1]!.label);
