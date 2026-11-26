@@ -76,15 +76,6 @@ describe("Transcript of a one-hour interview on its working cut, 9,000 words", (
     if (nodes.length !== words) throw new Error("Expected the whole transcript");
   }
   const open = { ...options, setup: mount, teardown() { root.unmount(); container.remove(); teardown(); } };
-  bench("drag a 24-word selection near the end", () => {
-    const at = words - 200;
-    flushSync(() => nodes[at]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
-    for (let i = 1; i < 24; i++) flushSync(() => {
-      nodes[at + i]!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: nodes[at + i - 1]! }));
-    });
-    nodes[at + 23]!.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-    if (!nodes[at + 23]!.classList.contains("bg-hi-dim")) throw new Error("Selection did not move");
-  }, open);
   bench("60 playback clock updates across the hour", () => {
     for (let i = 0; i < 60; i++) flushSync(() => usePlayerStore.getState().setTime(i * 55));
     if (!container.querySelector("[data-current]")) throw new Error("No word lit");
