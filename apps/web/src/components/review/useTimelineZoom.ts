@@ -155,6 +155,18 @@ export function useTimelineZoom(track: RefObject<HTMLDivElement | null>, start: 
     move({ from: left, span }, animate ? "animate" : "snap");
   }, [start, end, minSpan, total, move]);
 
+  /**
+   * Turn the view, at the same scale, to the page that shows `time`, and say where it went. A drag held past the
+   * timeline's edge sends the playhead to the video's start or end, which the view then shows instead of a playhead
+   * gone off its side; following playback waits while a pointer is held.
+   */
+  const reveal = useCallback((time: number) => {
+    const { view } = live.current;
+    const next = follow(view, time, start, end);
+    if (next !== view) move(next);
+    return next;
+  }, [start, end, move]);
+
   useLayoutEffect(() => {
     inspecting.current = false;
   }, [start, end, fitRange, stopZoom]);
@@ -386,5 +398,5 @@ export function useTimelineZoom(track: RefObject<HTMLDivElement | null>, start: 
     };
   }, [track, dragging, start, total, end, cancel, move]);
 
-  return { ...frame, minSpan, zoomBy, fitRange, stopZoom };
+  return { ...frame, minSpan, zoomBy, fitRange, stopZoom, reveal };
 }

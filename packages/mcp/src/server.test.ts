@@ -2793,6 +2793,11 @@ it("reports distinct prepared picture passages and confirmed review saves during
       expect(sheet.isError).toBeFalsy();
     }
     expect(mock.state.events.filter(e => e.data?.reviewCounter === "pictures").map(e => e.data?.count)).toEqual([1, 10]);
+    // A sheet asked for more frames than it holds is answered with as many as it holds, and says so, not refused.
+    const crowded = await editor.callTool({ name: "frame_contact_sheet", arguments: { mediaId: "m1", from: 0, to: 1, count: 20 } }) as CallToolResult;
+    expect(crowded.isError).toBeFalsy();
+    expect(mock.requests.filter(r => r.path.endsWith("/contact-sheet")).at(-1)?.body).toMatchObject({ count: 12 });
+    expect((crowded.content[0] as { text: string }).text).toContain("A sheet holds 12 frames");
     const save = await editor.callTool({ name: "dialogue_review_save", arguments: { changeId: "cut", fromVersion: "v1", toVersion: "v2",
       assessments: [{ index: 0, start: 0, end: 1, verdict: "cut", reason: "The editor identified the pickup." },
         { index: 1, start: 1, end: 3, verdict: "ask", reason: "The two takes overlap." }] } });

@@ -308,6 +308,14 @@ describe("an editing prompt", () => {
     expect(prompt).toContain("# Project\n\nTwo recordings, no edit yet.");
     expect(prompt).not.toMatch(/# Your task|# Review notes to address|# Change being revised|# Earlier questions and answers|# Your skills/);
   });
+
+  it("says how many review notes are open when the request names none, so no turn goes on listing them", () => {
+    const at = (openNotes?: number) => buildSystemPrompt({ project: "One recording.", skills: [], openNotes });
+    expect(at(0)).toContain("# Review notes\n\nThe project has no open review notes.");
+    expect(at(1)).toContain("The project has 1 open review note; `notes_list` reads them.");
+    expect(at(3)).toContain("The project has 3 open review notes;");
+    expect(at(undefined)).not.toContain("# Review notes");
+  });
 });
 
 describe("stripFrontmatter", () => {
