@@ -19,9 +19,16 @@ it("leaves Enter to an input method that is composing the style guide's name", a
   useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
   useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
   vi.spyOn(api, "styleGuide").mockImplementation(async () => ({ styleGuide: guide, edits: [] }));
-  const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => ({
-    styleGuide: (guide = { ...guide, ...patch, colorLook: patch.colorLook === null ? undefined : (patch.colorLook ?? guide.colorLook) }),
-  }));
+  const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => {
+    const { captionStyle, colorLook, ...rest } = patch;
+    guide = {
+      ...guide,
+      ...rest,
+      ...(captionStyle ? { captionStyle } : captionStyle === null ? { captionStyle: undefined } : {}),
+      ...(colorLook ? { colorLook } : colorLook === null ? { colorLook: undefined } : {}),
+    };
+    return { styleGuide: guide };
+  });
   const el = document.createElement("div");
   document.body.append(el);
   const root = createRoot(el);
@@ -265,7 +272,13 @@ it("renders the Tabbed Stage (Graphics, Transitions, Sounds, Color look) and per
   useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
   vi.spyOn(api, "styleGuide").mockImplementation(async () => ({ styleGuide: guide, edits: [] }));
   const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => {
-    guide = { ...guide, ...patch, colorLook: patch.colorLook === null ? undefined : (patch.colorLook ?? guide.colorLook) };
+    const { captionStyle, colorLook, ...rest } = patch;
+    guide = {
+      ...guide,
+      ...rest,
+      ...(captionStyle ? { captionStyle } : captionStyle === null ? { captionStyle: undefined } : {}),
+      ...(colorLook ? { colorLook } : colorLook === null ? { colorLook: undefined } : {}),
+    };
     return { styleGuide: guide };
   });
 

@@ -35,6 +35,7 @@ import {
   listStyleGuides,
   readStyleGuideAssetDocument,
   renderStyleGuidePreview,
+  resolveActiveStyleGuides,
   saveStyleGuideAsset,
   styleGuideEdits,
   styleGuidePreviewImagePath,
@@ -53,6 +54,12 @@ export function styleGuideRoutes(ctx: Ctx) {
 
   r.get("/style-guides", (c) => {
     return c.json({ styleGuides: listStyleGuides(ctx) });
+  });
+
+  r.get("/style-guides/active", (c) => {
+    const projectId = c.req.query("projectId") || undefined;
+    const taskId = c.req.query("taskId") || undefined;
+    return c.json({ styleGuides: resolveActiveStyleGuides(ctx, { projectId, taskId }) });
   });
 
   r.post("/style-guides", async (c) => {
@@ -263,6 +270,7 @@ export function styleGuideRoutes(ctx: Ctx) {
         {
           ...(body.description !== undefined && { description: body.description }),
           ...(body.instructions !== undefined && { instructions: body.instructions }),
+          ...(body.captionStyle !== undefined && { captionStyle: body.captionStyle }),
           ...(body.transitions !== undefined && { transitions: body.transitions }),
           ...(body.sounds !== undefined && { sounds: body.sounds }),
           ...(body.colorLook !== undefined && { colorLook: body.colorLook }),

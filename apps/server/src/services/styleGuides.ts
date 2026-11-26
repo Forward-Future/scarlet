@@ -13,8 +13,10 @@ import {
   slugifyStyleGuideName,
   StyleGuideRecord,
   synthesizeBuiltInSfxWav,
+  isAsideTask,
   isHandOff,
   styleGuideMentions,
+  type ActiveStyleGuide,
   type CreateStyleGuideRequest,
   type ImportStyleGuideSoundRequest,
   type Skill,
@@ -29,12 +31,13 @@ import {
   type UpdateStyleGuideRequest,
   type User,
 } from "@scarlet/shared";
-import { newId, type Author, type MediaAsset } from "@scarlet/timeline";
+import { newId, type Author, type CaptionStyle, type MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { actorFor, authorName, logActivity, quote } from "./activity.js";
 import { ingestMedia } from "./ingest.js";
+import { assistantSkills } from "./skills.js";
 import {
   adoptLinkedFiles,
   attachmentName,
@@ -89,6 +92,7 @@ export function createStyleGuide(
     name: body.name,
     description: body.description?.trim() ?? "",
     instructions: body.instructions ?? "",
+    ...(body.captionStyle !== undefined && { captionStyle: body.captionStyle }),
     isDefault,
     assets: extra.assets ?? [],
     transitions: body.transitions ?? [],
@@ -129,11 +133,17 @@ export function updateStyleGuide(
     : body.colorLook !== undefined
       ? body.colorLook
       : existing.colorLook;
+  const nextCaptionStyle = body.captionStyle === null
+    ? undefined
+    : body.captionStyle !== undefined
+      ? body.captionStyle
+      : existing.captionStyle;
   const next = StyleGuideRecord.parse({
     ...existing,
     name: nextName,
     description: body.description !== undefined ? body.description.trim() : existing.description,
     instructions: body.instructions !== undefined ? body.instructions : existing.instructions,
+    captionStyle: nextCaptionStyle,
     isDefault: nextDefault,
     assets: body.assets !== undefined ? body.assets : existing.assets,
     preview: body.preview !== undefined ? body.preview : existing.preview,
@@ -596,7 +606,7 @@ function summarizeGraphicStyle(name: string, html: string, assets: StyleGuideAss
     Array.from(html.matchAll(/font-family\s*:\s*([^;}"'\n]+)/gi), m => m[1]!.trim()),
   )].slice(0, 6);
   const lines = [
-    `Saved from the project graphic "${name}". Match its visual language across lower thirds, chapter titles, callouts, and overlays.`,
+    `Saved from the project graphic "${name}". Match its visual language across captions, lower thirds, chapter titles, callout boxes, and overlays.`,
   ];
   if (fonts.length) lines.push("", "## Typography", ...fonts.map(f => `- ${f}`));
   if (colors.length) lines.push("", "## Palette", `- ${colors.join(", ")}`);
@@ -711,6 +721,7 @@ export interface ResolvedPromptStyleGuide {
   name: string;
   description: string;
   instructions: string;
+  captionStyle?: Partial<CaptionStyle>;
   reason: "mentioned" | "default";
   assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
   transitions: StyleGuideTransition[];
@@ -758,6 +769,7 @@ export function resolvePromptStyleGuides(ctx: Ctx, task: Task, activeSkills: rea
         name: g.name,
         description: g.description,
         instructions: g.instructions,
+        ...(g.captionStyle && { captionStyle: g.captionStyle }),
         reason,
         assets,
         transitions: g.transitions,
@@ -794,8 +806,47 @@ export function resolvePromptStyleGuides(ctx: Ctx, task: Task, activeSkills: rea
 }
 
 /**
- * Import a portable JSON file defining a Style Guide's settings (graphics rules, transitions,
- * sound effects, and camera color look). Returns `{ imported: false }` if the file isn't a
+ * Resolve active style guides for a running task (using the same priority as prompt injection)
+ * or return the library Default when called outside a task.
+ */
+export function resolveActiveStyleGuides(ctx: Ctx, opts: { projectId?: string; taskId?: string } = {}): ActiveStyleGuide[] {
+  if (opts.taskId) {
+    const task = ctx.repos.tasks.get(opts.taskId);
+    if (task && (!opts.projectId || task.projectId === opts.projectId)) {
+      const aside = (isAsideTask(task) && !isHandOff(task)) || task.kind === "skill_from_change";
+      const activeSkills = aside ? [] : assistantSkills(ctx.repos.skills.select("1=1", [], "name ASC"), task.context.skillIds, true);
+      return resolvePromptStyleGuides(ctx, task, activeSkills);
+    }
+  }
+  const fallback = listStyleGuides(ctx).find(g => g.isDefault);
+  if (!fallback) return [];
+  const assets = styleGuideAssetPaths(ctx, fallback);
+  const lutAsset = fallback.colorLook?.lutAssetId ? assets.find(a => a.id === fallback.colorLook!.lutAssetId) : undefined;
+  return [{
+    id: fallback.id,
+    name: fallback.name,
+    description: fallback.description,
+    instructions: fallback.instructions,
+    ...(fallback.captionStyle && { captionStyle: fallback.captionStyle }),
+    reason: "default",
+    assets,
+    transitions: fallback.transitions,
+    sounds: fallback.sounds.map(s => ({ ...s, volumeLinear: dbToLinearGain(s.volumeDb) })),
+    ...(fallback.colorLook && {
+      colorLook: {
+        ...fallback.colorLook,
+        ...(lutAsset && {
+          lutFile: `${fallback.id}/assets/${lutAsset.id}/${lutAsset.name}`,
+          lutPath: lutAsset.path,
+        }),
+      },
+    }),
+  }];
+}
+
+/**
+ * Import a portable JSON file defining a Style Guide's settings (graphics rules, caption style,
+ * transitions, sound effects, and camera color look). Returns `{ imported: false }` if the file isn't a
  * structured Style Guide definition, so callers can pass it to Scarlet in chat instead.
  */
 export function importStyleGuideDefinition(
@@ -818,6 +869,7 @@ export function importStyleGuideDefinition(
       return updateStyleGuide(ctx, user, existing, {
         ...(parsed.description !== undefined && { description: parsed.description }),
         ...(parsed.instructions !== undefined && { instructions: parsed.instructions }),
+        ...(parsed.captionStyle !== undefined && { captionStyle: parsed.captionStyle }),
         ...(parsed.isDefault !== undefined && { isDefault: parsed.isDefault }),
         ...(parsed.transitions !== undefined && { transitions: parsed.transitions }),
         ...(parsed.sounds !== undefined && { sounds: parsed.sounds }),
@@ -837,6 +889,7 @@ export function importStyleGuideDefinition(
         name: uniqueName,
         description: parsed.description,
         instructions: parsed.instructions,
+        ...(parsed.captionStyle ? { captionStyle: parsed.captionStyle } : {}),
         isDefault: parsed.isDefault,
         transitions: parsed.transitions,
         sounds: parsed.sounds,

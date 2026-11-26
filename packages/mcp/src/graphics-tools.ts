@@ -325,17 +325,18 @@ export function registerGraphics(deps: GraphicsDeps) {
     const taskId = deps.task.id;
     tool(
       "style_guide_update",
-      "Save updates to this style guide: its one-line description, visual graphics rules (instructions), preferred transitions (with optional paired soundId), sound effects (built-in starters or attached audio assets with volumeDb and usageRule), and/or saved camera colorLook (adjustments and/or attached .cube/.3dl lutAssetId). Omitted sections stay as they are; pass colorLook: null to clear the saved color look.",
+      "Save updates to this style guide: its one-line description, visual graphics rules (instructions), optional structured captionStyle, preferred transitions (with optional paired soundId), sound effects (built-in starters or attached audio assets with volumeDb and usageRule), and/or saved camera colorLook (adjustments and/or attached .cube/.3dl lutAssetId). Omitted sections stay as they are; pass colorLook: null to clear the saved color look.",
       TaskStyleGuideDraft.shape,
-      async ({ description, instructions, transitions, sounds, colorLook }) => {
-        if (description === undefined && instructions === undefined && transitions === undefined && sounds === undefined && colorLook === undefined) {
-          return errorText("Provide at least one field to update (description, instructions, transitions, sounds, or colorLook).");
+      async ({ description, instructions, captionStyle, transitions, sounds, colorLook }) => {
+        if (description === undefined && instructions === undefined && captionStyle === undefined && transitions === undefined && sounds === undefined && colorLook === undefined) {
+          return errorText("Provide at least one field to update (description, instructions, captionStyle, transitions, sounds, or colorLook).");
         }
         const { styleGuide } = await client.saveTaskStyleGuideEdit(deps.projectId, taskId, {
           styleGuideId: editingGuide.styleGuideId,
           hostId: editingGuide.hostId,
           ...(description !== undefined && { description }),
           ...(instructions !== undefined && { instructions }),
+          ...(captionStyle !== undefined && { captionStyle }),
           ...(transitions !== undefined && { transitions }),
           ...(sounds !== undefined && { sounds }),
           ...(colorLook !== undefined && { colorLook }),
@@ -344,6 +345,7 @@ export function registerGraphics(deps: GraphicsDeps) {
           styleGuideId: styleGuide.id,
           name: styleGuide.name,
           description: styleGuide.description,
+          ...(styleGuide.captionStyle && { captionStyle: styleGuide.captionStyle }),
           transitionsCount: styleGuide.transitions.length,
           soundsCount: styleGuide.sounds.length,
           hasColorLook: Boolean(styleGuide.colorLook),

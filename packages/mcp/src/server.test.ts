@@ -1862,6 +1862,77 @@ describe("timeline_at and captions_generate", () => {
       ] });
     } finally { mock.state.timeline = before; }
   });
+
+  it("applies the active style guide's captionStyle automatically and lets explicit style fields override it", async () => {
+    const before = mock.state.timeline;
+    const tl = emptyTimeline(mock.state.project.id);
+    tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+    mock.state.timeline = tl;
+    let activeReason: "default" | "mentioned" = "default";
+    mock.state.extra = (req, res) => {
+      if (req.path !== "/style-guides/active") return false;
+      res.end(JSON.stringify({
+        styleGuides: [{
+          id: "sg_brand",
+          name: "channel-brand",
+          description: "Bold warm captions",
+          instructions: "Use Inter bold white on dark pill.",
+          captionStyle: { fontFamily: "Inter", fontWeight: "bold", color: "#FFFFFF", highlightColor: "#F59E0B", backgroundColor: "#000000CC", y: 0.86 },
+          reason: activeReason,
+          assets: [],
+        }],
+      }));
+      return true;
+    };
+    try {
+      // 1. New track inherits default style guide captionStyle + allows explicit field override.
+      const res1 = await client.callTool({
+        name: "captions_generate",
+        arguments: { intent: "requested", style: { y: 0.8 }, reason: "Add captions matching the channel look." },
+      }) as CallToolResult;
+      expect(res1.isError, textOf(res1)).toBeFalsy();
+      expect(textOf(res1)).toContain("Applied caption style from @channel-brand (with explicit style overrides).");
+      const post1 = mock.requests.filter(r => r.method === "POST" && r.path.endsWith("/changes")).at(-1)!;
+      expect(post1.body).toMatchObject({
+        ops: [{ op: "addTrack", track: { captionStyle: { fontFamily: "Inter", fontWeight: "bold", color: "#FFFFFF", highlightColor: "#F59E0B", backgroundColor: "#000000CC", y: 0.8 } } }],
+      });
+
+      // 2. Replacing an existing track with a default guide keeps existing track style on conflict, while an explicit @mention overrides it.
+      const tlWithCap = emptyTimeline(mock.state.project.id);
+      tlWithCap.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+      tlWithCap.tracks.push({ id: "cap_old", kind: "caption", name: "Captions", hidden: false, muted: false, clips: [], captionStyle: { color: "#00FF00", y: 0.25 } });
+      mock.state.timeline = tlWithCap;
+
+      activeReason = "default";
+      await client.callTool({
+        name: "captions_generate",
+        arguments: { intent: "requested", destination: { replaceTrackId: "cap_old" }, reason: "Refresh captions." },
+      });
+      const postDefault = mock.requests.filter(r => r.method === "POST" && r.path.endsWith("/changes")).at(-1)!;
+      expect(postDefault.body).toMatchObject({
+        ops: [
+          { op: "removeTrack", trackId: "cap_old" },
+          { op: "addTrack", track: { captionStyle: { fontFamily: "Inter", fontWeight: "bold", color: "#00FF00", y: 0.25 } } },
+        ],
+      });
+
+      activeReason = "mentioned";
+      await client.callTool({
+        name: "captions_generate",
+        arguments: { intent: "requested", destination: { replaceTrackId: "cap_old" }, reason: "Restyle with @channel-brand." },
+      });
+      const postMentioned = mock.requests.filter(r => r.method === "POST" && r.path.endsWith("/changes")).at(-1)!;
+      expect(postMentioned.body).toMatchObject({
+        ops: [
+          { op: "removeTrack", trackId: "cap_old" },
+          { op: "addTrack", track: { captionStyle: { fontFamily: "Inter", fontWeight: "bold", color: "#FFFFFF", y: 0.86 } } },
+        ],
+      });
+    } finally {
+      mock.state.timeline = before;
+      mock.state.extra = undefined;
+    }
+  });
 });
 
 describe("media_frame", () => {

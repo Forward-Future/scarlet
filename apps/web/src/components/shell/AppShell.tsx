@@ -8,6 +8,7 @@ import { reconnectRealtime, startRealtime } from "../../lib/realtime";
 import { useAuthStore } from "../../stores/auth";
 import { useHostsStore } from "../../stores/hosts";
 import { useProjectStore } from "../../stores/project";
+import { useStyleGuidesStore } from "../../stores/styleGuides";
 import { useUiStore } from "../../stores/ui";
 import { scheduleStorageScan } from "../../lib/storage";
 import { ExportStarNotice } from "./ExportStarNotice";
@@ -119,6 +120,7 @@ export function AppShell() {
     }).catch(() => undefined);
     void useHostsStore.getState().load();
     void useProjectStore.getState().loadList();
+    void useStyleGuidesStore.getState().load();
     return () => { active = false; };
   }, [status]);
 

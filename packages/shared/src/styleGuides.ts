@@ -1,6 +1,6 @@
-/** Reusable visual, motion, sound, and color style guides. */
+/** Reusable visual, caption, motion, sound, and color style guides. */
 import { z } from "zod/v3";
-import { Id, RenderColor, TransitionDirection, TransitionType } from "@scarlet/timeline";
+import { CaptionStyle, Id, RenderColor, TransitionDirection, TransitionType } from "@scarlet/timeline";
 import { RunChoice } from "./agents.js";
 import { BUILT_IN_STYLE_SOUNDS, findBuiltInStyleSound } from "./builtInSfx.js";
 import { SkillSlug } from "./skills.js";
@@ -94,7 +94,9 @@ export const StyleGuideRecord = z.object({
   description: z.string().default(""),
   /** Design direction, tokens, typography, and motion rules maintained by Scarlet. */
   instructions: z.string().default(""),
-  /** When true, this style applies automatically across projects unless overridden with @name. */
+  /** Structured caption style defaults (font, weight, color, box, outline, position, accent) applied by captions_generate. */
+  captionStyle: CaptionStyle.partial().optional(),
+  /** When true, this style applies automatically to captions, graphics, transitions, sounds, and color across projects unless overridden with @name. */
   isDefault: z.boolean().default(false),
   assets: z.array(StyleGuideAsset).default([]),
   preview: StyleGuidePreview.optional(),
@@ -115,6 +117,7 @@ export const CreateStyleGuideRequest = z.object({
   name: StyleGuideSlug,
   description: z.string().max(1024).optional(),
   instructions: z.string().max(128 * 1024).optional(),
+  captionStyle: CaptionStyle.partial().optional(),
   isDefault: z.boolean().optional(),
   transitions: z.array(StyleGuideTransition).max(32).optional(),
   sounds: z.array(StyleGuideSound).max(64).optional(),
@@ -126,6 +129,7 @@ export const UpdateStyleGuideRequest = z.object({
   name: StyleGuideSlug.optional(),
   description: z.string().max(1024).optional(),
   instructions: z.string().max(128 * 1024).optional(),
+  captionStyle: CaptionStyle.partial().nullable().optional(),
   isDefault: z.boolean().optional(),
   transitions: z.array(StyleGuideTransition).max(32).optional(),
   sounds: z.array(StyleGuideSound).max(64).optional(),
@@ -157,6 +161,7 @@ export type EditStyleGuideRequest = z.infer<typeof EditStyleGuideRequest>;
 export const TaskStyleGuideDraft = z.object({
   description: z.string().trim().max(1024).regex(/^[^\r\n]*$/).optional(),
   instructions: z.string().trim().min(1).max(128 * 1024).optional(),
+  captionStyle: CaptionStyle.partial().optional().describe("Structured caption style matching this guide (fontFamily or attached font path, fontWeight, fontSize, color, backgroundColor, outlineColor, outlineWidth, y, align, maxWidth, uppercase, highlightColor)"),
   transitions: z.array(StyleGuideTransition).max(32).optional(),
   sounds: z.array(StyleGuideSound).max(64).optional(),
   colorLook: StyleGuideColorLook.nullable().optional(),
@@ -174,6 +179,21 @@ export const ImportStyleGuideSoundRequest = z.object({
   { message: "Provide builtInId, or styleGuideId with soundId or assetId." },
 );
 export type ImportStyleGuideSoundRequest = z.infer<typeof ImportStyleGuideSoundRequest>;
+
+/** Active style guide resolved for a task (explicit @mention, skill @mention, or library Default). */
+export const ActiveStyleGuide = z.object({
+  id: Id,
+  name: StyleGuideSlug,
+  description: z.string(),
+  instructions: z.string(),
+  captionStyle: CaptionStyle.partial().optional(),
+  reason: z.enum(["mentioned", "default"]),
+  assets: z.array(StyleGuideAsset.extend({ path: z.string() })),
+  transitions: z.array(StyleGuideTransition).optional(),
+  sounds: z.array(StyleGuideSound.extend({ volumeLinear: z.number() })).optional(),
+  colorLook: StyleGuideColorLook.extend({ lutFile: z.string().optional(), lutPath: z.string().optional() }).optional(),
+});
+export type ActiveStyleGuide = z.infer<typeof ActiveStyleGuide>;
 
 /** Render a 16:9 still HTML style sheet preview for a style guide. */
 export const StyleGuidePreviewRenderRequest = z.object({
@@ -261,6 +281,7 @@ const StyleGuideDefinitionSchema = z.object({
   name: z.string().trim().max(120).optional(),
   description: z.string().max(1024).optional(),
   instructions: z.string().max(128 * 1024).optional(),
+  captionStyle: CaptionStyle.partial().nullable().optional(),
   isDefault: z.boolean().optional(),
   transitions: z.array(StyleGuideDefinitionTransitionInput).max(32).optional(),
   sounds: z.array(StyleGuideDefinitionSoundInput).max(64).optional(),
@@ -271,13 +292,14 @@ export interface ParsedStyleGuideDefinition {
   name?: string;
   description?: string;
   instructions?: string;
+  captionStyle?: Partial<z.infer<typeof CaptionStyle>> | null;
   isDefault?: boolean;
   transitions?: StyleGuideTransition[];
   sounds?: StyleGuideSound[];
   colorLook?: StyleGuideColorLook | null;
 }
 
-const DEFINITION_SIGNAL_KEYS = ["description", "instructions", "transitions", "sounds", "colorLook"] as const;
+const DEFINITION_SIGNAL_KEYS = ["description", "instructions", "captionStyle", "transitions", "sounds", "colorLook"] as const;
 
 function stableId(prefix: string, seed: string, index: number, used: Set<string>): string {
   const slug = slugifyStyleGuideName(seed).replace(/-/g, "_").slice(0, 32) || String(index + 1);
@@ -327,6 +349,7 @@ export function parseStyleGuideDefinitionJson(
     ...(slug ? { name: slug } : {}),
     ...(data.description !== undefined ? { description: data.description.trim() } : {}),
     ...(data.instructions !== undefined ? { instructions: data.instructions } : {}),
+    ...(data.captionStyle !== undefined ? { captionStyle: data.captionStyle } : {}),
     ...(data.isDefault !== undefined ? { isDefault: data.isDefault } : {}),
   };
 
@@ -437,6 +460,7 @@ export function serializeStyleGuideDefinition(guide: StyleGuideRecord): Record<s
     name: guide.name,
     description: guide.description,
     instructions: guide.instructions,
+    ...(guide.captionStyle && Object.keys(guide.captionStyle).length ? { captionStyle: guide.captionStyle } : {}),
     transitions: guide.transitions.map(t => ({
       id: t.id,
       name: t.name,

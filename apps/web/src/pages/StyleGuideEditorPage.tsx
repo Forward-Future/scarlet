@@ -524,9 +524,9 @@ export function StyleGuideEditorPage() {
           <div className="simple-chat" ref={threadRef}>
             {edits.length === 0 && (
               <div className="style-guide-chat-empty">
-                <p>Describe your look, transitions, sound effects, or camera color — or drop a style settings file (.json, .md, .yaml, .pdf), logo, font, audio clip, or .cube file anywhere.</p>
+                <p>Describe your look for captions, lower thirds, boxes, graphics, transitions, sound effects, or camera color — or drop a style settings file (.json, .md, .yaml, .pdf), logo, font, audio clip, or .cube file anywhere.</p>
                 <p className="text-dim mt-2 text-[12px]">
-                  Scarlet updates the live preview tabs beside you and applies this style across projects.
+                  Scarlet updates the live preview tabs beside you and applies this style automatically across projects.
                 </p>
               </div>
             )}
@@ -678,8 +678,8 @@ export function StyleGuideEditorPage() {
                     plain
                     id={askId}
                     disabled={boxOff}
-                    ariaLabel={question ? "Answer Scarlet" : "Describe graphics, transitions, sounds, or color look, or drop files"}
-                    placeholder={question ? "Answer Scarlet…" : "Ask for graphics, transitions, SFX, or color — or drop files…"}
+                    ariaLabel={question ? "Answer Scarlet" : "Describe captions, graphics, transitions, sounds, or color look, or drop files"}
+                    placeholder={question ? "Answer Scarlet…" : "Ask for captions, graphics, transitions, SFX, or color — or drop files…"}
                     onChange={text => { setAsk(text); setAskErr(null); }}
                     onSubmit={() => void send()}
                   />

@@ -173,11 +173,11 @@ export async function extractFilmstrip(file: string, frames: number[], fps: numb
 
 /** Sample the edited picture, using the same composition as playback. */
 export async function renderTimelineFrame(project: Project, timeline: Timeline, range: TimeRange, mediaRoot: string, signal?: AbortSignal, maxDimension = 160,
-  inputs?: Pick<GraphOptions, "pictureSource" | "decoder" | "lutRoots"> & Pick<FrameOptions, "onFallback">) {
+  inputs?: Pick<GraphOptions, "pictureSource" | "decoder" | "fontDirs" | "lutRoots"> & Pick<FrameOptions, "onFallback">) {
   const { width, height } = project.settings;
   const scale = Math.min(1, maxDimension / Math.max(width, height));
   const graph = await buildFilterGraph(project, timeline, range, {
-    pictureSource: inputs?.pictureSource, decoder: inputs?.decoder, lutRoots: inputs?.lutRoots, mediaRoot, signal, width: width * scale, height: height * scale, singleFrame: true, indexedInputs: true,
+    pictureSource: inputs?.pictureSource, decoder: inputs?.decoder, fontDirs: inputs?.fontDirs, lutRoots: inputs?.lutRoots, mediaRoot, signal, width: width * scale, height: height * scale, singleFrame: true, indexedInputs: true,
   });
   try {
     return await withStreamInfoFallback(graph.args, signal, async inputArgs => {

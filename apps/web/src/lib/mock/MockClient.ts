@@ -856,6 +856,7 @@ export class MockClient implements ScarletApi {
     if (body.isDefault) for (const g of this.store.db.styleGuides) g.isDefault = false;
     const styleGuide: import("@scarlet/shared").StyleGuideRecord = {
       id: newId("sg"), name: body.name, description: body.description?.trim() ?? "", instructions: body.instructions ?? "",
+      ...(body.captionStyle && Object.keys(body.captionStyle).length && { captionStyle: body.captionStyle }),
       isDefault: Boolean(body.isDefault), assets: [], transitions: body.transitions ?? [], sounds: body.sounds ?? [],
       ...(body.colorLook && { colorLook: body.colorLook }), createdAt: ts, updatedAt: ts,
     };
@@ -929,6 +930,11 @@ export class MockClient implements ScarletApi {
       ...(body.colorLook !== undefined && { colorLook: body.colorLook ?? undefined }),
       updatedAt: new Date().toISOString(),
     });
+    if (body.captionStyle === null) delete guide.captionStyle;
+    else if (body.captionStyle !== undefined) {
+      if (Object.keys(body.captionStyle).length) guide.captionStyle = body.captionStyle;
+      else delete guide.captionStyle;
+    }
     this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
     return this.latency({ styleGuide: { ...guide } }, 120);
   }

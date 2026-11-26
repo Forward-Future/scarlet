@@ -172,6 +172,7 @@ export function renderRoutes(ctx: Ctx) {
       }
       const root = ctx.paths.media(project.id);
       const lutRoots = [ctx.paths.styleGuidesLibrary];
+      const fontDirs = [ctx.paths.styleGuidesLibrary, ctx.paths.attachments(project.id)];
       const pictures = previewPictures(root, { signal });
       let usedProxy = false;
       const accel = ctx.settings().render.hwaccel;
@@ -180,6 +181,7 @@ export function renderRoutes(ctx: Ctx) {
         return await renderTimelineFrame(project, timeline, range, root, signal, size, {
           decoder,
           lutRoots,
+          fontDirs,
           pictureSource: async (asset, ...args) => {
             const picture = await pictures(asset, ...args);
             if (picture) usedProxy = true;
@@ -189,7 +191,7 @@ export function renderRoutes(ctx: Ctx) {
       } catch (error) {
         if ((!usedProxy && !decoder) || signal.aborted) throw error;
         retried(`frame/${project.id}`, `[render] frame_fallback project=${logId(project.id)} version=${version} reason=decode_retry frame=${frame}`);
-        return renderTimelineFrame(project, timeline, range, root, signal, size, { lutRoots });
+        return renderTimelineFrame(project, timeline, range, root, signal, size, { lutRoots, fontDirs });
       }
     }, sameFormat ? `"${key}"` : undefined);
   });
