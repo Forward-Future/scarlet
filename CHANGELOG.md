@@ -6,6 +6,11 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Hovering an added sound in the edits list now reads "Added Warm bed (−6 dB)" instead of "Added Warm bed, quieter (−6 dB)".
+- Dragging the edge of a voice edit on its own audio track now gives the time to or takes it from the sound beside it, instead of refusing or leaving a silent gap.
+- A style guide saved from a graphic now lists fonts whose names are in quotes, such as "Brand Serif", instead of an empty line.
+- Built-in style guide sounds now play correctly when only their ending is asked for.
+- Accented names in Settings › Models › Task models keep their letters together, so "Étalonnage" no longer becomes "e-talonnage".
 - Pressing A quickly on several to-dos now adds every one: the card moves to the next to-do at the press, and one that couldn't be sent comes back with the reason.
 - In the beta layout, the Working and Done headings in the edits column now stay pinned in view while their lists scroll.
 - Style guides now also keep transitions, sound effects and a camera color look, each on its own tab beside Graphics: replay a transition between two sample shots, play sound effects or add them from a built-in starter library with a mix level and a note on when to use them, and describe a color look in chat or drop a .cube or .3dl look file. Scarlet follows them when it edits.

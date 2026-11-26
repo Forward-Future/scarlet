@@ -15,6 +15,7 @@
     "start": "pnpm desktop:dev",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:coverage": "pnpm -r --no-bail exec vitest run --passWithNoTests --coverage --coverage.provider=v8 --coverage.reportOnFailure --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.include=src/** --coverage.exclude=**/*.test.* --coverage.exclude=**/mock/**",
     "mcp": "node packages/mcp/dist/cli.js",
     "agent": "node apps/agent/dist/cli.js",
     "release:version": "node apps/desktop/scripts/release-version.mjs",
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "4.1.12",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^4.1.12"

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findChrome, hasChrome } from "@scarlet/render";
 import { createProject, type MediaAsset, type Project } from "@scarlet/timeline";
 import { ATTEMPT_HEADER, TASK_HEADER, type StyleGuideAsset, type StyleGuideRecord, type Task, type TaskPrompt } from "@scarlet/shared";
@@ -96,8 +96,7 @@ describe("style guides CRUD & default semantics", () => {
     const delRes = await api("DELETE", `/style-guides/${first.id}`);
     expect(delRes.status).toBe(200);
     expect((await api("GET", `/style-guides/${first.id}`)).status).toBe(404);
-    await new Promise(r => setTimeout(r, 30));
-    expect(existsSync(workspace.ctx.paths.styleGuideDir(first.id))).toBe(false);
+    await vi.waitFor(() => expect(existsSync(workspace.ctx.paths.styleGuideDir(first.id))).toBe(false), { timeout: 2000, interval: 10 });
   });
 });
 
