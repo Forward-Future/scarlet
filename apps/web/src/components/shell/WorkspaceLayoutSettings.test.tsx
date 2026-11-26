@@ -138,6 +138,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     const { readFileSync } = await import("node:fs");
     const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
     expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-sec-body\s*\+\s*\.review-sec\s*\{[^}]*border-top:\s*1px solid var\(--color-line\)/);
+    // Keep the amber timestamp pill unclipped inside the composer's overflow-hidden aim line.
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.composer-aim-row\s+\.simple-pass-time\.is-need\s*\{[^}]*margin:\s*0\b/);
     expect(container.querySelector("#simple-chat .simple-need-link")).toBeNull();
     expect(container.querySelector(".review-rail-list .edit-badge")).toBeNull();
     expect(container.querySelector(".review-rail-list .edit-row-time")?.textContent).toMatch(/^\d+:\d\d$/);

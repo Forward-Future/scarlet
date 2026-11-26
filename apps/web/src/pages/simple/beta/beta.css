@@ -7,6 +7,9 @@
 [data-new-layout] .composer-aim-row { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
 [data-new-layout] .composer-aim-row:empty { display: none; }
 [data-new-layout] .composer-aim-rowcopy { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+/* Keep the amber timestamp pill unclipped inside .composer-aim-name's overflow: hidden box (list rows use negative margins to align digits). */
+[data-new-layout] .composer-aim-row .simple-pass-time { flex: none; white-space: nowrap; }
+[data-new-layout] .composer-aim-row .simple-pass-time.is-need { margin: 0; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row:not(:empty)) .composer-aim-plain { display: none; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row:empty) .composer-aim-row-time { display: none; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row .edit-row-time),
