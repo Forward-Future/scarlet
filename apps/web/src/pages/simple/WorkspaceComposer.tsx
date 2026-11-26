@@ -4,10 +4,15 @@ import { clock as clockLabel } from "../../lib/format";
 import { usePlayerStore } from "../../stores/player";
 import { pointOf, useUiStore } from "../../stores/ui";
 
-/** Track a new edit's point in the message box without rebuilding the rest of the conversation on each pick. */
-export function WorkspaceComposer({ newEdit, playerVersion, mediaId, ...props }: ComponentProps<typeof Composer> & {
-  newEdit: boolean; playerVersion?: string; mediaId?: string;
-}) {
+/** Where the message box is: aimed at a new edit or not, and the cut and footage the player shows. */
+export type NewEditPlace = { newEdit: boolean; playerVersion?: string; mediaId?: string };
+
+/**
+ * The message box's tag for the moment a new edit is aimed at, and whether it is that moment's (`targetTag`, when given,
+ * is the box's own and wins). It lets go of the moment once the editor plays or moves on. `tagTyped` says whether a time
+ * typed in the message is tagged too.
+ */
+export function usePointTarget({ newEdit, playerVersion, mediaId }: NewEditPlace, targetTag: string | undefined, tagTyped = true) {
   const point = useUiStore(s => newEdit ? pointOf(s.agentContext) : undefined);
   const written = useUiStore(s => !!point && !!s.agentDraft.trim());
   const speaking = useUiStore(s => !!point && s.speaking);
@@ -30,6 +35,14 @@ export function WorkspaceComposer({ newEdit, playerVersion, mediaId, ...props }:
     });
   }, [point, written, speaking, playerVersion, mediaId]);
   // A time typed in the message aims it as a picked moment does, so it has the same tag: it can be seen, and taken off.
-  const pointTag = point ? `At ${clockLabel(point.time)}` : undefined;
-  return <Composer {...props} targetTag={props.targetTag ?? pointTag} targetIsPoint={!props.targetTag && !!pointTag} />;
+  // Without `tagTyped` (the new layout) a time in the words themselves, typed or picked on the timeline, is read there:
+  // the line over the box says nothing more. A moment the message was aimed at any other way keeps its tag.
+  const pointTag = point && (tagTyped || !point.fromMessage) ? `At ${clockLabel(point.time)}` : undefined;
+  return { targetTag: targetTag ?? pointTag, targetIsPoint: !targetTag && !!pointTag };
+}
+
+/** Track a new edit's point in the message box without rebuilding the rest of the conversation on each pick. */
+export function WorkspaceComposer({ newEdit, playerVersion, mediaId, ...props }: ComponentProps<typeof Composer> & NewEditPlace) {
+  const target = usePointTarget({ newEdit, playerVersion, mediaId }, props.targetTag);
+  return <Composer {...props} {...target} />;
 }
