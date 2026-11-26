@@ -157,6 +157,7 @@ ${OPS_DOC}`,
       ops: z.array(z.record(z.unknown())).optional().describe("Operations to apply to the current head (see op types)"),
       timeline: z.record(z.unknown()).optional().describe("Full replacement Timeline JSON (use for initial assemblies); omit when using ops"),
       description: z.string().min(1).describe("One short sentence for the chat about what the editor will see or hear"),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("When this save makes several similar edits of the same kind (such as multiple cuts, graphics, zooms, or audio fixes), give a short plain-English group title summarizing them together for the edits list (e.g. '3 model title cards', '4 zooms on key moments', '2 cuts: false start & tangent'). Omit for a single edit or unrelated edits."),
       reason: editReasonInput.describe("Why you proposed the whole change. Give this for an unnamed edit or when several edits share one suggestion card."),
       noteIds: z.array(z.string()).optional().describe("Review note ids this change responds to"),
       fromVersion: z.string().optional().describe("Version the ops apply to. Defaults to the version you last read with timeline_get or timeline_at; leave it out unless you mean another version."),
@@ -173,7 +174,7 @@ ${OPS_DOC}`,
       withdraws: z.array(z.string()).max(20).optional().describe("Change IDs of this request's own suggestions or alternatives, still waiting for the editor, that this one replaces, such as a draft or a test. They leave the editor's review when this one is saved."),
       layeredSound: z.boolean().optional().describe("The editor asked to hear the same moment of a recording on two clips at once. Leave it out otherwise"),
     },
-    async ({ ops, timeline, description, reason, noteIds, fromVersion, intent, autoApprove, timelineEdits, skipRender, range, pictureLayout, withdraws, layeredSound }) => {
+    async ({ ops, timeline, description, batchTitle, reason, noteIds, fromVersion, intent, autoApprove, timelineEdits, skipRender, range, pictureLayout, withdraws, layeredSound }) => {
       // Every clip edge the edit makes is measured on its recording, however the edit makes it: a ripple, a clip added
       // or trimmed, a whole new timeline. One pass built its video from added clips, which nothing measured, and began
       // a clip inside the end of an “uh”; the revision the editor then asked for trimmed that join by one frame, into
@@ -200,7 +201,7 @@ ${OPS_DOC}`,
       const before = fromVersion ? await peekTimeline(fromVersion) : await headTimelineOrNull();
       if (range && (typeof pictureLayout === "object" || !before || !ops || ops.some(o => o.op !== "rippleDelete" || o.trackIds)))
         throw new Error("A bounded ripple edit takes only rippleDelete ops across all tracks on the existing timeline.");
-      const body: ProposeChangeRequest = { description, reason, noteIds, intent, autoApprove: !taskId && autoApprove === true ? true : undefined, timelineEdits, skipRender,
+      const body: ProposeChangeRequest = { description, ...(batchTitle && { batchTitle }), reason, noteIds, intent, autoApprove: !taskId && autoApprove === true ? true : undefined, timelineEdits, skipRender,
         ...(withdraws?.length && { withdraws }) };
       const frameChanges: FrameAdjustment[] = [];
       let splitJoins: SplitJoinPlaced[] = [];
@@ -337,14 +338,15 @@ ${OPS_DOC}`,
       joins: z.array(z.object({ leftClipId: z.string(), rightClipId: z.string() })).min(1),
       duration: z.number().finite().positive().optional().describe("Total overlap in seconds"),
       description: z.string().min(1).default("Smooth the selected dialogue joins"),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("Short plain-English group title for the edits list when smoothing multiple joins (e.g. '6 smoothed dialogue joins')"),
       reason: editReasonInput,
       noteIds: z.array(z.string()).optional(),
     },
-    async ({ intent, joins, duration, description, reason, noteIds }) => {
+    async ({ intent, joins, duration, description, batchTitle, reason, noteIds }) => {
       const { project } = await getProject();
       const before = await baseTimeline();
       const ops = audioCrossfadeOps(before, project.media, joins, duration ?? 2 / project.settings.fps);
-      return propose({ intent, ops, description, reason, noteIds }, before);
+      return propose({ intent, ops, description, ...(batchTitle && { batchTitle }), reason, noteIds }, before);
     },
   );
 
@@ -360,10 +362,11 @@ ${OPS_DOC}`,
       color: z.string().optional().describe("dip: the colour it passes through, default black"),
       none: z.boolean().optional().describe("Take the transition off: the join is a straight cut again"),
       description: z.string().min(1).default("Transition between clips"),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("Short plain-English group title for the edits list when adding transitions to multiple joins (e.g. '4 cross dissolves between sections')"),
       reason: editReasonInput,
       noteIds: z.array(z.string()).optional(),
     },
-    async ({ intent, joins, type, duration, direction, color, none, description, reason, noteIds }) => {
+    async ({ intent, joins, type, duration, direction, color, none, description, batchTitle, reason, noteIds }) => {
       const { project } = await getProject();
       const before = await baseTimeline();
       let style: Transition | null = null;
@@ -372,7 +375,7 @@ ${OPS_DOC}`,
         style = Transition.parse({ type, duration: duration ?? 0.5, ...(direction && { direction }), ...(color && { color }) });
       }
       const { ops, report } = transitionOps(before, project.media, project.settings.fps, joins, style);
-      const result = await propose({ intent, ops, description, reason, noteIds }, before);
+      const result = await propose({ intent, ops, description, ...(batchTitle && { batchTitle }), reason, noteIds }, before);
       return { ...result, content: [...result.content, { type: "text" as const, text: `Joins:\n${report.join("\n")}` }] };
     },
   );

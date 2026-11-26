@@ -85,6 +85,8 @@ export interface PromptContext {
   areaCheck?: { mediaId: string; at: number };
   /** What a listen_check task hears for a request whose model can't. Such a task edits no video, so its prompt is about one passage. */
   listenCheck?: { mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string };
+  /** A grouped batch of edits to summarize into one short title for the edits rail. */
+  batchSummary?: { key: string; prompt: string };
   /** The editor's setting for how many of a pass's cuts they are asked to check. Omitted = balanced. */
   checkIn?: CheckIn;
   /** The editor's own words, from Settings, on how Scarlet writes to them. Omitted or empty = nothing added. */
@@ -236,7 +238,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 
 - \`timeline_propose\` accepts typed operations or a replacement timeline. Specialized tools can assemble chosen source ranges, submit cut/keep/review decisions, crossfade specified joins, and build editable captions. Preserve the editor’s selected scope, protected material, and intended sync.
 - Save as you go. The editor reviews saved parts while you keep working, and a run stops at its time limit with only saved edits kept.
-- Use requested intent for authorized edits, suggestion for optional or preview-only changes, and alternative for competing options. Check the returned state when reporting what applied. When Scarlet adjusts a submitted edit, such as moving an edge onto measured silence, the result lists each adjustment with its evidence. Name each individual changed spot in \`timelineEdits\` with its exact range and a spot-specific label (each punch-in, zoom, or crop gets its own entry — never one umbrella range across untouched footage), and keep unrelated multi-spot passes in separate saves. A revision can link to its prior change and spot with \`replaces\` and to feedback with \`noteIds\`.
+- Use requested intent for authorized edits, suggestion for optional or preview-only changes, and alternative for competing options. Check the returned state when reporting what applied. When Scarlet adjusts a submitted edit, such as moving an edge onto measured silence, the result lists each adjustment with its evidence. Name each individual changed spot in \`timelineEdits\` with its exact range and a spot-specific label (each punch-in, zoom, or crop gets its own entry — never one umbrella range across untouched footage), and keep unrelated multi-spot passes in separate saves. When a save makes several related edits of the same kind (cuts, graphics, zooms, reframes, B-roll, audio fixes, transitions, etc.), pass \`batchTitle\` with a short plain-English title summarizing the group together (e.g. "3 model title cards", "4 zooms on demo screens", "2 cuts: false start & tangent"). A revision can link to its prior change and spot with \`replaces\` and to feedback with \`noteIds\`.
 - \`task_log\` can show the current activity, a finding, or both. Attach a saved change ID and spot to the exact phrase the editor can select to see the change. \`task_question\` hands a decision to the editor and pauses the task; the answer comes back as your next message.
 - Scarlet renders project media. \`render_request\` supports a short range or an explicitly requested full delivery.
 - A motion graphic is an HTML/CSS page Scarlet draws into a video with alpha (\`graphic_render\`). It goes over the picture on a track of its own with \`timeline_propose\`, as an edit like any other. A project has one style guide, saved with \`style_guide_save\` when the editor gives you one.
@@ -320,6 +322,16 @@ function buildAreaCheckPrompt(check: { mediaId: string; at: number }, prefix: st
     `Save it with \`${prefix}screen_area\`: one area in \`set\`, at ${check.at}, for \`${check.mediaId}\`, as [left, top, right, bottom] in percent of the picture to one decimal place, with \`pictures\` 0. Then stop: no other frames, no edits, no reply beyond a few words naming the window.`,
   ].join("\n\n");
 }
+
+/** Shared system prompt for AI-authored short titles summarizing any grouped batch of edits (used by direct HTTP calls and CLI side-checks). */
+export const BATCH_SUMMARY_SYSTEM = `You write one short, plain-English title for a grouped batch of video edits (cuts, graphics, zooms, reframes, captions, audio/music dips, B-roll, transitions, or other edits) shown on a single line in Scarlet's edits list.
+
+Rules:
+- Write ONE short phrase (about 3 to 7 words, max 52 characters) that captures what all the edits in the batch do together.
+- Include the edit count when helpful (examples: "110 dialogue cuts: pauses & retakes", "3 model title cards", "4 zooms on key demo screens", "5 B-roll cutaways on workflow", "3 music dips under speech", "2 cuts: false start & tangent").
+- Always say "cut" or "cuts" for cuts (never "removed", "trimmed", or "took out").
+- Never quote a single speech fragment or copy only the first edit's name as the title for a whole batch.
+- Reply with the title only: no quotes around it, no trailing period, no preamble, no tools.`;
 
 function buildListenCheckPrompt(check: { mediaId: string; from: number; to: number; voice?: "me" | "other voices"; question: string }, caps: AgentCapabilities): string {
   const prefix = caps.toolPrefix ?? "";
@@ -424,6 +436,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   if (ctx.learningCheck) return buildLearningCheckPrompt(ctx.learningCheck);
   if (ctx.areaCheck) return buildAreaCheckPrompt(ctx.areaCheck, ctx.capabilities?.toolPrefix ?? "");
   if (ctx.listenCheck) return buildListenCheckPrompt(ctx.listenCheck, ctx.capabilities ?? agentCapabilities(ctx.task?.agent, undefined, ctx.task?.model));
+  if (ctx.batchSummary) return BATCH_SUMMARY_SYSTEM;
   const parts: string[] = [SCARLET_INTRO];
   // Only a caller that says the run has the tool is asked: a harness's default says what it can do, not how this run was launched.
   if (ctx.capabilities?.plan) parts.push(PLAN_STEPS);

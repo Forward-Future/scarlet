@@ -40,6 +40,8 @@ export interface ProjectData {
   notes: Note[];
   /** Rules Scarlet picked up from requests here, each until the editor has approved or declined it and it is saved. */
   learnings?: Learning[];
+  /** AI-generated short titles for collapsed edit batches in the beta edits column, keyed by batch hash. */
+  batchSummaries?: Record<string, string>;
   renders: Render[];
   fullRenderKeys?: FullRenderKeys;
   renderSettingsRevision?: number;
@@ -87,6 +89,7 @@ interface ProjectState {
   refreshHead(projectId?: string): Promise<void>;
   loadVersions(): Promise<void>;
   applyEvent(ev: WsEvent): void;
+  mergeBatchSummaries(projectId: string, summaries: Record<string, string>): void;
 
   setThreadDone(threadId: string, done: boolean, revision: string): Promise<void>;
   updateProject(body: { mediaPaused?: boolean; name?: string; archived?: boolean; settings?: Partial<Project["settings"]>; expectedFormat?: Pick<Project, "head" | "settings"> }, projectId?: string): Promise<void>;
@@ -556,6 +559,11 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
         case "learning.updated":
           patch(cur.id, (d) => ({ learnings: upsert(d.learnings ?? [], ev.learning) }));
           break;
+        case "batch_summary.updated":
+          patch(cur.id, (d) => (d.batchSummaries?.[ev.key] === ev.title
+            ? {}
+            : { batchSummaries: { ...d.batchSummaries, [ev.key]: ev.title } }));
+          break;
         case "render.updated":
           // The stream loads its own fragments. Their encoder progress has no project UI.
           if (ev.render.kind === "playback") break;
@@ -586,6 +594,16 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
         default:
           break;
       }
+    },
+
+    mergeBatchSummaries(projectId, summaries) {
+      const entries = Object.entries(summaries);
+      if (!entries.length) return;
+      patch(projectId, (d) => {
+        const prev = d.batchSummaries;
+        if (prev && entries.every(([k, v]) => prev[k] === v)) return {};
+        return { batchSummaries: { ...prev, ...summaries } };
+      });
     },
 
     async setThreadDone(threadId, done, revision) {

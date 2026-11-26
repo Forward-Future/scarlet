@@ -1,12 +1,14 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { ThreadEdit } from "@scarlet/shared";
+import type { BatchSummaryItem, ThreadEdit } from "@scarlet/shared";
 import { AimRow } from "../../components/review/AimRow";
 import { EditVersion, RejectedMark } from "../../components/review/ThreadEdits";
 import { ChatRail } from "../../components/shell/ChatRail";
 import { Icon } from "../../components/ui/primitives";
+import { api } from "../../lib/client";
 import { clock as clockLabel } from "../../lib/format";
 import { editKey, unkeepEdits } from "../../lib/keptEdits";
 import { recordUndo } from "../../lib/undo";
+import { useProjectStore } from "../../stores/project";
 import type { RailSection, RailStore, UnifiedRailRow } from "./railStore";
 import { letGo, type HoveredReviewRow } from "./types";
 
@@ -84,17 +86,55 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
   reserve?: number;
 }) {
   useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
+  const batchSummaries = useProjectStore(s => s.current?.id === projectId ? s.current.batchSummaries : undefined);
+  useEffect(() => {
+    store.setBatchSummaries(batchSummaries);
+  }, [store, batchSummaries]);
   const host = useRef<HTMLElement>(null);
   const tipEl = useRef<HTMLDivElement>(null);
   const tipId = useId();
   const [tip, setTip] = useState<RowTooltip | null>(null);
   const [tipLeft, setTipLeft] = useState<number | null>(null);
+  const requestedSummaries = useRef<{ projectId: string; keys: Set<string> }>({ projectId, keys: new Set() });
+  if (requestedSummaries.current.projectId !== projectId) {
+    requestedSummaries.current = { projectId, keys: new Set() };
+  }
   const view = store.view();
   const { need, forYouRows, optional, working, done, pastHour, sections } = view;
   const total = need + optional;
   const nothing = need + forYouRows + optional + working + done === 0;
   const effectiveFilter: "all" | "need" = need > 0 && optional > 0 ? filter : "all";
   const showConfident = optional > 0 && effectiveFilter === "all";
+
+  // Ask the engine for AI-generated titles for any settled collapsed batches that don't have one cached yet.
+  const unsummarized: BatchSummaryItem[] = [];
+  const seenKeys = new Set<string>();
+  for (const row of [...sections.low, ...sections.done]) {
+    const input = row.batchSummaryInput;
+    if (!input || seenKeys.has(input.key) || batchSummaries?.[input.key] || requestedSummaries.current.keys.has(input.key)) continue;
+    seenKeys.add(input.key);
+    unsummarized.push(input);
+  }
+  const unsummarizedKey = unsummarized.map(b => b.key).join("|");
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
+    if (!unsummarized.length || typeof api.summarizeBatches !== "function") return;
+    const batch = unsummarized.slice(0, 20);
+    const timer = window.setTimeout(() => {
+      for (const item of batch) requestedSummaries.current.keys.add(item.key);
+      void api.summarizeBatches(projectId, { batches: batch }).then(res => {
+        if (!mounted.current || !res?.summaries) return;
+        useProjectStore.getState().mergeBatchSummaries(projectId, res.summaries);
+      }).catch(() => {});
+    }, 120);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [projectId, unsummarizedKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // The row of the cut or edit that's open stays in view as Keep, ↑ ↓, or filtering reveals it.
   useEffect(() => {
     if (selected) host.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" });
@@ -251,7 +291,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
         const unkeepTip = row.unkeepTip ?? "Move back to For you";
         const statusWord = row.word;
         const ariaLabel = row.ariaLabel ?? (batchCount > 1
-          ? `${rowTime}: ${row.label}, plus ${batchCount - 1} more${row.decided ? ", kept" : ""}`
+          ? `${rowTime}: ${row.label}${row.decided ? ", kept" : ""}`
           : moment
           ? `${rowTime} ${row.label}, ${moment.more.replace("+ ", "and ")}`
           : row.rejected ? `${rowTime} ${row.label}, rejected`
@@ -263,6 +303,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
             aria-current={row.on || undefined}
             data-log-control={row.logControl}
             data-log-label={batchCount > 1 ? "Edit group" : row.logLabel}
+            data-batch-count={batchCount > 1 ? batchCount : undefined}
             disabled={!row.open}
             data-row-tip={tipText}
             data-row-meta={tipMeta}
@@ -276,7 +317,6 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
               {(row.rejected || row.skipped) && <RejectedMark />}
               {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
               <span className="simple-pass-words simple-edit-words">{row.label}</span>
-              {batchCount > 1 && <span className="edit-batch-plus" aria-hidden="true">+{batchCount - 1}</span>}
               {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
               {row.fresh && <small className="edit-version is-new">New</small>}
               {moment && <span className="simple-pass-more" aria-expanded={moment.unfolded} title={moment.unfolded ? "Hide its edits" : "Show its edits"}
@@ -288,7 +328,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
           {canUnkeepRow && <span className="simple-row-unkeep"
             onPointerEnter={() => onHover?.(row.mark, row.hover)} onPointerLeave={() => onHover?.()}>
             <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
-              aria-label={batchCount > 1 ? `Unkeep all ${batchCount} edits` : `Unkeep ${row.label}`} title={unkeepTip}
+              aria-label={`Unkeep ${row.label}`} title={unkeepTip}
               onClick={letGo(() => { const fresh = store.view().findByKey(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
           </span>}
           <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span></AimRow>

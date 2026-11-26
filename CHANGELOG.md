@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- In the beta layout, grouped edits are now summarized by AI into a short plain-English title (such as "110 dialogue cuts: pauses & retakes" or "3 model title cards") instead of showing only the first edit's name with a "+N" badge.
 - In the beta layout, hovering an edit in the edits column now shows a plain summary underneath its title, such as how much a cut removes or the caption words, file, zoom, audio change, speed, or transition for other edits.
 - In the beta layout, the edits column now stays visible right away when you open a project with no edits yet, instead of hiding until Scarlet makes an edit.
 - Standardized wording across Scarlet so cuts always say "Cut" (instead of "Took out", "Takes out", "Removed", or "Trimmed") on timeline bands, edit cards, chat summaries, and drag readouts, and aligned remaining labels like "Safe edits", "Model selector", "Model host", "Suggestion", and "the video".

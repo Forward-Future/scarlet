@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { buildSystemPrompt, type EarlierRequest } from "@scarlet/mcp/prompt";
-import { agentCapabilities, cutText, wellFormed, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, isStyleGuideEdit, PROJECT_EDIT_TASK_KINDS, requestText, taskRunKind, workspaceCapabilities, type Skill, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
+import { agentCapabilities, cutText, wellFormed, isAsideTask, isBatchSummary, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, isStyleGuideEdit, PROJECT_EDIT_TASK_KINDS, requestText, taskRunKind, workspaceCapabilities, type Skill, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { notFound } from "../errors.js";
@@ -150,6 +150,7 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     learningCheck: isLearningCheck(task) ? learningCheckContext(ctx, task) : undefined,
     areaCheck: task.kind === "area_check" ? task.context.areaCheck : undefined,
     listenCheck: isListenCheck(task) ? task.context.listenCheck : undefined,
+    batchSummary: isBatchSummary(task) ? task.context.batchSummary : undefined,
     checkIn: ctx.settings().checkIn,
     // A run that edits no video writes nothing the editor reads as Scarlet talking to them.
     talkingToYou: aside ? undefined : ctx.settings().talkingToYou,

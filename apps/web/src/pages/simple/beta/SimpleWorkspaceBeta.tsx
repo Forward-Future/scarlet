@@ -1626,7 +1626,7 @@ export function SimpleWorkspaceBeta() {
         refs: primaryFresh,
         ...(extraParts.length > 0 && { extraParts }),
         ...undone,
-        ...(unified?.batch && unified.batch.length > 1 && { name: `${unified.batch.length} edits` }),
+        ...(unified?.batch && unified.batch.length > 1 && { name: unified.label }),
       });
     }
     moveOnFromShown();
