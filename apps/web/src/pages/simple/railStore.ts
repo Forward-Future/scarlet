@@ -85,7 +85,7 @@ export interface RailRow {
   decided: boolean;
   rejected: boolean;
   skipped: boolean;
-  /** Whether this row counts toward the amber For you badge. */
+  /** Whether this row counts toward the amber Needs review badge. */
   countsAsNeed: boolean;
   /** Whether a nested request under this row waits on the editor (stopped early or asking). */
   hasNeedNest: boolean;

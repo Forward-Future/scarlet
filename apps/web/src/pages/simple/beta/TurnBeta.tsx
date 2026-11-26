@@ -182,7 +182,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
   // Whether one of the request's edits was open when its line last drew, and which.
   const wasShowing = useRef(false);
   const lastOpen = useRef<string>(undefined);
-  // The rows the editor has just decided or sent back, which stay in For you a moment before they leave.
+  // The rows the editor has just decided or sent back, which stay in Needs review a moment before they leave.
   const [linger] = useState(() => new ReviewLinger());
   useEffect(() => () => linger.dispose(), [linger]);
   // Edits saved along the way belong to their run. Only the run's last edit is a result to Play, Revise or Undo.
@@ -454,7 +454,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     const tag = request?.revisionLabel ? tagOf(tagFor(request) ?? request.revisionLabel) : undefined;
     const about = aboutOne(run) ? actions.cutName?.(aimOf(run).context) ?? tag : undefined;
     // Where the request stands, at the right of its heading: a dot while Scarlet asks, a word once it stopped early or
-    // left a suggestion, and Paused while editing waits for Resume. The review count appears on For you.
+    // left a suggestion, and Paused while editing waits for Resume. The review count appears on Needs review.
     const ended = runEnded(task);
     const editsProject = isProjectEditTask(task);
     const paused = editingPaused && editsProject && task.state === "queued";
@@ -474,8 +474,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     const stop = stoppable(run) ? () => attempt(run.root, cancelTask(task.id)) : undefined;
     // Scarlet has a request under one of this block's rows: the band reads as the one it works on, on two lines.
     const worksUnder = !inside && !!request && run === owner && runs.some(r => nested.has(r.root) && isProjectEditTask(r.task) && stoppable(r));
-    // Project-wide Pause lives beside "Scarlet is editing" under the timeline. Stop stays on the message since it only
-    // stops this request.
+    // Stop stays on the message since it only stops this request.
     const stops = editsProject && !!stop;
     const editActions = stops ?
       <div className="unit-actions">

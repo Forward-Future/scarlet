@@ -11,7 +11,6 @@ import { runningTranscription, transcriptionProgressLabel, transcriptsProgress }
 import { isWorkingTask, PAUSED_HINT, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
 import { toolName, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
-import { usePublishWorkingLine } from "../../lib/workingLines";
 import { Linked } from "../ui/Linked";
 import { Icon } from "../ui/primitives";
 import { RequestMetrics, Tokens } from "./RequestMetrics";
@@ -162,8 +161,6 @@ function WorkingRun({ task, events: all, opening, changes, callTime, say, result
   const words = transcripts ? `Transcribing the recordings · ${transcripts}`
     : pickingUp ? PICKING_UP
     : doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? STARTING : WORKING);
-  // The timeline's status says the same words, so the editor can tell what Scarlet is on without the chat in view.
-  usePublishWorkingLine(task.id, words);
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
     {aim && !under && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
     <div className="req-row req-now">

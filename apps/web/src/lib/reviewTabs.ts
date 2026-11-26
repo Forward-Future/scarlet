@@ -1,14 +1,14 @@
 /**
- * A request with something for the editor to review lists its edits and calls under three tabs: For you, Working and
+ * A request with something for the editor to review lists its edits and calls under three tabs: Needs review, Working and
  * Done (the editor chose this on 2026-11-23). Every row is in exactly one place: waiting on the editor, optional (a low
- * risk edit: one Scarlet didn't flag that the editor hasn't decided, in For you's list once included), with Scarlet,
+ * risk edit: one Scarlet didn't flag that the editor hasn't decided, in Needs review's list once included), with Scarlet,
  * or decided.
  * The chat draws its lists from this and ↑ ↓ and Keep step by it, so the two can't disagree about a tab's rows.
  */
 export type RowPlace = "you" | "optional" | "working" | "done";
 export type ReviewTab = "you" | "working" | "done";
 
-/** The tab a request's open list shows. For you is the one shown until another is pressed, low risk edits included or not. */
+/** The tab a request's open list shows. Needs review is the one shown until another is pressed, low risk edits included or not. */
 export const tabShown = (open: string | undefined): ReviewTab => open === "working" || open === "done" ? open : "you";
 
 /**
@@ -30,7 +30,7 @@ export function inListOrder<R extends { at: number; num?: number }>(rows: readon
   return order.numbers && sorted.every(r => r.num !== undefined) ? sorted.sort((a, b) => a.num! - b.num!) : sorted;
 }
 
-/** The rows of the tab shown, top to bottom: For you's waiting rows, with the low risk ones among them while included. */
+/** The rows of the tab shown, top to bottom: Needs review's waiting rows, with the low risk ones among them while included. */
 export function rowsOfTab<R extends { place: RowPlace; at: number; num?: number }>(rows: readonly R[], tab: ReviewTab, optionalOpen: boolean, order: ListOrder): R[] {
   const shown = (place: RowPlace) => tab === "you" ? place === "you" || (optionalOpen && place === "optional") : place === tab;
   return inListOrder(rows.filter(r => shown(r.place)), order);
@@ -98,7 +98,7 @@ export type HeldFrom = "you" | "optional" | "done";
 type Held = { key: string; from: HeldFrom; leaving: boolean; busy: boolean; timers: ReturnType<typeof setTimeout>[] };
 
 /**
- * The rows the editor has just acted on. Kept, rejected or sent back, a row of For you belongs to Done or Working at
+ * The rows the editor has just acted on. Kept, rejected or sent back, a row of Needs review belongs to Done or Working at
  * once, and one sent back from Done belongs to Working at once; either stays where it was for a moment with its new
  * state before it fades and leaves, so the list doesn't jump under the pointer. Held by the turn, which outlives its
  * block moving between the conversation and the place above the message box.
@@ -109,12 +109,10 @@ export class ReviewLinger {
   private listeners = new Set<() => void>();
   private version = 0;
   /**
-   * Whether For you's low risk switch was on when For you was last the tab shown. Working and Done have no switch, so
-   * it is kept here for the way back: For you pressed leaves the switch as it was.
+   * Whether Needs review's low risk switch was on when Needs review was last the tab shown. Working and Done have no switch, so
+   * it is kept here for the way back: Needs review pressed leaves the switch as it was.
    */
   lowRisk = false;
-  /** Whether For you's "Needs you" filter pill was active when For you was last shown, kept across Working/Done switches. */
-  needsOnly = false;
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.version;
@@ -128,8 +126,8 @@ export class ReviewLinger {
   }
 
   /**
-   * Where each row is now. One that was listed in For you (`optionalShown`: its optional rows were too) and has gone
-   * to Working or Done is held. One that was in Done (`doneShown`: Done is shown, or it was still held in For you as
+   * Where each row is now. One that was listed in Needs review (`optionalShown`: its optional rows were too) and has gone
+   * to Working or Done is held. One that was in Done (`doneShown`: Done is shown, or it was still held in Needs review as
    * kept/done) and has gone to Working is held where it is so it shows Scarlet at work before fading out. `was` names
    * the rows it took the place of: a rejected edit is a new row for the old. `busy` says Scarlet is actively working
    * on it now. Called as the list draws, so a row that has just moved is still in the list in that same draw.
@@ -151,7 +149,7 @@ export class ReviewLinger {
       if (place === "you" || place === "optional" || current?.from === place) {
         this.drop(key);
       } else if (from === "done" && place === "working") {
-        // Moving from Done (or a just-kept row still lingering in For you) to Working: stay in place,
+        // Moving from Done (or a just-kept row still lingering in Needs review) to Working: stay in place,
         // start showing Scarlet at work, then fade out and leave.
         if (doneShown) {
           this.drop(key);

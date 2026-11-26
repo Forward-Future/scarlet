@@ -123,6 +123,48 @@ it("follows a drag across the stretch it began in", async () => {
   expect(picks).toEqual([1500]);
 });
 
+it("lands on the video's first or last moment when a drag goes past the end of a zoomed-in timeline, and shows it there (#681)", async () => {
+  // Zoomed to 1:40–1:50: before, the far left of the timeline was as far back as a drag could go.
+  await show({ start: 100, end: 110 });
+  await zoomed();
+  await pointer("pointerdown", 500);
+  await pointer("pointermove", -20);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(seeks).toEqual([105, 0]);
+  await pointer("pointerup", -20);
+  expect(picks).toEqual([0]);
+  // The view turned to the start at the same scale: the same press now reads 0:05, not 1:45.
+  await pointer("pointerdown", 500);
+  await pointer("pointerup", 500);
+  expect(picks).toEqual([0, 5]);
+  // And past the right end, the last moment, with the view at the end.
+  await pointer("pointerdown", 500);
+  await pointer("pointerup", 1040);
+  expect(picks).toEqual([0, 5, 3000]);
+  await pointer("pointerdown", 500);
+  await pointer("pointerup", 500);
+  expect(picks.at(-1)).toBe(2995);
+});
+
+it("carries frame-by-frame scrubbing on from the first frame once it is pulled past the start (#681)", async () => {
+  const fps = 25;
+  await act(async () => root.render(<TimelineScrubber start={0} duration={20} playhead={8} fps={fps} frameAt={() => undefined}
+    onScrubStart={() => released} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)} />));
+  await pointer("pointerdown", 400, 80);
+  await pointer("pointermove", 400, 40);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(container.querySelector<HTMLElement>(".scrub-loupe")?.dataset.frame).toBe("200");
+  await pointer("pointermove", -5, 40);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(seeks.at(-1)).toBe(0);
+  // Back inside, it steps on a frame each 10 px from the first frame, not from where the jog began.
+  await pointer("pointermove", 15, 40);
+  await act(async () => { await new Promise(requestAnimationFrame); });
+  expect(seeks.at(-1)).toBe(2 / fps);
+  await pointer("pointerup", 15, 40);
+  expect(picks).toEqual([2 / fps]);
+});
+
 it("reveals a typed timestamp outside the zoomed window without seeking the player", async () => {
   const render = (times: number[]) => act(async () => root.render(
     <TimelineScrubber duration={3000} playhead={100} frameAt={() => undefined} onSeek={t => seeks.push(t)}

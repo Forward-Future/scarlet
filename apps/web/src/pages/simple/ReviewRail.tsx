@@ -14,7 +14,7 @@ import { letGo, type HoveredReviewRow } from "./types";
 
 /**
  * The column of edits between the chat and the video, for the whole video (the editor chose it on 2026-11-24, as
- * T3 Code lists its threads). Every section (For you, Low risk, Working, Done) is one unified list sorted by video
+ * T3 Code lists its threads). Every section (Needs review, Low risk, Working, Done) is one unified list sorted by video
  * time — never stacked by chat request — and follow-up requests that modify the same edit combine into one row.
  */
 /** The narrowest the edits column can be dragged to while keeping times, words, and amounts legible. */
@@ -65,14 +65,11 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   };
 }
 
-export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onFilter, selected, onDoneLow, onHover, flashedThreadId, compact = false, reserve = 0 }: {
+export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow, onHover, flashedThreadId, compact = false, reserve = 0 }: {
   projectId: string;
   store: RailStore;
   open: { working: boolean; done: boolean; low?: boolean };
   onOpen(section: "working" | "done" | "low", open: boolean): void;
-  /** Priority list filter: All unreviewed edits (flagged pinned on top + confident below) or Needs you only. */
-  filter?: "all" | "need";
-  onFilter?(next: "all" | "need"): void;
   /** What is open on the card, so its row is kept in view. */
   selected?: string;
   /** Keep all confident edits at once. */
@@ -103,8 +100,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
   const { need, forYouRows, optional, working, done, pastHour, sections } = view;
   const total = need + optional;
   const nothing = need + forYouRows + optional + working + done === 0;
-  const effectiveFilter: "all" | "need" = need > 0 && optional > 0 ? filter : "all";
-  const showConfident = optional > 0 && effectiveFilter === "all";
+  const showConfident = optional > 0;
 
   // Ask the engine for AI-generated titles for any settled collapsed batches that don't have one cached yet.
   const unsummarized: BatchSummaryItem[] = [];
@@ -135,10 +131,10 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
       window.clearTimeout(timer);
     };
   }, [projectId, unsummarizedKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  // The row of the cut or edit that's open stays in view as Keep, ↑ ↓, or filtering reveals it.
+  // The row of the cut or edit that's open stays in view as Keep or ↑ ↓ reveals it.
   useEffect(() => {
     if (selected) host.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" });
-  }, [selected, effectiveFilter, open.working, open.done]);
+  }, [selected, open.working, open.done]);
 
   // Show Scarlet's own dark floating tooltip with the full line on hover or keyboard focus of any edit row.
   useEffect(() => {
@@ -224,7 +220,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
   // Never leave a floating tooltip orphaned if its row unmounts (e.g. via K shortcut or live update).
   useEffect(() => {
     setTip(cur => (cur && (nothing || !cur.row.isConnected) ? null : cur));
-  }, [nothing, need, optional, working, done, effectiveFilter, open.working, open.done]);
+  }, [nothing, need, optional, working, done, open.working, open.done]);
 
   // Tie aria-describedby to the hovered/focused row while the tooltip is open, and clamp its horizontal edge in view.
   useLayoutEffect(() => {
@@ -288,7 +284,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
         const tipMeta = row.tipMeta && row.tipMeta !== tipText ? row.tipMeta : undefined;
         const tipDetail = row.tipDetail && row.tipDetail !== tipText && row.tipDetail !== tipMeta ? row.tipDetail : undefined;
         const moment = row.moment;
-        const unkeepTip = row.unkeepTip ?? "Move back to For you";
+        const unkeepTip = row.unkeepTip ?? "Move back to Needs review";
         const statusWord = row.word;
         const ariaLabel = row.ariaLabel ?? (batchCount > 1
           ? `${rowTime}: ${row.label}${row.decided ? ", kept" : ""}`
@@ -378,26 +374,22 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     minWidth={REVIEW_RAIL_MIN} beside="simple-chat" reserve={reserve}>
     <header className="review-rail-head">
       <h2>
-        <span>For you</span>
+        <span>Needs review</span>
         {total > 0 && (need > 0 && optional > 0
           ? <><span className="review-rail-total">{total}</span><span className="review-rail-sep" aria-hidden="true">·</span><span className="review-rail-count" title={`${need} ${need === 1 ? "needs" : "need"} you`}>{need}</span></>
           : need > 0
             ? <span className="review-rail-count" title={`${need} ${need === 1 ? "needs" : "need"} you`}>{need}</span>
             : <span className="review-rail-total">{optional}</span>)}
       </h2>
-      {onDoneLow && optional > 0 && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
     </header>
-    {need > 0 && optional > 0 && onFilter && <div className="review-filter-bar" role="group" aria-label="Filter edits">
-      <button type="button" className="review-filter-chip" aria-pressed={effectiveFilter === "all"}
-        onClick={letGo(() => onFilter("all"))}>All {total}</button>
-      <button type="button" className="review-filter-chip is-warn" aria-pressed={effectiveFilter === "need"}
-        onClick={letGo(() => onFilter("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
-    </div>}
     <div className="review-rail-scroll">
-      <div className="review-rail-list" role="group" aria-label="For you">
+      <div className="review-rail-list" role="group" aria-label="Needs review">
         {renderSectionList("you")}
-        {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Safe edits ({optional})</span></div>}
+        {showConfident && <div className={need > 0 || forYouRows > 0 ? "review-tier-sep" : "review-tier-sep is-first"}>
+          <span className="review-tier-label">Safe edits ({optional})</span>
+          {onDoneLow && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
+            onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
+        </div>}
         <div className="review-low-body" role="group" aria-label="Safe edits" hidden={!showConfident}>{renderSectionList("low")}</div>
         {forYouRows === 0 && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
       </div>

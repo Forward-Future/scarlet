@@ -17,11 +17,11 @@ it("puts every row under exactly one tab: waiting, then with Scarlet, then decid
   expect(rowPlace(["kept", "kept"], is)).toBe("done");
 });
 
-it("shows For you until Working or Done is pressed, low risk edits included or not", () => {
+it("shows Needs review until Working or Done is pressed, low risk edits included or not", () => {
   expect([undefined, "need", "all", "working", "done"].map(tabShown)).toEqual(["you", "you", "you", "working", "done"]);
 });
 
-it("lists a tab's rows top to bottom: For you's waiting rows, with the low risk ones in their place among them while included", () => {
+it("lists a tab's rows top to bottom: Needs review's waiting rows, with the low risk ones in their place among them while included", () => {
   const rows = [row("a", "optional", 1), row("b", "you", 2), row("c", "working", 3), row("d", "done", 4), row("e", "you", 5), row("f", "optional", 6)];
   expect(keys(rowsOfTab(rows, "you", false, undefined))).toEqual(["b", "e"]);
   expect(keys(rowsOfTab(rows, "you", true, undefined))).toEqual(["a", "b", "e", "f"]);
@@ -84,7 +84,7 @@ it("builds a request's stops from its rows, its calls and what was rejected, and
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
-it("holds a row that has just left For you for a moment, fades it, then lets it go", () => {
+it("holds a row that has just left Needs review for a moment, fades it, then lets it go", () => {
   const linger = new ReviewLinger();
   const changed = vi.fn();
   linger.subscribe(changed);
@@ -108,7 +108,7 @@ it("carries a held row over to the row that took its place, and drops it when it
   // The edit is rejected: a new row stands for the old.
   linger.track([{ key: "gone", place: "done", was: ["v1"] }], false);
   expect([linger.of("v1"), linger.of("gone")?.from]).toEqual([undefined, "you"]);
-  // ⌘Z brings it back to wait: it is simply For you's again.
+  // ⌘Z brings it back to wait: it is simply Needs review's again.
   linger.track([{ key: "v1", place: "you", was: [] }], false);
   linger.track([{ key: "v1", place: "you" }], false);
   expect(linger.of("v1")).toBeUndefined();
@@ -119,7 +119,7 @@ it("carries a held row over to the row that took its place, and drops it when it
   linger.dispose();
 });
 
-it("holds a row moving from Done (or a just-kept row lingering in For you) to Working, then fades and releases it", () => {
+it("holds a row moving from Done (or a just-kept row lingering in Needs review) to Working, then fades and releases it", () => {
   const linger = new ReviewLinger();
   const changed = vi.fn();
   linger.subscribe(changed);
@@ -131,10 +131,10 @@ it("holds a row moving from Done (or a just-kept row lingering in For you) to Wo
   expect([linger.of("a")?.leaving, changed.mock.calls.length]).toEqual([true, 1]);
   vi.advanceTimersByTime(LINGER_FADE_MS);
   expect([linger.of("a"), changed.mock.calls.length]).toEqual([undefined, 2]);
-  // If Done is not shown and the row is not lingering in For you, moving Done -> Working does not linger.
+  // If Done is not shown and the row is not lingering in Needs review, moving Done -> Working does not linger.
   linger.track([{ key: "b", place: "working", busy: true }], false, false);
   expect(linger.of("b")).toBeUndefined();
-  // A row just kept in For you that moves to Working before leaving stays in For you with a fresh timer (cancelling any fade).
+  // A row just kept in Needs review that moves to Working before leaving stays in Needs review with a fresh timer (cancelling any fade).
   linger.track([{ key: "c", place: "you" }], false, false);
   linger.track([{ key: "c", place: "done" }], false, false);
   vi.advanceTimersByTime(LINGER_MS);
@@ -147,7 +147,7 @@ it("holds a row moving from Done (or a just-kept row lingering in For you) to Wo
   expect(linger.of("c")?.leaving).toBe(true);
   vi.advanceTimersByTime(LINGER_FADE_MS);
   expect(linger.of("c")).toBeUndefined();
-  // A row kept in For you and then revised from Done replaces the stale For you hold with a Done hold.
+  // A row kept in Needs review and then revised from Done replaces the stale Needs review hold with a Done hold.
   linger.track([{ key: "d", place: "you" }], false, false);
   linger.track([{ key: "d", place: "done" }], false, false);
   expect(linger.of("d")?.from).toBe("you");

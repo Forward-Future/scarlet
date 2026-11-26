@@ -124,12 +124,13 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => {});
     expect(container.querySelector("[data-new-layout]")).not.toBeNull();
     expect(container.querySelector(".review-rail")).not.toBeNull();
-    expect(container.querySelector(".review-tier-sep")?.textContent).toContain("Safe edits");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 1 safe edit");
-    expect([...container.querySelectorAll(".review-filter-chip")].map(b => b.textContent)).toEqual(["All 3", "Needs you 2"]);
+    expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
+    expect(container.querySelector(".review-tier-sep .review-tier-label")?.textContent).toBe("Safe edits (1)");
+    expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 1 safe edit");
+    expect(container.querySelector(".review-filter-bar")).toBeNull();
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
-    // Working and Done banners stay visible at the foot even when empty (Working above Done), separated by a divider line, chat doesn't repeat "For you N", and every row leads with its time, never a number.
+    // Working and Done banners stay visible at the foot even when empty (Working above Done), separated by a divider line, chat doesn't repeat "Needs review N", and every row leads with its time, never a number.
     const footSections = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];
     expect(footSections.map(b => b.textContent)).toEqual(["Working0", "Done0"]);
     expect(footSections.every(b => b.disabled && b.classList.contains("is-none") && b.getAttribute("aria-expanded") === "false")).toBe(true);
@@ -138,6 +139,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     const { readFileSync } = await import("node:fs");
     const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
     expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-sec-body\s*\+\s*\.review-sec\s*\{[^}]*border-top:\s*1px solid var\(--color-line\)/);
+    // Keep the amber timestamp pill unclipped inside the composer's overflow-hidden aim line.
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.composer-aim-row\s+\.simple-pass-time\.is-need\s*\{[^}]*margin:\s*0\b/);
     expect(container.querySelector("#simple-chat .simple-need-link")).toBeNull();
     expect(container.querySelector(".review-rail-list .edit-badge")).toBeNull();
     expect(container.querySelector(".review-rail-list .edit-row-time")?.textContent).toMatch(/^\d+:\d\d$/);
@@ -259,9 +262,10 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".queue-next")).toBeNull();
     expect(container.querySelector(".queue-paused")?.textContent).toBe("Editing paused");
 
-    // #12: Pause/Resume lives under the timeline (not on chat bubbles).
+    // No Pause/Resume button on the timeline or chat bubbles; paused projects can still resume from the chat queue.
     expect(container.querySelector("#simple-chat .unit-pause-edit")).toBeNull();
-    expect(container.querySelector(".timeline-working-pause.is-resume")?.textContent).toBe("Resume");
+    expect(container.querySelector(".timeline-working-pause")).toBeNull();
+    expect(container.querySelector(".queue-editing-action")?.textContent).toBe("Resume");
 
     // #13: Clicking the Working edit ("captions") shows the slim Working card with Stop.
     const workingBtn = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot button.simple-edit")]
@@ -278,18 +282,13 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => stopBtn.click());
     expect(cancelSpy).toHaveBeenCalledWith("task_beta_revise");
 
-    // #14 & #3: Filter to Needs you (hiding confident edits), then open the confident edit via Keep/click flow, confirm filter returns to All and Keep moves straight to Done.
-    const needsChip = [...container.querySelectorAll<HTMLButtonElement>(".review-filter-chip")]
-      .find(b => b.textContent?.includes("Needs you"))!;
-    await act(async () => needsChip.click());
-    expect(needsChip.getAttribute("aria-pressed")).toBe("true");
-    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(true);
+    // #14 & #3: Safe edits sit directly below flagged edits with no filter bar, and Keep moves straight to Done.
+    expect(container.querySelector(".review-filter-bar")).toBeNull();
+    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(false);
     const musicRow = [...container.querySelectorAll<HTMLButtonElement>(".review-low-body button.simple-edit")]
       .find(b => b.textContent?.includes("music bed"))!;
     await act(async () => musicRow.click());
     await act(async () => {});
-    expect(needsChip.getAttribute("aria-pressed")).toBe("false");
-    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(false);
     // Keep music bed -> moves straight to Done without lingering in confident edits.
     const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")]
       .find(b => b.textContent?.trim() === "Keep")!;
@@ -362,7 +361,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(sections[1]!.disabled).toBe(false);
     expect(sections[1]!.classList.contains("is-none")).toBe(false);
 
-    // Expanding Done shows the kept edit with Unkeep, which moves it back to For you without opening it.
+    // Expanding Done shows the kept edit with Unkeep, which moves it back to Needs review without opening it.
     const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined as never);
     await act(async () => sections[1]!.click());
     await act(async () => {});
@@ -776,7 +775,9 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       ["1:59", "Haiku 5.5 title", null, "Graphic"],
     ]);
     expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("3");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
+    expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
+    expect(container.querySelector(".review-tier-sep.is-first .review-tier-label")?.textContent).toBe("Safe edits (3)");
+    expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
 
     // Clicking the "2 Graphics" batch row opens the card with a 1 of 2 stepper and "Keep all 2", keeping all underlying thread edits together.
     await act(async () => lowRows[0]!.click());
@@ -882,7 +883,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(safeRows[0]!.dataset.batchCount).toBe("3");
     expect(safeRows[0]!.querySelector(".edit-batch-plus")).toBeNull();
     expect(safeRows[0]!.querySelector(".simple-edit-value")?.textContent).toBe("Graphic");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
+    expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
+    expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
 
     // Click the "3 Graphics" row: opens card with stepper 1 of 3, Keep all 3, Reject just this edit, and shows all 3 batch marks on the timeline.
     await act(async () => safeRows[0]!.click());
@@ -935,7 +937,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => {});
     expect(unkeepSpy).toHaveBeenCalledTimes(1);
     expect(container.querySelector('.review-low-body[aria-label="Safe edits"] .simple-pass-words')?.textContent).toBe("3 Graphics: Haiku 5.5 title, Sonnet 5.5 title, Hydrogen title");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
+    expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
+    expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
   });
 
   it("upgrades grouped edit rows live with AI-generated batch summaries from HTTP responses and WebSocket events", async () => {
@@ -1053,7 +1056,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     const rail = container.querySelector<HTMLElement>("#simple-review-rail")!;
     expect(rail).not.toBeNull();
     expect(rail.hidden).toBe(false);
-    expect(rail.querySelector(".review-rail-head h2")?.textContent).toBe("For you");
+    expect(rail.querySelector(".review-rail-head h2")?.textContent).toBe("Needs review");
     expect(rail.querySelector(".simple-review-empty")?.textContent).toBe("No edits yet.");
     expect(rail.querySelector(':scope > [role="separator"]')).not.toBeNull();
     const sections = [...rail.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];

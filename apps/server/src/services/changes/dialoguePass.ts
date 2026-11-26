@@ -45,7 +45,7 @@ export interface DialogueCutsAdjustments {
 /**
  * A staged cut Scarlet checked and settled as a cut without asking the editor. The video shows the edit as it will be,
  * so such a cut goes in when the pass next saves instead of waiting for the editor's last call (the editor's decision,
- * 2026-11-23). Calls stay in the review whatever is decided on them, so For you keeps every call under its number with
+ * 2026-11-23). Calls stay in the review whatever is decided on them, so Needs review keeps every call under its number with
  * its decision; so do a cut no one has checked, one Scarlet would keep, and one an earlier build staged for the
  * editor's approval.
  */

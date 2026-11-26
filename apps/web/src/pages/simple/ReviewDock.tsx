@@ -19,9 +19,8 @@ const TIME_ORDER: ListOrder = { numbers: false };
 
 const doneLabel = (count: number) => count === 1 ? "Keep the safe edit" : `Keep all ${count} safe edits`;
 
-function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], reveal, showNeeded, onKeepConfident }: {
+function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], reveal, showNeeded }: {
   need: number; optional: number; working: number; done: number; list: PassList; reveal(): void; showNeeded(): void;
-  onKeepConfident?(): void;
 }) {
   const tab = tabShown(open);
   const total = need + optional;
@@ -36,9 +35,9 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
     : need > 0 ? `${need} ${need === 1 ? "needs" : "need"} you`
     : optional > 0 ? `${optional} safe ${optional === 1 ? "edit" : "edits"}` : undefined;
   return <div className="simple-review-tabs" role="group" aria-label="Edit lists">
-    <button type="button" className="simple-review-tab simple-pass-need" aria-label="For you" aria-pressed={tab === "you"}
+    <button type="button" className="simple-review-tab simple-pass-need" aria-label="Needs review" aria-pressed={tab === "you"}
       title={forYouTitle} onClick={letGo(showNeeded)}>
-      For you
+      Needs review
       {total > 0 && (need > 0 && optional > 0
         ? <><span className="simple-review-tab-total" aria-hidden="true">{total}</span><span className="simple-review-tab-sep" aria-hidden="true">·</span><span className="simple-review-tab-count" aria-hidden="true">{need}</span></>
         : need > 0
@@ -49,16 +48,12 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
       title={working ? `${working} with Scarlet` : undefined} onClick={letGo(show("working"))}>Working{tally(working)}</button>
     <button type="button" className="simple-review-tab" aria-label="Done" aria-pressed={tab === "done"}
       title={done ? `${done} decided` : undefined} onClick={letGo(show("done"))}>Done{tally(done)}</button>
-    {tab === "you" && optional > 0 && onKeepConfident && (
-      <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onKeepConfident)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>
-    )}
   </div>;
 }
 
 /**
  * The fixed bottom review lists dock for the non-beta workspace.
- * Sits between `.simple-chat` (above) and `.composer-dock` (below) so the combined For you
+ * Sits between `.simple-chat` (above) and `.composer-dock` (below) so the combined Needs review
  * Priority list (flagged edits pinned on top, confident edits right below), Working, Done,
  * and See all lists stay fixed at the bottom while new messages flow above them.
  */
@@ -66,7 +61,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   store: ReviewDockStore;
   /** Thread ids in conversation order (oldest first) for deterministic tie-breaking. */
   threadIds: readonly string[];
-  /** Active tab/filter state (`undefined`/`"all"` = For you All, `"need"` = For you Needs you only, `"working"`, `"done"`). */
+  /** Active tab state (`undefined` = Needs review, `"working"`, `"done"`). */
   list: PassList;
   /** Number of requests in the chat above; an increase collapses held blank tab space. */
   laterRequests?: number;
@@ -92,7 +87,6 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const loadedOf = new Map(reports.map(r => [r.threadId, r.listLoaded] as const));
   const hasTabs = reports.some(r => r.hasForYou);
   const tab: ReviewTab = tabShown(open);
-  if (hasTabs && tab === "you") linger.needsOnly = open === "need";
 
   // Merge all threads' entries (deduplicated across cross-thread flags) in timeline order for tracking, Working, and Done.
   const deduped = hasTabs ? dedupeDockEntries(reports.flatMap(r => r.entries)) : [];
@@ -101,14 +95,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const inPlace = (place: RowPlace) => allEntries.filter(e => e.place === place);
   const optional = hasTabs ? inPlace("optional") : [];
   const need = hasTabs ? inPlace("you").filter(e => e.row.needs || e.row.asks).length : 0;
-  const needsOnly = hasTabs && tab === "you" && open === "need" && need > 0;
-  const optionalShown = hasTabs && tab === "you" && !needsOnly;
-  const allLoaded = reports.length > 0 && reports.every(r => r.listLoaded !== false);
-
-  // Automatically drop the "Needs you" filter once edit lists have loaded and no flagged edits remain so confident edits stay visible.
-  useEffect(() => {
-    if (hasTabs && allLoaded && open === "need" && need === 0 && optional.length > 0) setOpen(undefined);
-  }, [hasTabs, allLoaded, open, need, optional.length, setOpen]);
+  const optionalShown = hasTabs && tab === "you";
 
   // While a pass's confident edits are shown in the dock (and its list has settled), notify the workspace so the timeline shows its cuts too.
   const openPassThreadId = optionalShown
@@ -165,7 +152,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     tab,
     counts: { you: youBaseRows + lowRows.length, working: workingCount, done: doneRows },
     youBase: youBaseRows,
-    hasLowRisk: need > 0 && optional.length > 0,
+    hasLowRisk: false,
     lowOpen: optionalShown,
     nestedCount,
     laterRequests,
@@ -184,7 +171,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         id: "you",
         label: hasCalls ? "Calls and edits for you" : "Edits for you",
         rows: [...youRows, ...lowRows],
-        splitAt: youRows.length > 0 && lowRows.length > 0 ? youRows.length : undefined,
+        splitAt: lowRows.length > 0 && (youRows.length > 0 || optional.length > 0) ? youRows.length : undefined,
       }]
       : [{
         id: tab,
@@ -199,7 +186,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
       }]
       : [];
 
-  // Auto-switch tabs/filter when an edit or call is opened from outside (timeline dot, ⌘Z, Learnings, Show →).
+  // Auto-switch tabs when an edit or call is opened from outside (timeline dot, ⌘Z, Learnings, Show →).
   const onEntry = hasTabs ? allEntries.find(e => e.row.on || e.members?.some(m => m.on)) : undefined;
   const openId = onEntry?.row.id;
   const lastOpen = useRef<string | undefined>(undefined);
@@ -208,7 +195,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     lastOpen.current = openId;
     if (!hasTabs || !onEntry || openId === was) return;
     const shown = tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalShown) : onEntry.place === tab;
-    if (!shown) setOpen(onEntry.place === "you" ? (linger.needsOnly ? "need" : undefined) : onEntry.place === "optional" ? undefined : onEntry.place);
+    if (!shown) setOpen(onEntry.place === "you" || onEntry.place === "optional" ? undefined : onEntry.place);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset dock list state only when review tabs disappear after having been shown (never on initial mount before turns report).
@@ -232,7 +219,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     askedReveal.current = false;
     lastRevealSeq.current = revealSeq;
     if (!rows.querySelector('[aria-current="true"]')) {
-      rows.querySelector(":scope > li > button")?.scrollIntoView?.({ block: "nearest" });
+      rows.querySelector(":scope > li:not(.review-tier-sep) > button")?.scrollIntoView?.({ block: "nearest" });
     }
   }, [open, untabbedReport?.threadId, revealSeq, drawn.length]);
 
@@ -258,7 +245,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   if (!hasTabs && !untabbedReport && !passApplying && !passErrorReport) return null;
 
   const showNeeded = () => {
-    setOpen(linger.needsOnly ? "need" : undefined);
+    setOpen(undefined);
     const waitingOpen = allEntries.some(e => (e.row.on && (e.row.needs || e.row.asks)) || e.members?.some(m => m.on && (m.needs || m.asks)));
     const confidentOpen = !waitingOpen && need === 0 && allEntries.some(e => e.row.on && e.place === "optional");
     if (!waitingOpen && !confidentOpen) {
@@ -305,7 +292,15 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         const flashed = !!flashedThreadId && flashedThreadId === entry.threadId;
         return <Fragment key={row.key}>
           {splitAt !== undefined && idx === splitAt && (
-            <li className="review-tier-sep" role="presentation"><span>Safe edits ({optional.length})</span></li>
+            <li className={splitAt === 0 ? "review-tier-sep is-first" : "review-tier-sep"} role="presentation">
+              <span className="review-tier-sep-row">
+                <span className="review-tier-label">Safe edits ({optional.length})</span>
+                {optional.length > 0 && onKeepConfident && (
+                  <button type="button" className="review-head-keep" title={doneLabel(optional.length)} aria-label={doneLabel(optional.length)}
+                    onClick={letGo(onKeepConfident)}>Keep {optional.length} safe {optional.length === 1 ? "edit" : "edits"}</button>
+                )}
+              </span>
+            </li>
           )}
           <li className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
             data-thread={entry.threadId}
@@ -372,16 +367,8 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   return <div className="simple-review-dock" role="region" aria-label="Edit lists">
     <div ref={host} className="simple-pass" role="group" aria-label={isPassDock ? "Dialogue pass" : "Edits"}>
       {hasTabs && <DockReviewTabs need={need} optional={optional.length} working={workingCount} done={doneCount}
-        list={listState} reveal={reveal} showNeeded={showNeeded} onKeepConfident={onKeepConfident} />}
+        list={listState} reveal={reveal} showNeeded={showNeeded} />}
       {seeTab}
-      {hasTabs && tab === "you" && need > 0 && optional.length > 0 && (
-        <div className="review-filter-bar" role="group" aria-label="Filter edits">
-          <button type="button" className="review-filter-chip" aria-pressed={!needsOnly}
-            onClick={letGo(() => setOpen(undefined))}>All {need + optional.length}</button>
-          <button type="button" className="review-filter-chip is-warn" aria-pressed={needsOnly}
-            onClick={letGo(() => setOpen("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
-        </div>
-      )}
       {drawn.map(list => <Fragment key={list.id}>
         {list.rows.length > 0 ? rowList(list) : list.id !== "all" && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
       </Fragment>)}

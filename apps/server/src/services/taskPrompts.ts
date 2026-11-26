@@ -139,6 +139,8 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
     project: { project, timeline: !aside && project.head ? resolveTimeline(ctx, project, "head") : null },
     task: now ? { ...told, context: { ...c, changeId: now.change.id, cutIndex: now.index } } : told,
     notes,
+    // A request that names no notes is told how many are open, so it needn't list them to find out.
+    openNotes: aside || notes ? undefined : ctx.repos.notes.select("project_id = ? AND state IN ('open', 'in_progress')", [task.projectId]).length,
     change,
     replacedPass: now && named?.id,
     // A resumed session already holds the earlier questions and answers.

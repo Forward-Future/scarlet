@@ -139,7 +139,7 @@ function editClipIdsBySpot(changes: readonly Change[], edits: readonly Omit<Thre
 /**
  * A finished request with one result opens its edit on the timeline. A collection opens a list to choose from. Closed,
  * either is a link after the sentence (`place` "inline"): See edit for one, See both or See all for several, and the
- * edits so far while Scarlet works. Open, a finished collection's list is under its tab, in the row where For you,
+ * edits so far while Scarlet works. Open, a finished collection's list is under its tab, in the row where Needs review,
  * Working and Done sit when there is something to review (`place` "tab"), and the tab pressed again closes it. Each
  * place draws only its own. The word counts the rows the list opens (`rows`), a rejected edit's too: See both is for two.
  */
@@ -174,8 +174,8 @@ function EditResultLink({ thread, actions, single, rows, count, soFar, list: [op
 }
 
 /**
- * The three tabs over a request's rows once it has something for the editor to review: For you, Working and Done.
- * Every edit and call is under exactly one of them. A count shows only when there is one: For you's in amber, since
+ * The three tabs over a request's rows once it has something for the editor to review: Needs review, Working and Done.
+ * Every edit and call is under exactly one of them. A count shows only when there is one: Needs review's in amber, since
  * it is what waits on the editor, the others' muted.
  */
 function ReviewListTabs({ need, working, done, list: [open, setOpen], reveal, showNeeded }: {
@@ -189,9 +189,9 @@ function ReviewListTabs({ need, working, done, list: [open, setOpen], reveal, sh
   };
   const tally = (n: number) => n > 0 && <span className="simple-review-tab-tally" aria-hidden="true">{n}</span>;
   return <div className="simple-review-tabs" role="group" aria-label="Edit lists">
-    <button type="button" className="simple-review-tab simple-pass-need" aria-label="For you" aria-pressed={tab === "you"}
+    <button type="button" className="simple-review-tab simple-pass-need" aria-label="Needs review" aria-pressed={tab === "you"}
       title={need ? `${need} ${need === 1 ? "needs" : "need"} you` : undefined} onClick={letGo(showNeeded)}>
-      For you{need > 0 && <span className="simple-review-tab-count" aria-hidden="true">{need}</span>}
+      Needs review{need > 0 && <span className="simple-review-tab-count" aria-hidden="true">{need}</span>}
     </button>
     <button type="button" className="simple-review-tab" aria-label="Working" aria-pressed={tab === "working"}
       title={working ? `${working} with Scarlet` : undefined} onClick={letGo(show("working"))}>Working{tally(working)}</button>
@@ -204,7 +204,7 @@ function ReviewListTabs({ need, working, done, list: [open, setOpen], reveal, sh
 export const LOW_RISK_TIP = "Edits Scarlet is confident about. They go into the video without your OK. Open the list to look them over.";
 
 /**
- * The one quiet line under For you's rows: how many edits Scarlet didn't flag are still the editor's to keep or
+ * The one quiet line under Needs review's rows: how many edits Scarlet didn't flag are still the editor's to keep or
  * ignore, as "low risk edits" with a double check after the words that says what they are on hover. Closed until
  * pressed; open, those rows are listed under it.
  */
@@ -227,7 +227,7 @@ export function OptionalLine({ count, open, onToggle, inPass }: { count: number;
   </>;
 }
 
-/** What an empty tab says. In the chat alone For you says it only when it has no optional line either, so the tab is never blank. */
+/** What an empty tab says. In the chat alone Needs review says it only when it has no optional line either, so the tab is never blank. */
 const EMPTY_TAB = { you: "Nothing waits on you.", working: "Nothing in the works.", done: "Nothing decided yet." } as const;
 
 /** The rows a turn holds for its lists while its block moves: which were just acted on, and the edit last opened. */
@@ -266,13 +266,13 @@ function Made({ parts, link }: { parts: readonly SentencePart[]; link?: ReactNod
 }
 
 /**
- * In the chat, a request with something waiting on the editor says so after what it made: For you and how many, which
+ * In the chat, a request with something waiting on the editor says so after what it made: Needs review and how many, which
  * opens the first of them. The rows themselves are in the column of edits.
  */
 function NeedLink({ need, onOpen }: { need: number; onOpen(): void }) {
   if (!need) return null;
-  return <button type="button" className="simple-pass-need simple-need-link" aria-label="For you" title={`${need} ${need === 1 ? "needs" : "need"} you`}
-    onClick={letGo(onOpen)}>For you<span className="simple-review-tab-count" aria-hidden="true">{need}</span></button>;
+  return <button type="button" className="simple-pass-need simple-need-link" aria-label="Needs review" title={`${need} ${need === 1 ? "needs" : "need"} you`}
+    onClick={letGo(onOpen)}>Needs review<span className="simple-review-tab-count" aria-hidden="true">{need}</span></button>;
 }
 
 /** One row of a pass's lists: an edit, a call, a rejected edit or a call decided before the pass applied. */
@@ -337,7 +337,7 @@ interface Entry {
 
 /**
  * What a dialogue pass made, as the rows of its block. Once it has something for the editor to review, its rows sit
- * under three tabs and each is under exactly one. For you, shown until another is pressed, lists what waits on the
+ * under three tabs and each is under exactly one. Needs review, shown until another is pressed, lists what waits on the
  * editor: open calls and flagged edits, each by its time, with Scarlet's note. Pressed, it opens
  * the first one still waiting. A row the editor has just decided or sent back stays there a moment with its new word,
  * then fades and leaves. Beside the column of edits the edits Scarlet didn't flag are listed under Low risk at once; in
@@ -395,7 +395,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const tabbed = hasForYou || !!rail;
   const tab = tabShown(open);
   // Beside the column of edits the edits Scarlet didn't flag are always listed, under Low risk; in the chat they are
-  // behind one line under For you's rows.
+  // behind one line under Needs review's rows.
   const optionalOpen = tabbed && (open === "all" || !!rail);
   // While the pass makes its final check of the finished cut, the fixes it applies are marked New in the list: nothing
   // else tells them from the cuts that went in before (2026-11-14).
@@ -414,7 +414,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   // without a click or a tab, so a request whose only edit was rejected still says so (2026-11-23).
   const onlyRejected = !edits.length && rejected.length > 0 && !pass && !tabbed;
   const listed = fullList || onlyRejected || (!!single && !tabbed && open !== "need" && !!actions.showing && matchesEdit(actions.showing, single));
-  // The For you list closes only if there are no For you items at all. Beside the column of edits there is no list of
+  // The Needs review list closes only if there are no Needs review items at all. Beside the column of edits there is no list of
   // every edit to open: one left open from the line that used to open the edits Scarlet didn't flag lets go.
   useEffect(() => { if ((open === "need" && !tabbed) || (open === "all" && !!rail)) setOpen(undefined); }, [open, tabbed, rail]); // eslint-disable-line react-hooks/exhaustive-deps
   // A line mounted with its list already open is the same list, moved with its request between the conversation and
@@ -485,7 +485,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
             unkeepEdits(projectId, thread.id, [e]);
             recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: [e], name: label });
           },
-          unkeepTip: e.check || tabbed ? "Move back to For you" : "Unkeep",
+          unkeepTip: e.check || tabbed ? "Move back to Needs review" : "Unkeep",
         }),
         fresh: fresh.has(e.changeId), tip, removedSeconds: removed }];
     }),
@@ -506,7 +506,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
         forYou: true, onlyForYou: false, fresh: false, tip, removedSeconds: c.tag === "Cut" ? c.length : undefined,
         ...(c.state === "approved" && !pass!.deciding && pass!.unkeepCall && {
           unkeep: () => { actions.lightMark(); pass!.unkeepCall!(c.index); },
-          unkeepTip: "Move back to For you",
+          unkeepTip: "Move back to Needs review",
         }),
         // In the column of edits a call sent back opens from its row in Working, as an edit sent back does: its card
         // says where its revision stands, and ↑ ↓ then step through Working's rows.
@@ -552,7 +552,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const momentOf = new Map<string, Moment<Omit<ThreadEdit, "at">>>();
   if (tabbed || listed) for (const m of moments) if (m.edits.length > 1) for (const e of m.edits) momentOf.set(editKey(e), m);
   const byKey = new Map(rows.map(row => [row.key, row]));
-  // A request that itself waits on the editor (a question, or one that stopped early) keeps its row in For you.
+  // A request that itself waits on the editor (a question, or one that stopped early) keeps its row in Needs review.
   const asks = new Set(nests.flatMap(nest => nest.needs ? [nest.key] : []));
   const placeOf = (r: PassRow): RowPlace => r.needs || r.asks ? "you" : r.pending ? "working" : r.decided || r.rejected || r.onlyForYou ? "done" : "optional";
   const entries: Entry[] = [];
@@ -583,14 +583,14 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
         unkeepEdits(projectId, thread.id, unkeepMembers);
         recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepMembers, name: main.label });
       } : undefined,
-      unkeepTip: unkeepMembers.length > 0 ? (tabbed ? "Move back to For you" : "Unkeep") : undefined,
+      unkeepTip: unkeepMembers.length > 0 ? (tabbed ? "Move back to Needs review" : "Unkeep") : undefined,
       was: members.flatMap(m => m.was ?? []), title: members.map(m => m.label).join("\n"), tip: momentTip }, members, more, moment: moment.key,
       unfolded: unfolded.has(moment.key) || members.some(m => m.on),
       place: members.some(m => asks.has(m.key)) ? "you" : rowPlace(members, { waits: m => m.needs || m.asks, sent: m => m.pending, kept: m => m.decided }),
       at: Math.min(...members.map(m => m.at)) });
   }
-  // A row that has just left For you for Working or Done, or Done for Working, stays a moment where it was only in tabbed chat mode.
-  // In the edits column, For you, Working, and Done are all visible at once, so a kept or sent-back edit moves straight
+  // A row that has just left Needs review for Working or Done, or Done for Working, stays a moment where it was only in tabbed chat mode.
+  // In the edits column, Needs review, Working, and Done are all visible at once, so a kept or sent-back edit moves straight
   // there without appearing twice.
   if (tabbed && !rail) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })), optionalOpen && tab === "you", tab === "done");
   const heldFrom = (from: "you" | "optional" | "done") => rail ? [] : entries.filter(e => (from === "done" ? e.place === "working" : e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
@@ -613,7 +613,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided",
       rows: inListOrder(tab === "done" ? [...inPlace("done"), ...heldFrom("done")] : inPlace(tab), order) }];
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
-  // For you opens the first waiting row on the timeline, or leaves it open if the editor is already on one.
+  // Needs review opens the first waiting row on the timeline, or leaves it open if the editor is already on one.
   const showNeeded = () => {
     setOpen(was => was === "all" ? was : undefined);
     if (!rows.some(row => row.on && row.needs)) inListOrder(inPlace("you"), order).find(e => e.row.needs)?.row.open?.();
@@ -629,7 +629,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     const was = lastOpen.current;
     lastOpen.current = openId;
     if (!onEntry || openId === was) return;
-    // A row still in For you only for the moment after it was decided is Working's or Done's.
+    // A row still in Needs review only for the moment after it was decided is Working's or Done's.
     const shown = tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalOpen) : onEntry.place === tab;
     if (!shown) setOpen(onEntry.place === "you" ? undefined : onEntry.place === "optional" ? rail ? undefined : "all" : onEntry.place);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -767,7 +767,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const rowList = ({ id, label, rows: list }: Drawn) => {
     // Every list leads with each row's time, never a number, and keeps its version and amount: the time is bold amber
     // on a tint while the row needs the editor, and a decided row is ticked. A list widens its time column for all its
-    // rows once one on screen is past an hour ("1:02:07"), in the other list too: For you's rows and the optional ones
+    // rows once one on screen is past an hour ("1:02:07"), in the other list too: Needs review's rows and the optional ones
     // under them keep one edge.
     return <ol key={id} className={pastHour ? "simple-pass-list has-hours" : "simple-pass-list"} aria-label={label}>
       {list.map(entry => {
@@ -838,7 +838,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const seeEvery = rail
     ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
       : !soFar && canSeeAll && actions.showThread
-        ? <button type="button" className="simple-pass-toggle" title="Show these edits in For you" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
+        ? <button type="button" className="simple-pass-toggle" title="Show these edits in Needs review" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
         : null)
     : !tabbed && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
@@ -867,7 +867,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     {seeTab}
     {tabs}
     {drawn.map((list, i) => <Fragment key={list.id}>
-      {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
+      {/* Under Needs review's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
       {list.id === "optional" && optional.length > 0 && <OptionalLine inPass count={optional.length} open onToggle={() => setOpen(undefined)} />}
       {list.rows.length > 0 ? rowList(list) : (list.id === "working" || list.id === "done" || (list.id === "you" && optional.length === 0)) && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
       {list.id === "you" && i === drawn.length - 1 && optional.length > 0 && <OptionalLine inPass count={optional.length} open={false} onToggle={() => { reveal(); setOpen("all"); }} />}
@@ -882,19 +882,19 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
 /**
  * What any other request made, as the rows of its block: one sentence, then a link that opens the edits themselves,
  * each by its time. Edits of one name that overlap exactly are one edit. Once Scarlet flagged one, the rows
- * sit under three tabs, as a pass's do: For you lists the flagged edits
+ * sit under three tabs, as a pass's do: Needs review lists the flagged edits
  * not yet decided and counts them, with the edits Scarlet didn't flag under Low risk beside the column of edits, or
  * behind one line under them in the chat alone ("3 optional");
  * Working has the ones sent back, each with its request under its row; Done has the ones kept or rejected. A row just
- * decided or sent back stays in For you a moment with its new word, then fades and leaves. A request about an edit
+ * decided or sent back stays in Needs review a moment with its new word, then fades and leaves. A request about an edit
  * that is still in the chat (`nests`) sits directly under that edit's row.
  */
 export function ThreadResult({ projectId, thread, threadOrder = 0, edits, rejected, actions, aside, working, nests = noNests, spent = noSpent, list, listedNeed, wasShowing: heldShowing, linger: heldLinger, lastOpen: heldOpen, listLoaded, askingRowKey }: { projectId: string; thread: Thread; threadOrder?: number; edits: Omit<ThreadEdit, "at">[]; rejected?: Omit<ThreadEdit, "at">[]; actions: ChatActions;
   aside?: ReactNode; working?: boolean; nests?: readonly Nest[]; spent?: Spent;
-  /** Which list is open and what For you has listed, held by the turn: the block is mounted anew when it moves
+  /** Which list is open and what Needs review has listed, held by the turn: the block is mounted anew when it moves
    *  between the conversation and the place above the message box, and a list the editor opened must not close then,
    *  nor turn into another. `wasShowing` is whether one of the edits was open when the block last drew, `lastOpen`
-   *  which, and `linger` the rows just decided or sent back, which stay in For you a moment. */
+   *  which, and `linger` the rows just decided or sent back, which stay in Needs review a moment. */
   list: PassList; listedNeed: RefObject<Set<string>>; wasShowing?: RefObject<boolean>; linger?: ReviewLinger; lastOpen?: RefObject<string | undefined>;
   /** The engine's list of the request's edits has come: see `PassSummary`. */
   listLoaded?: boolean;
@@ -920,7 +920,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const showing = actions.showing;
   const shownEdit = showing && edits.find(e => matchesEdit(showing, e));
   const flagged = useMemo(() => edits.filter(e => e.check && !reviewed(e) && !revising(e)), [edits, reviewed, revising]);
-  // Edits of one name that overlap exactly are one edit, on one row of the list: For you counts the rows that wait.
+  // Edits of one name that overlap exactly are one edit, on one row of the list: Needs review counts the rows that wait.
   const groups = useMemo(() => editGroups(edits), [edits]);
   // So does one sent back whose request has stopped to ask the editor something: it is their turn again.
   const need = useMemo(() => waitingRows(edits, { reviewed, revising }), [edits, reviewed, revising]);
@@ -934,7 +934,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   // Beside the column of edits the edits Scarlet didn't flag are always listed, under Low risk.
   const optionalOpen = tabbed && (open === "all" || !!rail);
   // Where each row is: every edit and every rejected one is under exactly one tab. A request that itself waits on the
-  // editor (a question, or one that stopped early) keeps its row in For you.
+  // editor (a question, or one that stopped early) keeps its row in Needs review.
   const asks = new Set(nests.flatMap(nest => nest.needs ? [nest.key] : []));
   const rowOf = new Map<string, string>(), placeOf = new Map<string, RowPlace>();
   const tracked: { key: string; place: RowPlace; was: string[]; busy?: boolean }[] = [];
@@ -954,7 +954,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       placeOf.set(key, "done");
       tracked.push({ key, place: "done", was: e.previous.map(editKey) });
     }
-    // A row that has just left For you for Working or Done, or Done for Working, stays a moment only in tabbed chat mode.
+    // A row that has just left Needs review for Working or Done, or Done for Working, stays a moment only in tabbed chat mode.
     // In the edits column, Working and Done are right below, so a decided or sent-back edit moves there once.
     if (!rail) linger.track(tracked, optionalOpen && tab === "you", tab === "done");
   }
@@ -971,7 +971,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const onScreen = (e: Omit<ThreadEdit, "at">) => tab === "you" ? inYou(e) || (optionalOpen && inOptional(e)) : tab === "done" ? inDone(e) : place(e) === tab;
   const countOf = (at: RowPlace) => tracked.filter(row => row.place === at).length;
   const some = (only: (e: Omit<ThreadEdit, "at">) => boolean) => edits.some(only) || gone.some(only);
-  // Every edit belongs to For you: For you already lists them all.
+  // Every edit belongs to Needs review: Needs review already lists them all.
   const allForYou = hasForYou && forYouGroups.length === groups.length && forYouRejected.length === gone.length;
   const single = !working && groups.length === 1 ? shownEdit ?? edits[0] : undefined;
   const showingInList = !!shownEdit && (!single || allForYou);
@@ -984,7 +984,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
     if (!tabbed && showingInList && !wasShowing.current) setOpen("all");
     wasShowing.current = showingInList;
   }, [showingInList]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Under the tabs, an edit opened from somewhere else (the timeline, ⌘Z) shows the tab that holds it: For you for one
+  // Under the tabs, an edit opened from somewhere else (the timeline, ⌘Z) shows the tab that holds it: Needs review for one
   // that waits, Low risk (or in the chat alone its optional line open) for one Scarlet didn't flag, Working for one sent back, Done for one
   // decided. One opened from the list, stepped to or moved on to is in the tab shown already.
   const openEdit = showing && (shownEdit ?? gone.find(e => matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing)));
@@ -996,12 +996,12 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
     lastOpen.current = openId;
     if (!tabbed || !openEdit || openId === was) return;
     const at = place(openEdit);
-    // A row still in For you only for the moment after it was decided is Working's or Done's.
+    // A row still in Needs review only for the moment after it was decided is Working's or Done's.
     const shown = tab === "you" ? at === "you" || (at === "optional" && optionalOpen) : at === tab;
     if (shown) { if (at === "you") setOpen(o => o ?? "need"); }
     else if (at) setOpen(at === "you" ? "need" : at === "optional" ? rail ? undefined : "all" : at);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // The For you list closes only if there are no For you items at all. Beside the column one left open from the line
+  // The Needs review list closes only if there are no Needs review items at all. Beside the column one left open from the line
   // that used to open the edits Scarlet didn't flag lets go: they are listed under Low risk.
   useEffect(() => { if ((open === "need" && !tabbed) || (open === "all" && !!rail)) setOpen(undefined); }, [open, tabbed, rail]); // eslint-disable-line react-hooks/exhaustive-deps
   if (tabbed && tab === "you") {
@@ -1028,7 +1028,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const seeEvery = rail
     ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
       : !(working && !made) && canSeeAll && actions.showThread
-        ? <button type="button" className="simple-pass-toggle" title="Show these edits in For you" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
+        ? <button type="button" className="simple-pass-toggle" title="Show these edits in Needs review" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
         : null)
     : !tabbed && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
@@ -1238,7 +1238,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
     {!tabbed && showsList && rows(undefined)}
     {tabbed && tab === "you" && <>
       {some(inYou) ? rows("Edits that need you", inYou, "you", "you") : optional === 0 && <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
-      {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
+      {/* Under Needs review's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
       {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
       {optionalOpen && some(inOptional) && rows("Safe edits", inOptional, "optional", "optional")}
     </>}
