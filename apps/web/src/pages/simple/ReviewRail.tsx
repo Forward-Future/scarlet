@@ -19,8 +19,11 @@ import { letGo, type HoveredReviewRow } from "./types";
  */
 /** The narrowest the edits column can be dragged to while keeping times, words, and amounts legible. */
 export const REVIEW_RAIL_MIN = 220;
-/** Default width of the edits column before the user drags its right divider. */
-const reviewRailWidth = (available: number) => available <= 1100 ? 232 : Math.max(260, Math.min(320, available * 0.22));
+/**
+ * Default width of the chat and of the edits column before the user drags either divider: the two start equal,
+ * sharing the room the chat and the column used to take together, never under the chat's 320px.
+ */
+export const sideRailWidth = (available: number) => Math.round(Math.max(320, Math.min(400, available * 0.27)));
 /** What Keep safe edits says it does, on hover and to screen readers. */
 const doneLabel = (count: number) => count === 1 ? "Keep the safe edit" : `Keep all ${count} safe edits`;
 
@@ -372,7 +375,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
   };
 
   return <ChatRail compact={compact} railRef={host} id="simple-review-rail" className="review-rail" label="Edit lists"
-    side="left" resizes="edits" storageKey="scarlet.simpleReviewWidth" initialWidth={reviewRailWidth}
+    side="left" resizes="edits" storageKey="scarlet.simpleReviewWidth" initialWidth={sideRailWidth}
     minWidth={REVIEW_RAIL_MIN} beside="simple-chat" reserve={reserve}>
     <header className="review-rail-head">
       <h2>
