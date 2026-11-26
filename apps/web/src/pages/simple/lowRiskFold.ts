@@ -106,8 +106,9 @@ function fold(host: HTMLElement | null, way: "in" | "out", held: Held | undefine
  * once. With motion reduced they are there or gone at once.
  */
 /**
- * A row on its way out of Needs review or Done closes as it fades, so the rows under it don't jump up when it goes. One that
- * stays after all (⌘Z took its Keep back or a revision restarted it while it faded) is its own height again.
+ * A row (or departing Safe edits divider) on its way out of Needs review or Done closes as it fades, so the rows under it
+ * don't jump up when it goes. One that stays after all (⌘Z took its Keep back or a revision restarted it while it faded)
+ * is its own height again.
  */
 export function useLeavingRows(host: RefObject<HTMLElement | null>) {
   const leaving = useRef(new Map<HTMLElement, Animation>());
@@ -120,12 +121,64 @@ export function useLeavingRows(host: RefObject<HTMLElement | null>) {
       leaving.current.delete(row);
     }
     if (!canMove()) return;
-    for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-leaving:not([data-closing])") ?? []) {
+    for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-leaving:not([data-closing]), .review-tier-sep.is-leaving:not([data-closing])") ?? []) {
       row.dataset.closing = "";
       row.style.overflowY = "clip";
-      const room = row.animate([{ height: `${row.getBoundingClientRect().height}px` }, { height: "0px" }], { duration: LINGER_FADE_MS - 40, easing: EASE, fill: "forwards" });
+      const height = `${row.getBoundingClientRect().height}px`;
+      const isSep = row.classList.contains("review-tier-sep");
+      const keyframes: Keyframe[] = isSep
+        ? (() => {
+          const style = getComputedStyle(row);
+          return [
+            { height, marginTop: style.marginTop, marginBottom: style.marginBottom, paddingTop: style.paddingTop },
+            { height: "0px", marginTop: "0px", marginBottom: "0px", paddingTop: "0px" },
+          ];
+        })()
+        : [{ height }, { height: "0px" }];
+      const room = row.animate(keyframes, { duration: LINGER_FADE_MS - 40, easing: EASE, fill: "forwards" });
       room.finished?.catch(() => {});
       leaving.current.set(row, room);
+    }
+  });
+}
+
+/**
+ * A row that just finished lingering and landed in Working or Done smoothly opens into place with a brief soft highlight
+ * so the eye catches where it moved. With motion reduced, or when the section is hidden, nothing animates.
+ */
+export function useArrivingRows(host: RefObject<HTMLElement | null>) {
+  const arriving = useRef(new Map<HTMLElement, Animation[]>());
+  useLayoutEffect(() => {
+    for (const [row, anims] of arriving.current) {
+      if (row.isConnected && row.classList.contains("is-arriving")) continue;
+      for (const a of anims) a.cancel();
+      delete row.dataset.arrived;
+      row.style.overflowY = "";
+      arriving.current.delete(row);
+    }
+    if (!canMove()) return;
+    for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-arriving:not([data-arrived])") ?? []) {
+      const height = row.getBoundingClientRect().height;
+      if (height <= 0) continue;
+      row.dataset.arrived = "";
+      row.style.overflowY = "clip";
+      const room = row.animate([{ height: "0px" }, { height: `${height}px` }], { duration: 240, easing: EASE });
+      const anims: Animation[] = [room];
+      const btn = row.firstElementChild as HTMLElement | null;
+      if (btn) {
+        anims.push(btn.animate(
+          [{ opacity: 0, transform: "translateY(-4px)" }, { opacity: 1, transform: "none" }],
+          { duration: 220, easing: EASE },
+        ));
+        anims.push(btn.animate(
+          [{ backgroundColor: "rgba(255, 255, 255, .07)" }, { backgroundColor: "rgba(255, 255, 255, 0)" }],
+          { duration: 650, delay: 120, easing: "ease-out" },
+        ));
+      }
+      arriving.current.set(row, anims);
+      void room.finished?.then(() => {
+        row.style.overflowY = "";
+      }, () => {});
     }
   });
 }

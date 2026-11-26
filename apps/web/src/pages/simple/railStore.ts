@@ -3,8 +3,11 @@ import type { TimeRange } from "@scarlet/timeline";
 import { createContext, useContext, useSyncExternalStore } from "react";
 import { editKey } from "../../lib/editMoments";
 import { removedSeconds as formatRemovedSeconds } from "../../lib/format";
-import type { RowPlace } from "./beta/reviewTabsBeta";
+import { ReviewLinger, type HeldFrom, type RowPlace } from "./beta/reviewTabsBeta";
 import type { HoveredReviewRow, Nest } from "./types";
+
+/** How long a row that just finished lingering stays flagged as freshly arrived in Working or Done for its glide-in animation. */
+export const ARRIVE_MS = 320;
 
 /** The lists of the column of edits: what waits on the editor, the edits Scarlet didn't flag (Low risk), what is with Scarlet, what is decided. */
 export type RailSection = "you" | "low" | "working" | "done";
@@ -45,6 +48,8 @@ export interface RailSubRow {
 export interface RailRow {
   /** Unique within its thread (e.g. `editKey(e)` or `call/${n}`). */
   key: string;
+  /** Earlier row keys within this thread that this row replaced (e.g. previous versions or rejected edits). */
+  was?: readonly string[];
   threadId: string;
   /** Chronological index of the request thread (oldest = 0, newest = N - 1). */
   threadOrder: number;
@@ -137,10 +142,27 @@ export interface UnifiedRailRow extends RailRow {
   rows: readonly RailRow[];
   /** When several same-request safe or kept edits of the same kind collapse into one row, the individual unified rows in timeline order (length >= 2). */
   batch?: readonly UnifiedRailRow[];
+  /** Thread-qualified earlier keys carried for `ReviewLinger` when a row changes key across rejection/re-synthesis. */
+  was?: readonly string[];
+  /** Set when this row is briefly held in the section it just left before moving to Working or Done. */
+  lingerFrom?: HeldFrom;
+  /** True while the row is fading and collapsing out at the end of its linger window. */
+  leaving?: boolean;
+  /** True briefly right after a row finishes lingering and arrives in Working or Done. */
+  arriving?: boolean;
+}
+
+export interface RailDisplayView {
+  sections: Record<RailSection, readonly UnifiedRailRow[]>;
+  working: number;
+  done: number;
+  findByKey(key: string): UnifiedRailRow | undefined;
+  sectionOf(key: string): RailSection | undefined;
 }
 
 export interface RailView {
   sections: Record<RailSection, readonly UnifiedRailRow[]>;
+  display: RailDisplayView;
   need: number;
   forYouRows: number;
   optional: number;
@@ -165,6 +187,8 @@ export interface RailInfo {
   done: number;
   threadOrder?: number;
   rows?: readonly RailRow[];
+  /** True once this thread's live edit list has settled (so initial load does not trigger row lingering). */
+  listLoaded?: boolean;
   openFirst?(): void;
   openLast?(): void;
   openFirstLow?(): void;
@@ -242,9 +266,14 @@ const isDecisionWord = (value?: string) => value === "Kept" || value === "Done" 
 function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): UnifiedRailRow {
   if (group.length === 1) {
     const only = group[0]!;
+    const key = `${only.threadId}:${only.key}`;
+    const was = only.was?.length
+      ? [...new Set(only.was.map(w => `${only.threadId}:${w}`).filter(k => k !== key))]
+      : undefined;
     return {
       ...only,
-      key: `${only.threadId}:${only.key}`,
+      key,
+      was: was?.length ? was : undefined,
       section: placeToSection(only.place),
       latestThreadOrder: only.threadOrder,
       threadIds: [only.threadId],
@@ -287,9 +316,15 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
       members.push(member);
     }
   }
+  const key = `${lead.threadId}:${lead.key}`;
+  const was = [...new Set(group.flatMap(r => [
+    `${r.threadId}:${r.key}`,
+    ...(r.was ?? []).map(w => `${r.threadId}:${w}`),
+  ]).filter(k => k !== key))];
   return {
     ...lead,
-    key: `${lead.threadId}:${lead.key}`,
+    key,
+    was: was.length ? was : undefined,
     place,
     section,
     sourceOrder: lead.sourceOrder,
@@ -387,6 +422,20 @@ function batchPluralWord(row: UnifiedRailRow): string {
  * keeping flagged, revising, rejected, marker, and revised (`v2`) edits as individual rows.
  */
 function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" | "done"): UnifiedRailRow[] {
+  const unkeptBuckets = new Set<string>();
+  const leavingStatesByBucket = new Map<string, Set<boolean>>();
+  if (section === "low") {
+    for (const row of rows) {
+      if (!batchableRow(row, section)) continue;
+      const bucket = batchBucket(row);
+      if (!row.decided) unkeptBuckets.add(bucket);
+      else {
+        let states = leavingStatesByBucket.get(bucket);
+        if (!states) { states = new Set(); leavingStatesByBucket.set(bucket, states); }
+        states.add(!!row.leaving);
+      }
+    }
+  }
   const byBucket = new Map<string, UnifiedRailRow[]>();
   const passthrough: UnifiedRailRow[] = [];
   for (const row of rows) {
@@ -394,7 +443,14 @@ function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" 
       passthrough.push(row);
       continue;
     }
-    const bucket = batchBucket(row);
+    const baseBucket = batchBucket(row);
+    // Keep lingering kept rows separate from unkept rows (and separate from rows with a different fade phase),
+    // while preserving the exact `batch:low:${baseBucket}` key when the entire batch is kept together so the DOM node fades cleanly in place.
+    let bucket = baseBucket;
+    if (section === "low" && row.decided) {
+      if (unkeptBuckets.has(baseBucket)) bucket = `${baseBucket}:kept`;
+      if ((leavingStatesByBucket.get(baseBucket)?.size ?? 0) > 1) bucket = `${bucket}:${row.leaving ? "leaving" : "held"}`;
+    }
     const list = byBucket.get(bucket);
     if (list) list.push(row);
     else byBucket.set(bucket, [row]);
@@ -427,10 +483,13 @@ function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" 
         return sum + (bc ? Math.max(0, bc.removed.end - bc.removed.start) : 0);
       }, 0)
       : 0;
-    const countPart = section === "done" ? `${ordered.length} kept ${pluralWord}` : `${ordered.length} ${pluralWord}`;
+    const countPart = section === "done" || first.decided ? `${ordered.length} kept ${pluralWord}` : `${ordered.length} ${pluralWord}`;
     const tipMeta = isCutBatch && totalRemoved > 0
       ? `${countPart} · ${formatRemovedSeconds(totalRemoved)} removed`
       : countPart;
+    const leaving = ordered.every(r => !!r.leaving);
+    const arriving = ordered.every(r => !!r.arriving);
+    const lingerFrom = first.lingerFrom && ordered.every(r => r.lingerFrom === first.lingerFrom) ? first.lingerFrom : undefined;
     result.push({
       ...first,
       key: `batch:${section}:${bucket}`,
@@ -444,8 +503,11 @@ function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" 
       tipText: first.tipText ?? first.label,
       tipMeta,
       tipDetail: undefined,
-      unkeepTip: section === "done" ? `Unkeep all ${ordered.length}` : first.unkeepTip,
+      unkeepTip: section === "done" && !lingerFrom ? `Unkeep all ${ordered.length}` : first.unkeepTip,
       batch: ordered,
+      ...(lingerFrom && { lingerFrom }),
+      ...(leaving && { leaving: true }),
+      ...(arriving && { arriving: true }),
     });
   }
   return result.sort(section === "low" ? byNewestRequestThenTime : byVideoTime);
@@ -453,33 +515,8 @@ function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" 
 
 const rowEditCount = (row: UnifiedRailRow) => row.batch ? row.batch.length : 1;
 
-/**
- * Combine cross-request edits that modify the same clip/stretch and sort every section of the beta edits column into
- * one unified timeline-ordered list (never stacked by chat request).
- */
-export function buildUnifiedRail(infos: ReadonlyMap<string, RailInfo>): RailView {
-  const hasStructured = [...infos.values()].some(info => info.rows !== undefined);
-  const sections: Record<RailSection, UnifiedRailRow[]> = { you: [], low: [], working: [], done: [] };
-  const byKey = new Map<string, UnifiedRailRow>();
-
-  if (!hasStructured) {
-    let need = 0, optional = 0, working = 0, done = 0;
-    for (const info of infos.values()) {
-      need += info.you;
-      optional += info.optional;
-      working += info.working;
-      done += info.done;
-    }
-    return {
-      sections, need, forYouRows: need, optional, working, done, pastHour: false,
-      findByKey: () => undefined,
-      findOpen: () => undefined,
-      findForEdit: () => undefined,
-      findForCall: () => undefined,
-      lowRiskParts: () => [],
-    };
-  }
-
+/** Combine structured thread reports into pre-batch unified rows. */
+function synthesizeUnifiedRows(infos: ReadonlyMap<string, RailInfo>): UnifiedRailRow[] {
   const allRows: (RailRow & { sourceOrder: number })[] = [];
   for (const info of infos.values()) {
     if (!info.rows?.length) continue;
@@ -510,11 +547,72 @@ export function buildUnifiedRail(infos: ReadonlyMap<string, RailInfo>): RailView
     else groups.push({ rows: [row] });
   }
 
+  return groups.map(group => synthesizeRow(group.rows));
+}
+
+export interface RailLingerLookup {
+  of(key: string): { from: HeldFrom; leaving: boolean } | undefined;
+  arrived?: ReadonlySet<string>;
+}
+
+/**
+ * Combine cross-request edits that modify the same clip/stretch and sort every section of the beta edits column into
+ * one unified timeline-ordered list (never stacked by chat request). `sections` holds pure logical placement (used for
+ * keyboard stepping, Keep-next, and Keep all); `display` holds the visual lists where rows briefly pause and fade out
+ * in their previous section before moving cleanly into Working or Done without appearing twice.
+ */
+export function buildUnifiedRail(infos: ReadonlyMap<string, RailInfo>, lingerState?: RailLingerLookup): RailView {
+  const hasStructured = [...infos.values()].some(info => info.rows !== undefined);
+  const sections: Record<RailSection, UnifiedRailRow[]> = { you: [], low: [], working: [], done: [] };
+  const byKey = new Map<string, UnifiedRailRow>();
+
+  if (!hasStructured) {
+    let need = 0, optional = 0, working = 0, done = 0;
+    for (const info of infos.values()) {
+      need += info.you;
+      optional += info.optional;
+      working += info.working;
+      done += info.done;
+    }
+    return {
+      sections,
+      display: {
+        sections,
+        working,
+        done,
+        findByKey: () => undefined,
+        sectionOf: () => undefined,
+      },
+      need, forYouRows: need, optional, working, done, pastHour: false,
+      findByKey: () => undefined,
+      findOpen: () => undefined,
+      findForEdit: () => undefined,
+      findForCall: () => undefined,
+      lowRiskParts: () => [],
+    };
+  }
+
+  const unifiedRows = synthesizeUnifiedRows(infos);
+  const dispRaw: Record<RailSection, UnifiedRailRow[]> = { you: [], low: [], working: [], done: [] };
+  const sectionByKey = new Map<string, RailSection>();
+
   let pastHour = false;
-  for (const group of groups) {
-    const unified = synthesizeRow(group.rows);
+  for (const unified of unifiedRows) {
     sections[unified.section].push(unified);
     if (Math.floor(Math.max(0, unified.displayAt)) >= 3600) pastHour = true;
+
+    const held = lingerState?.of(unified.key);
+    const heldIn: RailSection | undefined = !held ? undefined
+      : held.from === "done" ? (unified.place === "working" ? "done" : undefined)
+      : (unified.place === "working" || unified.place === "done") ? (held.from === "optional" ? "low" : "you")
+      : undefined;
+    const dispSec = heldIn ?? unified.section;
+    const arriving = !heldIn && (dispSec === "working" || dispSec === "done") && !!lingerState?.arrived?.has(unified.key);
+    const dispRow: UnifiedRailRow = heldIn
+      ? { ...unified, lingerFrom: held!.from, leaving: held!.leaving }
+      : arriving ? { ...unified, arriving: true } : unified;
+    dispRaw[dispSec].push(dispRow);
+    sectionByKey.set(unified.key, dispSec);
   }
 
   sections.you.sort(byVideoTime);
@@ -522,11 +620,32 @@ export function buildUnifiedRail(infos: ReadonlyMap<string, RailInfo>): RailView
   sections.working.sort(byVideoTime);
   sections.done = collapseSectionBatches(sections.done, "done");
 
+  dispRaw.you.sort(byVideoTime);
+  dispRaw.low = collapseSectionBatches(dispRaw.low, "low");
+  dispRaw.working.sort(byVideoTime);
+  dispRaw.done = collapseSectionBatches(dispRaw.done, "done");
+
   const orderedSections: readonly UnifiedRailRow[][] = [sections.you, sections.low, sections.working, sections.done];
   for (const list of orderedSections) for (const row of list) byKey.set(row.key, row);
 
+  const dispByKey = new Map<string, UnifiedRailRow>();
+  for (const sec of ["you", "low", "working", "done"] as const) {
+    for (const row of dispRaw[sec]) {
+      dispByKey.set(row.key, row);
+      sectionByKey.set(row.key, sec);
+      if (row.batch) for (const item of row.batch) sectionByKey.set(item.key, sec);
+    }
+  }
+
   return {
     sections,
+    display: {
+      sections: dispRaw,
+      working: dispRaw.working.length,
+      done: dispRaw.done.reduce((sum, r) => sum + rowEditCount(r), 0),
+      findByKey: key => dispByKey.get(key),
+      sectionOf: key => sectionByKey.get(key),
+    },
     need: sections.you.filter(r => r.countsAsNeed).length,
     forYouRows: sections.you.length,
     optional: sections.low.reduce((sum, r) => sum + rowEditCount(r), 0),
@@ -603,25 +722,95 @@ function rowSignature(row: RailRow): string {
 function infoSignature(info: RailInfo): string {
   const editsCount = info.edits?.length ?? 0;
   if (!info.rows) return `${info.you}|${info.optional}|${info.working}|${info.done}|${editsCount}`;
-  return `${info.threadOrder ?? 0}|${editsCount}|${info.rows.map(rowSignature).join("\n")}`;
+  return `${info.threadOrder ?? 0}|${info.listLoaded !== false ? 1 : 0}|${editsCount}|${info.rows.map(rowSignature).join("\n")}`;
 }
 
 /**
  * The column of edits beside the chat is one unified list per section for the whole video: each request reports its
- * rows (`report`), and the store combines overlapping cross-request edits and sorts every section by video time.
+ * rows (`report`), and the store combines overlapping cross-request edits, sorts every section by video time, and holds
+ * recently acted-on rows briefly in place before smoothly moving them to Working or Done without duplicates.
  */
 export class RailStore {
   private hosts = new Map<string, HTMLElement>();
   private refs = new Map<string, (el: HTMLElement | null) => void>();
   private infos = new Map<string, RailInfo>();
   private signatures = new Map<string, string>();
+  private linger = new ReviewLinger();
+  private doneShown = false;
+  private prevHeldKeys = new Set<string>();
+  private arrived = new Map<string, ReturnType<typeof setTimeout>>();
   private cachedView?: RailView;
   private listeners = new Set<() => void>();
   private version = 0;
 
+  constructor() {
+    this.linger.subscribe(() => this.onLingerChange());
+  }
+
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.version;
   private changed() { this.cachedView = undefined; this.version++; for (const listener of this.listeners) listener(); }
+
+  /** Whether the Done section at the foot of the rail is currently expanded (so revisions sent from Done linger in place). */
+  setDoneOpen(open: boolean) { this.doneShown = open; }
+
+  private clearArrived(key: string) {
+    const timer = this.arrived.get(key);
+    if (timer !== undefined) clearTimeout(timer);
+    this.arrived.delete(key);
+  }
+
+  private markArrived(key: string) {
+    if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    this.clearArrived(key);
+    this.arrived.set(key, setTimeout(() => {
+      this.arrived.delete(key);
+      this.changed();
+    }, ARRIVE_MS));
+  }
+
+  private syncLinger() {
+    const hasStructured = [...this.infos.values()].some(info => info.rows !== undefined);
+    if (!hasStructured) return;
+    const unifiedRows = synthesizeUnifiedRows(this.infos);
+    const tracked = unifiedRows
+      .filter(u => u.isCall || u.rows.some(r => this.infos.get(r.threadId)?.listLoaded !== false))
+      .map(u => ({ key: u.key, place: u.place, was: u.was, busy: u.busy }));
+    this.linger.track(tracked, true, this.doneShown);
+    const nextHeld = new Set<string>();
+    for (const row of tracked) if (this.linger.of(row.key)) nextHeld.add(row.key);
+    this.prevHeldKeys = nextHeld;
+    for (const key of [...this.arrived.keys()]) {
+      if (this.linger.of(key) || !unifiedRows.some(u => u.key === key && (u.place === "working" || u.place === "done"))) {
+        this.clearArrived(key);
+      }
+    }
+  }
+
+  private onLingerChange() {
+    const nextHeld = new Set<string>();
+    for (const key of this.prevHeldKeys) {
+      if (this.linger.of(key)) nextHeld.add(key);
+      else this.markArrived(key);
+    }
+    this.prevHeldKeys = nextHeld;
+    this.changed();
+  }
+
+  resetLinger() {
+    this.linger.dispose();
+    for (const timer of this.arrived.values()) clearTimeout(timer);
+    this.arrived.clear();
+    this.prevHeldKeys.clear();
+    this.changed();
+  }
+
+  dispose() {
+    this.linger.dispose();
+    for (const timer of this.arrived.values()) clearTimeout(timer);
+    this.arrived.clear();
+    this.prevHeldKeys.clear();
+  }
 
   /** Legacy portal host lookup kept for backwards compatibility. */
   host(section: RailSection, threadId: string) { return this.hosts.get(`${section}/${threadId}`) ?? null; }
@@ -644,7 +833,10 @@ export class RailStore {
   report(threadId: string, info?: RailInfo) {
     if (!info) {
       this.signatures.delete(threadId);
-      if (this.infos.delete(threadId)) this.changed();
+      if (this.infos.delete(threadId)) {
+        this.syncLinger();
+        this.changed();
+      }
       return;
     }
     const nextSig = infoSignature(info);
@@ -654,6 +846,7 @@ export class RailStore {
     this.cachedView = undefined;
     if (prevSig !== nextSig) {
       this.signatures.set(threadId, nextSig);
+      this.syncLinger();
       this.changed();
     }
   }
@@ -661,7 +854,10 @@ export class RailStore {
   info(threadId: string) { return this.infos.get(threadId); }
 
   view(): RailView {
-    return (this.cachedView ??= buildUnifiedRail(this.infos));
+    return (this.cachedView ??= buildUnifiedRail(this.infos, {
+      of: key => this.linger.of(key),
+      arrived: this.arrived.size ? new Set(this.arrived.keys()) : undefined,
+    }));
   }
 
   total(section: Exclude<RailSection, "low"> | "optional") {

@@ -169,6 +169,13 @@ export function SimpleWorkspaceBeta() {
   // The column of edits beside the chat is one unified list per section for the whole video (`rail`).
   // Working, at the column's foot, is open until the editor folds it, so what Scarlet has is in view; Done opens on a press.
   const [rail] = useState(() => new RailStore());
+  useEffect(() => () => rail.dispose(), [rail]);
+  const railProject = useRef(current.id);
+  useEffect(() => {
+    if (railProject.current === current.id) return;
+    railProject.current = current.id;
+    rail.resetLinger();
+  }, [rail, current.id]);
   const railVersion = useSyncExternalStore(rail.subscribe, rail.snapshot, rail.snapshot);
   const railView = rail.view();
   const [railOpen, setRailOpen] = useState({ working: true, done: false, low: true });
@@ -1815,15 +1822,16 @@ export function SimpleWorkspaceBeta() {
   // Opening a Working/Done edit unfolds its section.
   // Manually refolding that section while the same edit stays open keeps it folded.
   const lastUnfoldedSection = useRef<string>(undefined);
+  const openDisplaySection = openRailRow ? (railView.display.sectionOf(openRailRow.key) ?? openRailRow.section) : undefined;
   useEffect(() => {
-    const sec = openRailRow?.section;
+    const sec = openDisplaySection;
     const openKey = reviewingEdit && focusThread ? `${focusThread.id}:${openEditKey}` : openCall && pass ? `call:${pass.id}:${openCall.index}` : undefined;
     const key = openKey && (sec === "working" || sec === "done") ? `${sec}:${openKey}` : undefined;
     if (!key || (sec !== "working" && sec !== "done")) { lastUnfoldedSection.current = undefined; return; }
     if (lastUnfoldedSection.current === key) return;
     lastUnfoldedSection.current = key;
     setRailOpen(was => was[sec] ? was : { ...was, [sec]: true });
-  }, [openRailRow?.section, reviewingEdit, focusThread, openEditKey, openCall, pass]);
+  }, [openDisplaySection, reviewingEdit, focusThread, openEditKey, openCall, pass]);
   // The edit that's open, for a rejection that lands after the editor stepped on: only the edit it was sent from moves on.
   const openEditNow = useRef(openEditKey);
   openEditNow.current = openEditKey;
