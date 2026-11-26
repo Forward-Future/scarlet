@@ -4,7 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Task } from "@scarlet/shared";
 import { requestRoots } from "../../lib/requestRuns";
-import { useWorkingLines } from "../../lib/workingLines";
 import { TimelineWorking } from "./TimelineWorking";
 
 let root: Root, container: HTMLDivElement;
@@ -17,14 +16,13 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
-  useWorkingLines.setState({}, true);
   delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   vi.unstubAllGlobals();
 });
 
 const task = (id: string) => ({ id }) as Task;
 
-it("counts several requests at work and goes on to the next one in the chat with each press", async () => {
+it("shows Scarlet is editing without trailing text and goes on to the next request in the chat with each press", async () => {
   const chat = document.createElement("aside");
   chat.id = "simple-chat";
   // A pass at work with a revision under one of its rows, each with its own working line.
@@ -33,13 +31,13 @@ it("counts several requests at work and goes on to the next one in the chat with
   document.body.append(chat);
   const scrolled: string[] = [];
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value(this: HTMLElement) { scrolled.push(this.id); } });
-  useWorkingLines.setState({ a: "Reading the dialogue at 12:34", b: "Listening to Cut 2" });
   try {
     await act(async () => root.render(<TimelineWorking tasks={[task("a")]} />));
     const status = () => container.querySelector<HTMLButtonElement>(".timeline-working")!;
-    expect(status().textContent).toBe("Scarlet is editing · Reading the dialogue at 12:34");
+    expect(status().textContent).toBe("Scarlet is editing");
+    expect(status().getAttribute("aria-label")).toBe("Scarlet is editing. Show in the chat");
     await act(async () => root.render(<TimelineWorking tasks={[task("a"), task("b")]} />));
-    expect(status().textContent).toBe("Scarlet is editing · Working on 2 at once");
+    expect(status().textContent).toBe("Scarlet is editing");
     // The pass's own line, not the one of the request drawn inside it; then the revision, lit whole; then round again.
     await act(async () => status().click());
     await act(async () => status().click());
@@ -120,18 +118,9 @@ it("finds and lights revisions inside the beta edits rail, open or folded, and d
   }
 });
 
-it("renders project-wide Pause beside Scarlet is editing and Resume when paused", async () => {
-  const onToggle = vi.fn();
-  await act(async () => root.render(<TimelineWorking tasks={[task("a")]} pause={{ paused: false, onToggle }} />));
-  const pauseBtn = container.querySelector<HTMLButtonElement>(".timeline-working-pause")!;
-  expect(pauseBtn.textContent).toBe("Pause");
-  await act(async () => pauseBtn.click());
-  expect(onToggle).toHaveBeenCalledTimes(1);
-
-  await act(async () => root.render(<TimelineWorking tasks={[]} pause={{ paused: true, onToggle }} />));
-  expect(container.querySelector(".timeline-working-paused")?.textContent).toBe("Editing paused");
-  const resumeBtn = container.querySelector<HTMLButtonElement>(".timeline-working-pause.is-resume")!;
-  expect(resumeBtn.textContent).toBe("Resume");
-  await act(async () => resumeBtn.click());
-  expect(onToggle).toHaveBeenCalledTimes(2);
+it("renders only the editing status button with no pause control on the timeline", async () => {
+  await act(async () => root.render(<TimelineWorking tasks={[task("a")]} />));
+  expect(container.querySelector(".timeline-working")?.textContent).toBe("Scarlet is editing");
+  expect(container.querySelector(".timeline-working-pause")).toBeNull();
+  expect(container.querySelectorAll("button")).toHaveLength(1);
 });

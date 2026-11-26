@@ -29,6 +29,9 @@ import { PictureBatches, type PictureRequest, type PreparedPictures } from "./pi
 import type { RecordingAreas } from "./show-area.js";
 import { json, notePreparing, text, type ToolRegistrar, type ToolResult } from "./tool-result.js";
 
+/** Frames one contact sheet holds (`SheetOptions.count`). */
+const SHEET_MOST = 12;
+
 export interface InspectionToolsDeps {
   tool: ToolRegistrar;
   client: ScarletClient;
@@ -208,12 +211,21 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
     return result;
   }
 
+  // A sheet holds 12 frames. A call asking for more gets 12 and is told so: refused, 44 calls in the editor's runs each
+  // cost a turn that re-read the whole run to ask again (2026-11-24).
+  const sheetOptions = { ...SheetOptions, count: z.number().int().min(2).default(9).describe(`Frames in the sheet, up to ${SHEET_MOST}; more are answered with ${SHEET_MOST}`) };
+  const SheetInput = z.object({ ...sheetOptions, mediaId: z.string().min(1).optional(), version: z.string().min(1).optional() });
+  const sheetRequest = (args: z.infer<typeof SheetInput>) => SheetRequest.parse({ ...args, count: Math.min(args.count, SHEET_MOST) });
+  const fewerFrames = (asked: number[]): ToolResult["content"] => asked.some(n => n > SHEET_MOST)
+    ? [{ type: "text", text: `A sheet holds ${SHEET_MOST} frames, so each asked for more has ${SHEET_MOST}. For more, split the window.` }] : [];
+
   tool("frame_contact_sheet",
     "See timestamped frames from one source or timeline window of up to 120 s. Use activity mode (up to 12 s) for pause checks, scene mode for shots, or focus for a cut boundary. For two or more windows use frame_contact_sheet_batch, which returns all of them in one result.",
-    { ...SheetOptions, mediaId: z.string().optional(), version: z.string().optional() },
+    { ...sheetOptions, mediaId: z.string().optional(), version: z.string().optional() },
     async args => {
-      const [request] = await pinPictures([SheetRequest.parse(args)]);
-      return deliverPictures(await preparePictures(request!));
+      const [request] = await pinPictures([sheetRequest(args)]);
+      const result = await deliverPictures(await preparePictures(request!));
+      return { ...result, content: [...fewerFrames([args.count]), ...result.content] };
     });
 
   // One call waits for the whole batch, a margin under the harness's tool deadline (toolWaitSeconds): 25 s for a
@@ -221,12 +233,12 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
   const batches = new PictureBatches(preparePictures, { waitMs: toolWait(caps, 20) * 1000 });
   tool("frame_contact_sheet_batch",
     "Inspect 1–8 independent picture windows together, each up to 120 s. One call returns every window's sheet, labeled by the index of its original window. If any took longer, nextCursor is set: collect the rest with batchId and that cursor until null. Activity sheets check every frame for pause decisions.",
-    { windows: z.array(SheetRequest).min(1).max(8).optional(), batchId: z.string().min(1).optional(), cursor: z.number().int().nonnegative().default(0) },
+    { windows: z.array(SheetInput).min(1).max(8).optional(), batchId: z.string().min(1).optional(), cursor: z.number().int().nonnegative().default(0) },
     async ({ windows, batchId, cursor }) => {
       if (!!windows === !!batchId || (windows && cursor)) throw new Error("Submit windows or collect a batchId with its cursor.");
-      const id = batchId ?? batches.start(await pinPictures(windows!));
+      const id = batchId ?? batches.start(await pinPictures(windows!.map(sheetRequest)));
       const page = await batches.collect(id, cursor);
-      const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify({ batchId: id, total: page.total, nextCursor: page.nextCursor }) }];
+      const content: ToolResult["content"] = [{ type: "text", text: JSON.stringify({ batchId: id, total: page.total, nextCursor: page.nextCursor }) }, ...fewerFrames(windows?.map(w => w.count) ?? [])];
       for (const item of page.items) {
         content.push({ type: "text", text: JSON.stringify({ index: item.index, ...("error" in item && { error: item.error }) }) });
         if ("pictures" in item) content.push(...(await deliverPictures(item.pictures)).content);

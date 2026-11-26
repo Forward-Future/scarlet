@@ -31,7 +31,7 @@ import {
   type TimelineOp,
   type TranscriptWord,
 } from "@scarlet/timeline";
-import { round3, summarizeTimelinePage } from "./analysis.js";
+import { FULL_TIMELINE_DEFAULTS, fullTimelinePage, round3, summarizeTimelinePage } from "./analysis.js";
 import { joinAudio } from "./dialogue-join.js";
 import { editReasonInput, makeIntentInput, timelineEditsInput } from "./mcp-schema.js";
 import { EDGES_IN_SOUND, type MediaSession, type SoundingEdge } from "./media-session.js";
@@ -77,11 +77,11 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
 
   tool(
     "timeline_get",
-    (authoring ? "Read the timeline version approved for the requested skill." : "Read a timeline version (default head).") + " summary: per track, each clip with id, label, timeline in–out (timecode), source range, speed, volume and fades, plus markers. Pass optional from/to (TIMELINE seconds) to read one stretch; long summaries page automatically with a from cursor. full: the complete Timeline JSON with every clip property (transforms, effects, caption styles). Clip ids are what ops reference. A media clip lasts (sourceOut - sourceIn) / speed on the timeline.",
+    (authoring ? "Read the timeline version approved for the requested skill." : "Read a timeline version (default head).") + ` summary: per track, each clip with id, label, timeline in–out (timecode), source range, speed, volume, fades, framing (scale, x, y, crops), effects and transition in, plus markers. Pass optional from/to (TIMELINE seconds) to read one stretch; long summaries page automatically with a from cursor. full: the Timeline JSON with every clip property (transforms, keyframes, effects, caption styles), taking from/to and paging the same way; ${FULL_TIMELINE_DEFAULTS} Read one stretch in full rather than the whole timeline. Clip ids are what ops reference. A media clip lasts (sourceOut - sourceIn) / speed on the timeline.`,
     { version: z.string().optional().describe(authoring ? "Defaults to the approved version" : "Version id; default head"),
       format: z.enum(["summary", "full"]).default("summary"),
-      from: z.number().finite().nonnegative().optional().describe("Optional start in TIMELINE seconds for summary format"),
-      to: z.number().finite().positive().optional().describe("Optional exclusive end in TIMELINE seconds for summary format") },
+      from: z.number().finite().nonnegative().optional().describe("Optional start in TIMELINE seconds"),
+      to: z.number().finite().positive().optional().describe("Optional exclusive end in TIMELINE seconds") },
     async ({ version, format, from, to }) => {
       if (authoring) {
         if (!authoring.changeId || (version && version !== authoring.version)) throw new Error("This skill reads only the approved timeline version.");
@@ -89,7 +89,7 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
       }
       if (from !== undefined && to !== undefined && to <= from) throw new Error("to must be greater than from.");
       const tl = await getTimeline(authoring?.version ?? version);
-      if (format === "full") return json(tl);
+      if (format === "full") return text(fullTimelinePage(tl, { from, to, maxChars: caps.resultChars ?? DEFAULT_RESULT_CHARS }));
       const project = await getHeader();
       return text(summarizeTimelinePage(tl, project.project.settings.fps, {
         from,

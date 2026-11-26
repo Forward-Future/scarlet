@@ -8,6 +8,7 @@ import {
   addedAfterRequest,
   summarizeTimeline,
   summarizeTimelinePage,
+  fullTimelinePage,
   captionWordMapper,
   dedupeWords,
   detectSilences,
@@ -264,5 +265,70 @@ describe("summarizeTimelinePage", () => {
     expect(slice).not.toContain("v_4 ");
     expect(slice).not.toContain("v_8 ");
     expect(slice).toContain("Showing 6 clips in 20.00–32.00 s (of 60 total).");
+  });
+
+  it("names a clip's framing, effects and transition, so reading them needn't take format full", () => {
+    const tl = emptyTimeline("prj");
+    tl.tracks[0]!.clips.push(makeMediaClip("m1", 0, 4, 0, { id: "framed",
+      transform: { x: 0.1, y: 0, scale: 1.5, rotation: 0, cropLeft: 0.2, cropRight: 0, cropTop: 0, cropBottom: 0.05 },
+      effects: [{ type: "lut", params: {}, enabled: true }, { type: "blur", params: {}, enabled: false }],
+      transitionIn: { type: "dissolve", duration: 0.5, direction: "left" } }));
+    tl.tracks[0]!.clips.push(makeMediaClip("m1", 4, 8, 4, { id: "plain" }));
+    const lines = summarizeTimeline(tl, 30).split("\n");
+    expect(lines.find(l => l.includes("framed"))).toContain(" framed scale 1.5 x 0.1 crop l0.2 b0.05 effects lut dissolve in 0.5 s");
+    expect(lines.find(l => l.includes("plain"))).toBe("  plain 0:04.00–0:08.00 <- m1 4.00–8.00");
+  });
+});
+
+describe("fullTimelinePage", () => {
+  const many = () => {
+    const tl = emptyTimeline("prj");
+    tl.version = "v_many";
+    for (let i = 0; i < 30; i++) {
+      tl.tracks[0]!.clips.push(makeMediaClip("m1", i * 5, i * 5 + 4, i * 4, { id: `v_${i}`, transform: { x: 0, y: 0, scale: i % 2 ? 1.2 : 1, rotation: 0, cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 } }));
+      tl.tracks[1]!.clips.push(makeMediaClip("m1", i * 5, i * 5 + 4, i * 4, { id: `a_${i}`, volume: i === 3 ? 0.5 : 1 }));
+    }
+    return tl;
+  };
+
+  it("gives every clip property but those at their default, and nothing is lost on a timeline that fits", () => {
+    const tl = many();
+    const out = JSON.parse(fullTimelinePage(tl));
+    expect(out.version).toBe("v_many");
+    expect(out.page).toBeUndefined();
+    const a3 = out.tracks[1].clips.find((c: { id: string }) => c.id === "a_3");
+    expect(a3).toMatchObject({ id: "a_3", kind: "media", mediaId: "m1", sourceIn: 15, sourceOut: 19, timelineIn: 12, volume: 0.5 });
+    expect(a3).not.toHaveProperty("speed");
+    expect(a3).not.toHaveProperty("enabled");
+    expect(a3).not.toHaveProperty("audioFadeIn");
+    expect(a3).not.toHaveProperty("effects");
+    expect(out.tracks[0].clips.find((c: { id: string }) => c.id === "v_1").transform).toEqual({ scale: 1.2 });
+    // Filling the defaults back in gives the timeline exactly.
+    expect(out.tracks.flatMap((t: { clips: unknown[] }) => t.clips)).toHaveLength(60);
+    expect(fullTimelinePage(tl).length).toBeLessThan(JSON.stringify(tl).length * 0.75);
+  });
+
+  it("reads one stretch, and pages a long timeline by clip start within the result budget", () => {
+    const tl = many();
+    const slice = JSON.parse(fullTimelinePage(tl, { from: 20, to: 32 }));
+    expect(slice.tracks[0].clips.map((c: { id: string }) => c.id)).toEqual(["v_5", "v_6", "v_7"]);
+    expect(slice.page).toBe("Clips in 20–32 s: 6 of 60.");
+
+    const limit = 3_000;
+    const seen = new Set<string>();
+    let from: number | undefined;
+    let pages = 0;
+    while (pages < 30) {
+      const page = fullTimelinePage(tl, { from, maxChars: limit });
+      expect(page.length).toBeLessThanOrEqual(limit);
+      const parsed = JSON.parse(page);
+      for (const t of parsed.tracks) for (const c of t.clips) seen.add(c.id);
+      pages++;
+      const next = /from=([\d.]+)/.exec(parsed.page ?? "");
+      if (!next) break;
+      from = Number(next[1]);
+    }
+    expect(pages).toBeGreaterThan(1);
+    expect(seen.size).toBe(60);
   });
 });

@@ -94,7 +94,7 @@ function resolveRestoredCutsTarget(
   restoredCuts: number[],
 ): ResolvedTarget {
   const { head } = project;
-  if (change.state !== "ready") throw conflict("cut_review_stale", "This pass has changed since. Open the call again from For you.");
+  if (change.state !== "ready") throw conflict("cut_review_stale", "This pass has changed since. Open the call again from Needs review.");
   const unchanged = head === change.fromVersion && !change.cutEdits?.length;
   const { review, draft, joinFades } = prepareCutReview(ctx, change, unchanged ? restoredCuts : undefined);
   if (!review) throw badRequest("cuts_unsupported", "This proposal has no individually restorable cuts.");
@@ -224,7 +224,7 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
   if (change.cutAssessments?.length && !opts.restoredCuts) {
     const review = prepareCutReview(ctx, change).review;
     if (!review || opts.spots || change.cutAssessments.length !== review.cuts.length || change.cutAssessments.some(a => a.verdict === "ask"))
-      throw conflict("review_decisions_needed", "Make this pass’s calls in For you first.");
+      throw conflict("review_decisions_needed", "Make this pass’s calls in Needs review first.");
     // The editor's call on a cut stands over Scarlet's verdict, as when the pass is applied once it finishes.
     opts = { ...opts, restoredCuts: keptCuts(change, review) };
   }

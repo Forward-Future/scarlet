@@ -68,7 +68,7 @@ export interface ThreadEdit extends EditRef {
   rejected?: true;
   /**
    * The edit was flagged for the editor (`check`) before it was rejected. `check` is cleared so nothing treats a
-   * rejected edit as still waiting, while `wasCheck` keeps its row in For you, marked Rejected.
+   * rejected edit as still waiting, while `wasCheck` keeps its row in Needs review, marked Rejected.
    */
   wasCheck?: true;
 }

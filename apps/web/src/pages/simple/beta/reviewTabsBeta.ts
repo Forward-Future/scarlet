@@ -1,14 +1,14 @@
 /**
- * A request with something for the editor to review lists its edits and calls under three tabs: For you, Working and
+ * A request with something for the editor to review lists its edits and calls under three tabs: Needs review, Working and
  * Done (the editor chose this on 2026-11-23). Every row is in exactly one place: waiting on the editor, optional (an
  * edit Scarlet didn't flag that the editor hasn't decided: the column of edits lists these under Low risk, below
- * For you's rows), with Scarlet, or decided.
+ * Needs review's rows), with Scarlet, or decided.
  * The chat draws its lists from this and ↑ ↓ and Keep step by it, so the two can't disagree about a tab's rows.
  */
 export type RowPlace = "you" | "optional" | "working" | "done";
 export type ReviewTab = "you" | "working" | "done";
 
-/** The tab a request's open list shows. For you is the one shown until another is pressed, its optional line open or not. */
+/** The tab a request's open list shows. Needs review is the one shown until another is pressed, its optional line open or not. */
 export const tabShown = (open: string | undefined): ReviewTab => open === "working" || open === "done" ? open : "you";
 
 /**
@@ -30,7 +30,7 @@ export function inListOrder<R extends { at: number; num?: number }>(rows: readon
   return order.numbers && sorted.every(r => r.num !== undefined) ? sorted.sort((a, b) => a.num! - b.num!) : sorted;
 }
 
-/** The rows of the tab shown, top to bottom: For you's waiting rows, then the optional ones while that line is open. */
+/** The rows of the tab shown, top to bottom: Needs review's waiting rows, then the optional ones while that line is open. */
 export function rowsOfTab<R extends { place: RowPlace; at: number; num?: number }>(rows: readonly R[], tab: ReviewTab, optionalOpen: boolean, order: ListOrder): R[] {
   const of = (place: RowPlace) => inListOrder(rows.filter(r => r.place === place), order);
   return tab === "you" ? [...of("you"), ...(optionalOpen ? of("optional") : [])] : of(tab);
@@ -38,7 +38,7 @@ export function rowsOfTab<R extends { place: RowPlace; at: number; num?: number 
 
 /**
  * The stops ↑ and ↓ step through in the column of edits: the rows of the part the open row is in. A low-risk row
- * (`low`: an edit Scarlet didn't flag) steps through Low risk's rows; any other through the tab `open` shows: For you's
+ * (`low`: an edit Scarlet didn't flag) steps through Low risk's rows; any other through the tab `open` shows: Needs review's
  * rows that wait, Working's or Done's.
  */
 export function sectionStops<E, C>(stops: readonly ReviewStop<E, C>[], open: string | undefined, low: boolean, order: ListOrder) {
@@ -103,7 +103,7 @@ export type HeldFrom = "you" | "optional" | "done";
 type Held = { key: string; from: HeldFrom; leaving: boolean; busy: boolean; timers: ReturnType<typeof setTimeout>[] };
 
 /**
- * The rows the editor has just acted on. Kept, rejected or sent back, a row of For you belongs to Done or Working at
+ * The rows the editor has just acted on. Kept, rejected or sent back, a row of Needs review belongs to Done or Working at
  * once, and one sent back from Done belongs to Working at once; either stays where it was for a moment with its new
  * state before it fades and leaves, so the list doesn't jump under the pointer. Held by the turn, which outlives its
  * block moving between the conversation and the place above the message box.
@@ -127,9 +127,9 @@ export class ReviewLinger {
   }
 
   /**
-   * Where each row is now. One that was listed in For you, or among the edits Scarlet didn't flag while those were on
+   * Where each row is now. One that was listed in Needs review, or among the edits Scarlet didn't flag while those were on
    * screen (`optionalShown`), and has gone to Working or Done is held. One in Done (`doneShown`, or still lingering in
-   * For you) that has gone to Working is held where it is so it shows Scarlet at work before fading out. `was` names
+   * Needs review) that has gone to Working is held where it is so it shows Scarlet at work before fading out. `was` names
    * the rows it took the place of: a rejected edit is a new row for the old. Called as the list draws, so a row that
    * has just moved is still in the list in that same draw.
    */
