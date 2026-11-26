@@ -13700,6 +13700,63 @@ it("leaves full screen on the first Esc and keeps the open edit, which the next 
   expect(editPanel()).toBeNull();
 });
 
+it("shows only the video in full screen, hides the transport and marking tools, and fades the player pills on pointer stillness", async () => {
+  appliedEdits();
+  await show();
+  await act(async () => {});
+  await click(dockFor(turnFor("chg_approved_2")).querySelector(".simple-pass-list > li > button")!);
+  expect(editPanel()).not.toBeNull();
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  const transport = container.querySelector<HTMLElement>(".cut-transport")!;
+  expect(transport.hidden).toBe(false);
+  expect(container.querySelector(".picture-mark-tools")).not.toBeNull();
+  expect(container.querySelector(".ambient-light")).not.toBeNull();
+
+  vi.useFakeTimers();
+  try {
+    await click(container.querySelector('button[aria-label="Full screen"]')!);
+    await act(async () => {});
+    expect(stage.dataset.expanded).toBe("true");
+    expect(stage.dataset.idle).toBe("true");
+    // The edit card and timeline stay mounted so their state and shortcuts survive, while hidden from view.
+    expect(transport.hidden).toBe(true);
+    expect(editPanel()).not.toBeNull();
+    expect(container.querySelector(".timeline-panel")).not.toBeNull();
+    // Ambient light, drawing tools and drawn marks are out of full screen, and M does nothing while it is on.
+    expect(container.querySelector(".ambient-light")).toBeNull();
+    expect(container.querySelector(".picture-mark-tools")).toBeNull();
+    expect(container.querySelector(".picture-marks")).toBeNull();
+    await press("m");
+    expect(usePictureMarksStore.getState().marking).toBeNull();
+    expect(container.querySelector(".picture-marks")).toBeNull();
+
+    // Moving the pointer brings the player's pills back, and 2 s of stillness hides them again.
+    await act(async () => {
+      stage.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 120, clientY: 80 }));
+    });
+    expect(stage.dataset.idle).toBeUndefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    expect(stage.dataset.idle).toBeUndefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(stage.dataset.idle).toBe("true");
+
+    // Leaving full screen brings the transport, drawing tools and ambient light back, and M marks again.
+    await click(container.querySelector('button[aria-label="Exit full screen"]')!);
+    await act(async () => {});
+    expect(stage.dataset.expanded).toBeUndefined();
+    expect(stage.dataset.idle).toBeUndefined();
+    expect(transport.hidden).toBe(false);
+    expect(editPanel()).not.toBeNull();
+    expect(container.querySelector(".timeline-panel")).not.toBeNull();
+    expect(container.querySelector(".picture-mark-tools")).not.toBeNull();
+    expect(container.querySelector(".ambient-light")).not.toBeNull();
+    await press("m");
+    expect(usePictureMarksStore.getState().marking).toBe(PRJ);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 function Address() {
   const { pathname, search } = useLocation();
   return <output id="address">{pathname}{search}</output>;
@@ -14001,7 +14058,7 @@ it("leaves full screen when Revise hands the keyboard to the message box, which 
   const stage = container.querySelector<HTMLElement>(".cut-preview")!;
   await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
   expect(stage.dataset.expanded).toBe("true");
-  // The card is still on screen over the timeline, with its keys. R aims the box at the edit and puts the caret in it.
+  // The card's keys still work while full screen hides it. R aims the box at the edit and puts the caret in it.
   useUiStore.setState({ composerFocus: 0 });
   await press("r");
   expect(useUiStore.getState().composerFocus).toBe(1);
