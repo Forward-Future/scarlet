@@ -652,9 +652,11 @@ it("lists a thread's edits once, by time, and opens one with its decisions under
   expect(dock.querySelector(".simple-review-tab-total")?.textContent).toBe("3");
   expect(dock.querySelector(".simple-review-tab-count")?.textContent).toBe("1");
   expect(dock.querySelector(".simple-review-tab-tally")).toBeNull();
+  expect(dock.querySelector(".simple-review-tabs .review-head-keep")).toBeNull();
   expect(keepConfidentBtn(turn)?.textContent).toBe("Keep 2 safe edits");
   expect(dock.querySelector(".simple-review-tabs + .review-filter-bar + .simple-pass-list")).not.toBeNull();
-  expect(dock.querySelector(".review-tier-sep")?.textContent).toBe("Safe edits (2)");
+  expect(dock.querySelector(".review-tier-sep .review-tier-label")?.textContent).toBe("Safe edits (2)");
+  expect(dock.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 2 safe edits");
   expect([editLists(turn), filterChips(turn)]).toEqual([[["Edits for you", ["wrap", "music bed", "captions"]]], [["All 3", "true"], ["Needs you 1", "false"]]]);
   // Filtering to Needs you narrows the list to only the flagged edit, and All brings confident edits right back.
   await click(filterChip("need", turn)!);
@@ -14578,9 +14580,10 @@ it("steps ↑ and ↓ through Needs review in Priority order while a pass waits,
   const back = [];
   for (let i = 0; i < 5; i++) { await press("ArrowUp"); await act(async () => {}); back.push(open()); }
   expect(back).toEqual(["mid trim", "intro trim", "Cut 0:06", "Cut 0:02", "Cut 0:02"]);
-  // Header holds Keep 3 confident, and the hairline divider separates the confident edits below.
-  expect(passCard().querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
-  expect(passCard().querySelector(".review-tier-sep")?.textContent).toBe("Safe edits (3)");
+  // The hairline divider separates safe edits below and holds Keep 3 safe edits on the same row.
+  expect(passCard().querySelector(".simple-review-tabs .review-head-keep")).toBeNull();
+  expect(passCard().querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
+  expect(passCard().querySelector(".review-tier-sep .review-tier-label")?.textContent).toBe("Safe edits (3)");
 });
 
 it("advances strictly down the Priority list on Keep, flagged edits first then confident edits", async () => {
@@ -15975,8 +15978,9 @@ it("surfaces a newer request's confident edits at the top of Confident edits and
   await act(async () => {});
 
   const dock = reviewDock()!;
-  // Flagged edit from the earlier request stays pinned at top; newer mographs appear first under Confident edits (4).
-  expect(dock.querySelector(".review-tier-sep")?.textContent).toBe("Safe edits (4)");
+  // Flagged edit from the earlier request stays pinned at top; newer mographs appear first under Safe edits (4).
+  expect(dock.querySelector(".review-tier-sep .review-tier-label")?.textContent).toBe("Safe edits (4)");
+  expect(dock.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 4 safe edits");
   expect(dockRows().map(r => r.querySelector(".simple-pass-words")?.textContent))
     .toEqual(["wrap", "Model A title", "Model B title", "music bed", "captions"]);
   expect(forYouTab()?.getAttribute("title")).toBe("5 unreviewed (1 needs you)");
@@ -16022,7 +16026,8 @@ it("keeps all confident edits across requests with Keep N confident and restores
   await act(async () => {});
   expect(forYouTab()?.getAttribute("title")).toBe("5 unreviewed (1 needs you)");
   expect(keepConfidentBtn()?.textContent).toBe("Keep 4 safe edits");
-  expect(reviewDock()!.querySelector(".review-tier-sep")?.textContent).toBe("Safe edits (4)");
+  expect(reviewDock()!.querySelector(".review-tier-sep .review-tier-label")?.textContent).toBe("Safe edits (4)");
+  expect(reviewDock()!.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 4 safe edits");
 });
 
 it("automatically resets the Needs you filter back to All once the last flagged edit is kept", async () => {
