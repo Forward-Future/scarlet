@@ -71,7 +71,8 @@ beforeEach(() => {
   localStorage.clear();
   usePlayerStore.setState({ time: 0, duration: 0, playing: false, rate: 1, speedUpRate: 1.5 });
   // Each test starts with an empty message box, nothing saved for any request and no dialog left open over the keys.
-  useUiStore.setState({ agentDraft: "", agentContext: null, savedDrafts: {}, draftOwner: null, notePopover: null, speaking: false, exportNotice: null, newLayout: false });
+  // SCARLET_TEST_BETA=1 runs the whole suite with the new layout on, to compare the two layouts while sharing code.
+  useUiStore.setState({ agentDraft: "", agentContext: null, savedDrafts: {}, draftOwner: null, notePopover: null, speaking: false, exportNotice: null, newLayout: process.env.SCARLET_TEST_BETA === "1" });
   useExports.setState({ jobs: {} });
   container = document.createElement("div");
   document.body.append(container);
