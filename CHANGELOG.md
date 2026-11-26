@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Zooms and pans on still images and other keyframed clips now glide smoothly instead of shaking or stepping between pixels.
 - Keeping or sending an edit to Scarlet from Needs review or Safe edits now shows a green check mark or turning spinner right on its row before it moves to Working or Done.
 - Updating existing B-roll To-dos or other edits from a follow-up request now replaces the earlier rows in Needs review instead of listing old and new versions side by side.
 - In the beta layout, your message bubbles in the chat now always show your full text instead of cutting off after two lines.
