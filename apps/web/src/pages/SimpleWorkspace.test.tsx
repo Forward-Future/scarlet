@@ -6914,6 +6914,29 @@ it("steps through a pass's calls with ↑ and ↓, and Esc closes the call", asy
   expect(container.querySelector('[aria-label="Suggestion"]')).toBeNull();
 });
 
+it("steps through a pass's calls with a modified next/previous edit shortcut", async () => {
+  useShortcutsStore.getState().setBinding("nextEdit", "Alt+ArrowDown");
+  useShortcutsStore.getState().setBinding("prevEdit", "Alt+ArrowUp");
+  try {
+    flagged();
+    useProjectStore.setState({ current: data });
+    await show();
+    await act(async () => {});
+    const altArrow = (key: "ArrowDown" | "ArrowUp") => act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, code: key, altKey: true, bubbles: true, cancelable: true }));
+    });
+    await altArrow("ArrowDown");
+    expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 3:50 · After");
+    await altArrow("ArrowDown");
+    expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 9:58 · After");
+    await altArrow("ArrowUp");
+    expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 3:50 · After");
+  } finally {
+    localStorage.clear();
+    resetShortcutsStore();
+  }
+});
+
 it("starts ↓ on the first call still waiting when nothing is open, and ↑ on the last, as need you does", async () => {
   flagged();
   useProjectStore.setState({ current: data });
