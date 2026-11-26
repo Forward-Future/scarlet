@@ -2,6 +2,7 @@ import { matchesEdit, type EditKind, type EditRef, type ThreadEdit } from "@scar
 import type { TimeRange } from "@scarlet/timeline";
 import { createContext, useContext, useSyncExternalStore } from "react";
 import { editKey } from "../../lib/editMoments";
+import { removedSeconds as formatRemovedSeconds } from "../../lib/format";
 import type { RowPlace } from "./beta/reviewTabsBeta";
 import type { HoveredReviewRow, Nest } from "./types";
 
@@ -20,6 +21,8 @@ export interface RailSubRow {
   key: string;
   label: string;
   title?: string;
+  tipMeta?: string;
+  tipDetail?: string;
   value?: string;
   word?: string;
   decided: boolean;
@@ -93,7 +96,10 @@ export interface RailRow {
   fresh?: boolean;
   spent?: string;
   tipText?: string;
+  tipMeta?: string;
   tipDetail?: string;
+  /** Seconds removed when this row is a cut (used to sum removed time on grouped `+N` cut rows). */
+  removedSeconds?: number;
   ariaLabel?: string;
   logControl: "open-pass-item" | "open-edit";
   logLabel: string;
@@ -309,6 +315,9 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
     version: Math.max(...group.map(r => r.version)),
     fresh: group.some(r => r.fresh),
     spent: lead.spent ?? [...group].reverse().find(r => r.spent)?.spent,
+    tipMeta: lead.tipMeta ?? [...group].reverse().find(r => r.tipMeta)?.tipMeta,
+    tipDetail: lead.tipDetail ?? [...group].reverse().find(r => r.tipDetail)?.tipDetail,
+    removedSeconds: lead.removedSeconds ?? [...group].reverse().find(r => r.removedSeconds !== undefined)?.removedSeconds,
     hadCheck: group.some(r => r.hadCheck),
     members,
     nests: group.flatMap(r => r.nests),
@@ -410,6 +419,18 @@ function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" 
       }
     }
     const pluralWord = batchPluralWord(first);
+    const isCutBatch = rowIsCut(first);
+    const totalRemoved = isCutBatch
+      ? ordered.reduce((sum, item) => {
+        if (item.removedSeconds !== undefined && item.removedSeconds > 0) return sum + item.removedSeconds;
+        const bc = item.editRef?.beforeCut;
+        return sum + (bc ? Math.max(0, bc.removed.end - bc.removed.start) : 0);
+      }, 0)
+      : 0;
+    const countPart = section === "done" ? `${ordered.length} kept ${pluralWord}` : `${ordered.length} ${pluralWord}`;
+    const tipMeta = isCutBatch && totalRemoved > 0
+      ? `${countPart} · ${formatRemovedSeconds(totalRemoved)} removed`
+      : countPart;
     result.push({
       ...first,
       key: `batch:${section}:${bucket}`,
@@ -421,9 +442,8 @@ function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" 
       hadCheck: ordered.some(r => r.hadCheck),
       open: (active ?? first).open,
       tipText: first.tipText ?? first.label,
-      tipDetail: section === "done"
-        ? `${ordered.length} kept ${pluralWord} · click to view all on the timeline`
-        : `${ordered.length} ${pluralWord} · click to review all on the timeline`,
+      tipMeta,
+      tipDetail: undefined,
       unkeepTip: section === "done" ? `Unkeep all ${ordered.length}` : first.unkeepTip,
       batch: ordered,
     });
@@ -563,7 +583,7 @@ function rowSignature(row: RailRow): string {
     row.needs, row.asks, row.isAskingCurrent, row.pending, row.busy, row.revised,
     row.decided, row.rejected, row.skipped, row.countsAsNeed, row.hasNeedNest,
     !!row.isCall, !!row.isMarker, row.on, row.version, !!row.fresh,
-    row.spent ?? null, row.tipText ?? null, row.tipDetail ?? null, row.ariaLabel ?? null,
+    row.spent ?? null, row.tipText ?? null, row.tipMeta ?? null, row.tipDetail ?? null, row.removedSeconds ?? null, row.ariaLabel ?? null,
     row.logControl, row.logLabel, !!row.open, !!row.unkeepCall, row.unkeepTip ?? null, !!row.hadCheck,
     row.callIndex ?? null,
     row.members.map(m => [m.threadId, editKey(m.edit), m.canUnkeep]),
@@ -571,7 +591,7 @@ function rowSignature(row: RailRow): string {
     row.moment ? [
       row.moment.key, row.moment.more, row.moment.unfolded,
       row.moment.subRows.map(s => [
-        s.key, s.label, s.title ?? null, s.value ?? null, s.word ?? null,
+        s.key, s.label, s.title ?? null, s.tipMeta ?? null, s.tipDetail ?? null, s.value ?? null, s.word ?? null,
         s.decided, s.needs, s.asks, s.busy, s.revised, s.version, s.spent ?? null,
         s.on, s.mark ?? null, !!s.open, !!s.unkeep, s.unkeepTip ?? null,
         s.nests?.map(n => [n.key, !!n.needs, n.version ?? ""]) ?? null,
