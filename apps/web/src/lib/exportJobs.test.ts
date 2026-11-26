@@ -4,7 +4,7 @@ import { fullRenderContext, ScarletApiError, type Render } from "@scarlet/shared
 import { flushAppLog, startAppLog, stopAppLog } from "./appLog";
 import { api } from "./client";
 import { desktop } from "./desktop";
-import { exportCounting, exportFailureSeen, exportFile, resumeExports, useExports, type ExportFile, type ExportJob } from "./exportJobs";
+import { exportCounting, exportFailureSeen, exportFile, resumeExports, useExports, videoExport, type ExportFile, type ExportJob } from "./exportJobs";
 import { buildDb, PRJ } from "./mock/fixtures";
 import { useProjectStore, type ProjectData } from "../stores/project";
 import { useUiStore } from "../stores/ui";
@@ -115,6 +115,23 @@ it("saves caption files from the caption URL, with the range, and does not start
   expect(asked.request).not.toHaveBeenCalled();
   expect(asked.save).toHaveBeenLastCalledWith(14, api.vttUrl(PRJ, project.project.head!));
   expect(useUiStore.getState().exportNotice).toEqual({ path: DESTINATION.path, format: "vtt" });
+});
+
+it("doesn't count a caption or timeline file as the video's export, and keeps the video's own export through one", async () => {
+  const context = fullRenderContext(project.project);
+  vi.mocked(desktop.chooseVideoExport).mockResolvedValue({ ticket: 15, path: "/Users/me/cut.vtt" });
+  await exportFile(project, { name: "cut.vtt", format: "vtt", video: { kind: "full", quality: "delivery" } });
+  expect(job()).toMatchObject({ phase: "done", context, sidecar: true });
+  expect(videoExport(job())).toBeUndefined();
+  // Captions saved after the video leave the video exported.
+  useExports.setState({ jobs: { [PRJ]: { phase: "done", path: "/Users/me/cut.mp4", context } } });
+  vi.mocked(desktop.chooseVideoExport).mockResolvedValue({ ticket: 16, path: "/Users/me/cut.srt" });
+  await exportFile(project, { name: "cut.srt", format: "srt", video: { kind: "full", quality: "delivery" } });
+  expect(job()).toMatchObject({ phase: "done", sidecar: true });
+  expect(videoExport(job())).toEqual({ path: "/Users/me/cut.mp4", context });
+  vi.mocked(desktop.chooseVideoExport).mockResolvedValue({ ticket: 17, path: "/Users/me/cut.otio" });
+  await exportFile(project, { name: "cut.otio", format: "otio", video: { kind: "export", quality: "delivery" } });
+  expect(videoExport(job())).toEqual({ path: "/Users/me/cut.mp4", context });
 });
 
 it("saves a folder for another app: asks the engine what goes in it, linked where it will be, and has the app write it", async () => {
