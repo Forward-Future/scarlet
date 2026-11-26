@@ -1,14 +1,13 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { Project, Timeline, Transcript } from "@scarlet/timeline";
-import { applyOps, newId } from "@scarlet/timeline";
-import type { WsEvent, YouTubeConnectionStatus, YouTubePublishingKit, YouTubeThumbnailCandidate, YouTubeUploadJob } from "@scarlet/shared";
+import type { WsEvent, YouTubeChaptersResponse, YouTubeConnectionStatus, YouTubeUploadJob } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import {
@@ -16,8 +15,6 @@ import {
   collectFinalTimelineWords,
   formatYouTubeTimestamp,
   normalizeYouTubeChapters,
-  scoreThumbnailFrame,
-  selectDistinctSharpFrames,
 } from "./youtubeKit.js";
 import { getValidYouTubeAccessToken } from "./youtubeAuth.js";
 
@@ -217,16 +214,12 @@ async function startMockGoogleServer(): Promise<{ baseUrl: string; state: MockYo
 describe("YouTube Publishing Kit & Direct Connect", () => {
   let fixtureDir: string;
   let multiSceneMp4: string;
-  let blackAndSharpMp4: string;
-  let customPngPath: string;
   let mockGoogle: Awaited<ReturnType<typeof startMockGoogleServer>>;
   const appsToClose: ScarletApp[] = [];
 
   beforeAll(async () => {
     fixtureDir = mkdtempSync(join(tmpdir(), "scarlet-yt-test-"));
     multiSceneMp4 = join(fixtureDir, "multi-scene.mp4");
-    blackAndSharpMp4 = join(fixtureDir, "black-and-sharp.mp4");
-    customPngPath = join(fixtureDir, "custom-thumb.png");
 
     // 12s video with 3 visually distinct high-contrast scenes + audio
     execFileSync("ffmpeg", [
@@ -239,24 +232,6 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
       "-map", "[v]", "-map", "3:a",
       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac",
       multiSceneMp4,
-    ]);
-
-    // 6s video: first 3s pure black, last 3s sharp colorful testsrc2
-    execFileSync("ffmpeg", [
-      "-hide_banner", "-loglevel", "error", "-y",
-      "-f", "lavfi", "-i", "color=c=black:s=320x180:d=3:r=30",
-      "-f", "lavfi", "-i", "testsrc2=duration=3:size=320x180:rate=30",
-      "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
-      "-map", "[v]",
-      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-      blackAndSharpMp4,
-    ]);
-
-    // Custom PNG thumbnail
-    execFileSync("ffmpeg", [
-      "-hide_banner", "-loglevel", "error", "-y",
-      "-f", "lavfi", "-i", "smptehdbars=duration=1:size=640x360:rate=1",
-      "-frames:v", "1", customPngPath,
     ]);
 
     mockGoogle = await startMockGoogleServer();
@@ -601,78 +576,37 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
       .toEqual(["0:00 Intro", "0:18 Main Topic"]);
   });
 
-  it("drafts Publishing Kit with sharp non-black candidate thumbnails, playhead capture, and custom image upload", async () => {
+  it("returns final-cut chapters from GET /projects/:id/youtube/chapters without packaging suggestions", async () => {
     const { scarlet, api } = makeApp();
     const { projectId } = await seedEditedProject(scarlet, api, multiSceneMp4);
 
-    const kitRes = await api<{ kit: YouTubePublishingKit }>("POST", `/projects/${projectId}/youtube/kit`, { useAi: false });
-    expect(kitRes.status).toBe(200);
-    const kit = kitRes.json.kit;
-    expect(kit.draftedWith).toBe("fallback");
-    expect(kit.title).toBe("Scarlet Demo Cut");
-    expect(kit.chapters[0]?.timestamp).toBe("0:00");
-    expect(kit.description).toContain("0:00");
-    expect(kit.thumbnails.length).toBeGreaterThanOrEqual(3);
-    expect(kit.thumbnails.length).toBeLessThanOrEqual(4);
-    for (const thumb of kit.thumbnails) {
-      expect(thumb.previewUrl.startsWith("data:image/jpeg;base64,")).toBe(true);
-    }
-
-    // Playhead frame capture
-    const capRes = await api<{ thumbnail: YouTubeThumbnailCandidate }>("POST", `/projects/${projectId}/youtube/thumbnail-frame`, { time: 5.2 });
-    expect(capRes.status).toBe(200);
-    expect(capRes.json.thumbnail.source).toBe("playhead");
-    expect(capRes.json.thumbnail.previewUrl.startsWith("data:image/")).toBe(true);
-
-    // Custom image upload by local path (desktop pickFile)
-    const customRes = await api<{ thumbnail: YouTubeThumbnailCandidate }>("POST", `/projects/${projectId}/youtube/thumbnail-upload`, { path: customPngPath });
-    expect(customRes.status).toBe(200);
-    expect(customRes.json.thumbnail.source).toBe("custom");
-    expect(customRes.json.thumbnail.label).toBe("custom-thumb.png");
-
-    // Verify frame scorer filters out pure black frames in favor of sharp ones
-    const darkJpeg = execFileSync("ffmpeg", [
-      "-hide_banner", "-loglevel", "error", "-ss", "1", "-i", blackAndSharpMp4,
-      "-frames:v", "1", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
-    ]);
-    const sharpJpeg = execFileSync("ffmpeg", [
-      "-hide_banner", "-loglevel", "error", "-ss", "4.5", "-i", blackAndSharpMp4,
-      "-frames:v", "1", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1",
-    ]);
-    const darkScore = await scoreThumbnailFrame(darkJpeg);
-    const sharpScore = await scoreThumbnailFrame(sharpJpeg);
-    expect(darkScore.isDarkOrBlank).toBe(true);
-    expect(sharpScore.isDarkOrBlank).toBe(false);
-    expect(sharpScore.quality).toBeGreaterThan(darkScore.quality * 5);
-    const picked = selectDistinctSharpFrames([
-      { time: 0.5, score: darkScore },
-      { time: 1.5, score: darkScore },
-      { time: 4.5, score: sharpScore },
-      { time: 5.0, score: sharpScore },
-    ], 2);
-    expect(picked.every(p => p.time >= 4)).toBe(true);
+    const res = await api<YouTubeChaptersResponse>("GET", `/projects/${projectId}/youtube/chapters`);
+    expect(res.status).toBe(200);
+    expect(res.json.chapters[0]?.timestamp).toBe("0:00");
+    expect(res.json.chaptersText).toContain("0:00");
+    expect(res.json.duration).toBeCloseTo(10, 1);
+    expect(res.json).not.toHaveProperty("titleOptions");
+    expect(res.json).not.toHaveProperty("tags");
+    expect(res.json).not.toHaveProperty("thumbnails");
   });
 
   // -------------------------------------------------------------------------
-  // Part 3: Direct Upload (resumable chunks, render reuse, thumbnail set, errors, cancel)
+  // Part 3: Direct Upload (resumable chunks, render reuse, errors, cancel)
   // -------------------------------------------------------------------------
 
-  it("renders, uploads via resumable chunks, sets thumbnail, and reuses the exact delivery render on repeat publish", async () => {
+  it("renders, uploads via resumable chunks, and reuses the exact delivery render on repeat publish", async () => {
     // Use a 256 KiB chunk size so our real rendered video spans multiple chunks cleanly.
     const { scarlet, api } = makeApp({ uploadChunkBytes: 256 * 1024 });
     await completeMockOAuth(api);
     const { projectId } = await seedEditedProject(scarlet, api);
 
-    const kit = (await api<{ kit: YouTubePublishingKit }>("POST", `/projects/${projectId}/youtube/kit`, { useAi: false })).json.kit;
-    const thumbId = kit.thumbnails[0]!.id;
+    const chapters = (await api<YouTubeChaptersResponse>("GET", `/projects/${projectId}/youtube/chapters`)).json;
 
-    // 1. First publish renders & uploads + sets thumbnail
+    // 1. First publish renders & uploads
     const pub1 = await api<{ upload: YouTubeUploadJob }>("POST", `/projects/${projectId}/youtube/publish`, {
       title: "My Finished Cut",
-      description: kit.description,
-      tags: ["scarlet", "demo"],
+      description: chapters.chaptersText,
       visibility: "private",
-      thumbnailId: thumbId,
     });
     expect(pub1.status).toBe(201);
     const uploadId = pub1.json.upload.id;
@@ -688,23 +622,21 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
     expect(finalJob.videoId).toBe("ytVid_ABC123");
     expect(finalJob.studioUrl).toBe("https://studio.youtube.com/video/ytVid_ABC123/edit");
     expect(finalJob.visibility).toBe("private");
-    expect(finalJob.thumbnailWarning).toBeUndefined();
     expect(mockGoogle.state.uploadMetadata).toMatchObject({
-      snippet: { title: "My Finished Cut", tags: ["scarlet", "demo"] },
+      snippet: { title: "My Finished Cut", description: chapters.chaptersText },
       status: { privacyStatus: "private" },
     });
+    expect((mockGoogle.state.uploadMetadata as { snippet?: Record<string, unknown> })?.snippet?.tags).toBeUndefined();
     expect(mockGoogle.state.uploadedChunks.length).toBeGreaterThanOrEqual(1);
     const totalUploaded = Buffer.concat(mockGoogle.state.uploadedVideoBytes).length;
     expect(totalUploaded).toBe(finalJob.bytesTotal);
     expect(totalUploaded).toBeGreaterThan(10_000);
-    expect(mockGoogle.state.uploadedThumbnail?.videoId).toBe("ytVid_ABC123");
-    expect(mockGoogle.state.uploadedThumbnail?.bytes.length).toBeGreaterThan(500);
+    expect(mockGoogle.state.uploadedThumbnail).toBeUndefined();
 
     // 2. Second publish on the exact same timeline head reuses the already-rendered delivery export!
     const pub2 = await api<{ upload: YouTubeUploadJob }>("POST", `/projects/${projectId}/youtube/publish`, {
       title: "My Finished Cut (Unlisted)",
       description: "Reusing exact render",
-      tags: [],
       visibility: "unlisted",
     });
     expect(pub2.status).toBe(201);
@@ -719,33 +651,12 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
     expect(final2.reusedRender).toBe(true);
   });
 
-  it("handles missing thumbnail permission (non-fatal), quota exceeded, revoked auth, and upload cancellation gracefully", async () => {
+  it("handles quota exceeded, revoked auth, and upload cancellation gracefully", async () => {
     const { scarlet, api } = makeApp({ uploadChunkBytes: 256 * 1024 });
     await completeMockOAuth(api);
     const { projectId } = await seedEditedProject(scarlet, api);
-    const thumb = (await api<{ thumbnail: YouTubeThumbnailCandidate }>("POST", `/projects/${projectId}/youtube/thumbnail-upload`, { path: customPngPath })).json.thumbnail;
 
-    // 1. Missing thumbnail permission (403 on thumbnails/set) -> video upload STILL succeeds with plain-English warning!
-    mockGoogle.state.failThumbnailStatus = 403;
-    const pubWarn = await api<{ upload: YouTubeUploadJob }>("POST", `/projects/${projectId}/youtube/publish`, {
-      title: "Unverified Channel Video",
-      description: "0:00 Intro",
-      tags: [],
-      visibility: "private",
-      thumbnailId: thumb.id,
-    });
-    let jobWarn = pubWarn.json.upload;
-    for (let i = 0; i < 120; i++) {
-      jobWarn = (await api<{ upload: YouTubeUploadJob }>("GET", `/youtube/uploads/${jobWarn.id}`)).json.upload;
-      if (jobWarn.phase === "done" || jobWarn.phase === "failed") break;
-      await sleep(100);
-    }
-    expect(jobWarn.phase).toBe("done");
-    expect(jobWarn.studioUrl).toBe("https://studio.youtube.com/video/ytVid_ABC123/edit");
-    expect(jobWarn.thumbnailWarning).toMatch(/channel verification/i);
-    mockGoogle.state.failThumbnailStatus = undefined;
-
-    // 2. Quota exceeded -> clear plain-English error
+    // 1. Quota exceeded -> clear plain-English error
     mockGoogle.state.failUploadStatus = {
       status: 403,
       body: { error: { code: 403, message: "The request cannot be completed because you have exceeded your quota.", errors: [{ reason: "quotaExceeded" }] } },
@@ -753,26 +664,24 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
     const pubQuota = await api<{ upload: YouTubeUploadJob }>("POST", `/projects/${projectId}/youtube/publish`, {
       title: "Quota Test",
       description: "",
-      tags: [],
       visibility: "private",
     });
     let jobQuota = pubQuota.json.upload;
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 120; i++) {
       jobQuota = (await api<{ upload: YouTubeUploadJob }>("GET", `/youtube/uploads/${jobQuota.id}`)).json.upload;
       if (jobQuota.phase === "failed" || jobQuota.phase === "done") break;
-      await sleep(50);
+      await sleep(100);
     }
     expect(jobQuota.phase).toBe("failed");
     expect(jobQuota.errorCode).toBe("youtube_quota_exceeded");
     expect(jobQuota.error).toMatch(/daily upload limit/i);
 
-    // 3. Cancellation mid-upload
+    // 2. Cancellation mid-upload
     mockGoogle.state.failUploadStatus = undefined;
     mockGoogle.state.delayChunkMs = 500;
     const pubCancel = await api<{ upload: YouTubeUploadJob }>("POST", `/projects/${projectId}/youtube/publish`, {
       title: "Cancel Test",
       description: "",
-      tags: [],
       visibility: "private",
     });
     await sleep(60);
@@ -781,13 +690,12 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
     expect(cancelled.json.upload.phase).toBe("cancelled");
     mockGoogle.state.delayChunkMs = 0;
 
-    // 4. Revoked auth (401 + refresh fails with invalid_grant) -> reconnect required
+    // 3. Revoked auth (401 + refresh fails with invalid_grant) -> reconnect required
     mockGoogle.state.failUploadStatus = { status: 401, body: { error: { code: 401, message: "Invalid Credentials" } } };
     mockGoogle.state.failRefreshInvalidGrant = true;
     const pubRevoked = await api<{ upload: YouTubeUploadJob }>("POST", `/projects/${projectId}/youtube/publish`, {
       title: "Revoked Auth Test",
       description: "",
-      tags: [],
       visibility: "private",
     });
     let jobRevoked = pubRevoked.json.upload;

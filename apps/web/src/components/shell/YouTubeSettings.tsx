@@ -167,7 +167,7 @@ export function YouTubeSettings() {
           <span className="transcription-glyph"><YouTubeMark size={20} /></span>
           <div>
             <h2 id="youtube-heading">YouTube</h2>
-            <p>Connect your channel to draft chapters and upload finished videos straight to YouTube Studio.</p>
+            <p>Connect your channel to upload finished videos with final-cut chapters straight to YouTube Studio.</p>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">

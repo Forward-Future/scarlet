@@ -117,10 +117,6 @@ export class Paths {
   notes(projectId: string) {
     return join(this.project(projectId), "notes");
   }
-  /** Candidate and custom YouTube thumbnails for a project. */
-  youtubeThumbs(projectId: string) {
-    return join(this.project(projectId), "youtube-thumbs");
-  }
   ensureProject(projectId: string) {
     if (!/^[a-zA-Z0-9_-]+$/.test(projectId)) throw new Error("Invalid project directory.");
     for (const d of [

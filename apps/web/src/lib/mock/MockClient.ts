@@ -987,7 +987,7 @@ export class MockClient implements ScarletApi {
     this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
     return this.latency({ status: { ...this.ytStatus } }, 80);
   }
-  async youtubePublishingKit(projectId: string) {
+  async youtubeChapters(projectId: string) {
     this.requireAuth();
     const project = this.store.projectById(projectId);
     const tl = project.head ? this.store.db.timelines[project.head] : undefined;
@@ -998,49 +998,11 @@ export class MockClient implements ScarletApi {
       { time: Math.min(14, Math.floor((duration * 2) / 3)), timestamp: `0:${String(Math.min(14, Math.floor((duration * 2) / 3))).padStart(2, "0")}`, title: "Wrap-up" },
     ];
     return this.latency({
-      kit: {
-        version: project.head ?? "ver_1",
-        duration,
-        title: project.name,
-        titleOptions: [project.name],
-        description: `Highlights from ${project.name}.\n\nChapters:\n${chapters.map(c => `${c.timestamp} ${c.title}`).join("\n")}`,
-        chapters,
-        tags: ["scarlet", "video"],
-        thumbnails: [
-          { id: "yt_demo_1", time: 2, label: "0:02", source: "auto" as const, previewUrl: "/sample-frame.jpg?t=2" },
-          { id: "yt_demo_2", time: 8, label: "0:08", source: "auto" as const, previewUrl: "/sample-frame.jpg?t=8" },
-          { id: "yt_demo_3", time: 15, label: "0:15", source: "auto" as const, previewUrl: "/sample-frame.jpg?t=15" },
-        ],
-        draftedWith: "fallback" as const,
-      },
-    }, 150);
-  }
-  async youtubeCaptureThumbnail(_projectId: string, body: { version?: string; time: number }) {
-    this.requireAuth();
-    return this.latency({
-      thumbnail: {
-        id: `yt_playhead_${Math.round(body.time * 10)}`,
-        time: body.time,
-        label: `Playhead 0:${String(Math.floor(body.time)).padStart(2, "0")}`,
-        source: "playhead" as const,
-        previewUrl: `/sample-frame.jpg?t=${body.time}`,
-      },
-    }, 120);
-  }
-  async youtubeUploadThumbnail(_projectId: string, file: Blob | { path: string }, name?: string) {
-    this.requireAuth();
-    const label = name ?? (file instanceof Blob ? "custom.jpg" : file.path.split(/[\\/]/).pop() || "custom.jpg");
-    return this.latency({
-      thumbnail: {
-        id: `yt_custom_${Date.now()}`,
-        label,
-        source: "custom" as const,
-        previewUrl: "/sample-frame.jpg",
-      },
-    }, 120);
-  }
-  youtubeThumbnailUrl(projectId: string, thumbId: string) {
-    return this.fileUrl(`/projects/${encodeURIComponent(projectId)}/youtube/thumbnails/${encodeURIComponent(thumbId)}`);
+      version: project.head ?? "ver_1",
+      duration,
+      chapters,
+      chaptersText: chapters.map(c => `${c.timestamp} ${c.title}`).join("\n"),
+    }, 100);
   }
   async youtubePublish(projectId: string, body: import("@scarlet/shared").YouTubePublishRequest) {
     this.requireAuth();

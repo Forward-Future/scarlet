@@ -156,7 +156,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
       {failed ? "Retry" : "Export"}
     </button>
   </>;
-  return <Modal open title={modalTitle} width={isYouTube ? 680 : 600} onClose={onClose} footer={modalFooter}>
+  return <Modal open title={modalTitle} width={600} onClose={onClose} footer={modalFooter}>
     {!advanced && (
       <div className="mb-3 flex items-center gap-1 rounded-lg border border-line bg-bg p-1" role="tablist" aria-label="Export destination">
         <button

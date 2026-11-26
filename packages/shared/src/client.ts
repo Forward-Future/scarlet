@@ -32,12 +32,10 @@ import type {
   UpdateStyleGuideRequest,
 } from "./styleGuides.js";
 import type {
+  YouTubeChaptersResponse,
   YouTubeConfigRequest,
   YouTubeConnectionStatus,
-  YouTubeKitRequest,
-  YouTubePublishingKit,
   YouTubePublishRequest,
-  YouTubeThumbnailCandidate,
   YouTubeUploadJob,
 } from "./youtube.js";
 
@@ -796,7 +794,7 @@ export class ScarletClient extends ClientTransport {
     return this.patch<{ settings: ServerSettings }>("/settings", body);
   }
 
-  // YouTube connection, Publishing Kit & direct upload
+  // YouTube connection, final-cut chapters & direct upload
   youtubeStatus() {
     return this.get<{ status: YouTubeConnectionStatus }>("/settings/youtube");
   }
@@ -812,21 +810,13 @@ export class ScarletClient extends ClientTransport {
   youtubeDisconnect() {
     return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/disconnect", {});
   }
-  youtubePublishingKit(projectId: string, body: Partial<YouTubeKitRequest> = {}, signal?: AbortSignal) {
-    return this.request<{ kit: YouTubePublishingKit }>("POST", `/projects/${apiPathId(projectId)}/youtube/kit`, body, { signal });
-  }
-  youtubeCaptureThumbnail(projectId: string, body: { version?: string; time: number }) {
-    return this.post<{ thumbnail: YouTubeThumbnailCandidate }>(`/projects/${apiPathId(projectId)}/youtube/thumbnail-frame`, body);
-  }
-  youtubeUploadThumbnail(projectId: string, file: Blob | { path: string }, name?: string) {
-    const path = `/projects/${apiPathId(projectId)}/youtube/thumbnail-upload`;
-    if (!(file instanceof Blob)) return this.post<{ thumbnail: YouTubeThumbnailCandidate }>(path, { path: file.path });
-    const fd = new FormData();
-    fd.append("file", file, name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "thumbnail.jpg"));
-    return this.post<{ thumbnail: YouTubeThumbnailCandidate }>(path, fd);
-  }
-  youtubeThumbnailUrl(projectId: string, thumbId: string) {
-    return this.fileUrl(`/projects/${apiPathId(projectId)}/youtube/thumbnails/${apiPathId(thumbId)}`);
+  youtubeChapters(projectId: string, version?: string, signal?: AbortSignal) {
+    return this.request<YouTubeChaptersResponse>(
+      "GET",
+      withQuery(`/projects/${apiPathId(projectId)}/youtube/chapters`, { version }),
+      undefined,
+      { signal },
+    );
   }
   youtubePublish(projectId: string, body: YouTubePublishRequest) {
     return this.post<{ upload: YouTubeUploadJob }>(`/projects/${apiPathId(projectId)}/youtube/publish`, body);

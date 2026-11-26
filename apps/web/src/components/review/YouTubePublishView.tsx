@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useInRouterContext, useLocation, useNavigate } from "react-router-dom";
 import {
   fullRenderContext,
-  type YouTubePublishingKit,
-  type YouTubeThumbnailCandidate,
+  type YouTubeChapter,
   type YouTubeUploadJob,
   type YouTubeVisibility,
 } from "@scarlet/shared";
 import { api, errorMessage } from "../../lib/client";
 import { desktop, isDesktop } from "../../lib/desktop";
 import { fmtBytes, pct } from "../../lib/format";
-import { usePlayerStore } from "../../stores/player";
 import type { ProjectData } from "../../stores/project";
 import { useUiStore } from "../../stores/ui";
 import { useYouTubeStore } from "../../stores/youtube";
@@ -19,7 +17,7 @@ import { PreferenceSelect } from "../ui/PreferenceSelect";
 import { ActivityProgress, Icon, InlineError, Spinner } from "../ui/primitives";
 
 export function isYouTubeUploadActive(phase?: YouTubeUploadJob["phase"]): boolean {
-  return phase === "queued" || phase === "rendering" || phase === "uploading" || phase === "thumbnail";
+  return phase === "queued" || phase === "rendering" || phase === "uploading";
 }
 
 const VISIBILITY_OPTIONS: Array<{ value: YouTubeVisibility; label: string }> = [
@@ -70,72 +68,71 @@ export function useYouTubePublish(current: ProjectData, active: boolean, hasCut:
   const applyUpload = useYouTubeStore(s => s.applyUpload);
   const clearUpload = useYouTubeStore(s => s.clearUpload);
 
-  const [kit, setKit] = useState<YouTubePublishingKit | null>(null);
-  const [loadingKit, setLoadingKit] = useState(false);
-  const [kitError, setKitError] = useState("");
-  const [title, setTitle] = useState(() => project.name.slice(0, 100));
+  const [chapters, setChapters] = useState<YouTubeChapter[]>([]);
+  const [chaptersText, setChaptersText] = useState("");
+  const [loadingChapters, setLoadingChapters] = useState(false);
+  const [chaptersError, setChaptersError] = useState("");
+  const [title, setTitle] = useState(() => project.name.trim().slice(0, 100));
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState<YouTubeVisibility>("private");
-  const [tagsText, setTagsText] = useState("");
-  const [thumbnails, setThumbnails] = useState<YouTubeThumbnailCandidate[]>([]);
-  const [selectedThumbId, setSelectedThumbId] = useState<string | undefined>(undefined);
-  const [thumbBusy, setThumbBusy] = useState<"playhead" | "custom" | null>(null);
-  const [thumbError, setThumbError] = useState("");
   const [connectBusy, setConnectBusy] = useState(false);
   const [submitBusy, setSubmitBusy] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [copiedChapters, setCopiedChapters] = useState(false);
 
   const loadedVersionRef = useRef<string | null>(null);
+  const userEditedDescriptionRef = useRef(false);
 
-  const fetchKit = useCallback(async (force = false) => {
+  const fetchChapters = useCallback(async () => {
     if (!hasCut || !project.head || !duration) return;
-    if (!force && loadedVersionRef.current === project.head && kit) return;
-    setLoadingKit(true);
-    setKitError("");
+    if (loadedVersionRef.current === project.head) return;
+    setLoadingChapters(true);
+    setChaptersError("");
     try {
-      const { kit: next } = await api.youtubePublishingKit(current.id, { version: project.head });
+      const res = await api.youtubeChapters(current.id, project.head);
       loadedVersionRef.current = project.head;
-      setKit(next);
-      setTitle(next.title);
-      setDescription(next.description);
-      setTagsText(next.tags.join(", "));
-      setThumbnails(next.thumbnails);
-      setSelectedThumbId(next.thumbnails[0]?.id);
+      setChapters(res.chapters);
+      setChaptersText(res.chaptersText);
+      if (!userEditedDescriptionRef.current) {
+        setDescription(res.chaptersText);
+      }
     } catch (err) {
-      setKitError(errorMessage(err));
+      setChaptersError(errorMessage(err));
     } finally {
-      setLoadingKit(false);
+      setLoadingChapters(false);
     }
-  }, [current.id, duration, hasCut, kit, project.head]);
+  }, [current.id, duration, hasCut, project.head]);
 
-  // Hydrate YouTube connection, active uploads, and draft Publishing Kit when switching into the tab.
+  // Hydrate YouTube connection, active uploads, and final-cut chapters when switching into the tab.
   useEffect(() => {
     if (!active) return;
     void loadStatus();
     void loadProjectUploads(current.id);
-    void fetchKit(false);
-  }, [active, current.id, loadStatus, loadProjectUploads, fetchKit]);
+    void fetchChapters();
+  }, [active, current.id, loadStatus, loadProjectUploads, fetchChapters]);
 
-  // Poll gently while OAuth sign-in is waiting or an upload is active (backups WS events).
+  // Poll gently while OAuth sign-in is waiting or an upload is active (backs up WS events).
+  const uploading = isYouTubeUploadActive(upload?.phase);
   useEffect(() => {
-    if (!active || status?.state !== "connecting") return;
-    const timer = window.setInterval(() => { void loadStatus(); }, 1500);
-    return () => window.clearInterval(timer);
-  }, [active, status?.state, loadStatus]);
-
-  useEffect(() => {
-    if (!active || !upload || !isYouTubeUploadActive(upload.phase)) return;
+    if (!active) return;
+    if (status?.state !== "connecting" && !uploading) return;
     const timer = window.setInterval(() => {
-      void api.youtubeUpload(upload.id).then(({ upload: next }) => applyUpload(next)).catch(() => undefined);
-    }, 800);
+      if (status?.state === "connecting") void loadStatus();
+      if (uploading && upload?.id) {
+        void api.youtubeUpload(upload.id).then(r => applyUpload(r.upload)).catch(() => {});
+      }
+    }, 1500);
     return () => window.clearInterval(timer);
-  }, [active, upload, applyUpload]);
+  }, [active, status?.state, uploading, upload?.id, loadStatus, applyUpload]);
 
   const connected = status?.state === "connected" && !status.needsReconnect;
-  const uploading = !!upload && isYouTubeUploadActive(upload.phase);
   const doneCurrent = upload?.phase === "done" && upload.context === context;
   const failed = upload?.phase === "failed";
+
+  const onDescriptionChange = (value: string) => {
+    userEditedDescriptionRef.current = true;
+    setDescription(value);
+  };
 
   const connectYouTube = async () => {
     setConnectBusy(true);
@@ -151,90 +148,35 @@ export function useYouTubePublish(current: ProjectData, active: boolean, hasCut:
     }
   };
 
-  const capturePlayhead = async () => {
-    if (!project.head || thumbBusy) return;
-    setThumbBusy("playhead");
-    setThumbError("");
-    try {
-      const time = usePlayerStore.getState().time;
-      const { thumbnail } = await api.youtubeCaptureThumbnail(current.id, { version: project.head, time });
-      setThumbnails(prev => [thumbnail, ...prev.filter(t => t.id !== thumbnail.id)]);
-      setSelectedThumbId(thumbnail.id);
-    } catch (err) {
-      setThumbError(errorMessage(err));
-    } finally {
-      setThumbBusy(null);
-    }
-  };
-
-  const uploadCustomFile = async (file: Blob | { path: string }, name?: string) => {
-    setThumbBusy("custom");
-    setThumbError("");
-    try {
-      const { thumbnail } = await api.youtubeUploadThumbnail(current.id, file, name);
-      setThumbnails(prev => [thumbnail, ...prev.filter(t => t.id !== thumbnail.id)]);
-      setSelectedThumbId(thumbnail.id);
-    } catch (err) {
-      setThumbError(errorMessage(err));
-    } finally {
-      setThumbBusy(null);
-    }
-  };
-
-  const pickCustomDesktop = async () => {
-    if (thumbBusy) return;
-    try {
-      const path = await desktop.pickFile("Choose YouTube thumbnail");
-      if (path) await uploadCustomFile({ path });
-    } catch (err) {
-      setThumbError(errorMessage(err));
-    }
-  };
-
-  const onFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (file) void uploadCustomFile(file, file.name);
-  };
-
   const copyChapters = async () => {
-    if (!kit?.chapters.length) return;
-    const text = kit.chapters.map(c => `${c.timestamp} ${c.title}`).join("\n");
+    if (!chaptersText) return;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(chaptersText);
       setCopiedChapters(true);
       window.setTimeout(() => setCopiedChapters(false), 1800);
     } catch {
-      /* clipboard may be unavailable in non-secure test env */
+      // Clipboard may be unavailable in restricted contexts.
     }
   };
 
   const publish = async () => {
-    if (!hasCut || !duration || !connected || uploading || submitBusy) return;
+    if (!hasCut || !project.head || !duration || !connected || uploading || submitBusy) return;
     const cleanTitle = title.trim();
     if (!cleanTitle) {
-      setSubmitError("Enter a video title before uploading.");
+      setSubmitError("Enter a video title.");
       return;
     }
-    const tags = tagsText
-      .split(",")
-      .map(t => t.trim())
-      .filter(Boolean)
-      .slice(0, 50);
-
     setSubmitBusy(true);
     setSubmitError("");
     try {
-      const { upload: created } = await api.youtubePublish(current.id, {
-        version: project.head ?? undefined,
+      const { upload: job } = await api.youtubePublish(current.id, {
+        version: project.head,
         title: cleanTitle,
         description,
-        tags,
         visibility,
-        ...(selectedThumbId ? { thumbnailId: selectedThumbId } : {}),
         quality: "delivery",
       });
-      applyUpload(created);
+      applyUpload(job);
     } catch (err) {
       setSubmitError(errorMessage(err));
     } finally {
@@ -270,22 +212,16 @@ export function useYouTubePublish(current: ProjectData, active: boolean, hasCut:
   return {
     status,
     connected,
-    kit,
-    loadingKit,
-    kitError,
+    chapters,
+    chaptersText,
+    loadingChapters,
+    chaptersError,
     title,
     setTitle,
     description,
-    setDescription,
+    setDescription: onDescriptionChange,
     visibility,
     setVisibility,
-    tagsText,
-    setTagsText,
-    thumbnails,
-    selectedThumbId,
-    setSelectedThumbId,
-    thumbBusy,
-    thumbError,
     connectBusy,
     submitBusy,
     submitError,
@@ -295,11 +231,7 @@ export function useYouTubePublish(current: ProjectData, active: boolean, hasCut:
     doneCurrent,
     failed,
     canPublish: hasCut && duration > 0 && connected && !uploading && !submitBusy && title.trim().length > 0,
-    fetchKit,
     connectYouTube,
-    capturePlayhead,
-    pickCustomDesktop,
-    onFileInputChange,
     copyChapters,
     publish,
     cancelUpload,
@@ -319,11 +251,9 @@ export function YouTubePublishView({
   hasCut: boolean;
   onClose(): void;
 }) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const {
-    status, connected, kit, loadingKit, kitError, title, setTitle, description, setDescription,
-    visibility, setVisibility, tagsText, setTagsText, thumbnails, selectedThumbId, setSelectedThumbId,
-    thumbBusy, thumbError, connectBusy, submitError, copiedChapters, upload, uploading, doneCurrent, failed,
+    status, connected, chapters, loadingChapters, chaptersError, title, setTitle, description, setDescription,
+    visibility, setVisibility, connectBusy, submitError, copiedChapters, upload, uploading, doneCurrent, failed,
   } = ctrl;
 
   const progressLabel = () => {
@@ -339,14 +269,13 @@ export function YouTubePublishView({
         : "";
       return `Uploading to YouTube… · ${pct(upload.progress)}${bytes}`;
     }
-    if (upload.phase === "thumbnail") return "Applying thumbnail…";
     return "";
   };
 
   return (
-    <div className="space-y-2.5" data-testid="youtube-publish-view">
+    <div className="space-y-3" data-testid="youtube-publish-view">
       {/* Account status bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-bg/60 px-3 py-1.5 text-[12px]">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-bg/60 px-3 py-2 text-[12px]">
         {connected && status?.channel ? (
           <>
             <div className="flex items-center gap-2 min-w-0">
@@ -372,7 +301,7 @@ export function YouTubePublishView({
                   ? "Your YouTube sign-in expired. Reconnect to upload."
                   : status?.configured
                     ? "Connect your YouTube channel to upload straight from Scarlet."
-                    : "Connect YouTube in Settings to enable direct upload (you can still draft and copy your kit below)."}
+                    : "Connect YouTube in Settings to enable direct upload."}
               </span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -394,7 +323,7 @@ export function YouTubePublishView({
         <InlineError>There’s no video to publish yet.</InlineError>
       ) : doneCurrent && upload ? (
         /* Completed upload confirmation card */
-        <div className="rounded-xl border border-line bg-bg/70 p-4 space-y-3" role="status" data-testid="youtube-upload-done">
+        <div className="rounded-xl border border-line bg-bg/70 p-4 space-y-2" role="status" data-testid="youtube-upload-done">
           <div className="flex items-start gap-2.5">
             <span className="mt-0.5 text-ok shrink-0"><Icon name="check" size={16} /></span>
             <div className="min-w-0 flex-1">
@@ -406,50 +335,9 @@ export function YouTubePublishView({
               </div>
             </div>
           </div>
-          {upload.thumbnailWarning && (
-            <p className="rounded-lg border border-warn/30 bg-warn/5 px-3 py-2 text-[12px] text-warn">
-              {upload.thumbnailWarning}
-            </p>
-          )}
         </div>
       ) : (
-        <fieldset disabled={uploading} className="min-w-0 space-y-2.5">
-          {/* Kit header actions */}
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
-            <div className="flex items-center gap-2 text-muted">
-              {loadingKit ? (
-                <>
-                  <Spinner className="size-3.5" />
-                  <span>Drafting title, chapters, and thumbnails…</span>
-                </>
-              ) : kit ? (
-                <span>
-                  Publishing Kit · {kit.chapters.length} {kit.chapters.length === 1 ? "chapter" : "chapters"}
-                  {kit.draftedWith === "ai" ? " · Drafted by Scarlet" : ""}
-                </span>
-              ) : (
-                <span>Publishing Kit</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              {kit && kit.chapters.length > 0 && (
-                <button type="button" className="btn-quiet text-[11.5px] py-1 px-2" onClick={() => void ctrl.copyChapters()}>
-                  {copiedChapters ? "Copied chapters" : "Copy chapters"}
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn-quiet text-[11.5px] py-1 px-2"
-                disabled={loadingKit || uploading}
-                onClick={() => void ctrl.fetchKit(true)}
-              >
-                <Icon name="refresh" size={12} /> Redraft
-              </button>
-            </div>
-          </div>
-
-          {kitError && <InlineError>{kitError}</InlineError>}
-
+        <fieldset disabled={uploading} className="min-w-0 space-y-3">
           {/* Title */}
           <div>
             <div className="flex items-center justify-between mb-1">
@@ -464,156 +352,65 @@ export function YouTubePublishView({
               onChange={e => setTitle(e.target.value)}
               placeholder="Video title"
             />
-            {kit && kit.titleOptions.length > 1 && (
-              <div className="mt-1.5 flex items-center gap-1.5 overflow-x-auto pb-0.5">
-                {kit.titleOptions.map(option => (
-                  <button
-                    key={option}
-                    type="button"
-                    className={`shrink-0 max-w-[240px] rounded-md border px-2 py-0.5 text-[11px] transition-colors truncate ${
-                      option === title
-                        ? "border-fg/40 bg-raised text-fg"
-                        : "border-line bg-bg/50 text-muted hover:text-fg hover:border-fg/30"
-                    }`}
-                    onClick={() => setTitle(option)}
-                    title={option}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* Description with final-cut chapters */}
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="label mb-0" htmlFor="yt-description">Description & chapters</label>
-              <span className="text-[11px] text-dim tnum">{description.length} / 5,000</span>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <div className="flex items-center gap-2">
+                <label className="label mb-0" htmlFor="yt-description">Description</label>
+                {loadingChapters ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] text-dim">
+                    <Spinner className="size-3" /> Loading chapters…
+                  </span>
+                ) : chapters.length > 0 ? (
+                  <span className="text-[11px] text-dim">
+                    {chapters.length} {chapters.length === 1 ? "chapter" : "chapters"} from final cut
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                {chapters.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn-quiet text-[11px] py-0.5 px-1.5"
+                    onClick={() => void ctrl.copyChapters()}
+                  >
+                    {copiedChapters ? "Copied" : "Copy chapters"}
+                  </button>
+                )}
+                <span className="text-[11px] text-dim tnum">{description.length} / 5,000</span>
+              </div>
             </div>
             <textarea
               id="yt-description"
-              rows={5}
-              className="field border border-line min-h-[112px] py-1.5 text-[12.5px] resize-y font-sans leading-[1.45]"
+              rows={6}
+              className="field border border-line min-h-[124px] py-2 text-[12.5px] resize-y font-sans leading-relaxed"
               maxLength={5000}
               value={description}
               onChange={e => setDescription(e.target.value)}
               placeholder="Video description and 0:00 chapters…"
             />
+            {chaptersError && <InlineError>{chaptersError}</InlineError>}
           </div>
 
-          {/* Visibility + Tags */}
-          <div className="grid grid-cols-1 gap-x-3 gap-y-2 sm:grid-cols-2">
-            <div>
-              <label className="label" htmlFor="yt-visibility">Visibility</label>
-              <PreferenceSelect
-                id="yt-visibility"
-                value={visibility}
-                onChange={setVisibility}
-                disabled={uploading}
-                options={VISIBILITY_OPTIONS}
-              />
-              <p className="mt-1 text-[11.5px] text-muted">
-                {visibility === "private"
-                  ? "Uploads as a Private draft in YouTube Studio so you can review before going live."
-                  : visibility === "unlisted"
-                    ? "Anyone with the link can watch. Hidden from search and your channel."
-                    : "Visible to everyone on YouTube right away."}
-              </p>
-            </div>
-            <div>
-              <label className="label" htmlFor="yt-tags">Tags</label>
-              <input
-                id="yt-tags"
-                className="field border border-line"
-                value={tagsText}
-                onChange={e => setTagsText(e.target.value)}
-                placeholder="tutorial, editing, scarlet"
-              />
-              <p className="mt-1 text-[11.5px] text-muted">Comma-separated keywords (optional).</p>
-            </div>
-          </div>
-
-          {/* Thumbnail selector */}
-          <div className="border-t border-line pt-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-              <span className="label mb-0">Thumbnail</span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  className="btn-quiet text-[11.5px] py-1 px-2"
-                  disabled={!!thumbBusy || uploading}
-                  onClick={() => void ctrl.capturePlayhead()}
-                >
-                  {thumbBusy === "playhead" ? <Spinner className="size-3" /> : <Icon name="image" size={12} />}
-                  Use current frame
-                </button>
-                <button
-                  type="button"
-                  className="btn-quiet text-[11.5px] py-1 px-2"
-                  disabled={!!thumbBusy || uploading}
-                  onClick={() => {
-                    if (isDesktop()) void ctrl.pickCustomDesktop();
-                    else fileInputRef.current?.click();
-                  }}
-                >
-                  {thumbBusy === "custom" ? <Spinner className="size-3" /> : <Icon name="upload" size={12} />}
-                  Choose image…
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  className="hidden"
-                  onChange={ctrl.onFileInputChange}
-                />
-              </div>
-            </div>
-
-            {thumbnails.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" role="radiogroup" aria-label="Thumbnail choices">
-                {thumbnails.map(thumb => {
-                  const selected = thumb.id === selectedThumbId;
-                  return (
-                    <button
-                      key={thumb.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => setSelectedThumbId(thumb.id)}
-                      className={`group relative aspect-video overflow-hidden rounded-lg border bg-bg text-left transition-all ${
-                        selected
-                          ? "border-hi ring-2 ring-hi/80"
-                          : "border-line opacity-80 hover:opacity-100 hover:border-fg/40"
-                      }`}
-                    >
-                      <img
-                        src={thumb.previewUrl}
-                        alt={`Thumbnail ${thumb.label}`}
-                        className="h-full w-full object-cover"
-                      />
-                      <span className="absolute bottom-1 left-1 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-medium text-fg tnum">
-                        {thumb.label}
-                      </span>
-                      {selected && (
-                        <span className="absolute top-1 right-1 size-4 rounded-full bg-hi text-bg grid place-items-center">
-                          <Icon name="check" size={10} />
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : loadingKit ? (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {[0, 1, 2, 3].map(i => (
-                  <div key={i} className="aspect-video rounded-lg border border-line bg-bg/60 animate-pulse" />
-                ))}
-              </div>
-            ) : (
-              <p className="text-[12px] text-dim">No frames extracted yet. Capture the current frame or choose an image.</p>
-            )}
-            <InlineError>{thumbError}</InlineError>
+          {/* Visibility */}
+          <div>
+            <label className="label" htmlFor="yt-visibility">Visibility</label>
+            <PreferenceSelect
+              id="yt-visibility"
+              value={visibility}
+              onChange={setVisibility}
+              disabled={uploading}
+              options={VISIBILITY_OPTIONS}
+            />
+            <p className="mt-1.5 text-[11.5px] text-muted">
+              {visibility === "private"
+                ? "Uploads as a Private draft in YouTube Studio so you can finish details before going live."
+                : visibility === "unlisted"
+                  ? "Anyone with the link can watch. Hidden from search and your channel."
+                  : "Visible to everyone on YouTube right away."}
+            </p>
           </div>
         </fieldset>
       )}
@@ -623,7 +420,7 @@ export function YouTubePublishView({
         <div className="rounded-lg border border-line bg-bg/60 p-3" data-testid="youtube-upload-progress">
           <ActivityProgress
             label={`YouTube upload progress for ${upload.title}`}
-            value={upload.phase === "queued" || upload.phase === "thumbnail" ? undefined : upload.progress}
+            value={upload.phase === "queued" ? undefined : upload.progress}
           >
             {progressLabel()}
           </ActivityProgress>

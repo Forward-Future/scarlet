@@ -1,5 +1,5 @@
 /**
- * YouTube Direct Connect, Publishing Kit drafting, and Resumable Upload API shapes.
+ * YouTube Direct Connect, final-cut chapters, and Resumable Upload API shapes.
  *
  * OAuth tokens and client secrets live strictly in the engine's private local storage
  * and NEVER appear in any schema or response defined here.
@@ -54,47 +54,20 @@ export const YouTubeChapter = z.object({
 });
 export type YouTubeChapter = z.infer<typeof YouTubeChapter>;
 
-export const YouTubeThumbnailCandidate = z.object({
-  id: z.string(),
-  /** Final edited timeline clock time (seconds) for extracted frames; omitted for custom image files. */
-  time: Seconds.optional(),
-  label: z.string(),
-  source: z.enum(["auto", "playhead", "custom"]).default("auto"),
-  /** Authenticated engine thumbnail path or data URL for previewing in Export. */
-  previewUrl: z.string(),
-  width: z.number().int().positive().optional(),
-  height: z.number().int().positive().optional(),
-  score: z.number().optional(),
-});
-export type YouTubeThumbnailCandidate = z.infer<typeof YouTubeThumbnailCandidate>;
-
-export const YouTubeKitRequest = z.object({
-  version: Id.optional(),
-  playheadTime: Seconds.optional(),
-  useAi: z.boolean().default(true),
-});
-export type YouTubeKitRequest = z.infer<typeof YouTubeKitRequest>;
-
-export const YouTubePublishingKit = z.object({
+export const YouTubeChaptersResponse = z.object({
   version: Id,
   duration: Seconds,
-  title: z.string(),
-  titleOptions: z.array(z.string()).default([]),
-  description: z.string(),
   chapters: z.array(YouTubeChapter),
-  tags: z.array(z.string()),
-  thumbnails: z.array(YouTubeThumbnailCandidate),
-  draftedWith: z.enum(["ai", "fallback"]),
+  /** Plain newline-separated YouTube chapter lines (`0:00 ...`) ready for the video description. */
+  chaptersText: z.string(),
 });
-export type YouTubePublishingKit = z.infer<typeof YouTubePublishingKit>;
+export type YouTubeChaptersResponse = z.infer<typeof YouTubeChaptersResponse>;
 
 export const YouTubePublishRequest = z.object({
   version: Id.optional(),
   title: z.string().trim().min(1, "Enter a video title.").max(100, "Title must be 100 characters or fewer."),
   description: z.string().max(5000, "Description must be 5,000 characters or fewer.").default(""),
-  tags: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
   visibility: YouTubeVisibility.default("private"),
-  thumbnailId: z.string().min(1).max(128).optional(),
   quality: z.enum(["preview", "delivery"]).default("delivery"),
   height: z.number().int().min(2).max(16384).multipleOf(2).optional(),
   bestQuality: z.boolean().optional(),
@@ -105,7 +78,6 @@ export const YouTubeUploadPhase = z.enum([
   "queued",
   "rendering",
   "uploading",
-  "thumbnail",
   "done",
   "failed",
   "cancelled",
@@ -128,7 +100,6 @@ export const YouTubeUploadJob = z.object({
   videoId: z.string().optional(),
   studioUrl: z.string().optional(),
   watchUrl: z.string().optional(),
-  thumbnailWarning: z.string().optional(),
   error: z.string().optional(),
   errorCode: z.string().optional(),
   createdAt: z.string().datetime(),
