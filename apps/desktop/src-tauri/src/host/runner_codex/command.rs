@@ -48,6 +48,9 @@ fn codex_tool_args(mcp: &McpSpec, executable: Option<&str>, workspace: Option<&W
     }
     args.extend([
         "-c".into(), r#"approval_policy="never""#.into(),
+        // Codex's own usage metrics to OpenAI stay off. Its private home drops the editor's own config.toml, so an
+        // opt-out there wouldn't reach it otherwise.
+        "-c".into(), "analytics.enabled=false".into(),
         // A request's agent searches the live web; a side check has none.
         "-c".into(), format!("web_search={}", if workspace.is_some() { r#""live""# } else { r#""disabled""# }),
         // Long edit prompts include the timeline, editor's notes and earlier answers.

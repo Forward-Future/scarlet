@@ -50,7 +50,7 @@ pub fn login_command(agent: &str) -> Option<(&'static str, &'static [&'static st
     match agent {
         "claude" => Some(("claude", &["auth", "login", "--claudeai"])),
         "codex" => Some(("codex", &["login"])),
-        "gemini" => Some(("agy", &["acp", "--login"])),
+        "gemini" => Some(("agy", &["acp", "--login", "--disable-telemetry"])),
         _ => None,
     }
 }
@@ -319,7 +319,7 @@ mod tests {
     fn claude_codex_and_gemini_have_one_click_sign_in() {
         assert_eq!(login_command("claude").unwrap().1, &["auth", "login", "--claudeai"]);
         assert_eq!(login_command("codex").unwrap(), ("codex", &["login"][..]));
-        assert_eq!(login_command("gemini").unwrap(), ("agy", &["acp", "--login"][..]));
+        assert_eq!(login_command("gemini").unwrap(), ("agy", &["acp", "--login", "--disable-telemetry"][..]));
         assert!(login_command("other").is_none());
     }
 }
