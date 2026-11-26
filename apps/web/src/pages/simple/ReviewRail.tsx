@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { REVISED_CHECK, type ThreadEdit } from "@scarlet/shared";
+import type { ThreadEdit } from "@scarlet/shared";
 import { AimRow } from "../../components/review/AimRow";
 import { EditVersion, RejectedMark } from "../../components/review/ThreadEdits";
 import { ChatRail } from "../../components/shell/ChatRail";
@@ -242,7 +242,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
         const tipDetail = row.tipDetail && row.tipDetail !== tipText ? row.tipDetail : undefined;
         const moment = row.moment;
         const unkeepTip = row.unkeepTip ?? "Move back to For you";
-        const statusWord = row.word ?? (row.revised ? REVISED_CHECK : undefined);
+        const statusWord = row.word;
         const ariaLabel = row.ariaLabel ?? (moment
           ? `${rowTime} ${row.label}, ${moment.more.replace("+ ", "and ")}`
           : row.rejected ? `${rowTime} ${row.label}, rejected`

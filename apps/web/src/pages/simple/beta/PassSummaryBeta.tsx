@@ -9,7 +9,7 @@ import { Icon } from "../../../components/ui/primitives";
 import { useFloatingPosition } from "../../../lib/uiHooks";
 import { editKindWord, editRowWord } from "../../../lib/editKind";
 import { listMoments, type Moment } from "../../../lib/editMoments";
-import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../../../lib/format";
+import { clock as clockLabel, lengthLabel, plural } from "../../../lib/format";
 import { editKey, unkeepEdits } from "../../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../../lib/madeSentence";
 import { decidedPassCalls, rejectedCallRef } from "../../../lib/passCalls";
@@ -451,21 +451,17 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
       // with them (the editor's call, 2026-11-23).
       const decided = !needs && !sent && (seen || decidedCallEditKeys.has(key));
       const decision = decided ? (e.marker ? "Done" : "Kept") : undefined;
-      // Where it stands, when it isn't simply waiting: the word a row among the calls ends on. In a list that leads
-      // with times it takes the place of the row's amount.
-      const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
+      // Where it stands while Scarlet is actively working on it (Revising…, Up next, Queued, Needs your answer).
+      // Once revised, v2 sits beside the title and the row keeps its type tag on the right.
+      const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : undefined;
       const at = (e as ThreadEdit).at ?? e.range.start;
       const displayAt = (!seen && !sent ? e.reviewRange?.start : undefined) ?? at;
-      // Listed with the calls, by its time. One that came back revised with a reason of
-      // Scarlet's own ends on its version there, as a revised call does, until it is kept or sent back again.
-      const rawKind = editRowWord(e);
-      const kindWord = rail && rawKind === "Edit" ? undefined : rawKind;
       const unkeepable = decided && !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(key));
       const label = (e.reason && e.summary) || e.label;
       return [{ key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey),
         at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
         label, n: 0, num: undefined,
-        state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: editRemovedLabel(e) ?? kindWord, word, revised, rejected: false, skipped: false,
+        state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: editRowWord(e), word, revised, rejected: false, skipped: false,
         forYou, onlyForYou: false,
         // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
         busy: !!sent && isWorking(sent.state), pending: !!sent, needs, asks, sentBack, decided,
@@ -1018,7 +1014,6 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
     <ThreadEdits key={listKey} projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
       leaving={only && leaveFrom ? isLeaving(leaveFrom) : undefined}
       nextQueuedId={actions.nextQueuedId}
-      hideGenericKind={!!rail}
       inRail={!!rail}
       askingKey={askingRowKey}
       onPlay={ref => actions.openEdit(thread, ref)}
@@ -1050,9 +1045,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       const countsAsNeed = rowEdits.some(e => asksEditor(revising(e)) || (!!e.check && !reviewed(e) && !revising(e)));
       const at = Math.min(...rowEdits.map(e => (e as ThreadEdit).at ?? e.range.start));
       const displayAt = (!reviewed(shown) && !isRevising ? shown.reviewRange?.start : undefined) ?? ((shown as ThreadEdit).at ?? shown.range.start);
-      const rawKind = editRowWord(shown);
-      const kindWord = rawKind === "Edit" ? undefined : rawKind;
-      const value = rowTabPlace === "done" ? decision : (editRemovedLabel(shown) ?? kindWord);
+      const value = rowTabPlace === "done" ? decision : editRowWord(shown);
       const label = (shown.reason && shown.summary) || shown.label;
       const checkTitle = revised || shown.reason ? undefined : shown.check;
       const version = rowEdits.length === 1 && shown.previous.length ? shown.previous.length + 1 : 0;

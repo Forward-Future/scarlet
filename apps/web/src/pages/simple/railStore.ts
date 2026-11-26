@@ -259,9 +259,11 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
   const askingRow = group.find(r => r.asks);
   const pendingRow = group.find(r => r.pending);
   const word = askingRow?.word ?? pendingRow?.word ?? lead.word;
-  const kindValue = lead.value && !isDecisionWord(lead.value)
+  const isSpecificKind = (v?: string) => !!v && !isDecisionWord(v) && v !== "Edit";
+  const kindValue = isSpecificKind(lead.value)
     ? lead.value
-    : [...group].reverse().find(r => r.value && !isDecisionWord(r.value))?.value;
+    : [...group].reverse().find(r => isSpecificKind(r.value))?.value
+      ?? (lead.value && !isDecisionWord(lead.value) ? lead.value : [...group].reverse().find(r => r.value && !isDecisionWord(r.value))?.value);
   const value = place === "done" ? (decision ?? lead.value) : kindValue;
   const members: RailEditMember[] = [];
   const seenMembers = new Set<string>();

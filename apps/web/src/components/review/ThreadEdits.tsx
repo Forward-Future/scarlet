@@ -5,7 +5,7 @@ import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE,
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
 import { asksEditor, editGroups, listPlaces, noEdits, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
-import { clock as clockLabel, editRemovedLabel } from "../../lib/format";
+import { clock as clockLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
 import { editKey, keepEdits, unkeepEdits } from "../../lib/keptEdits";
 import { isWorkingTask } from "../../lib/taskRun";
@@ -164,7 +164,7 @@ export function RejectedMark() {
  * its time. `label` names such a list, and `leaving` picks the rows that are on their way out of it: decided or sent back a
  * moment ago, they fade before they go.
  */
-export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low, hideGenericKind, inRail, askingKey }: {
+export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low, inRail, askingKey }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
   /** Edits the editor rejected, which are out of the video: each keeps a row where it was, with a × and "Rejected". */
   rejected?: ListedEdit[];
@@ -176,8 +176,6 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   label?: string; leaving?(edit: ListedEdit): boolean;
   /** The rows that are in For you's list only while low risk edits are included: they open into it and close out of it. */
   low?(edit: ListedEdit): boolean;
-  /** Omit the generic fallback word "Edit" at the right of a row, keeping meaningful words like "−1.0 s", "B-roll", "Kept". */
-  hideGenericKind?: boolean;
   /** Drawn inside the beta edits column: use Scarlet's hover tooltip instead of the system title tooltip. */
   inRail?: boolean;
   /** The row key of the edit whose question is currently shown over the message box, so it lights up. */
@@ -263,15 +261,11 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       const decided = isKept && !isRevising;
       // In For you, a handled edit says how it was decided (Kept, or Done for a marker).
-      // Otherwise a cut says how much came out, and any other edit says what it did.
-      const rawKind = editRowWord(edit);
-      const kindWord = hideGenericKind && rawKind === "Edit" ? undefined : rawKind;
-      const value = only && decided ? (edit.marker ? "Done" : "Kept")
-        : editRemovedLabel(edit) ?? kindWord;
+      // Otherwise every edit ends on a consistent word for what it did (Cut, Audio, B-roll, Edit…).
+      const value = only && decided ? (edit.marker ? "Done" : "Kept") : editRowWord(edit);
       const check = asks || (places > 1 ? needs > 0 : !!edit.check && !isRevising);
       const title = (edit.reason && edit.summary) || edit.label;
-      // One that came back revised with no reason from Scarlet says so on its row until it is kept: its card has no
-      // sentence for that.
+      // One that came back revised with no reason from Scarlet keeps its type tag beside v2 rather than replacing it.
       const revised = edit.check === REVISED_CHECK && !reviewed(edit) && !isRevising;
       const rowTime = clockLabel((edit as ThreadEdit).at ?? edit.range.start);
       const isAskingCurrent = !!askingKey && askingKey === editKey(edit);
@@ -295,12 +289,10 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         {lead}
         <span className="simple-edit-title">{decided && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
-        {/* Sent back or come back revised, the row ends on that (Revising…, Up next, Revised) in place of what it was:
-            one word a row, on the row's own line. One whose request stopped to ask the editor ends on Needs your
-            answer, in amber and still: it is their turn. */}
-        {value && !statusWord && !revised && <span className="simple-edit-value" title={took}>{value}</span>}
-        {statusWord ? <span className={asks ? "simple-edit-check" : busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>
-          : revised && <span className="simple-edit-check" title={took}>{edit.check}</span>}
+        {/* While sent back, the row ends on its live status (Revising…, Up next, Queued, Needs your answer). Once revised,
+            v2 sits beside the title and the edit keeps its type tag on the right. */}
+        {value && !statusWord && <span className="simple-edit-value" title={took}>{value}</span>}
+        {statusWord && <span className={asks ? "simple-edit-check" : busy ? "simple-edit-check is-kept working-text" : "simple-edit-check is-kept"} title={took}>{statusWord}</span>}
       </button>
         {showUnkeep && <span className="simple-row-unkeep"
           onPointerEnter={() => onHover?.(edit)} onPointerLeave={() => onHover?.()}>

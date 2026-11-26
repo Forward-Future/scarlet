@@ -47,8 +47,9 @@ describe("drawing an applied edit on the timeline", () => {
     expect(editKindWord(edit({}))).toBeUndefined();
   });
 
-  it("gives every row in a list a word, a mix included", () => {
+  it("gives every row in a list a word, a cut and a mix included", () => {
     expect(editRowWord(edit({ kind: "zoom" }))).toBe("Zoom");
+    expect(editRowWord(edit({ beforeCut: { version: "v1", removed: { start: 1, end: 2 } } }))).toBe("Cut");
     expect(editRowWord(edit({ kind: "other" }))).toBe("Edit");
     expect(editRowWord(edit({ kind: "other", marker: true }))).toBe("To do");
   });

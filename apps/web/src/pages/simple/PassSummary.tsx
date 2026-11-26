@@ -5,7 +5,7 @@ import { asksEditor, editGroups, listPlaces, revisionWord, useAdding, useCanUnke
 import { Icon } from "../../components/ui/primitives";
 import { editKindWord, editRowWord } from "../../lib/editKind";
 import { listMoments, type Moment } from "../../lib/editMoments";
-import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../../lib/format";
+import { clock as clockLabel, lengthLabel, plural } from "../../lib/format";
 import { editKey, unkeepEdits } from "../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../lib/madeSentence";
 import { decidedPassCalls, rejectedCallRef } from "../../lib/passCalls";
@@ -319,19 +319,17 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       // with them (the editor's call, 2026-11-23).
       const decided = !needs && !sent && (seen || decidedCallEditKeys.has(key));
       const decision = decided ? (e.marker ? "Done" : "Kept") : undefined;
-      // Where it stands, when it isn't simply waiting: the word a row among the calls ends on. In a list that leads
-      // with times it takes the place of the row's amount.
-      const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
+      // Where it stands while Scarlet is actively working on it (Revising…, Up next, Queued, Needs your answer).
+      // Once revised, v2 sits beside the title and the row keeps its type tag on the right.
+      const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : undefined;
       const at = (e as ThreadEdit).at ?? e.range.start;
       const displayAt = (!seen && !sent ? e.reviewRange?.start : undefined) ?? at;
-      // Listed with the calls, by its time. One that came back revised with a reason of
-      // Scarlet's own ends on its version there, as a revised call does, until it is kept or sent back again.
       const unkeepable = decided && !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(key));
       const label = (e.reason && e.summary) || e.label;
       return [{ key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey),
         at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
         label, n: 0, num: editNumber(e),
-        state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: editRemovedLabel(e) ?? editRowWord(e), word, revised, rejected: false, skipped: false,
+        state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: editRowWord(e), word, revised, rejected: false, skipped: false,
         forYou, onlyForYou: false,
         // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
         busy: !!sent && isWorking(sent.state), pending: !!sent, needs, asks, sentBack, decided,
@@ -1003,7 +1001,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       const asksNow = asksEditor(revisingNow);
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       const decided = isKept && !isRevising;
-      const value = editRemovedLabel(edit) ?? editRowWord(edit);
+      const value = editRowWord(edit);
       const decision = decided ? (edit.marker ? "Done" : "Kept") : undefined;
       const check = asksNow || (places > 1 ? needCount > 0 : !!edit.check && !isRevising);
       const title = (edit.reason && edit.summary) || edit.label;
@@ -1035,7 +1033,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
           n: 0,
           decision,
           value,
-          word: statusWord ?? (revised ? edit.check : undefined),
+          word: statusWord,
           revised,
           rejected: false,
           skipped: false,

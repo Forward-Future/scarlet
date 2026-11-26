@@ -3,7 +3,7 @@ import { clock } from "../../lib/format";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildThreads, threadEditList, type VersionSummary } from "@scarlet/shared";
+import { buildThreads, REVISED_CHECK, threadEditList, type VersionSummary } from "@scarlet/shared";
 import { api } from "../../lib/client";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useProjectStore, type ProjectData } from "../../stores/project";
@@ -251,4 +251,28 @@ it("offers Unkeep on kept edit rows and takes back Keep without opening the edit
   expect(onPlay).not.toHaveBeenCalled();
   expect(unkeep).toHaveBeenCalledWith(PRJ, { threadId: thread.id, edits: [{ changeId: edits[0]!.changeId, spot: edits[0]!.spot }] });
   expect(container.querySelector(".simple-unkeep")).toBeNull();
+});
+
+it("keeps a consistent type tag on every row, including cuts and v2 revisions", async () => {
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const edits: ThreadEdit[] = [
+    { changeId: "chg_v2", spot: 0, label: "Open Opus with “absolute banger”", range: { start: 13, end: 13 }, at: 13, kind: "cut",
+      beforeCut: { version: "ver_2", removed: { start: 13, end: 14 } }, previous: [{ changeId: "chg_v1", spot: 0 }], check: REVISED_CHECK },
+    { changeId: "chg_v2", spot: 1, label: "Re-timed intro", range: { start: 0, end: 3 }, kind: "other",
+      previous: [{ changeId: "chg_v1", spot: 1 }] },
+    { changeId: "chg_v2", spot: 2, label: "Quiet music bed", range: { start: 5, end: 10 }, kind: "audio", previous: [] },
+  ];
+  useProjectStore.setState({ current: data, status: "ready" });
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} inRail onPlay={() => {}} />));
+  const rows = [...container.querySelectorAll<HTMLElement>(".simple-edit")];
+  expect(rows.map(r => [
+    r.querySelector(".edit-version")?.textContent ?? null,
+    r.querySelector(".simple-edit-value")?.textContent ?? null,
+    r.querySelector(".simple-edit-check")?.textContent ?? null,
+    r.querySelector(".edit-row-time")?.classList.contains("is-need"),
+  ])).toEqual([
+    ["v2", "Cut", null, true],
+    ["v2", "Edit", null, false],
+    [null, "Audio", null, false],
+  ]);
 });
