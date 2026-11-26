@@ -24,7 +24,7 @@ Some requests aren't usage reports and don't depend on the setting: checking Git
 | `feature.used` | A listed request succeeds | `feature` |
 | `task.requested` | A request is queued | `kind`, `agent`, `fast` |
 | `task.finished` | A request is done, failed or cancelled | `kind`, `agent`, `state`, `changeCount`, `interrupted`, `durationMs` (omitted if a queued transcription ended before starting), `failureReason` (failed only; clean pauses, project deletes and quits are reported as `cancelled` with `interrupted: true`) |
-| `edit.reviewed` | An editor explicitly keeps an applied edit or successfully submits a revision or Undo edit request about it | `decision` (keep, revise, undo), `editId` |
+| `edit.reviewed` | An editor explicitly keeps or rejects an applied edit, or successfully submits a revision request about it | `decision` (keep, revise, undo), `editId` |
 | `render.finished` | An export is done, failed or cancelled | `kind`, `state`, `quality`, `failureReason` (failed only) |
 | `export.finished` | An export succeeds: a rendered video, a handoff folder, a timeline, captions or a YouTube upload | `route` (render, handoff, otio, srt, vtt, youtube), `firstExport` |
 | `youtube.upload_finished` | A YouTube upload is done, failed or cancelled | `state`, `visibility` (public, unlisted, private), `reusedRender`, `failureCode` (failed only: the engine's own code, such as `youtube_quota_exceeded`) |
@@ -64,7 +64,7 @@ Every event also carries its capture time, a random UUID for delivery deduplicat
 
 `task.requested` also counts transcriptions the engine starts on its own (`agent` is `api`) and runs that resume an earlier request.
 
-An explicit Keep is counted once when it marks that version as reviewed. Revise includes typed or spoken requests submitted about an applied edit. Undo means the editor used Undo edit and Scarlet accepted the request. Either request can still fail or be cancelled later. Opening Revise, discarding a draft, leaving an edit alone, approving a proposed cut and automatic retries do not produce review decisions.
+An explicit Keep is counted once when it marks that version as reviewed. Revise includes typed or spoken requests submitted about an applied edit. Undo means the editor rejected the edit (Reject edit, or X) and Scarlet put it back or accepted the request to. A revision or reject request can still fail or be cancelled later. Opening Revise, discarding a draft, leaving an edit alone, approving a proposed cut and automatic retries do not produce review decisions.
 
 The engine generates `editId` using HMAC-SHA-256 with the installation’s private random ID as its key and the original local edit reference as input. The same edit on another installation gets a different code. The dashboard uses the most recent reported choice per reviewed edit in the reporting period. Edits without a decision are outside that denominator.
 

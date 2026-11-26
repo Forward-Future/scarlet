@@ -29,7 +29,7 @@ Run commands from the repository root. `pnpm desktop:dev` opens your local proje
 
 The render tests need `ffmpeg` and `ffprobe` on `PATH`. A full run spreads the two longest test files, `apps/web/src/pages/SimpleWorkspace.test.tsx` and `apps/server/src/workspace.test.ts`, over their `.part*.test` files so they don't hold one worker for minutes. Write tests in the long file as usual; naming it on the command line runs it whole. [How the parts work](../test/parts.ts) For a change to editing behavior, use the editing evaluations and keep real footage, transcripts and results outside the repository. For performance work, the editor benchmarks measure project opening, scrubbing, previews and export. [Editing evaluations](../evals/README.md) · [Editor benchmarks](editor-performance.md)
 
-For headless integration work, `pnpm --filter @scarlet/server start` runs the API and render workers. `docker compose up -d` starts the containerized engine. To connect an external agent, configure `pnpm mcp` as a stdio MCP server with `SCARLET_SERVER` set to the engine URL, `SCARLET_PROJECT` to the project ID and `SCARLET_TOKEN` to the destination engine’s token. Use HTTPS for remote engines, or an HTTP loopback address through a tunnel. The standalone agent and MCP CLIs also accept `--token-file PATH` for an owner-readable file. The desktop app handles this connection for you. Both hosts include a Gemini CLI runner, which also requires a working sandbox backend.
+For headless integration work, `pnpm --filter @scarlet/server start` runs the API and render workers. `docker compose up -d` starts the containerized engine. To connect an external agent, configure `pnpm mcp` as a stdio MCP server with `SCARLET_SERVER` set to the engine URL, `SCARLET_PROJECT` to the project ID and `SCARLET_TOKEN` to the destination engine’s token. Use HTTPS for remote engines, or an HTTP loopback address through a tunnel. The standalone agent and MCP CLIs also accept `--token-file PATH` for an owner-readable file. The desktop app handles this connection for you. Both hosts include a Gemini runner through Antigravity CLI (`agy`), which also requires a working sandbox backend. Both also run Ollama, LM Studio and OpenRouter models through Claude Code. Each reads `OLLAMA_HOST`, `LMSTUDIO_HOST` or `OPENROUTER_API_KEY` from the environment when **Settings → Models** (or the standalone host's config file) leaves it unset.
 
 ### Ubuntu 24.04 x86-64
 
@@ -49,7 +49,7 @@ Download the `.deb` from the [Ubuntu preview releases](https://github.com/Forwar
 
 ## Transcription
 
-Scarlet prefers a local verbatim CrisperWhisper installation. Bundled Whisper large-v3-turbo handles local speech until that installation is ready. You can also choose another local model in **Settings → General**. [Transcription model setup and adapter interface](transcription-models.md)
+Bundled Whisper large-v3-turbo is the default local model. If you choose CrisperWhisper, bundled Whisper handles local speech until that installation is ready. You can also choose another local model in **Settings → General**. [Transcription model setup and adapter interface](transcription-models.md)
 
 Scarlet’s bundled whisper.cpp runtime supports GGML models. In a source checkout, `node apps/desktop/scripts/build-whisper.mjs` builds the pinned runtime with CMake. Set `CMAKE_COMMAND` if CMake is installed outside `PATH`. Packaged apps include the runtime.
 
@@ -106,7 +106,7 @@ Rerun the enable command after changing the helper script so the installed copy 
 
 ## Diagnose a problem
 
-**Settings → Advanced → Share logs → Export logs…** saves a ZIP with operational events and `system.json` for the app version, OS, engine, assistant status and desktop settings. The ZIP retains timings, status and error codes, generated IDs and route names. Free-form error text stays in the local log. The ZIP excludes media files, projects, transcript files, the database and sign-in tokens. For a bug report, note the time of the problem and review the bundle before sharing it.
+**Settings → Advanced → Share logs → Export logs…** saves a ZIP with operational events and `system.json` for the app version, OS, engine, assistant status and desktop settings. The ZIP retains timings, status and error codes, generated IDs and route names. Free-form error text stays in the local log. The ZIP excludes media files, projects, transcript files, the database and sign-in tokens. For a bug report, note the time of the problem and review the bundle before sharing it. **Settings → About → Report a problem…** sends the same system report and cleaned log straight to the Scarlet team with your description. [What a problem report sends](telemetry.md#problem-reports)
 
 | Platform | Desktop log |
 | --- | --- |
