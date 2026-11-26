@@ -436,3 +436,135 @@ describe("live preview rendering", () => {
     expect([src.width, src.height]).toEqual([640, 360]);
   });
 });
+
+describe("style guide transitions, sound effects, and camera color looks", () => {
+  it("streams built-in starter SFX (including Range requests), imports built-in and custom SFX into project media with dedupe, and cleans up deleted assets", async () => {
+    const catalogRes = await api("GET", "/style-guides/sounds/builtin");
+    expect(catalogRes.status).toBe(200);
+    const { sounds: builtIns } = await catalogRes.json() as { sounds: Array<{ id: string; name: string }> };
+    expect(builtIns.some(s => s.id === "soft-whoosh")).toBe(true);
+
+    const wavRes = await api("GET", "/style-guides/sounds/builtin/soft-whoosh");
+    expect(wavRes.status).toBe(200);
+    expect(wavRes.headers.get("content-type")).toBe("audio/wav");
+    const wavBytes = new Uint8Array(await wavRes.arrayBuffer());
+    expect(Buffer.from(wavBytes.subarray(0, 4)).toString("ascii")).toBe("RIFF");
+
+    const rangeRes = await api("GET", "/style-guides/sounds/builtin/soft-whoosh", undefined, { Range: "bytes=0-31" });
+    expect(rangeRes.status).toBe(206);
+    expect((await rangeRes.arrayBuffer()).byteLength).toBe(32);
+
+    const createdRes = await api("POST", "/style-guides", {
+      name: "motion-audio-color",
+      description: "Full studio kit",
+      isDefault: true,
+      transitions: [
+        { id: "tr_push", name: "Section push", type: "push", duration: 0.4, direction: "left", soundId: "sfx_whoosh", usageRule: "Default between sections", isDefault: true },
+      ],
+      sounds: [
+        { id: "sfx_whoosh", name: "Soft whoosh", source: "builtin", builtInId: "soft-whoosh", volumeDb: -14, duration: 0.45, usageRule: "With section push" },
+      ],
+      colorLook: {
+        name: "Warm Studio",
+        notes: "Gentle warmth and soft highlights",
+        adjustments: { exposure: 0.15, contrast: 1.06, warmth: 0.22, highlights: -0.2 },
+      },
+    });
+    expect(createdRes.status).toBe(201);
+    const { styleGuide: guide } = await createdRes.json() as { styleGuide: StyleGuideRecord };
+    expect(guide.transitions).toHaveLength(1);
+    expect(guide.sounds).toHaveLength(1);
+    expect(guide.colorLook?.name).toBe("Warm Studio");
+
+    const wavForm = new FormData();
+    wavForm.append("file", new Blob([wavBytes], { type: "audio/wav" }), "custom-swoosh.wav");
+    const wavUp = await api("POST", `/style-guides/${guide.id}/assets`, wavForm);
+    expect(wavUp.status).toBe(201);
+    const { asset: audioAsset } = await wavUp.json() as { asset: StyleGuideAsset };
+
+    const lutForm = new FormData();
+    lutForm.append("file", new Blob(["LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n"], { type: "text/plain" }), "StudioWarm.cube");
+    const lutUp = await api("POST", `/style-guides/${guide.id}/assets`, lutForm);
+    expect(lutUp.status).toBe(201);
+    const { asset: lutAsset } = await lutUp.json() as { asset: StyleGuideAsset };
+
+    const updatedRes = await api("PUT", `/style-guides/${guide.id}`, {
+      sounds: [
+        ...guide.sounds,
+        { id: "sfx_custom", name: "Custom swoosh", source: "asset", assetId: audioAsset.id, volumeDb: -12, usageRule: "When lower thirds enter" },
+      ],
+      colorLook: {
+        ...guide.colorLook!,
+        lutAssetId: lutAsset.id,
+        lutName: lutAsset.name,
+      },
+    });
+    expect(updatedRes.status).toBe(200);
+
+    const editTask = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "Grade cameras and add transitions",
+    })).json() as { task: Task }).task;
+    const builtPrompt = await prompt(editTask);
+    expect(builtPrompt).toContain("### Preferred transitions");
+    expect(builtPrompt).toContain("Section push [Default]: push left, 0.4 s");
+    expect(builtPrompt).toContain("### Sound effects (SFX)");
+    expect(builtPrompt).toContain("Custom swoosh");
+    expect(builtPrompt).toContain("### Camera color look");
+    expect(builtPrompt).toContain(`${guide.id}/assets/${lutAsset.id}/${lutAsset.name}`);
+
+    const imp1Res = await api("POST", `/projects/${project.id}/media/from-style-sound`, {
+      styleGuideId: guide.id,
+      soundId: "sfx_whoosh",
+    });
+    expect(imp1Res.status).toBe(201);
+    const imp1 = await imp1Res.json() as { media: MediaAsset; volumeDb: number; volume: number };
+    expect(imp1.media.kind).toBe("audio");
+    expect(imp1.volumeDb).toBe(-14);
+    expect(imp1.volume).toBeCloseTo(0.1995, 3);
+
+    const imp2Res = await api("POST", `/projects/${project.id}/media/from-style-sound`, {
+      builtInId: "soft-whoosh",
+    });
+    expect(imp2Res.status).toBe(201);
+    const imp2 = await imp2Res.json() as { media: MediaAsset };
+    expect(imp2.media.id).toBe(imp1.media.id);
+
+    const delLutRes = await api("DELETE", `/style-guides/${guide.id}/assets/${lutAsset.id}`);
+    expect(delLutRes.status).toBe(200);
+    const afterDel = (await delLutRes.json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    expect(afterDel.colorLook?.lutAssetId).toBeUndefined();
+    expect(afterDel.assets.some(a => a.id === lutAsset.id)).toBe(false);
+  });
+
+  it("allows style_guide_edit tasks to update transitions, sounds, and colorLook without replacing instructions", async () => {
+    const guide = (await (await api("POST", "/style-guides", {
+      name: "keep-instructions",
+      instructions: "ORIGINAL_GRAPHICS_RULES",
+    })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    const { task } = await (await api("POST", `/style-guides/${guide.id}/edit`, {
+      prompt: "Add a whip transition and warm look",
+      agent: "claude",
+    })).json() as { task: Task };
+    const startedAt = "2026-11-26T10:00:00.000Z";
+    saveTask(workspace.ctx, { ...task, state: "running", hostId: "host_1", startedAt });
+
+    const saveRes = await api(
+      "POST",
+      `/projects/${project.id}/tasks/${task.id}/style-guide-edit`,
+      {
+        styleGuideId: guide.id,
+        hostId: "host_1",
+        transitions: [{ id: "tr_w", name: "Quick whip", type: "whip", duration: 0.3, direction: "left", soundId: "builtin:airy-slide", usageRule: "Into demos", isDefault: true }],
+        colorLook: { name: "Warm Studio", notes: "Clean warm look", adjustments: { warmth: 0.18 } },
+      },
+      { [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: startedAt },
+    );
+    expect(saveRes.status).toBe(200);
+    const { styleGuide: updated } = await saveRes.json() as { styleGuide: StyleGuideRecord };
+    expect(updated.instructions).toBe("ORIGINAL_GRAPHICS_RULES");
+    expect(updated.transitions).toHaveLength(1);
+    expect(updated.colorLook?.name).toBe("Warm Studio");
+  });
+});

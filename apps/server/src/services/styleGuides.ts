@@ -2,29 +2,37 @@
  * Reusable visual style guides: library-wide design direction, fonts/logos/assets, and rendered 16:9 previews
  * referenced automatically (as the Default style) or explicitly via @name in chat and skills.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { ChromeNotFound, findChrome, renderGraphicStill } from "@scarlet/render";
 import {
+  dbToLinearGain,
+  findBuiltInStyleSound,
   StyleGuideRecord,
+  synthesizeBuiltInSfxWav,
   isHandOff,
   styleGuideMentions,
   type CreateStyleGuideRequest,
+  type ImportStyleGuideSoundRequest,
   type Skill,
   type StyleGuideAsset,
+  type StyleGuideColorLook,
   type StyleGuideFromGraphicRequest,
   type StyleGuidePreviewRenderRequest,
   type StyleGuidePreviewRenderResponse,
+  type StyleGuideSound,
+  type StyleGuideTransition,
   type Task,
   type UpdateStyleGuideRequest,
   type User,
 } from "@scarlet/shared";
-import { newId, type Author } from "@scarlet/timeline";
+import { newId, type Author, type MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
-import { conflict, HttpError, notFound } from "../errors.js";
+import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { actorFor, authorName, logActivity, quote } from "./activity.js";
+import { ingestMedia } from "./ingest.js";
 import {
   adoptLinkedFiles,
   attachmentName,
@@ -81,6 +89,9 @@ export function createStyleGuide(
     instructions: body.instructions ?? "",
     isDefault,
     assets: extra.assets ?? [],
+    transitions: body.transitions ?? [],
+    sounds: body.sounds ?? [],
+    ...(body.colorLook && { colorLook: body.colorLook }),
     source: extra.source,
     createdAt: ts,
     updatedAt: ts,
@@ -111,6 +122,11 @@ export function updateStyleGuide(
   if (dup) throw conflict("style_guide_exists", `A style guide named "@${nextName}" already exists.`, { styleGuideId: dup.id });
   const nextDefault = body.isDefault ?? existing.isDefault;
   if (nextDefault && !existing.isDefault) clearOtherDefaults(ctx, existing.id);
+  const nextColorLook = body.colorLook === null
+    ? undefined
+    : body.colorLook !== undefined
+      ? body.colorLook
+      : existing.colorLook;
   const next = StyleGuideRecord.parse({
     ...existing,
     name: nextName,
@@ -119,6 +135,9 @@ export function updateStyleGuide(
     isDefault: nextDefault,
     assets: body.assets !== undefined ? body.assets : existing.assets,
     preview: body.preview !== undefined ? body.preview : existing.preview,
+    transitions: body.transitions !== undefined ? body.transitions : existing.transitions,
+    sounds: body.sounds !== undefined ? body.sounds : existing.sounds,
+    colorLook: nextColorLook,
     updatedAt: now(),
   });
   const saved = ctx.repos.styleGuides.put(next);
@@ -159,6 +178,8 @@ export function deleteStyleGuide(ctx: Ctx, guide: StyleGuideRecord, user?: User 
 // Assets (fonts, logos, screenshots, brand docs attached in chat or saved from a graphic)
 // ---------------------------------------------------------------------------
 
+const AUDIO_EXTENSION = /\.(?:wav|mp3|m4a|aac|ogg|flac)$/i;
+
 export async function saveStyleGuideAsset(
   ctx: Ctx,
   guideId: string,
@@ -166,7 +187,7 @@ export async function saveStyleGuideAsset(
   data: AsyncIterable<Uint8Array>,
   mime?: string,
   signal?: AbortSignal,
-): Promise<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord }> {
+): Promise<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord; duration?: number }> {
   const existing = ctx.repos.styleGuides.get(guideId);
   if (!existing) throw notFound(`style guide ${guideId}`);
   const id = newId("sga");
@@ -190,6 +211,11 @@ export async function saveStyleGuideAsset(
     throw error;
   }
   const detected = mime && mime !== "application/octet-stream" ? mime.slice(0, 200) : mimeFor(basename(file));
+  let duration: number | undefined;
+  if ((detected?.startsWith("audio/") || AUDIO_EXTENSION.test(file)) && size > 0) {
+    const probed = await ctx.render.probeMedia(file, signal).catch(() => null);
+    if (probed && probed.duration > 0) duration = Math.round(probed.duration * 1000) / 1000;
+  }
   const asset: StyleGuideAsset = {
     id,
     name: basename(file),
@@ -202,7 +228,181 @@ export async function saveStyleGuideAsset(
     if (!current) throw notFound(`style guide ${guideId}`);
     return updateStyleGuide(ctx, null, current, { assets: [...current.assets, asset] });
   }, "immediate")();
-  return { asset, styleGuide: saved };
+  return { asset, styleGuide: saved, ...(duration !== undefined && { duration }) };
+}
+
+export function deleteStyleGuideAsset(
+  ctx: Ctx,
+  user: User | null,
+  guideId: string,
+  assetId: string,
+): StyleGuideRecord {
+  if (!SAFE_ID.test(guideId) || !SAFE_ID.test(assetId)) throw notFound("style guide asset");
+  const existing = ctx.repos.styleGuides.get(guideId);
+  if (!existing) throw notFound(`style guide ${guideId}`);
+  if (!existing.assets.some(a => a.id === assetId)) throw notFound("style guide asset");
+  const removedSoundIds = new Set(existing.sounds.filter(s => s.source === "asset" && s.assetId === assetId).map(s => s.id));
+  const nextAssets = existing.assets.filter(a => a.id !== assetId);
+  const nextSounds = existing.sounds.filter(s => !(s.source === "asset" && s.assetId === assetId));
+  const nextTransitions = removedSoundIds.size
+    ? existing.transitions.map(t => (t.soundId && removedSoundIds.has(t.soundId) ? { ...t, soundId: undefined } : t))
+    : existing.transitions;
+  const nextColorLook = existing.colorLook?.lutAssetId === assetId
+    ? { ...existing.colorLook, lutAssetId: undefined, lutName: undefined }
+    : existing.colorLook;
+  const saved = updateStyleGuide(ctx, user, existing, {
+    assets: nextAssets,
+    sounds: nextSounds,
+    transitions: nextTransitions,
+    colorLook: nextColorLook,
+  });
+  const folder = join(ctx.paths.styleGuideAssets(guideId), assetId);
+  ctx.db.afterCommit(() => {
+    void rm(folder, { recursive: true, force: true }).catch(() => undefined);
+  });
+  return saved;
+}
+
+const builtInWavCache = new Map<string, Uint8Array>();
+
+export function builtInStyleSoundWav(id: string): Uint8Array | undefined {
+  const meta = findBuiltInStyleSound(id);
+  if (!meta) return undefined;
+  const cached = builtInWavCache.get(meta.id);
+  if (cached) return cached;
+  const wav = synthesizeBuiltInSfxWav(meta.id);
+  if (wav) builtInWavCache.set(meta.id, wav);
+  return wav;
+}
+
+/**
+ * Import a built-in starter SFX or a style guide's sound effect (built-in or attached audio asset)
+ * cleanly into a project's media library, deduplicating by SHA-256 so repeated placements reuse one asset.
+ */
+export async function importStyleGuideSoundToProject(
+  ctx: Ctx,
+  projectId: string,
+  user: User | null,
+  body: ImportStyleGuideSoundRequest,
+  opts: { signal?: AbortSignal; checkAttempt?: () => void } = {},
+): Promise<{
+  media: MediaAsset;
+  name: string;
+  volumeDb: number;
+  volume: number;
+  duration?: number;
+  usageRule: string;
+}> {
+  const project = ctx.repos.projects.get(projectId);
+  if (!project) throw notFound(`project ${projectId}`);
+
+  let soundName = "";
+  let fileName = "";
+  let volumeDb = -14;
+  let usageRule = "";
+  let knownDuration: number | undefined;
+  let bytes: Uint8Array | undefined;
+  let sourcePath: string | undefined;
+
+  const loadBuiltIn = (slug: string, overrides?: Partial<{ name: string; volumeDb: number; usageRule: string }>) => {
+    const meta = findBuiltInStyleSound(slug);
+    const wav = meta ? builtInStyleSoundWav(meta.id) : undefined;
+    if (!meta || !wav) throw notFound(`built-in sound "${slug}"`);
+    soundName = overrides?.name || meta.name;
+    fileName = `${meta.id}.wav`;
+    volumeDb = overrides?.volumeDb ?? meta.defaultVolumeDb;
+    usageRule = overrides?.usageRule ?? meta.defaultUsageRule;
+    knownDuration = meta.duration;
+    bytes = wav;
+  };
+
+  if (body.builtInId) {
+    loadBuiltIn(body.builtInId);
+  } else if (body.styleGuideId) {
+    const guide = ctx.repos.styleGuides.get(body.styleGuideId);
+    if (!guide) throw notFound(`style guide ${body.styleGuideId}`);
+    if (body.soundId) {
+      if (body.soundId.startsWith("builtin:")) {
+        loadBuiltIn(body.soundId.slice("builtin:".length));
+      } else {
+        const entry = guide.sounds.find(s => s.id === body.soundId);
+        if (!entry) throw notFound(`sound "${body.soundId}" in @${guide.name}`);
+        if (entry.source === "builtin") {
+          if (!entry.builtInId) throw badRequest("invalid_sound", `Sound "${entry.name}" is missing its built-in id.`);
+          loadBuiltIn(entry.builtInId, { name: entry.name, volumeDb: entry.volumeDb, usageRule: entry.usageRule });
+        } else {
+          if (!entry.assetId) throw badRequest("invalid_sound", `Sound "${entry.name}" is missing its audio file.`);
+          const found = await findStyleGuideAsset(ctx, guide.id, entry.assetId);
+          if (!found) throw notFound(`audio asset "${entry.assetId}" in @${guide.name}`);
+          if (!found.asset.mime?.startsWith("audio/") && !AUDIO_EXTENSION.test(found.asset.name)) {
+            throw badRequest("not_audio", `"${found.asset.name}" is not an audio file.`);
+          }
+          soundName = entry.name;
+          fileName = found.asset.name;
+          volumeDb = entry.volumeDb;
+          usageRule = entry.usageRule;
+          knownDuration = entry.duration;
+          sourcePath = found.path;
+        }
+      }
+    } else if (body.assetId) {
+      const found = await findStyleGuideAsset(ctx, guide.id, body.assetId);
+      if (!found) throw notFound(`audio asset "${body.assetId}" in @${guide.name}`);
+      if (!found.asset.mime?.startsWith("audio/") && !AUDIO_EXTENSION.test(found.asset.name)) {
+        throw badRequest("not_audio", `"${found.asset.name}" is not an audio file.`);
+      }
+      const linkedEntry = guide.sounds.find(s => s.source === "asset" && s.assetId === body.assetId);
+      soundName = linkedEntry?.name ?? found.asset.name.replace(/\.[^.]+$/, "");
+      fileName = found.asset.name;
+      volumeDb = linkedEntry?.volumeDb ?? -14;
+      usageRule = linkedEntry?.usageRule ?? "";
+      knownDuration = linkedEntry?.duration;
+      sourcePath = found.path;
+    }
+  } else {
+    throw badRequest("missing_sound", "Provide builtInId, or styleGuideId with soundId or assetId.");
+  }
+
+  const hash = bytes
+    ? createHash("sha256").update(bytes).digest("hex")
+    : await ctx.render.hashFile(sourcePath!, undefined, opts.signal);
+
+  const existingMedia = project.media.find(m => m.kind === "audio" && m.hash === hash);
+  if (existingMedia) {
+    return {
+      media: existingMedia,
+      name: soundName,
+      volumeDb,
+      volume: dbToLinearGain(volumeDb),
+      duration: existingMedia.duration ?? knownDuration,
+      usageRule,
+    };
+  }
+
+  await mkdir(ctx.paths.tmp, { recursive: true, mode: 0o700 });
+  const staged = join(ctx.paths.tmp, `sfx-${randomUUID()}${extname(fileName) || ".wav"}`);
+  try {
+    if (bytes) await writeFile(staged, bytes, { mode: 0o600, signal: opts.signal });
+    else await cp(sourcePath!, staged);
+    const ingested = await ingestMedia(ctx, project, { type: "upload", path: staged, hash }, {
+      name: soundName.endsWith(extname(fileName)) ? soundName : `${soundName}${extname(fileName) || ".wav"}`,
+      kind: "audio",
+      checkAttempt: opts.checkAttempt,
+      transcription: { provider: undefined, revision: 0, signal: opts.signal ?? ctx.shutdown },
+      by: { by: "agent", name: "style-guide-sfx", createdAt: now() },
+      uploadedBy: user?.id,
+    });
+    return {
+      media: ingested,
+      name: soundName,
+      volumeDb,
+      volume: dbToLinearGain(volumeDb),
+      duration: ingested.duration ?? knownDuration,
+      usageRule,
+    };
+  } finally {
+    await rm(staged, { force: true }).catch(() => undefined);
+  }
 }
 
 export async function findStyleGuideAsset(
@@ -511,6 +711,9 @@ export interface ResolvedPromptStyleGuide {
   instructions: string;
   reason: "mentioned" | "default";
   assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
+  transitions: StyleGuideTransition[];
+  sounds: Array<StyleGuideSound & { volumeLinear: number }>;
+  colorLook?: StyleGuideColorLook & { lutFile?: string; lutPath?: string };
 }
 
 /**
@@ -545,14 +748,29 @@ export function resolvePromptStyleGuides(ctx: Ctx, task: Task, activeSkills: rea
   for (const slug of styleGuideMentions(messageText)) addMessage(byName.get(slug));
 
   const format = (guides: StyleGuideRecord[], reason: "mentioned" | "default"): ResolvedPromptStyleGuide[] =>
-    guides.map(g => ({
-      id: g.id,
-      name: g.name,
-      description: g.description,
-      instructions: g.instructions,
-      reason,
-      assets: styleGuideAssetPaths(ctx, g),
-    }));
+    guides.map(g => {
+      const assets = styleGuideAssetPaths(ctx, g);
+      const lutAsset = g.colorLook?.lutAssetId ? assets.find(a => a.id === g.colorLook!.lutAssetId) : undefined;
+      return {
+        id: g.id,
+        name: g.name,
+        description: g.description,
+        instructions: g.instructions,
+        reason,
+        assets,
+        transitions: g.transitions,
+        sounds: g.sounds.map(s => ({ ...s, volumeLinear: dbToLinearGain(s.volumeDb) })),
+        ...(g.colorLook && {
+          colorLook: {
+            ...g.colorLook,
+            ...(lutAsset && {
+              lutFile: `${g.id}/assets/${lutAsset.id}/${lutAsset.name}`,
+              lutPath: lutAsset.path,
+            }),
+          },
+        }),
+      };
+    });
 
   if (fromMessage.length) return format(fromMessage, "mentioned");
 

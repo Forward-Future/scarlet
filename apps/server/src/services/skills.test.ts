@@ -562,7 +562,7 @@ describe("skills that the workflows replaced", () => {
   ].join("\n");
 
   it("ships the stock skills in skills/, and removes unedited copies of the rest on upgrade", async () => {
-    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "b-roll", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "music-under-speech", "punch-in", "speed-through-waits", "split-edits"]);
+    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "b-roll", "color-match", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "music-under-speech", "punch-in", "speed-through-waits", "split-edits"]);
     const stock = createSkill(app.ctx, null, { name: "smooth-audio-cuts", scope: "team", content: smoothing }, { source: "bundled" });
     const run = uses([stock.id]);
     app.ctx.repos.tasks.put({ ...run, state: "done" });

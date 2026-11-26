@@ -5,8 +5,10 @@ import { basename, isAbsolute } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import {
+  BUILT_IN_STYLE_SOUNDS,
   CreateStyleGuideRequest,
   EditStyleGuideRequest,
+  ImportStyleGuideSoundRequest,
   StyleGuideFromGraphicRequest,
   StyleGuidePreviewRenderRequest,
   TaskStyleGuideDraft,
@@ -21,10 +23,13 @@ import { serveOriginal } from "../files.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
 import { MAX_ATTACHMENT_BYTES, MAX_DOCUMENT_PAGES, mimeFor } from "../services/graphics.js";
 import {
+  builtInStyleSoundWav,
   createStyleGuide,
   createStyleGuideFromGraphic,
   deleteStyleGuide,
+  deleteStyleGuideAsset,
   findStyleGuideAsset,
+  importStyleGuideSoundToProject,
   latestStyleGuideEdit,
   listStyleGuides,
   readStyleGuideAssetDocument,
@@ -35,7 +40,7 @@ import {
   styleGuidePreviewSource,
   updateStyleGuide,
 } from "../services/styleGuides.js";
-import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
+import { requestAttempt, requireActiveAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { createTask, FINISHED_TASK, saveTask } from "../services/tasks.js";
 import { jsonBody, multipartError, requireProjectHeader, requireScoped } from "./util.js";
 
@@ -65,6 +70,44 @@ export function styleGuideRoutes(ctx: Ctx) {
       AbortSignal.any([ctx.shutdown, c.req.raw.signal]),
     );
     return c.json({ styleGuide }, 201);
+  });
+
+  r.get("/style-guides/sounds/builtin", (c) => {
+    return c.json({ sounds: BUILT_IN_STYLE_SOUNDS });
+  });
+
+  r.get("/style-guides/sounds/builtin/:soundId", (c) => {
+    const wav = builtInStyleSoundWav(c.req.param("soundId"));
+    if (!wav) throw notFound("built-in sound");
+    const total = wav.byteLength;
+    const rangeHeader = c.req.header("range");
+    const headers: Record<string, string> = {
+      "Content-Type": "audio/wav",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=31536000, immutable",
+    };
+    if (rangeHeader) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+      if (m) {
+        const start = m[1] ? Number(m[1]) : Math.max(0, total - Number(m[2] || total));
+        const end = m[2] ? Math.min(total - 1, Number(m[2])) : total - 1;
+        if (start >= 0 && start <= end && end < total) {
+          const slice = wav.subarray(start, end + 1);
+          return new Response(Buffer.from(slice), {
+            status: 206,
+            headers: {
+              ...headers,
+              "Content-Range": `bytes ${start}-${end}/${total}`,
+              "Content-Length": String(slice.byteLength),
+            },
+          });
+        }
+      }
+    }
+    return new Response(Buffer.from(wav), {
+      status: 200,
+      headers: { ...headers, "Content-Length": String(total) },
+    });
   });
 
   r.get("/style-guides/:styleGuideId", (c) => {
@@ -140,9 +183,18 @@ export function styleGuideRoutes(ctx: Ctx) {
     return c.json({ task }, 201);
   });
 
-  // Save updated description/instructions from an authorized style_guide_edit task.
+  // Save updated style guide sections from an authorized style_guide_edit task.
   r.post("/projects/:id/tasks/:taskId/style-guide-edit", async (c) => {
     const body = await jsonBody(c, TaskStyleGuideDraft.extend({ styleGuideId: z.string(), hostId: z.string() }).strict());
+    if (
+      body.description === undefined &&
+      body.instructions === undefined &&
+      body.transitions === undefined &&
+      body.sounds === undefined &&
+      body.colorLook === undefined
+    ) {
+      throw badRequest("empty_update", "Provide at least one style guide field to update.");
+    }
     const projectId = c.req.param("id");
     const styleGuide = ctx.db.transaction(() => {
       const task = ctx.repos.tasks.get(c.req.param("taskId"));
@@ -159,7 +211,10 @@ export function styleGuideRoutes(ctx: Ctx) {
         guide,
         {
           ...(body.description !== undefined && { description: body.description }),
-          instructions: body.instructions,
+          ...(body.instructions !== undefined && { instructions: body.instructions }),
+          ...(body.transitions !== undefined && { transitions: body.transitions }),
+          ...(body.sounds !== undefined && { sounds: body.sounds }),
+          ...(body.colorLook !== undefined && { colorLook: body.colorLook }),
         },
         { author: { type: "agent", id: task.agent, name: task.agent, model: task.model } },
       );
@@ -167,6 +222,20 @@ export function styleGuideRoutes(ctx: Ctx) {
       return saved;
     }, "immediate")();
     return c.json({ styleGuide });
+  });
+
+  // Import a built-in starter SFX or style guide sound effect into a project's media library.
+  r.post("/projects/:id/media/from-style-sound", async (c) => {
+    const projectId = c.req.param("id");
+    requireProjectHeader(ctx, projectId);
+    const attempt = requestAttempt(c.req.raw);
+    requireProjectLocalPauseTarget(ctx, attempt, projectId);
+    const body = await jsonBody(c, ImportStyleGuideSoundRequest);
+    const imported = await importStyleGuideSoundToProject(ctx, projectId, c.var.user, body, {
+      signal: AbortSignal.any([ctx.shutdown, c.req.raw.signal]),
+      checkAttempt: () => { requireProjectLocalPauseTarget(ctx, attempt, projectId); },
+    });
+    return c.json(imported, 201);
   });
 
   // -- assets ---------------------------------------------------------------
@@ -208,6 +277,17 @@ export function styleGuideRoutes(ctx: Ctx) {
       cacheControl: "private, no-cache",
       ...(active && { downloadName: found.asset.name }),
     });
+  });
+
+  r.delete("/style-guides/:styleGuideId/assets/:assetId", (c) => {
+    const id = c.req.param("styleGuideId");
+    const assetId = c.req.param("assetId");
+    requireStyleGuide(id);
+    const styleGuide = ctx.db.transaction(
+      () => deleteStyleGuideAsset(ctx, c.var.user, id, assetId),
+      "immediate",
+    )();
+    return c.json({ styleGuide });
   });
 
   r.post("/style-guides/:styleGuideId/assets/:assetId/read", async (c) => {

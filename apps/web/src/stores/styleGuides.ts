@@ -87,9 +87,15 @@ export const useStyleGuidesStore = create<StyleGuidesState>((set, get) => ({
     const prev = get().styleGuides;
     const existing = prev.find(g => g.id === id);
     if (existing) {
+      const nextColorLook = body.colorLook === null
+        ? undefined
+        : body.colorLook !== undefined
+          ? body.colorLook
+          : existing.colorLook;
       get().apply({
         ...existing,
         ...body,
+        colorLook: nextColorLook,
         isDefault: body.isDefault ?? existing.isDefault,
       });
     }

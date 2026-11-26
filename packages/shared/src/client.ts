@@ -20,9 +20,11 @@ import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLe
 import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
 import type { GraphicRenderResponse, SaveStyleGuideRequest } from "./graphics.js";
 import type { Skill, SkillVersion, EditSkillRequest, UpsertSkillRequest } from "./skills.js";
+import type { BuiltInStyleSound } from "./builtInSfx.js";
 import type {
   CreateStyleGuideRequest,
   EditStyleGuideRequest,
+  ImportStyleGuideSoundRequest,
   StyleGuideAsset,
   StyleGuideFromGraphicRequest,
   StyleGuidePreviewRenderRequest,
@@ -705,13 +707,33 @@ export class ScarletClient extends ClientTransport {
   }
   uploadStyleGuideAsset(styleGuideId: string, file: Blob | { path: string }, name?: string) {
     const path = `/style-guides/${apiPathId(styleGuideId)}/assets`;
-    if (!(file instanceof Blob)) return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord }>(path, { path: file.path });
+    if (!(file instanceof Blob)) return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord; duration?: number }>(path, { path: file.path });
     const fd = new FormData();
     fd.append("file", file, name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "asset"));
-    return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord }>(path, fd);
+    return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord; duration?: number }>(path, fd);
+  }
+  deleteStyleGuideAsset(styleGuideId: string, assetId: string) {
+    return this.delete<{ styleGuide: StyleGuideRecord }>(`/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}`);
   }
   styleGuideAssetUrl(styleGuideId: string, assetId: string) {
     return this.fileUrl(`/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}`);
+  }
+  builtInStyleSounds() {
+    return this.get<{ sounds: BuiltInStyleSound[] }>("/style-guides/sounds/builtin");
+  }
+  builtInStyleSoundUrl(soundId: string) {
+    const slug = soundId.startsWith("builtin:") ? soundId.slice("builtin:".length) : soundId;
+    return this.fileUrl(`/style-guides/sounds/builtin/${apiPathId(slug)}`);
+  }
+  importStyleGuideSound(projectId: string, body: ImportStyleGuideSoundRequest) {
+    return this.post<{
+      media: ProjectDetail["project"]["media"][number];
+      name: string;
+      volumeDb: number;
+      volume: number;
+      duration?: number;
+      usageRule: string;
+    }>(`/projects/${apiPathId(projectId)}/media/from-style-sound`, body);
   }
   readStyleGuideAsset(styleGuideId: string, assetId: string, pages?: number[]) {
     return this.post<{ name: string; path: string; size: number; mime?: string; text?: string; pageCount?: number;

@@ -838,7 +838,8 @@ export class MockClient implements ScarletApi {
     if (body.isDefault) for (const g of this.store.db.styleGuides) g.isDefault = false;
     const styleGuide: import("@scarlet/shared").StyleGuideRecord = {
       id: newId("sg"), name: body.name, description: body.description?.trim() ?? "", instructions: body.instructions ?? "",
-      isDefault: Boolean(body.isDefault), assets: [], createdAt: ts, updatedAt: ts,
+      isDefault: Boolean(body.isDefault), assets: [], transitions: body.transitions ?? [], sounds: body.sounds ?? [],
+      ...(body.colorLook && { colorLook: body.colorLook }), createdAt: ts, updatedAt: ts,
     };
     this.store.db.styleGuides.push(styleGuide);
     this.store.emit({ type: "style_guide.updated", styleGuide });
@@ -861,6 +862,9 @@ export class MockClient implements ScarletApi {
       ...(body.description !== undefined && { description: body.description.trim() }),
       ...(body.instructions !== undefined && { instructions: body.instructions }),
       ...(body.isDefault !== undefined && { isDefault: body.isDefault }),
+      ...(body.transitions !== undefined && { transitions: body.transitions }),
+      ...(body.sounds !== undefined && { sounds: body.sounds }),
+      ...(body.colorLook !== undefined && { colorLook: body.colorLook ?? undefined }),
       updatedAt: new Date().toISOString(),
     });
     this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
@@ -909,6 +913,30 @@ export class MockClient implements ScarletApi {
     guide.updatedAt = new Date().toISOString();
     this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
     return this.latency({ asset, styleGuide: { ...guide } }, 150);
+  }
+  async deleteStyleGuideAsset(styleGuideId: string, assetId: string): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const removedSounds = new Set(guide.sounds.filter(s => s.source === "asset" && s.assetId === assetId).map(s => s.id));
+    guide.assets = guide.assets.filter(a => a.id !== assetId);
+    guide.sounds = guide.sounds.filter(s => !(s.source === "asset" && s.assetId === assetId));
+    guide.transitions = guide.transitions.map(t => (t.soundId && removedSounds.has(t.soundId) ? { ...t, soundId: undefined } : t));
+    if (guide.colorLook?.lutAssetId === assetId) {
+      guide.colorLook = { ...guide.colorLook, lutAssetId: undefined, lutName: undefined };
+    }
+    guide.updatedAt = new Date().toISOString();
+    this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+    return this.latency({ styleGuide: { ...guide } }, 100);
+  }
+  async builtInStyleSounds() {
+    this.requireAuth();
+    const { BUILT_IN_STYLE_SOUNDS } = await import("@scarlet/shared");
+    return this.latency({ sounds: [...BUILT_IN_STYLE_SOUNDS] }, 60);
+  }
+  builtInStyleSoundUrl(soundId: string) {
+    const slug = soundId.startsWith("builtin:") ? soundId.slice("builtin:".length) : soundId;
+    return this.fileUrl(`/style-guides/sounds/builtin/${encodeURIComponent(slug)}`);
   }
   styleGuideAssetUrl(styleGuideId: string, assetId: string) {
     return this.fileUrl(`/style-guides/${encodeURIComponent(styleGuideId)}/assets/${encodeURIComponent(assetId)}`);

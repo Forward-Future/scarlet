@@ -245,7 +245,7 @@ export async function renderPlaybackSegment(project: Project, timeline: Timeline
   const media = new Map(project.media.map(asset => [asset.id, asset]));
   const transitions = planTransitions(timeline, media, project.settings.fps);
   const [part] = segmentTimelines(transitions.timeline, [range]);
-  const seg = segmentInfo(project, part!, range, cacheDir, { quality, height: size.height, encoder, allowProxy: !!opts.pictureSource }, opts.mediaRoot, media, transitions);
+  const seg = segmentInfo(project, part!, range, cacheDir, { quality, height: size.height, encoder, allowProxy: !!opts.pictureSource }, opts.mediaRoot, media, transitions, opts.lutRoots);
   seg.cached = await fileHasContent(seg.file);
   warnings.push(...await fillSegment(project, part!, seg, { ...opts, transitions, videoEncoder, quality, pictureOnly: false }));
   // Decode AAC with its MP4 priming edit intact. FLAC has no encoder delay, so
@@ -313,7 +313,7 @@ export async function renderFullCached(
   const media = new Map(project.media.map(asset => [asset.id, asset]));
   const transitions = planTransitions(picture, media, project.settings.fps);
   const parts = segmentTimelines(transitions.timeline, ranges);
-  const segments = ranges.map((range, i) => segmentInfo(project, parts[i]!, range, cacheDir, format, opts.mediaRoot, media, transitions));
+  const segments = ranges.map((range, i) => segmentInfo(project, parts[i]!, range, cacheDir, format, opts.mediaRoot, media, transitions, opts.lutRoots));
   for (let i = 0; i < segments.length; i += 32) {
     await Promise.all(segments.slice(i, i + 32).map(async seg => { seg.cached = await fileHasContent(seg.file); }));
   }

@@ -88,6 +88,8 @@ export interface GraphOptions extends FontOptions {
   pictureFilter?: string;
   /** Absolute directory that relative `MediaAsset.path`s resolve against. */
   mediaRoot: string;
+  /** Optional extra trusted directories (such as library-wide style guides) for `.cube`/`.3dl` LUTs. */
+  lutRoots?: readonly string[];
   /** Output canvas; defaults to the project settings. Previews pass a smaller size. */
   width?: number;
   height?: number;
@@ -177,7 +179,7 @@ async function writeFilterGraph(
   };
   const media = new Map(project.media.map((m) => [m.id, m]));
   const probes = opts.probes ?? new Map<string, ProbeResult>();
-  const effectCtx = { mediaRoot: opts.mediaRoot, warn };
+  const effectCtx = { mediaRoot: opts.mediaRoot, lutRoots: opts.lutRoots, warn };
   // Transitions add picture-only layers around their joins and move the clips either side.
   const transitions = opts.transitions
     ? { timeline, motions: opts.transitions.motions, layers: opts.transitions.layers }

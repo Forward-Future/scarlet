@@ -26,6 +26,8 @@ export interface RenderOptions extends FontOptions {
   pictureOnly?: boolean;
   /** Absolute directory that relative media paths resolve against. */
   mediaRoot: string;
+  /** Optional extra trusted directories (such as library-wide style guides) for `.cube`/`.3dl` LUTs. */
+  lutRoots?: readonly string[];
   /** preview: fast, scaled to `height`; delivery: slow, full resolution. Default preview. */
   quality?: RenderQuality;
   /** Preview height in pixels (default 540, never upscaled). Ignored for delivery. */
@@ -156,6 +158,7 @@ export async function renderRange(
     }),
     decoder: opts.softwareDecode ? undefined : decoder,
     mediaRoot: opts.mediaRoot,
+    lutRoots: opts.lutRoots,
     width: size.width,
     height: size.height,
     tempDir: opts.tempDir,

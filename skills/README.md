@@ -14,6 +14,7 @@ Every project uses the same library. A skill command pins its guide to the task.
 | Picture and graphics | [Add captions](add-captions/SKILL.md) | Caption retained speech in short, readable lines. |
 | Picture and graphics | [Motion graphics](motion-graphics/SKILL.md) | Lower thirds, titles and callouts that read well on the footage, in the project's style guide or the look the editor has approved. |
 | Picture and graphics | [B-roll and graphics](b-roll/SKILL.md) | Describe what should be on screen at each spot first, as To dos, then find footage or make a graphic only for the ones you ask for. |
+| Picture and graphics | [Color matching and camera looks](color-match/SKILL.md) | Match exposure, white balance and contrast across cameras, or apply a style guide's saved color look consistently across the edit. |
 | Examples | [Matt’s talking-head edit](matt-talking-head/SKILL.md) | Example talking-head style built on the dialogue pass, screen framing and punch-ins: tight joins, spoken notes to the editor acted on, and two-frame audio crossfades. Installed switched off: an example style to read or copy. |
 
 The built-in `/tighten-pauses-here` command limits the request to local pauses. The dialogue guide sets the defaults for what to cut, what to review and how much space to leave around speech. It uses straight cuts. Editors can request audio smoothing separately. Project context, permissions and scope belong to Scarlet. [Skill and tool ownership](../docs/skills-and-tools.md)

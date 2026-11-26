@@ -54,6 +54,8 @@ export interface WaveformCache extends WaveformData<number[] | Float32Array> {
 export interface RenderOptions {
   /** Absolute dir that MediaAsset.path is relative to. */
   mediaRoot: string;
+  /** Optional extra trusted directories (such as library-wide style guides) for `.cube`/`.3dl` LUTs. */
+  lutRoots?: readonly string[];
   quality: "preview" | "delivery";
   exportRange?: TimeRange;
   exportHeight?: number;

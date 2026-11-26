@@ -1,6 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { slugifyStyleGuideName, type StyleGuideAsset, type StyleGuideRecord, type Task, type TaskEvent } from "@scarlet/shared";
+import {
+  slugifyStyleGuideName,
+  type StyleGuideAsset,
+  type StyleGuideColorLook,
+  type StyleGuideRecord,
+  type StyleGuideSound,
+  type StyleGuideTransition,
+  type Task,
+  type TaskEvent,
+} from "@scarlet/shared";
 import { AgentChip, useAgentAvailability } from "../components/agent/AgentChip";
 import { SkillCommandInput } from "../components/agent/SkillCommandInput";
 import { Said } from "../components/review/RunBundle";
@@ -13,7 +22,13 @@ import { taskActivityLabel } from "../lib/taskActivity";
 import { isActiveTask } from "../lib/taskRun";
 import { useEscapeToLeave, useFileDropTarget } from "../lib/uiHooks";
 import { useStyleGuidesStore } from "../stores/styleGuides";
+import { ColorLookStage } from "./style-guide/ColorLookStage";
+import { SoundsStage } from "./style-guide/SoundsStage";
+import { useStyleSoundPlayer } from "./style-guide/stageAudio";
+import { TransitionsStage } from "./style-guide/TransitionsStage";
 import "../simple.css";
+
+type StageTab = "graphics" | "transitions" | "sounds" | "color";
 
 interface StagedFile {
   key: string;
@@ -66,6 +81,8 @@ export function StyleGuideEditorPage() {
   const [savingMeta, setSavingMeta] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [stageTab, setStageTab] = useState<StageTab>("graphics");
+  const player = useStyleSoundPlayer(guide);
 
   const [edits, setEdits] = useState<Task[]>([]);
   const [activeEvents, setActiveEvents] = useState<TaskEvent[]>([]);
@@ -196,11 +213,46 @@ export function StyleGuideEditorPage() {
 
   const pickFiles = async () => {
     if (isDesktop()) {
-      const picked = await desktop.pickFile("Attach a logo, font, or reference image").catch(() => null);
+      const picked = await desktop.pickFile("Attach a logo, font, reference image, audio, or .cube look file").catch(() => null);
       if (picked) stageItems([{ path: picked }]);
       return;
     }
     fileInputRef.current?.click();
+  };
+
+  const ensureGuideForDirectEdit = async (): Promise<StyleGuideRecord> => {
+    if (guide) return guide;
+    const requestedSlug = slugifyStyleGuideName(name);
+    const derived = requestedSlug || uniqueSlug("style-guide", library);
+    const created = await create({ name: derived, isDefault });
+    createdHere.current = created.id;
+    setLoaded(created);
+    setName(created.name);
+    if (isNew) navigate(`/settings/style-guides/${created.id}`, { replace: true });
+    return created;
+  };
+
+  const saveTransitions = async (transitions: StyleGuideTransition[]) => {
+    const target = await ensureGuideForDirectEdit();
+    const saved = await update(target.id, { transitions });
+    setLoaded(saved);
+  };
+
+  const saveSounds = async (sounds: StyleGuideSound[]) => {
+    const target = await ensureGuideForDirectEdit();
+    const saved = await update(target.id, { sounds });
+    setLoaded(saved);
+  };
+
+  const saveColorLook = async (colorLook: StyleGuideColorLook | null) => {
+    const target = await ensureGuideForDirectEdit();
+    const saved = await update(target.id, { colorLook });
+    setLoaded(saved);
+  };
+
+  const handleGuideUpdated = (updated: StyleGuideRecord) => {
+    setLoaded(updated);
+    useStyleGuidesStore.getState().apply(updated);
   };
 
   const commitName = async () => {
@@ -395,9 +447,9 @@ export function StyleGuideEditorPage() {
           <div className="simple-chat" ref={threadRef}>
             {edits.length === 0 && (
               <div className="style-guide-chat-empty">
-                <p>Describe the look you want, or drop a logo, font, or reference screenshot into the message box.</p>
+                <p>Describe your look, transitions, sound effects, or camera color — or drop a logo, font, audio clip, or .cube file.</p>
                 <p className="text-dim mt-2 text-[12px]">
-                  Scarlet will render a live 16:9 preview beside you and apply this style whenever you create graphics.
+                  Scarlet updates the live preview tabs beside you and applies this style across projects.
                 </p>
               </div>
             )}
@@ -516,8 +568,8 @@ export function StyleGuideEditorPage() {
                   <button
                     type="button"
                     className="btn-icon shrink-0 text-muted hover:text-fg"
-                    aria-label="Attach logo, font, or screenshot"
-                    title="Attach logo, font, or screenshot"
+                    aria-label="Attach logo, font, audio, or look file"
+                    title="Attach logo, font, audio, or .cube look file"
                     disabled={boxOff || sending}
                     onClick={() => void pickFiles()}
                   >
@@ -541,8 +593,8 @@ export function StyleGuideEditorPage() {
                     plain
                     id={askId}
                     disabled={boxOff}
-                    ariaLabel={question ? "Answer Scarlet" : "Describe your style or drop a logo, font, or screenshot"}
-                    placeholder={question ? "Answer Scarlet…" : "Describe a look, or drop a logo, font, or screenshot…"}
+                    ariaLabel={question ? "Answer Scarlet" : "Describe graphics, transitions, sounds, or color look, or drop files"}
+                    placeholder={question ? "Answer Scarlet…" : "Ask for graphics, transitions, SFX, or color — or drop files…"}
                     onChange={text => { setAsk(text); setAskErr(null); }}
                     onSubmit={() => void send()}
                   />
@@ -568,27 +620,83 @@ export function StyleGuideEditorPage() {
         </aside>
 
         <main className="style-guide-preview-pane" aria-label="Style guide preview">
-          <div className="style-guide-preview-stage">
-            {previewUrl ? (
-              <button
-                type="button"
-                className="style-guide-preview-frame is-clickable"
-                onClick={() => setLightboxOpen(true)}
-                title="Click to inspect full size"
-              >
-                <img src={previewUrl} alt={`Live preview of @${guide!.name}`} />
-              </button>
-            ) : (
-              <div className="style-guide-preview-frame is-empty">
-                <span className="style-guide-preview-placeholder-title">Live preview</span>
-                <span className="style-guide-preview-placeholder-body">
-                  Describe the look you want or drop a logo, font, or screenshot in chat.
-                </span>
-              </div>
-            )}
-            {guide?.description && (
-              <p className="style-guide-preview-caption">{guide.description}</p>
-            )}
+          <div className="sg-stage-shell">
+            <div className="sg-tab-bar" role="tablist" aria-label="Style guide sections">
+              {([
+                { id: "graphics", label: "Graphics" },
+                { id: "transitions", label: "Transitions", count: guide?.transitions.length ?? 0 },
+                { id: "sounds", label: "Sounds", count: guide?.sounds.length ?? 0 },
+                { id: "color", label: "Color look", dot: Boolean(guide?.colorLook) },
+              ] as Array<{ id: StageTab; label: string; count?: number; dot?: boolean }>).map(tab => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={stageTab === tab.id}
+                  className={`sg-tab ${stageTab === tab.id ? "is-active" : ""}`}
+                  onClick={() => setStageTab(tab.id)}
+                >
+                  <span>{tab.label}</span>
+                  {tab.count ? <span className="sg-tab-count tnum">{tab.count}</span> : null}
+                  {tab.dot ? <span className="sg-tab-dot" aria-hidden="true" /> : null}
+                </button>
+              ))}
+            </div>
+
+            <div className="sg-tab-panel" role="tabpanel" aria-label={stageTab}>
+              {stageTab === "graphics" && (
+                <div className="style-guide-preview-stage">
+                  {previewUrl ? (
+                    <button
+                      type="button"
+                      className="style-guide-preview-frame is-clickable"
+                      onClick={() => setLightboxOpen(true)}
+                      title="Click to inspect full size"
+                    >
+                      <img src={previewUrl} alt={`Live preview of @${guide!.name}`} />
+                    </button>
+                  ) : (
+                    <div className="style-guide-preview-frame is-empty">
+                      <span className="style-guide-preview-placeholder-title">Live preview</span>
+                      <span className="style-guide-preview-placeholder-body">
+                        Describe the look you want or drop a logo, font, or screenshot in chat.
+                      </span>
+                    </div>
+                  )}
+                  {guide?.description && (
+                    <p className="style-guide-preview-caption">{guide.description}</p>
+                  )}
+                </div>
+              )}
+
+              {stageTab === "transitions" && (
+                <TransitionsStage
+                  guide={guide}
+                  disabled={working || savingMeta}
+                  player={player}
+                  onSave={saveTransitions}
+                />
+              )}
+
+              {stageTab === "sounds" && (
+                <SoundsStage
+                  guide={guide}
+                  disabled={working || savingMeta}
+                  player={player}
+                  onSave={saveSounds}
+                  onGuideUpdated={handleGuideUpdated}
+                />
+              )}
+
+              {stageTab === "color" && (
+                <ColorLookStage
+                  guide={guide}
+                  disabled={working || savingMeta}
+                  onSave={saveColorLook}
+                  onGuideUpdated={handleGuideUpdated}
+                />
+              )}
+            </div>
           </div>
         </main>
       </div>

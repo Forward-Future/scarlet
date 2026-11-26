@@ -94,6 +94,7 @@ export const scarletRenderAdapter: RenderAdapter = {
     const { warnings } = await R.renderRange(project, timeline, range, outputPath, {
       pictureSource:opts.quality==="preview"?previewPictures(opts.mediaRoot):undefined,
       mediaRoot: opts.mediaRoot,
+      lutRoots: opts.lutRoots,
       quality: opts.quality,
       height: opts.height,
       hwaccel: hwaccel(opts),
@@ -129,6 +130,7 @@ export const scarletRenderAdapter: RenderAdapter = {
       best: opts.best,
       pictureSource: opts.quality === "preview" && opts.exportHeight === undefined ? previewPictures(opts.mediaRoot) : undefined,
       mediaRoot: opts.mediaRoot,
+      lutRoots: opts.lutRoots,
       quality: opts.quality,
       height: opts.height,
       hwaccel: hwaccel(opts),
