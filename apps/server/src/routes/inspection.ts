@@ -194,10 +194,11 @@ export function inspectionRoutes(ctx: Ctx) {
     const pictures = await Promise.all(body.times.map(async asked => {
       const frame = Math.min(Math.max(0, Math.ceil(duration * fps - 1e-6) - 1), Math.floor(asked * fps + 1e-6));
       const range = { start: frame / fps, end: (frame + 1) / fps };
+      const lutRoots = [ctx.paths.styleGuidesLibrary];
       const jpeg = await ctx.track(lane.run(() =>
-        renderTimelineFrame(project, timeline, range, root, signal, body.width, { pictureSource: previewPictures(root, { signal }), fontDirs })
+        renderTimelineFrame(project, timeline, range, root, signal, body.width, { pictureSource: previewPictures(root, { signal }), lutRoots, fontDirs })
           .catch(error => { signal.throwIfAborted(); ctx.log(`[inspection] drawing ${range.start.toFixed(2)} s from the originals: ${(error as Error).message}`);
-            return renderTimelineFrame(project, timeline, range, root, signal, body.width, { fontDirs }); }), { signal }), project.id);
+            return renderTimelineFrame(project, timeline, range, root, signal, body.width, { lutRoots, fontDirs }); }), { signal }), project.id);
       return { time: asked, jpeg: jpeg.toString("base64") };
     }));
     return c.json({ pictures });

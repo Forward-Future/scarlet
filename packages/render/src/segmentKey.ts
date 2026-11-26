@@ -6,8 +6,7 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import { sha256, SOURCE_PREVIEW_SECONDS, stableStringify } from "@scarlet/timeline";
 import type { Clip, MediaAsset, Project, Timeline, TimeRange, Track, TransitionPlan } from "@scarlet/timeline";
-import { fileInDirectory } from "./assetPath.js";
-import { audioEffectDelay, effectKind } from "./effects.js";
+import { audioEffectDelay, effectKind, resolveLutFile } from "./effects.js";
 import { TONE_MAP_REVISION } from "./hdr.js";
 import { fnum } from "./exec.js";
 import { clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graphTransform.js";
@@ -184,7 +183,7 @@ export function deliveryPicture(project: Project, timeline: Timeline): Timeline 
 }
 
 /** A LUT is an external file rather than an immutable media row. Include its current identity in cached pictures. */
-export function lutFileStamps(timeline: Timeline, mediaRoot: string) {
+export function lutFileStamps(timeline: Timeline, mediaRoot: string, lutRoots?: readonly string[]) {
   const names = new Set<string>();
   for (const track of timeline.tracks) for (const clip of track.clips) {
     if (clip.kind !== "media" || clip.enabled === false) continue;
@@ -195,16 +194,16 @@ export function lutFileStamps(timeline: Timeline, mediaRoot: string) {
     }
   }
   return [...names].sort().map(name => {
-    const file = fileInDirectory(mediaRoot, name);
+    const file = resolveLutFile(name, mediaRoot, lutRoots);
     const info = file && statSync(file, { throwIfNoEntry: false });
     return [name, info ? [file, info.size, info.mtimeMs, info.ctimeMs] : null];
   });
 }
 
 export function segmentInfo(project: Project, timeline: Timeline, range: TimeRange, cacheDir: string, format: SegmentKeyOptions,
-  mediaRoot: string, media: Map<string, MediaAsset>, transitions: TransitionPlan): SegmentInfo {
+  mediaRoot: string, media: Map<string, MediaAsset>, transitions: TransitionPlan, lutRoots?: readonly string[]): SegmentInfo {
   let key = plannedSegmentKey(project, timeline, range, format, media, transitions);
-  const luts = lutFileStamps(timeline, mediaRoot);
+  const luts = lutFileStamps(timeline, mediaRoot, lutRoots);
   if (luts.length) key = sha256(stableStringify([key, luts]));
   const file = path.join(cacheDir, `${key}.mp4`);
   return { range, key, file, cached: false };

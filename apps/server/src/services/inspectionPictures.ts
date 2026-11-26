@@ -12,7 +12,7 @@ import { previewPictures } from "./previewPictures.js";
 
 type Mode = "uniform" | "scene" | "activity";
 type Sheet = Pick<InspectionWindow, "timestamps" | "columns" | "jpeg" | "changedFrames">;
-type Inputs = Pick<GraphOptions, "pictureSource" | "decoder" | "fontDirs">;
+type Inputs = Pick<GraphOptions, "pictureSource" | "decoder" | "fontDirs" | "lutRoots">;
 interface Block { first: number; changes: number[]; pixels?: Buffer; samples?: number[] }
 const frameBytes = 320 * 180 * 3 / 2;
 
@@ -99,8 +99,9 @@ export function inspectionPictures(ctx: Ctx) {
       const activity = mode === "activity";
       if (activity && (end - first) * frameBytes > 64 * 1024 * 1024) throw new Error("Use the rendered preview for this frame rate.");
       const accel = ctx.settings().render.hwaccel;
+      const lutRoots = [ctx.paths.styleGuidesLibrary];
       const fontDirs = [ctx.paths.styleGuidesLibrary, ctx.paths.attachments(project.id)];
-      const inputs: Inputs = { pictureSource: previewPictures(mediaRoot), decoder: await pictureDecoder(accel), fontDirs };
+      const inputs: Inputs = { pictureSource: previewPictures(mediaRoot), decoder: await pictureDecoder(accel), lutRoots, fontDirs };
       // Each decode takes its turn in the engine's picture lane, on the GPU when there is one.
       const lane = pictureLane(ctx);
       async function read<T>(demand: AbortSignal, fn: (inputs: Inputs, signal: AbortSignal) => Promise<T>) {
@@ -109,7 +110,7 @@ export function inspectionPictures(ctx: Ctx) {
         catch (error) {
           active.throwIfAborted();
           retried("pictures", `[inspection] reading ${timeline.version} again from the originals on the CPU: ${clip((error as Error).message, 300)}`);
-          return lane.run(() => fn({ fontDirs }, active), { signal: active });
+          return lane.run(() => fn({ lutRoots, fontDirs }, active), { signal: active });
         }
       }
       const changes = new Set<number>();

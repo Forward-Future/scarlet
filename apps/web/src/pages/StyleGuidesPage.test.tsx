@@ -28,6 +28,8 @@ function sampleGuide(overrides: Partial<StyleGuideRecord> = {}): StyleGuideRecor
     instructions: "Use #F5F2EB background, #E05A3A accent, and Inter bold.",
     isDefault: true,
     assets: [],
+    transitions: [],
+    sounds: [],
     preview: {
       width: 1280,
       height: 720,
@@ -96,8 +98,13 @@ it("edits name, default toggle, attached files in chat, and deletes a style guid
 
   vi.spyOn(api, "styleGuide").mockImplementation(async () => ({ styleGuide: guide, edits: [] }));
   const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => {
-    const { captionStyle, ...rest } = patch;
-    guide = { ...guide, ...rest, ...(captionStyle ? { captionStyle } : captionStyle === null ? { captionStyle: undefined } : {}) };
+    const { captionStyle, colorLook, ...rest } = patch;
+    guide = {
+      ...guide,
+      ...rest,
+      ...(captionStyle ? { captionStyle } : captionStyle === null ? { captionStyle: undefined } : {}),
+      ...(colorLook ? { colorLook } : colorLook === null ? { colorLook: undefined } : {}),
+    };
     return { styleGuide: guide };
   });
   const upload = vi.spyOn(api, "uploadStyleGuideAsset").mockImplementation(async (_id, _file, name) => {

@@ -857,7 +857,8 @@ export class MockClient implements ScarletApi {
     const styleGuide: import("@scarlet/shared").StyleGuideRecord = {
       id: newId("sg"), name: body.name, description: body.description?.trim() ?? "", instructions: body.instructions ?? "",
       ...(body.captionStyle && Object.keys(body.captionStyle).length && { captionStyle: body.captionStyle }),
-      isDefault: Boolean(body.isDefault), assets: [], createdAt: ts, updatedAt: ts,
+      isDefault: Boolean(body.isDefault), assets: [], transitions: body.transitions ?? [], sounds: body.sounds ?? [],
+      ...(body.colorLook && { colorLook: body.colorLook }), createdAt: ts, updatedAt: ts,
     };
     this.store.db.styleGuides.push(styleGuide);
     this.store.emit({ type: "style_guide.updated", styleGuide });
@@ -866,6 +867,50 @@ export class MockClient implements ScarletApi {
   async createStyleGuideFromGraphic(body: import("@scarlet/shared").StyleGuideFromGraphicRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
     this.requireAuth();
     return this.createStyleGuide({ name: body.name, description: body.description || "Saved from project graphic", isDefault: body.isDefault });
+  }
+  async importStyleGuideFile(
+    file: Blob | { path: string },
+    opts: { styleGuideId?: string; name?: string } = {},
+  ): Promise<{ imported: true; styleGuide: import("@scarlet/shared").StyleGuideRecord } | { imported: false }> {
+    this.requireAuth();
+    if (!(file instanceof Blob)) return this.latency({ imported: false as const }, 80);
+    const text = await file.text();
+    const { parseStyleGuideDefinitionJson, slugifyStyleGuideName } = await import("@scarlet/shared");
+    const fileName = opts.name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "style-guide.json");
+    const baseName = fileName.replace(/\.(?:style\.)?json$/i, "");
+    const existing = opts.styleGuideId ? this.store.db.styleGuides.find(g => g.id === opts.styleGuideId) : undefined;
+    const parsed = parseStyleGuideDefinitionJson(text, {
+      fallbackName: baseName,
+      existingAssetIds: new Set(existing?.assets.map(a => a.id) ?? []),
+    });
+    if (!parsed) return this.latency({ imported: false as const }, 80);
+    if (existing) {
+      const updated = await this.updateStyleGuide(existing.id, {
+        ...(parsed.description !== undefined && { description: parsed.description }),
+        ...(parsed.instructions !== undefined && { instructions: parsed.instructions }),
+        ...(parsed.isDefault !== undefined && { isDefault: parsed.isDefault }),
+        ...(parsed.transitions !== undefined && { transitions: parsed.transitions }),
+        ...(parsed.sounds !== undefined && { sounds: parsed.sounds }),
+        ...(parsed.colorLook !== undefined && { colorLook: parsed.colorLook }),
+      });
+      return { imported: true, styleGuide: updated.styleGuide };
+    }
+    const baseSlug = parsed.name || slugifyStyleGuideName(baseName) || "imported-style";
+    let uniqueName = baseSlug;
+    let n = 2;
+    while (this.store.db.styleGuides.some(g => g.name.toLowerCase() === uniqueName.toLowerCase())) {
+      uniqueName = `${baseSlug}-${n++}`;
+    }
+    const created = await this.createStyleGuide({
+      name: uniqueName,
+      description: parsed.description,
+      instructions: parsed.instructions,
+      isDefault: parsed.isDefault,
+      transitions: parsed.transitions,
+      sounds: parsed.sounds,
+      ...(parsed.colorLook ? { colorLook: parsed.colorLook } : {}),
+    });
+    return { imported: true, styleGuide: created.styleGuide };
   }
   async updateStyleGuide(styleGuideId: string, body: import("@scarlet/shared").UpdateStyleGuideRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
     this.requireAuth();
@@ -880,6 +925,9 @@ export class MockClient implements ScarletApi {
       ...(body.description !== undefined && { description: body.description.trim() }),
       ...(body.instructions !== undefined && { instructions: body.instructions }),
       ...(body.isDefault !== undefined && { isDefault: body.isDefault }),
+      ...(body.transitions !== undefined && { transitions: body.transitions }),
+      ...(body.sounds !== undefined && { sounds: body.sounds }),
+      ...(body.colorLook !== undefined && { colorLook: body.colorLook ?? undefined }),
       updatedAt: new Date().toISOString(),
     });
     if (body.captionStyle === null) delete guide.captionStyle;
@@ -933,6 +981,30 @@ export class MockClient implements ScarletApi {
     guide.updatedAt = new Date().toISOString();
     this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
     return this.latency({ asset, styleGuide: { ...guide } }, 150);
+  }
+  async deleteStyleGuideAsset(styleGuideId: string, assetId: string): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const removedSounds = new Set(guide.sounds.filter(s => s.source === "asset" && s.assetId === assetId).map(s => s.id));
+    guide.assets = guide.assets.filter(a => a.id !== assetId);
+    guide.sounds = guide.sounds.filter(s => !(s.source === "asset" && s.assetId === assetId));
+    guide.transitions = guide.transitions.map(t => (t.soundId && removedSounds.has(t.soundId) ? { ...t, soundId: undefined } : t));
+    if (guide.colorLook?.lutAssetId === assetId) {
+      guide.colorLook = { ...guide.colorLook, lutAssetId: undefined, lutName: undefined };
+    }
+    guide.updatedAt = new Date().toISOString();
+    this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+    return this.latency({ styleGuide: { ...guide } }, 100);
+  }
+  async builtInStyleSounds() {
+    this.requireAuth();
+    const { BUILT_IN_STYLE_SOUNDS } = await import("@scarlet/shared");
+    return this.latency({ sounds: [...BUILT_IN_STYLE_SOUNDS] }, 60);
+  }
+  builtInStyleSoundUrl(soundId: string) {
+    const slug = soundId.startsWith("builtin:") ? soundId.slice("builtin:".length) : soundId;
+    return this.fileUrl(`/style-guides/sounds/builtin/${encodeURIComponent(slug)}`);
   }
   styleGuideAssetUrl(styleGuideId: string, assetId: string) {
     return this.fileUrl(`/style-guides/${encodeURIComponent(styleGuideId)}/assets/${encodeURIComponent(assetId)}`);

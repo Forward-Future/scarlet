@@ -87,12 +87,14 @@ export const useStyleGuidesStore = create<StyleGuidesState>((set, get) => ({
     const prev = get().styleGuides;
     const existing = prev.find(g => g.id === id);
     if (existing) {
-      const { captionStyle, ...rest } = body;
+      const { captionStyle, colorLook, ...rest } = body;
       const next: StyleGuideRecord = {
         ...existing,
         ...rest,
         isDefault: body.isDefault ?? existing.isDefault,
       };
+      if (colorLook === null) delete next.colorLook;
+      else if (colorLook !== undefined) next.colorLook = colorLook;
       if (captionStyle === null) delete next.captionStyle;
       else if (captionStyle !== undefined) next.captionStyle = captionStyle;
       get().apply(next);
