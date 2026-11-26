@@ -167,7 +167,7 @@ export function RejectedMark() {
  * its time. `label` names such a list, and `leaving` picks the rows that are on their way out of it: decided or sent back a
  * moment ago, they fade before they go.
  */
-export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low, inRail, askingKey }: {
+export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, lingering, low, inRail, askingKey }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
   /** Edits the editor rejected, which are out of the video: each keeps a row where it was, with a × and "Rejected". */
   rejected?: ListedEdit[];
@@ -177,6 +177,8 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   /** The queued request Scarlet will take up next, so its edit's row says "Up next" instead of "Queued". */
   nextQueuedId?: string;
   label?: string; leaving?(edit: ListedEdit): boolean;
+  /** Which new status a row is briefly showing in place before moving out of this list. */
+  lingering?(edit: ListedEdit): "working" | "done" | undefined;
   /** The rows that are in Needs review's list only while low risk edits are included: they open into it and close out of it. */
   low?(edit: ListedEdit): boolean;
   /** Drawn inside the beta edits column: use Scarlet's hover tooltip instead of the system title tooltip. */
@@ -189,6 +191,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
   const adding = useAdding(thread);
+  const paused = useProjectStore(s => s.current?.id === projectId ? !!s.current.project.editingPaused : false);
   const list = useRef<HTMLOListElement>(null);
   // A rejected edit that's open is its own row: the edit that took its place in the video's order isn't lit for it.
   const open = showing?.rejected ? -1 : edits.findIndex(edit => !!showing && matchesEdit(showing, edit));
@@ -276,9 +279,16 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const lead = <span className={asks || (check && !isKept) ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
       const checkTitle = revised || edit.reason ? undefined : edit.check;
       const isLeaving = !!leaving?.(edit);
-      const showUnkeep = decided && !edit.marker && !isLeaving && unkeepRefs.length > 0;
+      const lingerKind = lingering?.(edit);
+      const workingState = isRevising && !asks ? (busy ? "busy" : "pending") : undefined;
+      const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
+      const showUnkeep = decided && !edit.marker && !isLeaving && !lingerKind && unkeepRefs.length > 0;
       const unkeepTip = edit.check ? "Move back to Needs review" : only ? "Move back to safe edits" : "Unkeep";
-      return <Fragment key={editKey(edit)}><li className={[isLeaving && "is-leaving", showUnkeep && "has-unkeep"].filter(Boolean).join(" ") || undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
+      return <Fragment key={editKey(edit)}><li className={[isLeaving && "is-leaving", showUnkeep && "has-unkeep"].filter(Boolean).join(" ") || undefined}
+        data-low-risk={low?.(edit) ? "" : undefined}
+        data-lingering={lingerKind}
+        data-working={workingState}
+        data-paused={workingState === "pending" && paused ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
         className={["simple-edit", on && "is-on", asks && "is-asking", isAskingCurrent && "is-asking-current", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
@@ -290,7 +300,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         data-row-detail={inRail && checkTitle && checkTitle !== title ? checkTitle : undefined}
         aria-label={`${rowTime}: ${title}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
         {lead}
-        <span className="simple-edit-title">{decided && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
+        <span className="simple-edit-title">{decided && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}{spinning && <span className="simple-pass-spin" aria-hidden="true" />}<span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
         {/* While sent back, the row ends on its live status (Revising…, Up next, Queued, Needs your answer). Once revised,
             v2 sits beside the title and the edit keeps its type tag on the right. */}
