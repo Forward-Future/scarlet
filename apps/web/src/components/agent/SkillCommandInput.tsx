@@ -132,8 +132,8 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, ti
               else if (activeStyle) chooseStyle(activeStyle);
               else if (mode === "skill" && status === "error") void load();
               else if (mode === "style" && styleStatus === "error") void loadStyleGuides();
-              // A command no row matches still sends: the send says when no skill has that name, and a shortcut such
-              // as /dialogue-pass goes to the skill it stands for.
+              // A command no row matches still sends: the send says when no skill has that name, and one of Scarlet's
+              // built-in commands runs with or without a skill that guides it.
               else if (e.key === "Enter" && caret === token?.end && !e.repeat) onSubmit();
               return;
             }

@@ -377,13 +377,24 @@ export class MockClient implements ScarletApi {
     const fps = project.settings.fps;
     const oldRemoved = body.cut.before.removed;
     const oldLen = oldRemoved.end - oldRemoved.start;
-    const target = frameAligned(body.removed, fps);
+    const alignMoved = (oldRange: TimeRange, nextRange: TimeRange): TimeRange => {
+      const half = 0.5 / fps;
+      if (nextRange.end - nextRange.start <= half) return { start: nextRange.start, end: nextRange.start };
+      const aligned = frameAligned(nextRange, fps);
+      const start = Math.abs(nextRange.start - oldRange.start) >= half ? aligned.start : oldRange.start;
+      const end = Math.abs(nextRange.end - oldRange.end) >= half ? aligned.end : oldRange.end;
+      return end > start ? { start, end } : { start, end: start };
+    };
+    const target = alignMoved(oldRemoved, body.removed);
     const rejects = target.end - target.start <= 0.5 / fps;
     const media = this.store.db.media[projectId] ?? project.media;
     const dur = timelineDuration(head);
-    const fullDelta = body.cut.at <= 0.5 / fps
+    const isOpening = body.cut.at <= 0.5 / fps;
+    if (isOpening && oldRemoved.start > 1 / fps) throw new ScarletApiError(409, "needs_scarlet", "This cut can’t be adjusted directly. Use Revise instead.");
+    const isClosing = !isOpening && dur > 0.5 / fps && !head.tracks.some(t => t.clips.some(c => c.timelineIn >= body.cut.at - 0.5 / fps));
+    const fullDelta = isOpening
       ? { ds: 0, de: -oldLen }
-      : dur > 0.5 / fps && Math.abs(body.cut.at - dur) <= 0.5 / fps
+      : isClosing
         ? { ds: oldLen, de: 0 }
         : { ds: target.start - oldRemoved.start, de: target.end - oldRemoved.end };
     const next = rejects
@@ -436,7 +447,14 @@ export class MockClient implements ScarletApi {
       if (op.op === "updateClip" && typeof op.clipId === "string") return [op.clipId];
       return [];
     });
-    const target = frameAligned(body.nextRange, fps);
+    const half = 0.5 / fps;
+    const aligned = frameAligned(body.nextRange, fps);
+    const target = body.nextRange.end - body.nextRange.start <= half
+      ? { start: body.nextRange.start, end: body.nextRange.start }
+      : {
+        start: Math.abs(body.nextRange.start - body.edit.range.start) >= half ? aligned.start : body.edit.range.start,
+        end: Math.abs(body.nextRange.end - body.edit.range.end) >= half ? aligned.end : body.edit.range.end,
+      };
     const result = adjustEdit(head, body.edit.range, target, fps, this.store.db.media[projectId] ?? project.media, {
       kind: body.edit.kind,
       ...(clipIds?.length && { clipIds }),

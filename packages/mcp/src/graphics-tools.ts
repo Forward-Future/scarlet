@@ -1,5 +1,5 @@
 /**
- * The motion-graphics tools: drawing a graphic from a web page, the project's style
+ * The motion graphics tools: drawing a graphic from a web page, the project's style
  * guide and the files the editor attached. Scarlet draws the page (packages/render/src/graphic.ts); these tools carry
  * the page and its files there and report what the drawing measured.
  */

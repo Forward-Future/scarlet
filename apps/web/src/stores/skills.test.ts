@@ -8,6 +8,9 @@ import { commandSkillIds, enabledSkills, skillCommands, useSkillsStore } from ".
 const base = buildDb().skills[0]!;
 const skill = (name: string, extra: Partial<Skill> = {}): Skill => ({ ...base, id: `skl_${name}`, name, enabled: true, ...extra });
 const names = () => useSkillsStore.getState().skills.map(s => s.name);
+/** A skill that says in its header that it guides Scarlet's dialogue commands, whatever it is called. */
+const guide = (name: string, extra: Partial<Skill> = {}) =>
+  skill(name, { content: `---\nname: ${name}\nruns: dialogue-pass, tighten-pauses-here\n---\n\nCut tight.\n`, ...extra });
 
 beforeEach(() => useSkillsStore.setState({ skills: [], status: "idle", error: null }));
 afterEach(() => vi.restoreAllMocks());
@@ -26,15 +29,18 @@ it("finds the skill commands in a message as whole words, and leaves paths, link
 });
 
 it("lists the skills that are on, by name, with the passage version of the dialogue pass beside it", () => {
-  const library = [skill("zoom-in"), skill("captions", { enabled: false }), skill("dialogue-pass")];
+  const library = [skill("zoom-in"), skill("captions", { enabled: false }), guide("dialogue-pass")];
   const listed = enabledSkills(library);
   expect(listed.map(s => s.name)).toEqual(["dialogue-pass", "tighten-pauses-here", "zoom-in"]);
-  expect(enabledSkills([skill("dialogue-pass", { source: undefined, bundledName: undefined })]).map(s => s.name)).toEqual(["dialogue-pass"]);
+  // A skill that doesn't say it guides the pause command brings no passage version.
+  expect(enabledSkills([skill("dialogue-pass")]).map(s => s.name)).toEqual(["dialogue-pass"]);
+  // Renamed, the guide still brings both of Scarlet's commands, under their own names.
+  expect(enabledSkills([guide("my-cuts")]).map(s => [s.name, s.id])).toEqual([["dialogue-pass", "skl_my-cuts"], ["my-cuts", "skl_my-cuts"], ["tighten-pauses-here", "skl_my-cuts"]]);
   // The passage version runs the dialogue pass's own skill.
   expect(listed[1]).toMatchObject({ id: "skl_dialogue-pass", description: expect.stringContaining("selected passage") });
   // A library with its own skill of that name, on or off, keeps it as it is. With the dialogue pass off there is nothing to add.
   expect(enabledSkills([...library, skill("tighten-pauses-here", { enabled: false })]).map(s => s.name)).toEqual(["dialogue-pass", "zoom-in"]);
-  expect(enabledSkills([skill("dialogue-pass", { enabled: false }), skill("zoom-in")]).map(s => s.name)).toEqual(["zoom-in"]);
+  expect(enabledSkills([guide("dialogue-pass", { enabled: false }), skill("zoom-in")]).map(s => s.name)).toEqual(["zoom-in"]);
 });
 
 it("turns the commands in a message into skill ids, loading the library first when it isn't here yet", async () => {
@@ -51,16 +57,24 @@ it("turns the commands in a message into skill ids, loading the library first wh
   expect(read).toHaveBeenCalledTimes(1);
 });
 
-it.each(["dialogue-pass", "first-cut-dialogue", "tighten-pauses-here"])("leaves /%s with a same-named custom guide even when disabled", async name => {
+it.each(["dialogue-pass", "tighten-pauses-here"])("runs Scarlet's own /%s with a same-named skill as its guide, and without it when it is off", async name => {
   const custom = skill(name, { source: undefined, bundledName: undefined });
   useSkillsStore.setState({ status: "ready", skills: [custom] });
   await expect(commandSkillIds(`Use /${name} here`)).resolves.toEqual([custom.id]);
   useSkillsStore.setState({ skills: [{ ...custom, enabled: false }] });
-  await expect(commandSkillIds(`Use /${name} here`)).rejects.toThrow(`No enabled skill named /${name}.`);
+  await expect(commandSkillIds(`Use /${name} here`)).resolves.toBeUndefined();
+});
+
+it("refuses a switched-off skill's own command by name", async () => {
+  const custom = skill("first-cut-dialogue", { source: undefined, bundledName: undefined });
+  useSkillsStore.setState({ status: "ready", skills: [custom] });
+  await expect(commandSkillIds("Use /first-cut-dialogue here")).resolves.toEqual([custom.id]);
+  useSkillsStore.setState({ skills: [{ ...custom, enabled: false }] });
+  await expect(commandSkillIds("Use /first-cut-dialogue here")).rejects.toThrow("No enabled skill named /first-cut-dialogue.");
 });
 
 it("keeps a customized first-cut-dialogue entry separate from the stock guide and its local pause shortcut", async () => {
-  const stock = skill("dialogue-pass", { bundledName: "dialogue-pass" });
+  const stock = guide("dialogue-pass", { bundledName: "dialogue-pass" });
   const custom = skill("first-cut-dialogue", { source: undefined, bundledName: undefined });
   const library = [custom, stock];
   useSkillsStore.setState({ status: "ready", skills: library });
@@ -71,16 +85,20 @@ it("keeps a customized first-cut-dialogue entry separate from the stock guide an
   expect(enabledSkills([stock]).map(entry => entry.name)).toEqual(["dialogue-pass", "tighten-pauses-here"]);
 });
 
-it("uses the former shipped guide for local pauses only in a library that predates the new one", async () => {
-  const former = skill("first-cut-dialogue", { bundledName: "first-cut-dialogue" });
-  const current = skill("dialogue-pass", { bundledName: "dialogue-pass" });
+it("pins the skill that says it guides the pause command, the first by name when several do", async () => {
+  const former = guide("first-cut-dialogue", { bundledName: "first-cut-dialogue" });
+  const current = guide("dialogue-pass", { bundledName: "dialogue-pass" });
   useSkillsStore.setState({ status: "ready", skills: [former] });
   await expect(commandSkillIds("/tighten-pauses-here")).resolves.toEqual([former.id]);
   useSkillsStore.setState({ skills: [former, current] });
   await expect(commandSkillIds("/tighten-pauses-here")).resolves.toEqual([current.id]);
+  // One switched off, or rewritten without the line, guides nothing: the other does.
   useSkillsStore.setState({ skills: [former, { ...current, enabled: false }] });
-  await expect(commandSkillIds("/tighten-pauses-here")).resolves.toBeUndefined();
-  useSkillsStore.setState({ skills: [former, { ...current, source: undefined, bundledName: undefined }] });
+  await expect(commandSkillIds("/tighten-pauses-here")).resolves.toEqual([former.id]);
+  useSkillsStore.setState({ skills: [former, { ...current, content: "My own rules." }] });
+  await expect(commandSkillIds("/tighten-pauses-here")).resolves.toEqual([former.id]);
+  // With none, the command still runs.
+  useSkillsStore.setState({ skills: [{ ...former, enabled: false }] });
   await expect(commandSkillIds("/tighten-pauses-here")).resolves.toBeUndefined();
 });
 

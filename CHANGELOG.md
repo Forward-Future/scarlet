@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 26, 2026
 
 - Connect your YouTube channel in Settings › General, then open Export › Publish to YouTube to upload finished cuts with final-cut chapter timestamps straight to YouTube Studio (starting as a Private draft by default).
+- Fixed timeline edge dragging on crossfaded cuts, cleaned audio joins, synced multi-camera opening and closing cuts, and multi-clip B-roll or overlay edits so their handles always appear and save cleanly.
 - When something goes wrong, you can now report it in one click right where you see it: press Report beside the error, or on the screen Scarlet shows when a page breaks, and Scarlet sends it to the Scarlet team with its logs (no videos, projects, transcripts or sign-ins). Add details afterwards if you like. Help › Report a Problem… and Settings › About let you write a report yourself.
 - A page that breaks now says so with Reload and Report this problem, instead of an empty or technical error screen.
 - In the beta layout, taking a marked stretch off the timeline no longer deletes its times from the message you're writing.

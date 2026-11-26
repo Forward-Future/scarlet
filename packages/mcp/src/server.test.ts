@@ -5648,8 +5648,8 @@ it("keeps a resumed or answered task in the pass the editor typed last", async (
   };
   try {
     expect(await run("resumed-local", "/tighten-pauses-here", "The exchange at 0:01.")).toContain("Supply the local timeline range for the pause edit.");
-    expect(await run("answered-local", "/first-cut-dialogue", "/tighten-pauses-here just the intro")).toContain("Supply the local timeline range for the pause edit.");
-    expect(await run("answered-full", "/tighten-pauses-here", "/first-cut-dialogue the whole thing")).toContain("preserved");
+    expect(await run("answered-local", "/dialogue-pass", "/tighten-pauses-here just the intro")).toContain("Supply the local timeline range for the pause edit.");
+    expect(await run("answered-full", "/tighten-pauses-here", "/dialogue-pass the whole thing")).toContain("preserved");
   } finally {
     Object.assign(mock.state, original);
   }

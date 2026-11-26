@@ -44,6 +44,7 @@ import { DOUBLED_SOUND, doubledSoundText, OPS_DOC, validateOps } from "./timelin
 import { errorText, formatZodError, json, text, type ToolRegistrar } from "./tool-result.js";
 import { splitJoinEvidence, splitJoinLabel } from "./split-join.js";
 import { transitionOps } from "./transition.js";
+import { registerMulticamTools } from "./multicam-tools.js";
 import { registerTimelineGenerateTools } from "./timeline-generate-tools.js";
 
 /** Times one timeline_at call maps; the rest of a longer list come back to ask for. */
@@ -408,4 +409,5 @@ ${OPS_DOC}`,
   );
 
   registerTimelineGenerateTools(deps);
+  registerMulticamTools(deps);
 }

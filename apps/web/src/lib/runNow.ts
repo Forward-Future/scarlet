@@ -158,6 +158,9 @@ function toolWords(name: string, raw: unknown, callTime?: CallTime): string | un
     case "timeline_get": case "timeline_summary": case "timeline_at": return "Looking at the timeline";
     case "timeline_transcript": return "Reading the video’s words";
     case "timeline_propose": return "Making the edit";
+    case "timeline_sync_multicam": return "Syncing cameras and audio";
+    case "timeline_switch_cameras": return "Switching camera angles";
+    case "multicam_analyze": return "Matching speakers to cameras";
     case "timeline_framing": return field(input, "preview") === true ? "Trying a framing" : "Framing the picture";
     case "captions_generate": return "Making captions";
     case "render_request": return "Rendering a preview";
