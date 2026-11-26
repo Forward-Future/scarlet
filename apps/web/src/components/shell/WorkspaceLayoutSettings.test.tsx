@@ -1425,4 +1425,138 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(bodyRule).toMatch(/overflow-y:\s*auto/);
     expect(bodyRule).toMatch(/min-height:\s*0/);
   });
+
+  it("shows a green check mark or working spinner right on Needs review and Safe edit rows before moving them to Done or Working", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const change = db.changes.find(c => c.id === "chg_approved_2") ?? db.changes[0]!;
+    const ownerThreadId = buildThreads({ changes: db.changes, tasks: db.tasks, notes: db.notes })
+      .find(t => t.changes.some(c => c.id === change.id))!.id;
+    const baseTasks = db.tasks.filter(t => t.state !== "waiting_for_user");
+    let data: ProjectData = {
+      id: PRJ,
+      project: { ...project, editingPaused: false },
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: baseTasks,
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "summarizeBatches").mockResolvedValue({ summaries: {}, pending: [] });
+    vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === ownerThreadId ? [
+        { changeId: change.id, spot: 0, label: "Flagged intro cut", range: { start: 1, end: 3 }, kind: "cut", previous: [], check: "Check the cut." },
+        { changeId: change.id, spot: 1, label: "Safe captions", range: { start: 5, end: 8 }, kind: "text", previous: [] },
+        { changeId: change.id, spot: 2, label: "Safe music bed", range: { start: 9, end: 12 }, kind: "audio", previous: [] },
+      ] : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // Unfold Safe edits so safe rows are on screen before acting on them.
+    await act(async () => container.querySelector<HTMLButtonElement>(".review-tier-toggle")!.click());
+    await act(async () => {});
+
+    // Open the flagged edit first.
+    const flaggedBtn = container.querySelector<HTMLButtonElement>('.review-rail-list ol[aria-label="Edits that need you"] > li > button')!;
+    await act(async () => flaggedBtn.click());
+    await act(async () => {});
+
+    const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")]
+      .find(b => b.textContent?.trim() === "Keep")!;
+    const footHead = (name: "Working" | "Done") => [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")]
+      .find(b => b.textContent?.startsWith(name))!;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // 1) Keeping a flagged edit shows data-lingering="done" with a check mark and Kept in Needs review before moving to Done.
+      await act(async () => keepBtn.click());
+      await act(async () => {});
+      const keptFlagged = container.querySelector<HTMLLIElement>('.review-rail-list ol[aria-label="Edits that need you"] > li')!;
+      expect(keptFlagged.dataset.lingering).toBe("done");
+      expect(keptFlagged.querySelector(".simple-pass-tick")).not.toBeNull();
+      expect(keptFlagged.querySelector(".simple-edit-value")?.textContent).toBe("Kept");
+      expect(keptFlagged.querySelector(".simple-unkeep")).toBeNull();
+      expect(footHead("Done").textContent).toBe("Done0");
+
+      // 2) Revising a safe edit (running) and queuing another safe edit (pending, unpaused) show spinners & working labels in Safe edits before moving to Working.
+      const runningTask = Task.parse({
+        id: "task_status_running", projectId: PRJ, kind: "edit", agent: "claude",
+        instruction: "Make captions larger", state: "running",
+        createdBy: { type: "human", name: "Editor" }, changeIds: [],
+        context: { changeId: change.id, editIndex: 1, threadId: ownerThreadId },
+        createdAt: "2026-11-26T10:01:00.000Z",
+      });
+      const queuedTask = Task.parse({
+        id: "task_status_queued", projectId: PRJ, kind: "edit", agent: "claude",
+        instruction: "Lower music bed", state: "queued",
+        createdBy: { type: "human", name: "Editor" }, changeIds: [],
+        context: { changeId: change.id, editIndex: 2, threadId: ownerThreadId },
+        createdAt: "2026-11-26T10:02:00.000Z",
+      });
+      data = { ...data, tasks: [...baseTasks, runningTask, queuedTask] };
+      await act(async () => { useProjectStore.setState({ current: data }); });
+      await act(async () => {});
+
+      const safeItems = [...container.querySelectorAll<HTMLLIElement>('.review-low-body[aria-label="Safe edits"] ol > li')];
+      const runningLi = safeItems.find(li => li.textContent?.includes("Safe captions"))!;
+      const queuedLi = safeItems.find(li => li.textContent?.includes("Safe music bed"))!;
+      expect([runningLi.dataset.lingering, runningLi.dataset.working, runningLi.hasAttribute("data-paused")]).toEqual(["working", "busy", false]);
+      expect(runningLi.querySelector(".simple-pass-spin")).not.toBeNull();
+      expect(runningLi.querySelector(".simple-edit-check")?.textContent).toBe("Revising…");
+      expect([queuedLi.dataset.lingering, queuedLi.dataset.working, queuedLi.hasAttribute("data-paused")]).toEqual(["working", "pending", false]);
+      expect(queuedLi.querySelector(".simple-pass-spin")).not.toBeNull();
+      expect(queuedLi.querySelector(".simple-edit-check")?.textContent).toBe("Up next");
+      // Neither working row is duplicated in Working yet.
+      expect(footHead("Working").textContent).toBe("Working0");
+
+      // 3) Pausing project editing stops the queued lingering row from spinning while keeping the running row spinning.
+      data = { ...data, project: { ...data.project, editingPaused: true } };
+      await act(async () => { useProjectStore.setState({ current: data }); });
+      await act(async () => {});
+      const pausedItems = [...container.querySelectorAll<HTMLLIElement>('.review-low-body[aria-label="Safe edits"] ol > li')];
+      const pausedQueued = pausedItems.find(li => li.textContent?.includes("Safe music bed"))!;
+      const stillRunning = pausedItems.find(li => li.textContent?.includes("Safe captions"))!;
+      expect(pausedQueued.hasAttribute("data-paused")).toBe(true);
+      expect(pausedQueued.querySelector(".simple-pass-spin")).toBeNull();
+      expect(stillRunning.querySelector(".simple-pass-spin")).not.toBeNull();
+
+      // 4) After LINGER_MS + LINGER_FADE_MS, all lingering rows leave Needs review / Safe edits and land cleanly in Done and Working.
+      await act(async () => { vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS); });
+      expect(container.querySelectorAll('.review-rail-list ol[aria-label="Edits that need you"] > li')).toHaveLength(0);
+      expect(container.querySelectorAll('.review-low-body[aria-label="Safe edits"] ol > li')).toHaveLength(0);
+      expect(footHead("Done").textContent).toBe("Done1");
+      expect(footHead("Working").textContent).toBe("Working2");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // CSS lights up lingering kept check marks in --color-ok and turns beta working/lingering timestamps into spinners while keeping status words visible.
+    const { readFileSync } = await import("node:fs");
+    const simpleCss = readFileSync(`${import.meta.dirname}/../../simple.css`, "utf8");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    expect(simpleCss).toMatch(/li\[data-lingering="done"\]\s+\.simple-pass-tick:not\(\.is-rejected\)\s*\{[^}]*color:\s*var\(--color-ok\)/);
+    expect(simpleCss).toMatch(/\.simple-pass-spin\s*\{[^}]*border-radius:\s*50%/);
+    expect(betaCss).toContain(':not([data-lingering="working"]) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }');
+    expect(betaCss).toContain('[data-lingering="working"][data-working="pending"]:not([data-paused])');
+  });
 });

@@ -188,7 +188,7 @@
 [data-new-layout] .review-rail .simple-pass-list > li > button { align-items: center; }
 [data-new-layout] .review-rail :is(.simple-pass-time, .edit-row-time) { white-space: nowrap; }
 [data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) { display: flex; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
-[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) > :is(.simple-pass-tick, .edit-version, .simple-pass-more) { flex: none; }
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) > :is(.simple-pass-tick, .simple-pass-spin, .edit-version, .simple-pass-more) { flex: none; }
 
 /* Compact stepper on the edit card when stepping through a collapsed batch. */
 [data-new-layout] .edit-card-stepper {
@@ -227,7 +227,8 @@
 [data-new-layout] .review-rail .subunit { margin-left: 8px; }
 
 /* One-row in-line revision style everywhere inside the beta layout. */
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)):not([data-lingering="working"]) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li[data-lingering="working"]:is(:hover, :focus-within):has(> .subunit .unit-actions) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { opacity: 0; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit { position: relative; margin-top: 0; margin-bottom: 6px; border-left-color: transparent; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg > p {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -242,35 +243,40 @@
 @media (hover: hover) {
   [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)):not(:hover, :focus-within) > .subunit .unit-actions { opacity: 0; }
 }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) { position: relative; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button { color: var(--color-fg); }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)):hover > button:not(:disabled, .is-on) { background: rgba(255, 255, 255, .04); }
-[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button > :is(.simple-edit-title, .simple-pass-label) {
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])):not(:has(> .subunit .is-auto)) { position: relative; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button { color: var(--color-fg); }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])):hover > button:not(:disabled, .is-on) { background: rgba(255, 255, 255, .04); }
+[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)):not([data-lingering="working"]) > button > :is(.simple-edit-title, .simple-pass-label) {
   grid-column: 2 / -1; justify-self: stretch; padding-right: 22px; contain: inline-size; }
-[data-new-layout] .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button { grid-template-columns: 15px minmax(0, 1fr); align-items: center; padding-right: 30px; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit { position: static; margin: 0; padding: 0; border: 0; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .req {
+[data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button { grid-template-columns: 15px minmax(0, 1fr); align-items: center; padding-right: 30px; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now), [data-lingering="working"][data-working]:not([data-paused])):not(:has(> .subunit .is-auto)) > .subunit { position: static; margin: 0; padding: 0; border: 0; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now), [data-lingering="working"][data-working]:not([data-paused])):not(:has(> .subunit .is-auto)) > .subunit > .req {
   position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { position: absolute; top: 5px; right: 6px; z-index: 1; padding: 0; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now), [data-lingering="working"][data-working]:not([data-paused])):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { position: absolute; top: 5px; right: 6px; z-index: 1; padding: 0; }
 [data-new-layout] .req .simple-edits > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { right: -2px; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge {
   position: relative; border-color: transparent; background: var(--color-raised); color: var(--color-fg); }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge.is-kept svg { display: none; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge::after { content: ""; position: absolute; inset: -1.2px;
   border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.simple-pass-time, .edit-row-time) {
+/* In beta layout the leading time slot becomes the 15px spinning ring while working, so hide the inline title spinner. */
+[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button .simple-pass-spin,
+[data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button .simple-pass-spin { display: none; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button :is(.simple-pass-time, .edit-row-time) {
   position: relative; margin: 0; padding: 0; background: none; color: transparent; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.simple-pass-time, .edit-row-time)::after { content: ""; position: absolute; left: 0; top: 50%;
+[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button :is(.simple-pass-time, .edit-row-time)::after { content: ""; position: absolute; left: 0; top: 50%;
   width: 15px; height: 15px; margin-top: -7.5px; border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-[data-new-layout] .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { content: ""; width: 15px; height: 15px;
+[data-new-layout] .review-low-body :is(.simple-edits, .simple-pass-list) > li[data-lingering="working"] > button > :is(.simple-edit-check, .simple-pass-check, .simple-edit-value, .simple-pass-value),
+[data-new-layout] .review-low-body :is(.simple-edits, .simple-pass-list) > li[data-lingering="done"] > button > :is(.simple-edit-value, .simple-pass-value) { color: var(--color-muted); }
+[data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button::before { content: ""; width: 15px; height: 15px;
   border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
 @media (prefers-reduced-motion: no-preference) {
-  [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.edit-badge, .simple-pass-time, .edit-row-time)::after,
-  [data-new-layout] .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { animation: req-mark-turn 1s linear infinite; }
+  [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button :is(.edit-badge, .simple-pass-time, .edit-row-time)::after,
+  [data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button::before { animation: req-mark-turn 1s linear infinite; }
 }
 @media (prefers-reduced-motion: reduce) {
-  [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.edit-badge, .simple-pass-time, .edit-row-time)::after,
-  [data-new-layout] .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
+  [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button :is(.edit-badge, .simple-pass-time, .edit-row-time)::after,
+  [data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button::before { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
 }
 
 [data-new-layout] .review-rail-foot { flex: 0 1 auto; display: flex; flex-direction: column; max-height: max(55%, 82px); min-height: 0; overflow: hidden; padding: 0 0 8px; border-top: 1px solid var(--color-line); }
