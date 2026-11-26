@@ -927,4 +927,55 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector('.review-low-body[aria-label="Safe edits"] .edit-batch-plus')?.textContent).toBe("+2");
     expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
   });
+
+  it("never flashes stale saved edits in the beta rail or default dock while threadEdits loads on project open", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: db.tasks.filter(t => t.state !== "waiting_for_user"),
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+
+    for (const beta of [true, false]) {
+      const pending: Array<() => void> = [];
+      vi.spyOn(api, "threadEdits").mockImplementation(() => new Promise(resolve => {
+        pending.push(() => resolve({ version: project.head!, edits: [] }));
+      }));
+      useUiStore.setState({ ...oldUi, newLayout: beta }, true);
+      useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+
+      await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+      // Engine reads are still in flight: neither layout may flash raw saved edits in the list.
+      expect(pending.length).toBeGreaterThan(0);
+      expect(container.querySelectorAll(".review-rail-list button.simple-edit, .review-rail-list ol > li > button")).toHaveLength(0);
+      expect(container.querySelectorAll(".simple-review-dock .simple-pass-list > li > button")).toHaveLength(0);
+
+      // Once the engine responds with zero live edits, the list stays clean with zero transient rows.
+      await act(async () => { pending.forEach(done => done()); });
+      expect(container.querySelectorAll(".review-rail-list button.simple-edit, .review-rail-list ol > li > button")).toHaveLength(0);
+      expect(container.querySelectorAll(".simple-review-dock .simple-pass-list > li > button")).toHaveLength(0);
+
+      await act(async () => root.unmount());
+      root = createRoot(container);
+    }
+  });
 });
