@@ -304,7 +304,7 @@ it("renders the Tabbed Stage (Graphics, Transitions, Sounds, Color look) and per
       ]),
     }));
 
-    // Switch to Color look tab and verify interactive before/after split + LUT pill + adjustments
+    // Switch to Color look tab and verify prompt-only readouts (no manual sliders or inputs) + Before/After split
     await act(async () => tabs[3]!.click());
     const splitSlider = el.querySelector<HTMLElement>('[role="slider"][aria-label="Before and after split position"]');
     expect(splitSlider).not.toBeNull();
@@ -313,8 +313,11 @@ it("renders the Tabbed Stage (Graphics, Transitions, Sounds, Color look) and per
       splitSlider!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
     });
     expect(splitSlider!.getAttribute("aria-valuenow")).toBe("55");
+    expect(el.textContent).toContain("Warm Studio");
     expect(el.textContent).toContain("StudioWarm.cube");
     expect(el.textContent).toContain("Warmth");
+    expect(el.textContent).toContain("+24");
+    expect(el.querySelectorAll(".sg-tab-panel input")).toHaveLength(0);
   } finally {
     await act(async () => root.unmount());
     el.remove();

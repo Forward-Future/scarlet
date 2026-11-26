@@ -3,7 +3,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   slugifyStyleGuideName,
   type StyleGuideAsset,
-  type StyleGuideColorLook,
   type StyleGuideRecord,
   type StyleGuideSound,
   type StyleGuideTransition,
@@ -241,12 +240,6 @@ export function StyleGuideEditorPage() {
   const saveSounds = async (sounds: StyleGuideSound[]) => {
     const target = await ensureGuideForDirectEdit();
     const saved = await update(target.id, { sounds });
-    setLoaded(saved);
-  };
-
-  const saveColorLook = async (colorLook: StyleGuideColorLook | null) => {
-    const target = await ensureGuideForDirectEdit();
-    const saved = await update(target.id, { colorLook });
     setLoaded(saved);
   };
 
@@ -691,9 +684,15 @@ export function StyleGuideEditorPage() {
               {stageTab === "color" && (
                 <ColorLookStage
                   guide={guide}
-                  disabled={working || savingMeta}
-                  onSave={saveColorLook}
-                  onGuideUpdated={handleGuideUpdated}
+                  onSuggestPrompt={prompt => {
+                    setAsk(prompt);
+                    setAskErr(null);
+                    boxRef.current?.focus();
+                  }}
+                  onStageFiles={items => {
+                    stageItems(items);
+                    boxRef.current?.focus();
+                  }}
                 />
               )}
             </div>

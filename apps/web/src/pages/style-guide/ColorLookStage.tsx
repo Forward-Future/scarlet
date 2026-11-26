@@ -1,40 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { StyleGuideColorAdjustments, type StyleGuideColorLook, type StyleGuideRecord } from "@scarlet/shared";
-import { Icon, InlineError } from "../../components/ui/primitives";
-import { api, errorMessage } from "../../lib/client";
-import { desktop, isDesktop } from "../../lib/desktop";
+import { StyleGuideColorAdjustments, type StyleGuideRecord } from "@scarlet/shared";
+import { Icon } from "../../components/ui/primitives";
 import { useFileDropTarget } from "../../lib/uiHooks";
 
 const LUT_FILE = /\.(?:cube|3dl)$/i;
-
 const DEFAULT_ADJ: StyleGuideColorAdjustments = StyleGuideColorAdjustments.parse({});
+
+const PROMPT_STARTERS = [
+  "Warm studio filmic look with natural skin tones and soft highlight rolloff",
+  "Crisp neutral daylight with gentle shadow lift",
+  "Clean documentary grade, balanced contrast and subtle warmth",
+];
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
 
-function hasChanges(a: StyleGuideColorAdjustments): boolean {
-  return (
-    Math.abs(a.exposure) > 1e-4 ||
-    Math.abs(a.contrast - 1) > 1e-4 ||
-    Math.abs(a.saturation - 1) > 1e-4 ||
-    Math.abs(a.warmth) > 1e-4 ||
-    Math.abs(a.tint) > 1e-4 ||
-    Math.abs(a.shadows) > 1e-4 ||
-    Math.abs(a.highlights) > 1e-4 ||
-    Math.abs(a.blacks) > 1e-4 ||
-    Math.abs(a.whites) > 1e-4 ||
-    Math.abs(a.gamma - 1) > 1e-4
-  );
-}
-
 /**
- * Draw a clean, natural studio reference frame (warm skin tones, neutral matte studio walls,
- * window highlight, deep shadow falloff, and a subtle gray/color balance strip) so every camera
- * look adjustment is immediately legible in the Before/After split preview.
+ * Draw a natural studio reference frame (skin tones, neutral matte studio wall,
+ * window highlight, deep shadow falloff, and calibration swatches) so the saved
+ * camera color look is immediately legible in the Before/After comparison.
  */
 function drawReferenceScene(ctx: CanvasRenderingContext2D, w: number, h: number) {
-  // Neutral dark-mid studio wall gradient
   const bg = ctx.createLinearGradient(0, 0, w, h);
   bg.addColorStop(0, "#23252a");
   bg.addColorStop(0.55, "#34373e");
@@ -42,7 +29,6 @@ function drawReferenceScene(ctx: CanvasRenderingContext2D, w: number, h: number)
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
 
-  // Soft studio practical window highlight on upper right
   const win = ctx.createRadialGradient(w * 0.78, h * 0.24, w * 0.02, w * 0.78, h * 0.24, w * 0.34);
   win.addColorStop(0, "rgba(246, 241, 232, 0.92)");
   win.addColorStop(0.28, "rgba(214, 206, 194, 0.35)");
@@ -50,7 +36,6 @@ function drawReferenceScene(ctx: CanvasRenderingContext2D, w: number, h: number)
   ctx.fillStyle = win;
   ctx.fillRect(0, 0, w, h);
 
-  // Subtle practical lamp glow on left background
   const lamp = ctx.createRadialGradient(w * 0.16, h * 0.42, 4, w * 0.16, h * 0.42, w * 0.22);
   lamp.addColorStop(0, "rgba(232, 186, 134, 0.52)");
   lamp.addColorStop(0.5, "rgba(182, 130, 88, 0.16)");
@@ -58,7 +43,6 @@ function drawReferenceScene(ctx: CanvasRenderingContext2D, w: number, h: number)
   ctx.fillStyle = lamp;
   ctx.fillRect(0, 0, w, h);
 
-  // Studio bookshelf / architectural lines in background
   ctx.fillStyle = "rgba(15, 16, 19, 0.42)";
   ctx.fillRect(w * 0.06, h * 0.12, w * 0.22, h * 0.68);
   ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
@@ -66,14 +50,12 @@ function drawReferenceScene(ctx: CanvasRenderingContext2D, w: number, h: number)
     ctx.fillRect(w * 0.08, h * (0.24 + i * 0.14), w * 0.18, 2);
   }
 
-  // Desk plane in lower foreground (neutral slate wood)
   const desk = ctx.createLinearGradient(0, h * 0.76, 0, h);
   desk.addColorStop(0, "#2f2c29");
   desk.addColorStop(1, "#161514");
   ctx.fillStyle = desk;
   ctx.fillRect(0, h * 0.78, w, h * 0.22);
 
-  // Presenter shoulders (matte charcoal knit)
   ctx.save();
   ctx.beginPath();
   ctx.ellipse(w * 0.48, h * 0.88, w * 0.23, h * 0.27, 0, Math.PI, Math.PI * 2);
@@ -85,7 +67,6 @@ function drawReferenceScene(ctx: CanvasRenderingContext2D, w: number, h: number)
   ctx.fill();
   ctx.restore();
 
-  // Presenter neck + face with natural key-light to shadow rolloff (realistic skin tones!)
   ctx.save();
   ctx.fillStyle = "#b98a6f";
   ctx.fillRect(w * 0.452, h * 0.54, w * 0.056, h * 0.11);
@@ -97,14 +78,12 @@ function drawReferenceScene(ctx: CanvasRenderingContext2D, w: number, h: number)
   skin.addColorStop(1, "#7c5743");
   ctx.fillStyle = skin;
   ctx.fill();
-  // Hair crown
   ctx.beginPath();
   ctx.ellipse(w * 0.48, h * 0.31, w * 0.085, h * 0.095, 0, Math.PI, Math.PI * 2);
   ctx.fillStyle = "#1d1917";
   ctx.fill();
   ctx.restore();
 
-  // Subtle calibration chips on lower right desk (skin, foliage, sky, neutral gray, shadow, white)
   const chips = ["#1b1b1d", "#55575b", "#9a9ca0", "#dedede", "#c8987b", "#5c7a67", "#537494", "#b56a52"];
   const cw = w * 0.03;
   const ch = h * 0.042;
@@ -118,7 +97,7 @@ function drawReferenceScene(ctx: CanvasRenderingContext2D, w: number, h: number)
   });
 }
 
-/** Apply Scarlet's color look parameters directly to RGBA pixels for an accurate live preview. */
+/** Apply saved color look parameters directly to RGBA pixels for the Before/After preview. */
 function applyAdjustmentsToImageData(src: ImageData, adj: StyleGuideColorAdjustments): ImageData {
   const out = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
   const d = out.data;
@@ -133,11 +112,11 @@ function applyAdjustmentsToImageData(src: ImageData, adj: StyleGuideColorAdjustm
     if (adj.blacks !== 0) v = adj.blacks > 0 ? v + adj.blacks * 0.08 * (1 - v) * (1 - v) : Math.max(0, (v + adj.blacks * 0.08) / (1 + adj.blacks * 0.08));
     if (adj.whites !== 0) v = adj.whites < 0 ? v * (1 + adj.whites * 0.08 * v * v) : Math.min(1, v / (1 - adj.whites * 0.08));
     if (adj.shadows !== 0) {
-      const w = 4 * v * (1 - v) * (1 - v); // peaks in shadows (~0.25)
+      const w = 4 * v * (1 - v) * (1 - v);
       v += adj.shadows * 0.24 * w;
     }
     if (adj.highlights !== 0) {
-      const w = 4 * v * v * (1 - v); // peaks in highlights (~0.75)
+      const w = 4 * v * v * (1 - v);
       v += adj.highlights * 0.24 * w;
     }
     return clamp(v, 0, 1);
@@ -152,7 +131,6 @@ function applyAdjustmentsToImageData(src: ImageData, adj: StyleGuideColorAdjustm
     g = toneCurve(clamp(g, 0, 1));
     b = toneCurve(clamp(b, 0, 1));
 
-    // Contrast & gamma
     r = clamp((r - 0.5) * adj.contrast + 0.5, 0, 1);
     g = clamp((g - 0.5) * adj.contrast + 0.5, 0, 1);
     b = clamp((b - 0.5) * adj.contrast + 0.5, 0, 1);
@@ -162,13 +140,11 @@ function applyAdjustmentsToImageData(src: ImageData, adj: StyleGuideColorAdjustm
       b = Math.pow(b, invGamma);
     }
 
-    // Saturation
     const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     r = clamp(luma + (r - luma) * adj.saturation, 0, 1);
     g = clamp(luma + (g - luma) * adj.saturation, 0, 1);
     b = clamp(luma + (b - luma) * adj.saturation, 0, 1);
 
-    // White balance (warmth + tint, lightness-preserving midtone weighting)
     if (rShift !== 0 || gShift !== 0 || bShift !== 0) {
       const weight = 0.75 + 0.25 * (1 - Math.abs(luma * 2 - 1));
       const nr = clamp(r + rShift * weight * (0.25 + 0.75 * r), 0, 1);
@@ -188,60 +164,46 @@ function applyAdjustmentsToImageData(src: ImageData, adj: StyleGuideColorAdjustm
   return out;
 }
 
-interface SliderSpec {
+interface ReadoutSpec {
   key: keyof StyleGuideColorAdjustments;
   label: string;
-  min: number;
-  max: number;
-  step: number;
   format(v: number): string;
 }
 
-const SLIDERS: readonly SliderSpec[] = [
-  { key: "exposure", label: "Exposure", min: -2, max: 2, step: 0.05, format: v => `${v >= 0 ? "+" : ""}${v.toFixed(2)} EV` },
-  { key: "contrast", label: "Contrast", min: 0.5, max: 1.8, step: 0.02, format: v => `${Math.round((v - 1) * 100) >= 0 ? "+" : ""}${Math.round((v - 1) * 100)}` },
-  { key: "saturation", label: "Saturation", min: 0, max: 2, step: 0.02, format: v => `${Math.round((v - 1) * 100) >= 0 ? "+" : ""}${Math.round((v - 1) * 100)}` },
-  { key: "warmth", label: "Warmth", min: -1, max: 1, step: 0.02, format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
-  { key: "tint", label: "Tint", min: -1, max: 1, step: 0.02, format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
-  { key: "shadows", label: "Shadows", min: -1, max: 1, step: 0.02, format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
-  { key: "highlights", label: "Highlights", min: -1, max: 1, step: 0.02, format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
-  { key: "blacks", label: "Blacks", min: -1, max: 1, step: 0.02, format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
+const READOUTS: readonly ReadoutSpec[] = [
+  { key: "exposure", label: "Exposure", format: v => `${v >= 0 ? "+" : ""}${v.toFixed(2)} EV` },
+  { key: "contrast", label: "Contrast", format: v => `${Math.round((v - 1) * 100) >= 0 ? "+" : ""}${Math.round((v - 1) * 100)}` },
+  { key: "saturation", label: "Saturation", format: v => `${Math.round((v - 1) * 100) >= 0 ? "+" : ""}${Math.round((v - 1) * 100)}` },
+  { key: "warmth", label: "Warmth", format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
+  { key: "tint", label: "Tint", format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
+  { key: "shadows", label: "Shadows", format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
+  { key: "highlights", label: "Highlights", format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
+  { key: "blacks", label: "Blacks", format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
+  { key: "whites", label: "Whites", format: v => `${v >= 0 ? "+" : ""}${Math.round(v * 100)}` },
+  { key: "gamma", label: "Gamma", format: v => v.toFixed(2) },
 ];
 
 export function ColorLookStage({
   guide,
-  disabled,
-  onSave,
-  onGuideUpdated,
+  onSuggestPrompt,
+  onStageFiles,
 }: {
   guide: StyleGuideRecord | null;
-  disabled: boolean;
-  onSave(next: StyleGuideColorLook | null): Promise<void>;
-  onGuideUpdated(next: StyleGuideRecord): void;
+  onSuggestPrompt(prompt: string): void;
+  onStageFiles(items: Array<File | { path: string }>): void;
 }) {
   const saved = guide?.colorLook;
+  const adj = saved?.adjustments ?? DEFAULT_ADJ;
   const [split, setSplit] = useState(50);
   const [dragging, setDragging] = useState(false);
-  const [lookName, setLookName] = useState(saved?.name ?? "");
-  const [notes, setNotes] = useState(saved?.notes ?? "");
-  const [adj, setAdj] = useState<StyleGuideColorAdjustments>(saved?.adjustments ?? DEFAULT_ADJ);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const beforeCanvasRef = useRef<HTMLCanvasElement>(null);
   const afterCanvasRef = useRef<HTMLCanvasElement>(null);
   const baseImageRef = useRef<ImageData | null>(null);
-  const lutInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setLookName(saved?.name ?? "");
-    setNotes(saved?.notes ?? "");
-    setAdj(saved?.adjustments ?? DEFAULT_ADJ);
-  }, [saved?.name, saved?.notes, saved?.adjustments, saved?.lutAssetId]);
-
-  // Paint Before & After studio reference frames whenever adjustments change.
-  useEffect(() => {
+    if (!saved) return;
     const before = beforeCanvasRef.current;
     const after = afterCanvasRef.current;
     if (!before || !after) return;
@@ -260,7 +222,7 @@ export function ColorLookStage({
     }
     const graded = applyAdjustmentsToImageData(baseImageRef.current, adj);
     aCtx.putImageData(graded, 0, 0);
-  }, [adj]);
+  }, [saved, adj]);
 
   const updateSplitFromClientX = (clientX: number) => {
     const rect = stageRef.current?.getBoundingClientRect();
@@ -280,97 +242,53 @@ export function ColorLookStage({
     };
   }, [dragging]);
 
-  const persistLook = async (next: { name?: string; notes?: string; adjustments?: StyleGuideColorAdjustments; lutAssetId?: string; lutName?: string }) => {
-    if (!guide || disabled) return;
-    const merged: StyleGuideColorLook = {
-      name: (next.name ?? lookName).trim(),
-      notes: (next.notes ?? notes).trim(),
-      adjustments: next.adjustments ?? adj,
-      ...(next.lutAssetId !== undefined
-        ? (next.lutAssetId ? { lutAssetId: next.lutAssetId, lutName: next.lutName } : {})
-        : (saved?.lutAssetId ? { lutAssetId: saved.lutAssetId, lutName: saved.lutName } : {})),
-    };
-    setErr(null);
-    try {
-      await onSave(merged);
-    } catch (e) {
-      setErr(errorMessage(e));
-    }
-  };
-
-  const uploadLut = async (item: File | { path: string }) => {
-    if (!guide || disabled || busy) return;
-    const name = item instanceof File ? item.name : item.path.split(/[\\/]/).pop() || "look.cube";
-    if (!LUT_FILE.test(name)) {
-      setErr("Choose a .cube or .3dl color look file.");
-      return;
-    }
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await api.uploadStyleGuideAsset(guide.id, item, name);
-      onGuideUpdated(res.styleGuide);
-      await persistLook({
-        name: lookName || res.asset.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "),
-        lutAssetId: res.asset.id,
-        lutName: res.asset.name,
-      });
-    } catch (e) {
-      setErr(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
+  // Dropping a .cube / .3dl file attaches it to the chat composer so all color changes stay prompt-driven.
   const { over: dropping, dropProps } = useFileDropTarget(
-    paths => { if (paths[0]) void uploadLut({ path: paths[0] }); },
-    files => { if (files[0]) void uploadLut(files[0]); },
+    paths => {
+      const luts = paths.filter(p => LUT_FILE.test(p)).map(path => ({ path }));
+      if (luts.length) onStageFiles(luts);
+    },
+    files => {
+      const luts = Array.from(files).filter(f => LUT_FILE.test(f.name));
+      if (luts.length) onStageFiles(luts);
+    },
     { ignoreChildLeave: true },
   );
 
-  const pickLut = async () => {
-    if (isDesktop()) {
-      const picked = await desktop.pickFile("Attach a .cube or .3dl look file").catch(() => null);
-      if (picked) void uploadLut({ path: picked });
-      return;
-    }
-    lutInputRef.current?.click();
-  };
+  const savedMetrics = useMemo(() => {
+    if (!saved) return [];
+    return READOUTS.filter(spec => Math.abs(adj[spec.key] - DEFAULT_ADJ[spec.key]) > 1e-4).map(spec => ({
+      key: spec.key,
+      label: spec.label,
+      value: spec.format(adj[spec.key]),
+    }));
+  }, [saved, adj]);
 
-  const removeLut = async () => {
-    if (!guide || !saved?.lutAssetId || disabled || busy) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const res = await api.deleteStyleGuideAsset(guide.id, saved.lutAssetId);
-      onGuideUpdated(res.styleGuide);
-    } catch (e) {
-      setErr(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const resetAdjustments = async () => {
-    setAdj(DEFAULT_ADJ);
-    if (!saved?.lutAssetId && !lookName.trim() && !notes.trim()) {
-      await onSave(null);
-    } else {
-      await persistLook({ adjustments: DEFAULT_ADJ });
-    }
-  };
-
-  const activeChips = useMemo(() => {
-    const out: string[] = [];
-    for (const spec of SLIDERS) {
-      const val = adj[spec.key];
-      const def = DEFAULT_ADJ[spec.key];
-      if (Math.abs(val - def) > 1e-4) out.push(`${spec.label} ${spec.format(val)}`);
-    }
-    return out;
-  }, [adj]);
-
-  const modified = hasChanges(adj);
+  if (!saved) {
+    return (
+      <div {...dropProps} className={`style-guide-preview-stage ${dropping ? "is-dropping" : ""}`}>
+        <div className="style-guide-preview-frame is-empty">
+          <span className="style-guide-preview-placeholder-title">Camera color look</span>
+          <span className="style-guide-preview-placeholder-body">
+            Describe the color and lighting look in chat, or drop a .cube / .3dl file — Scarlet will save it here and apply it across projects.
+          </span>
+          <div className="sg-prompt-chips">
+            {PROMPT_STARTERS.map(starter => (
+              <button
+                key={starter}
+                type="button"
+                className="sg-prompt-chip"
+                onClick={() => onSuggestPrompt(starter)}
+              >
+                {starter}
+              </button>
+            ))}
+          </div>
+        </div>
+        {dropping && <div className="sg-drop-overlay" aria-hidden="true">Attach .cube / .3dl file to your chat message</div>}
+      </div>
+    );
+  }
 
   return (
     <div {...dropProps} className={`sg-tab-body ${dropping ? "is-dropping" : ""}`}>
@@ -408,119 +326,35 @@ export function ColorLookStage({
         </div>
       </div>
 
-      <InlineError>{err}</InlineError>
-
-      <div className="sg-color-identity">
-        <div className="sg-color-meta-row">
-          <input
-            className="sg-look-name-input"
-            value={lookName}
-            disabled={disabled || busy || !guide}
-            aria-label="Color look name"
-            placeholder="Untitled camera look (e.g. Warm Studio Filmic)"
-            onChange={e => setLookName(e.target.value)}
-            onBlur={() => { if (lookName.trim() !== (saved?.name ?? "")) void persistLook({ name: lookName }); }}
-            onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
-          />
-          <div className="sg-lut-bar">
-            {saved?.lutName ? (
-              <span className="sg-lut-pill">
-                <Icon name="file" size={11} />
-                <span className="truncate max-w-[200px]">{saved.lutName}</span>
-                <button
-                  type="button"
-                  className="sg-lut-remove"
-                  aria-label={`Remove ${saved.lutName}`}
-                  title="Remove LUT"
-                  disabled={disabled || busy}
-                  onClick={() => void removeLut()}
-                >
-                  <Icon name="x" size={10} />
-                </button>
-              </span>
-            ) : null}
-            <button
-              type="button"
-              className="btn-ghost text-[12px] py-1 px-2.5 shrink-0"
-              disabled={disabled || busy || !guide}
-              onClick={() => void pickLut()}
-            >
-              <Icon name="upload" size={11} /> {saved?.lutName ? "Replace LUT" : "Attach .cube / .3dl"}
-            </button>
-            <input
-              ref={lutInputRef}
-              type="file"
-              accept=".cube,.3dl"
-              className="sr-only"
-              onChange={e => {
-                const file = e.target.files?.[0];
-                if (file) void uploadLut(file);
-                e.target.value = "";
-              }}
-            />
-          </div>
-        </div>
-
-        <input
-          className="sg-rule-input"
-          value={notes}
-          disabled={disabled || busy || !guide}
-          aria-label="Color look notes"
-          placeholder="Notes for Scarlet when matching cameras (e.g. Match B-cam to warm A-cam skin tones, soft highlight rolloff)…"
-          onChange={e => setNotes(e.target.value)}
-          onBlur={() => { if (notes.trim() !== (saved?.notes ?? "")) void persistLook({ notes }); }}
-          onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
-        />
-      </div>
-
-      <div className="sg-section-head">
-        <div className="flex items-baseline gap-2.5 min-w-0">
-          <span className="sg-section-title shrink-0">Saved adjustments</span>
-          {activeChips.length > 0 && (
-            <span className="text-dim text-[12px] truncate">{activeChips.slice(0, 4).join(" · ")}</span>
+      <div className="sg-color-summary">
+        <div className="sg-color-summary-head">
+          <h3 className="sg-color-title">{saved.name || "Saved camera look"}</h3>
+          {saved.lutName && (
+            <span className="sg-lut-pill">
+              <Icon name="file" size={11} />
+              <span className="truncate max-w-[240px]">{saved.lutName}</span>
+            </span>
           )}
         </div>
-        {modified && (
-          <button
-            type="button"
-            className="btn-quiet text-[12px]"
-            disabled={disabled || busy || !guide}
-            onClick={() => void resetAdjustments()}
-          >
-            Reset
-          </button>
-        )}
-      </div>
+        {saved.notes && <p className="sg-color-notes">{saved.notes}</p>}
 
-      <div className="sg-sliders-grid">
-        {SLIDERS.map(spec => {
-          const value = adj[spec.key];
-          const isModified = Math.abs(value - DEFAULT_ADJ[spec.key]) > 1e-4;
-          return (
-            <label key={spec.key} className="sg-slider-row">
-              <div className="sg-slider-head">
-                <span className={isModified ? "text-fg" : "text-muted"}>{spec.label}</span>
-                <span className={`tnum text-[11.5px] ${isModified ? "text-fg" : "text-dim"}`}>{spec.format(value)}</span>
+        {savedMetrics.length > 0 && (
+          <dl className="sg-color-readouts" aria-label="Saved color look parameters">
+            {savedMetrics.map(item => (
+              <div key={item.key} className="sg-color-stat">
+                <dt>{item.label}</dt>
+                <dd className="tnum">{item.value}</dd>
               </div>
-              <input
-                type="range"
-                min={spec.min}
-                max={spec.max}
-                step={spec.step}
-                value={value}
-                disabled={disabled || busy || !guide}
-                aria-label={spec.label}
-                onChange={e => setAdj(prev => ({ ...prev, [spec.key]: Number(e.target.value) }))}
-                onMouseUp={() => void persistLook({ adjustments: adj })}
-                onTouchEnd={() => void persistLook({ adjustments: adj })}
-                onKeyUp={() => void persistLook({ adjustments: adj })}
-              />
-            </label>
-          );
-        })}
+            ))}
+          </dl>
+        )}
+
+        <p className="sg-color-prompt-hint">
+          Describe color or lighting adjustments in chat — or drop a .cube / .3dl file into chat — and Scarlet will update this look.
+        </p>
       </div>
 
-      {dropping && <div className="sg-drop-overlay" aria-hidden="true">Drop a .cube or .3dl file to save as this style’s camera look</div>}
+      {dropping && <div className="sg-drop-overlay" aria-hidden="true">Attach .cube / .3dl file to your chat message</div>}
     </div>
   );
 }
