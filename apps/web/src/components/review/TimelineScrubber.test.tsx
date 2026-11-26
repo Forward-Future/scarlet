@@ -357,3 +357,44 @@ it("renders edit-toned edge handles with custom removeLabel when pulling a timed
   });
   expect(onCommit).toHaveBeenCalledWith({ start: 1, end: 1 });
 });
+
+/** An open cut's band, at `start` for a second, zoomed to as `focusAround` does: five seconds either side. */
+const openCut = (start: number, duration = 3000, playhead = start - 2) => act(async () => root.render(
+  <TimelineScrubber start={0} duration={duration} playhead={playhead} frameAt={() => undefined} onSeek={t => seeks.push(t)} onScrubStart={() => released}
+    highlight={{ key: "cut-1", view: { start: start - 5, end: start + 6 }, band: { start, end: start + 1 }, bandLabel: "Cut · 1.0 s" }} />));
+const band = () => container.querySelector<HTMLElement>(".simple-timeline-band");
+const bandLeft = () => Math.round(parseFloat(band()!.style.left) * 100) / 100;
+
+it("zooms to an open cut's band again when the timeline is built again for a version where the cut sits elsewhere (#686)", async () => {
+  // The cut opens at 1:40 on the version before it, zoomed to 1:35–1:46.
+  await openCut(100);
+  await zoomed();
+  expect(bandLeft()).toBeCloseTo(45.45, 1);
+  // The version it is shown on changes under it (a pass saves its next batch, a call goes onto the version that still
+  // has the footage round it): the timeline is built again, and the same cut now sits at 5:00. The zoom it carried
+  // over showed 1:35–1:46, where the band isn't, and the cut on the card had nothing on the timeline.
+  await openCut(300, 3100);
+  await zoomed();
+  expect(band()).not.toBeNull();
+  expect(bandLeft()).toBeCloseTo(45.45, 1);
+});
+
+it("zooms to an open cut's band again when it moves out of view on the same timeline (#686)", async () => {
+  await openCut(100);
+  await zoomed();
+  // The same cut, placed again on the same version (its one-cut preview arrived, or its revision landed elsewhere),
+  // before its listen has moved the playhead there.
+  await openCut(300, 3000, 98);
+  await zoomed();
+  expect(band()).not.toBeNull();
+  expect(bandLeft()).toBeCloseTo(45.45, 1);
+});
+
+it("keeps the zoom it had when the timeline is built again and the open cut's band is still in view", async () => {
+  await openCut(100);
+  await zoomed();
+  // A new version under the same cut, which moved a little: the zoom stays as the editor had it, and the band moves in it.
+  await openCut(101, 3100);
+  await zoomed();
+  expect(bandLeft()).toBeCloseTo(54.55, 1);
+});
