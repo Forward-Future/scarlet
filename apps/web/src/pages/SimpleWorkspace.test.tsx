@@ -117,7 +117,7 @@ const click = (element: Element) => act(async () => (element as HTMLElement).cli
 const reviewDock = () => container.querySelector<HTMLElement>(".simple-review-dock");
 const dockFor = (scope: Element) => scope.closest(".simple-review-dock") ? scope : reviewDock() ?? scope;
 const threadIdOf = (scope: Element) => scope.closest("section.simple-turn")?.getAttribute("data-thread") ?? undefined;
-/** What opens the rest of a request's edits: See all where it has one list (never Show →, which jumps in the tabbed dock). */
+/** What opens the rest of a request's edits: See all where it has one list (the tabbed dock has no link in the chat). */
 const seeAll = (scope: Element) =>
   scope.querySelector<HTMLButtonElement>(".simple-pass-toggle[aria-expanded]")
   ?? dockFor(scope).querySelector<HTMLButtonElement>(".simple-review-tab.is-see-all, .simple-review-tab:only-child");
@@ -633,10 +633,10 @@ it("lists a thread's edits once, by time, and opens one with its decisions under
   await showFolded();
   const turn = turnFor("chg_approved_2");
   const dock = dockFor(turn);
-  // The summary stands on its own with a Show → link to jump to its rows in the unified Priority list.
+  // The summary stands on its own, with no link after it: its rows are in the unified Priority list.
   expect(turn.querySelector(".simple-made")?.textContent).toBe("Made 3 edits: music bed, captions, wrap.");
   expect([...turn.querySelectorAll(".simple-made b")].map(b => b.textContent)).toEqual(["3"]);
-  expect(turn.querySelector(".simple-made-line button")?.textContent).toBe("Show →");
+  expect(turn.querySelector(".simple-made-line button")).toBeNull();
   // Needs review, Working and Done sit above the Priority list. Needs review shows flagged edits pinned on top and
   // safe edits right below under a hairline divider, with Keep N safe edits and no filter bar.
   expect(reviewModes(turn)).toEqual(tabs());
@@ -3583,7 +3583,7 @@ it("lists an applied pass under Needs review, Working and Done, with its cuts ma
   const lists = () => [...pass.querySelectorAll(".simple-pass-list")].map(l => [l.getAttribute("aria-label"), l.querySelectorAll(":scope > li:not(.review-tier-sep)").length]);
   const marks = () => [...container.querySelectorAll<HTMLElement>(".simple-timeline-mark")];
   expect(turn.querySelector(".simple-made")?.textContent).toBe("Made 3 edits: music bed, captions, wrap.");
-  expect(turn.querySelector(".simple-made-line button")?.textContent).toBe("Show →");
+  expect(turn.querySelector(".simple-made-line button")).toBeNull();
   // The three tabs sit above the Priority list with flagged edits pinned on top, safe edits below, and no filter bar.
   expect([reviewModes(pass), pass.querySelector(".review-filter-bar")]).toEqual([tabs(), null]);
   expect([pass.querySelector(".simple-review-tabs + .simple-pass-list"), lists()]).toEqual([list(), [["Edits for you", 3]]]);
@@ -15879,7 +15879,7 @@ it("opens a standalone See all list in the fixed bottom dock above the message b
   expect(reviewDock()).toBeNull();
 });
 
-it("surfaces a newer request's confident edits at the top of Confident edits and lets Show → open and flash them", async () => {
+it("surfaces a newer request's confident edits at the top of Confident edits, with no Show → link in the chat", async () => {
   earlierRequestOnly(true);
   const later = laterRequest("chg_mographs", true);
   const at = new Date().toISOString();
@@ -15909,16 +15909,8 @@ it("surfaces a newer request's confident edits at the top of Confident edits and
     .toEqual(["wrap", "Model A title", "Model B title", "music bed", "captions"]);
   expect(forYouTab()?.getAttribute("title")).toBe("5 unreviewed (1 needs you)");
 
-  // Even while on Done, clicking Show → on the mographs request switches back to Needs review, opens its first graphic, and flashes its rows.
-  await click(tabNamed(dock, "Done"));
-  const showLink = buttonIn(turnFor("chg_mographs"), "Show →")!;
-  expect(showLink).toBeDefined();
-  await click(showLink);
-  await act(async () => {});
-  expect(openTitle()).toBe("Model A title");
-  expect([reviewModes(dock), dock.querySelector(".review-filter-bar")]).toEqual([tabs(), null]);
-  expect([...dock.querySelectorAll("li[data-flash]")].map(li => li.getAttribute("data-thread")))
-    .toEqual([mographThread, mographThread]);
+  // The chat has no Show → link after what the request made.
+  expect(buttonIn(turnFor("chg_mographs"), "Show →")).toBeFalsy();
 });
 
 it("keeps all confident edits across requests with Keep N confident and restores them all on one ⌘Z", async () => {
