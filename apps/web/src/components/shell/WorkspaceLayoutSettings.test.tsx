@@ -928,6 +928,49 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
   });
 
+  it("keeps the middle edits column visible on a newly opened project with no edits yet", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: [],
+      notes: [],
+      renders: [],
+      tasks: [],
+      taskEvents: {},
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: "empty-preview", delivery: "empty-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockResolvedValue({ version: project.head!, edits: [] });
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    const rail = container.querySelector<HTMLElement>("#simple-review-rail")!;
+    expect(rail).not.toBeNull();
+    expect(rail.hidden).toBe(false);
+    expect(rail.querySelector(".review-rail-head h2")?.textContent).toBe("For you");
+    expect(rail.querySelector(".simple-review-empty")?.textContent).toBe("No edits yet.");
+    expect(rail.querySelector(':scope > [role="separator"]')).not.toBeNull();
+    const sections = [...rail.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];
+    expect(sections.map(b => b.textContent)).toEqual(["Working0", "Done0"]);
+    expect(sections.every(b => b.disabled)).toBe(true);
+  });
+
   it("never flashes stale saved edits in the beta rail or default dock while threadEdits loads on project open", async () => {
     const db = buildDb();
     const project = db.projects.find(p => p.id === PRJ)!;
