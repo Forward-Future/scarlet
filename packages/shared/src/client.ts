@@ -544,7 +544,7 @@ export class ScarletClient extends ClientTransport {
   }
   tasks(projectId: string, state?: string, events?: "conversation") {
     // Not URLSearchParams.size: a WebView older than Safari 17 has none, and the whole query was dropped there.
-    return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]> }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
+    return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]>; handOffs?: Task[] }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
   }
   task(taskId: string, events: "all" | "conversation" | "none" = "all") {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener;
