@@ -551,6 +551,8 @@ export function mediaRoutes(ctx: Ctx) {
     };
     // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.
     const priority = framePriority(c.req.query("priority"));
+    // The editor is looking at a source's pictures: background work yields meanwhile (editorFirst.ts), as for a cut's.
+    if (priority === true) editorFirst.touch();
     // An agent's frame that goes to the GPU while the editor looks may run past the lane's slots then.
     const gpu = await frameGoesToGpu(ctx.settings().render.hwaccel, priority, hdr);
     try {
