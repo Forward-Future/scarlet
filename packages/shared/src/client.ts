@@ -31,6 +31,15 @@ import type {
   TaskStyleGuideDraft,
   UpdateStyleGuideRequest,
 } from "./styleGuides.js";
+import type {
+  YouTubeConfigRequest,
+  YouTubeConnectionStatus,
+  YouTubeKitRequest,
+  YouTubePublishingKit,
+  YouTubePublishRequest,
+  YouTubeThumbnailCandidate,
+  YouTubeUploadJob,
+} from "./youtube.js";
 
 /**
  * File extension for a recorded clip. Chromium (Windows) records webm/opus;
@@ -785,5 +794,50 @@ export class ScarletClient extends ClientTransport {
   }
   updateSettings(body: Partial<ServerSettings>) {
     return this.patch<{ settings: ServerSettings }>("/settings", body);
+  }
+
+  // YouTube connection, Publishing Kit & direct upload
+  youtubeStatus() {
+    return this.get<{ status: YouTubeConnectionStatus }>("/settings/youtube");
+  }
+  youtubeUpdateConfig(body: YouTubeConfigRequest) {
+    return this.put<{ status: YouTubeConnectionStatus }>("/settings/youtube/config", body);
+  }
+  youtubeConnect() {
+    return this.post<{ authUrl: string; status: YouTubeConnectionStatus }>("/settings/youtube/connect", {});
+  }
+  youtubeCancelConnect() {
+    return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/cancel", {});
+  }
+  youtubeDisconnect() {
+    return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/disconnect", {});
+  }
+  youtubePublishingKit(projectId: string, body: Partial<YouTubeKitRequest> = {}, signal?: AbortSignal) {
+    return this.request<{ kit: YouTubePublishingKit }>("POST", `/projects/${apiPathId(projectId)}/youtube/kit`, body, { signal });
+  }
+  youtubeCaptureThumbnail(projectId: string, body: { version?: string; time: number }) {
+    return this.post<{ thumbnail: YouTubeThumbnailCandidate }>(`/projects/${apiPathId(projectId)}/youtube/thumbnail-frame`, body);
+  }
+  youtubeUploadThumbnail(projectId: string, file: Blob | { path: string }, name?: string) {
+    const path = `/projects/${apiPathId(projectId)}/youtube/thumbnail-upload`;
+    if (!(file instanceof Blob)) return this.post<{ thumbnail: YouTubeThumbnailCandidate }>(path, { path: file.path });
+    const fd = new FormData();
+    fd.append("file", file, name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "thumbnail.jpg"));
+    return this.post<{ thumbnail: YouTubeThumbnailCandidate }>(path, fd);
+  }
+  youtubeThumbnailUrl(projectId: string, thumbId: string) {
+    return this.fileUrl(`/projects/${apiPathId(projectId)}/youtube/thumbnails/${apiPathId(thumbId)}`);
+  }
+  youtubePublish(projectId: string, body: YouTubePublishRequest) {
+    return this.post<{ upload: YouTubeUploadJob }>(`/projects/${apiPathId(projectId)}/youtube/publish`, body);
+  }
+  youtubeUploads(projectId: string) {
+    return this.get<{ uploads: YouTubeUploadJob[] }>(`/projects/${apiPathId(projectId)}/youtube/uploads`);
+  }
+  youtubeUpload(uploadId: string) {
+    return this.get<{ upload: YouTubeUploadJob }>(`/youtube/uploads/${apiPathId(uploadId)}`);
+  }
+  youtubeCancelUpload(uploadId: string) {
+    return this.post<{ upload: YouTubeUploadJob }>(`/youtube/uploads/${apiPathId(uploadId)}/cancel`, {});
   }
 }

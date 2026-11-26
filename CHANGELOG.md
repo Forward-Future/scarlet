@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Connect your YouTube channel in Settings › General, then open Export › Publish to YouTube to review a drafted title, description, final-cut chapter timestamps, tags, and thumbnail picks and upload straight to YouTube Studio (starting as a Private draft by default).
 - When something goes wrong, you can now report it in one click right where you see it: press Report beside the error, or on the screen Scarlet shows when a page breaks, and Scarlet sends it to the Scarlet team with its logs (no videos, projects, transcripts or sign-ins). Add details afterwards if you like. Help › Report a Problem… and Settings › About let you write a report yourself.
 - A page that breaks now says so with Reload and Report this problem, instead of an empty or technical error screen.
 - In the beta layout, taking a marked stretch off the timeline no longer deletes its times from the message you're writing.

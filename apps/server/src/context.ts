@@ -152,6 +152,17 @@ export interface ServerOptions {
     now?: () => number;
     random?: () => number;
   };
+  /** Overrides for YouTube OAuth and upload endpoints (used by tests). */
+  youtube?: {
+    authBaseUrl?: string;
+    tokenUrl?: string;
+    revokeUrl?: string;
+    apiBaseUrl?: string;
+    uploadBaseUrl?: string;
+    oauthTimeoutMs?: number;
+    uploadChunkBytes?: number;
+    fetch?: typeof fetch;
+  };
 }
 
 export interface Ctx {
@@ -162,7 +173,7 @@ export interface Ctx {
   render: RenderAdapter;
   renders: RenderQueue;
   settings(): ServerSettings;
-  env: { openaiKey?: string; anthropicKey?: string; geminiKey?: string };
+  env: { openaiKey?: string; anthropicKey?: string; geminiKey?: string; youtubeClientId?: string; youtubeClientSecret?: string };
   options: ServerOptions;
   log(message: string): void;
   /** Anonymous usage reports. See docs/telemetry.md. */
@@ -243,7 +254,13 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
     bus: new Bus(db),
     render: options.render ?? defaultAdapter,
     settings: () => repos.settings.get(),
-    env: { openaiKey: env.OPENAI_API_KEY || undefined, anthropicKey: env.ANTHROPIC_API_KEY || undefined, geminiKey: env.GEMINI_API_KEY || undefined },
+    env: {
+      openaiKey: env.OPENAI_API_KEY || undefined,
+      anthropicKey: env.ANTHROPIC_API_KEY || undefined,
+      geminiKey: env.GEMINI_API_KEY || undefined,
+      youtubeClientId: env.SCARLET_YOUTUBE_CLIENT_ID || undefined,
+      youtubeClientSecret: env.SCARLET_YOUTUBE_CLIENT_SECRET || undefined,
+    },
     options,
     log,
     telemetry: createTelemetry({

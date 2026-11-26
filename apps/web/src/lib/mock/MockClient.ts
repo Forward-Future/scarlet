@@ -929,4 +929,159 @@ export class MockClient implements ScarletApi {
     if (previous.hwaccel !== this.store.db.settings.render.hwaccel || previous.previewHeight !== this.store.db.settings.render.previewHeight) this.store.emit({ type: "render.settings.updated" });
     return this.latency({ settings: this.store.db.settings }, 250);
   }
+
+  // --- YouTube demo stand-in -----------------------------------------------------------
+  private ytStatus: import("@scarlet/shared").YouTubeConnectionStatus = {
+    state: "disconnected",
+    configured: false,
+    configSource: "none",
+    hasCustomClientId: false,
+    hasCustomClientSecret: false,
+  };
+  private ytUploads: import("@scarlet/shared").YouTubeUploadJob[] = [];
+
+  async youtubeStatus() {
+    this.requireAuth();
+    return this.latency({ status: { ...this.ytStatus } }, 60);
+  }
+  async youtubeUpdateConfig(body: import("@scarlet/shared").YouTubeConfigRequest) {
+    this.requireAuth();
+    const id = body.clientId === undefined ? (this.ytStatus.hasCustomClientId ? "custom" : "") : (body.clientId?.trim() ?? "");
+    const hasSecret = body.clientSecret === undefined ? !!this.ytStatus.hasCustomClientSecret : !!body.clientSecret?.trim();
+    this.ytStatus = {
+      ...this.ytStatus,
+      configured: !!id,
+      configSource: id ? "custom" : "none",
+      hasCustomClientId: !!id,
+      hasCustomClientSecret: hasSecret,
+      clientIdHint: id ? `${id.slice(0, 8)}…` : undefined,
+    };
+    this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
+    return this.latency({ status: { ...this.ytStatus } }, 80);
+  }
+  async youtubeConnect() {
+    this.requireAuth();
+    if (!this.ytStatus.configured) {
+      throw new ScarletApiError(400, "youtube_not_configured", "Add a Google OAuth Client ID in Settings before connecting YouTube.");
+    }
+    this.ytStatus = {
+      ...this.ytStatus,
+      state: "connected",
+      channel: { id: "UC_demo", title: "Demo Channel", handle: "@scarletdemo" },
+      connectedAt: now(),
+      error: undefined,
+      needsReconnect: false,
+    };
+    this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
+    return this.latency({ authUrl: "https://accounts.google.com/o/oauth2/v2/auth", status: { ...this.ytStatus } }, 120);
+  }
+  async youtubeCancelConnect() {
+    this.requireAuth();
+    this.ytStatus = { ...this.ytStatus, state: "disconnected", authUrl: undefined };
+    this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
+    return this.latency({ status: { ...this.ytStatus } }, 60);
+  }
+  async youtubeDisconnect() {
+    this.requireAuth();
+    this.ytStatus = { ...this.ytStatus, state: "disconnected", channel: undefined, connectedAt: undefined, needsReconnect: false, error: undefined };
+    this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
+    return this.latency({ status: { ...this.ytStatus } }, 80);
+  }
+  async youtubePublishingKit(projectId: string) {
+    this.requireAuth();
+    const project = this.store.projectById(projectId);
+    const tl = project.head ? this.store.db.timelines[project.head] : undefined;
+    const duration = tl ? timelineDuration(tl) : 20;
+    const chapters = [
+      { time: 0, timestamp: "0:00", title: "Intro" },
+      { time: Math.min(7, Math.floor(duration / 3)), timestamp: `0:0${Math.min(7, Math.floor(duration / 3))}`, title: "Main discussion" },
+      { time: Math.min(14, Math.floor((duration * 2) / 3)), timestamp: `0:${String(Math.min(14, Math.floor((duration * 2) / 3))).padStart(2, "0")}`, title: "Wrap-up" },
+    ];
+    return this.latency({
+      kit: {
+        version: project.head ?? "ver_1",
+        duration,
+        title: project.name,
+        titleOptions: [project.name],
+        description: `Highlights from ${project.name}.\n\nChapters:\n${chapters.map(c => `${c.timestamp} ${c.title}`).join("\n")}`,
+        chapters,
+        tags: ["scarlet", "video"],
+        thumbnails: [
+          { id: "yt_demo_1", time: 2, label: "0:02", source: "auto" as const, previewUrl: "/sample-frame.jpg?t=2" },
+          { id: "yt_demo_2", time: 8, label: "0:08", source: "auto" as const, previewUrl: "/sample-frame.jpg?t=8" },
+          { id: "yt_demo_3", time: 15, label: "0:15", source: "auto" as const, previewUrl: "/sample-frame.jpg?t=15" },
+        ],
+        draftedWith: "fallback" as const,
+      },
+    }, 150);
+  }
+  async youtubeCaptureThumbnail(_projectId: string, body: { version?: string; time: number }) {
+    this.requireAuth();
+    return this.latency({
+      thumbnail: {
+        id: `yt_playhead_${Math.round(body.time * 10)}`,
+        time: body.time,
+        label: `Playhead 0:${String(Math.floor(body.time)).padStart(2, "0")}`,
+        source: "playhead" as const,
+        previewUrl: `/sample-frame.jpg?t=${body.time}`,
+      },
+    }, 120);
+  }
+  async youtubeUploadThumbnail(_projectId: string, file: Blob | { path: string }, name?: string) {
+    this.requireAuth();
+    const label = name ?? (file instanceof Blob ? "custom.jpg" : file.path.split(/[\\/]/).pop() || "custom.jpg");
+    return this.latency({
+      thumbnail: {
+        id: `yt_custom_${Date.now()}`,
+        label,
+        source: "custom" as const,
+        previewUrl: "/sample-frame.jpg",
+      },
+    }, 120);
+  }
+  youtubeThumbnailUrl(projectId: string, thumbId: string) {
+    return this.fileUrl(`/projects/${encodeURIComponent(projectId)}/youtube/thumbnails/${encodeURIComponent(thumbId)}`);
+  }
+  async youtubePublish(projectId: string, body: import("@scarlet/shared").YouTubePublishRequest) {
+    this.requireAuth();
+    if (this.ytStatus.state !== "connected") {
+      throw new ScarletApiError(401, "youtube_not_connected", "Connect your YouTube account in Settings before uploading.");
+    }
+    const project = this.store.projectById(projectId);
+    const job: import("@scarlet/shared").YouTubeUploadJob = {
+      id: newId("ytup"),
+      projectId,
+      version: project.head ?? "ver_1",
+      context: `${projectId}:${project.head ?? "ver_1"}`,
+      phase: "done",
+      progress: 1,
+      title: body.title,
+      visibility: body.visibility,
+      videoId: "demoVideoId",
+      studioUrl: "https://studio.youtube.com/video/demoVideoId/edit",
+      watchUrl: "https://www.youtube.com/watch?v=demoVideoId",
+      createdAt: now(),
+      finishedAt: now(),
+    };
+    this.ytUploads = [job, ...this.ytUploads];
+    this.store.emit({ type: "youtube.upload.updated", projectId, upload: job });
+    return this.latency({ upload: job }, 200);
+  }
+  async youtubeUploads(projectId: string) {
+    this.requireAuth();
+    return this.latency({ uploads: this.ytUploads.filter(u => u.projectId === projectId) }, 60);
+  }
+  async youtubeUpload(uploadId: string) {
+    this.requireAuth();
+    const found = this.ytUploads.find(u => u.id === uploadId);
+    if (!found) throw notFound("YouTube upload");
+    return this.latency({ upload: found }, 60);
+  }
+  async youtubeCancelUpload(uploadId: string) {
+    this.requireAuth();
+    const found = this.ytUploads.find(u => u.id === uploadId);
+    if (!found) throw notFound("YouTube upload");
+    found.phase = "cancelled";
+    return this.latency({ upload: { ...found } }, 60);
+  }
 }
