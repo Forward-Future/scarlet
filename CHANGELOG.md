@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 26, 2026
+
+- In the beta layout, taking a marked stretch off the timeline no longer deletes its times from the message you're writing.
+
 ## November 25, 2026
 
 - In the beta layout, an edit you send back to Scarlet to revise no longer shows a "Scarlet is revising this" card above the timeline; as in the default layout, its card comes back once the new version is ready.
