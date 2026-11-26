@@ -615,7 +615,7 @@ export function StyleGuideEditorPage() {
             {importNote && (
               <div className="sg-import-note">
                 <span>{importNote}</span>
-                <button type="button" className="btn-icon" aria-label="Dismiss import notice" onClick={() => setImportNote(null)}>
+                <button type="button" className="btn-icon" aria-label="Dismiss import notice" title="Dismiss" onClick={() => setImportNote(null)}>
                   <Icon name="x" size={11} />
                 </button>
               </div>
