@@ -11,7 +11,8 @@ export type ListedEdit = Omit<ThreadEdit, "at">;
 
 /**
  * A thread's edits as the timeline numbers them: the engine's list for the working cut, which leaves out
- * undone work, and the thread's own saved list until that arrives. With no thread, none.
+ * undone, superseded, and no-op work. The thread's raw saved list only stands in when there is no working cut yet
+ * or the engine read failed — never while the first engine read is still in flight. With no thread, none.
  *
  * `needed`: whether the list is read again when the working cut moves. Every request in the chat lists its edits, and
  * each new working cut would read them all again. One out of view keeps the list it last read, and reads it again
@@ -23,7 +24,6 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   // Located on the working cut on screen, which holds while the video plays: the engine's list for a newer one waits.
   const head = useShownCutStore(s => s.head);
   const media = useProjectStore(s => s.current?.media);
-  const saved = useMemo(() => thread ? threadEditList(thread, media) : [], [thread, media]);
   // An edit another request made counts here once this request flagged it.
   const applied = !!thread?.changes.some(c => c.state === "approved") || !!thread?.flagged?.length;
   const key = useThreadEditKey(projectId, head, thread);
@@ -54,7 +54,13 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   const previous = loaded && loaded.threadId === thread?.id && shown.current?.key === loaded.key ? shown.current.edits : undefined;
   // Out of view, the engine's last list stands even when it arrived after the working cut had moved on.
   const kept = !needed && loaded?.threadId === thread?.id ? loaded?.edits : undefined;
-  const edits = (current ? loaded.edits : previous ?? kept) ?? saved;
+  const resolved = current ? loaded.edits : previous ?? kept;
+  // Only fall back to the raw saved list when there is no working cut yet or the engine read failed. While the
+  // initial engine read is still in flight, stay empty so stale/undone/no-op edits never flash and disappear.
+  const failed = !!thread && loaded?.threadId === thread.id && loaded.edits === undefined;
+  const fallback = !head || failed;
+  const saved = useMemo(() => thread && !resolved && fallback ? threadEditList(thread, media) : noEdits, [thread, media, resolved, fallback]);
+  const edits = resolved ?? (fallback ? saved : noEdits);
   useEffect(() => { if (current && loaded.edits) shown.current = { key, edits }; }, [current, loaded, key, edits]);
   // An edit the editor rejected is out of the video: it is no edit to open, count or mark, only a row that says so.
   const live = useMemo(() => edits.filter(e => !e.rejected), [edits]);
