@@ -14984,13 +14984,12 @@ it("ticks in Done the cuts that went in with a pass through its calls, Scarlet's
   expect(passRow(CUTS[2]!.reason).querySelector(".simple-pass-check")?.textContent).toBe("Revising…");
 });
 
-it("says under the timeline what Scarlet is doing while it edits the video shown, and a press brings that request into view", async () => {
+it("shows Scarlet is editing under the timeline while it edits the video shown, and a press brings that request into view", async () => {
   await show();
   const status = () => container.querySelector<HTMLButtonElement>(".timeline-foot .timeline-working");
-  // No glow over the pictures: the chat's turning ring and its own words sit beside the clock.
+  // No glow over the pictures: the chat's turning ring and "Scarlet is editing" sit beside the clock.
   expect(container.querySelector(".timeline-editing-wash")).toBeNull();
-  const chatLine = runOf("task_running").querySelector(".req-now-text")!.textContent;
-  expect(status()?.textContent).toBe(`Scarlet is editing · ${chatLine}`);
+  expect(status()?.textContent).toBe("Scarlet is editing");
   expect(status()?.querySelector('.req-mark[data-state="working"]')).not.toBeNull();
   expect(status()?.title).toBe("Show in the chat");
   // A press brings the request's working line into the middle of the chat and lights it for a moment.
