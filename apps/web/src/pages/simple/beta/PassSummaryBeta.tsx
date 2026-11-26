@@ -1,23 +1,21 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { clipRange, type Change, type Clip, type TimeRange, type Timeline, type Track } from "@scarlet/timeline";
-import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
+import { matchesEdit, REVISED_CHECK, type ThreadEdit } from "@scarlet/shared";
 import { ThreadAction } from "../../../components/review/ThreadEdits";
-import { asksEditor, editGroups, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, waitingPassRows, waitingRows } from "../../../components/review/threadEditState";
-import { editKindWord, editRowWord } from "../../../lib/editKind";
-import { listMoments, type Moment } from "../../../lib/editMoments";
-import { callRowTooltip, changeForEdit, cutRemovedSeconds, decidedCallRowTooltip, editRowTooltip, momentRowTooltip, type RowTooltipInfo } from "../../../lib/editRowTooltip";
-import { lengthLabel, plural } from "../../../lib/format";
-import { editKey, unkeepEdits } from "../../../lib/keptEdits";
-import { madeSentence, type SentencePart } from "../../../lib/madeSentence";
-import { decidedPassCalls, rejectedCallRef } from "../../../lib/passCalls";
-import { inListOrder, rowPlace, tabShown, type ListOrder, type ReviewLinger, type RowPlace } from "./reviewTabsBeta";
-import { isRecheck, type Thread } from "../../../lib/threads";
+import { asksEditor, revisionWord } from "../../../components/review/threadEditState";
+import { editRowWord } from "../../../lib/editKind";
+import { changeForEdit, cutRemovedSeconds, editRowTooltip } from "../../../lib/editRowTooltip";
+import { lengthLabel } from "../../../lib/format";
+import { editKey } from "../../../lib/keptEdits";
+import { madeSentence } from "../../../lib/madeSentence";
+import { inListOrder, tabShown, type ListOrder, type ReviewLinger, type RowPlace } from "./reviewTabsBeta";
+import { type Thread } from "../../../lib/threads";
 import { useKeepSelectedInView } from "../../../lib/uiHooks";
-import { recordUndo } from "../../../lib/undo";
 import { useProjectStore } from "../../../stores/project";
 import { useShownCut } from "../../../stores/shownCut";
+import { EditResultLink, entryKeys, Made, namedEdit, nestsUnder, passEntries, passMade, selectedRowKey, useListOpen, usePassFacts, useReveal, useThreadFacts, threadRowPlaces, type Entry } from "../passRows";
 import { useReviewRail, type RailEditMember, type RailRow, type RailSubRow } from "../railStore";
-import { callRowKey, isWorking, letGo, listedBefore, noNests, noRejected, noSpent, type ChatActions, type HoveredReviewRow, type Nest, type PassList, type Spent } from "../types";
+import { isWorking, noNests, noRejected, noSpent, type ChatActions, type Nest, type PassList, type Spent } from "../types";
 
 interface SpotClips {
   clipIds: string[];
@@ -133,129 +131,6 @@ function editClipIdsBySpot(changes: readonly Change[], edits: readonly Omit<Thre
 }
 
 /**
- * A finished request with one result opens its edit on the timeline. A collection opens a list to choose from. Closed,
- * either is a link after the sentence (`place` "inline"): See edit for one, See both or See all for several, and the
- * edits so far while Scarlet works. Open, a finished collection's list is under its tab, in the row where Needs review,
- * Working and Done sit when there is something to review (`place` "tab"), and the tab pressed again closes it. Each
- * place draws only its own. The word counts the rows the list opens (`rows`), a rejected edit's too: See both is for two.
- */
-function EditResultLink({ thread, actions, single, rows, count, soFar, list: [open, setOpen], reveal, place, column }: {
-  thread: Thread; actions: ChatActions; single?: EditRef; rows: number; count: number; soFar?: boolean; list: PassList; reveal(): void; place: "inline" | "tab";
-  /** The rows are in the column of edits, not under this link: a request's one edit keeps its link whatever is open there. */
-  column?: boolean;
-}) {
-  const expanded = open === "all";
-  const current = !!single && !!actions.showing && matchesEdit(actions.showing, single);
-  const one = !!single && (column || !expanded || current);
-  const tab = !column && expanded && !one && !soFar;
-  if (tab !== (place === "tab")) return null;
-  const label = rows === 2 ? "See both" : "See all";
-  if (tab) return <div className="simple-review-tabs" role="group" aria-label="Edit lists">
-    <button type="button" className="simple-review-tab" aria-pressed title="Hide the edits" onClick={letGo(() => setOpen(undefined))}>{label}</button>
-  </div>;
-  if (single && one) {
-    const toggleEdit = () => {
-      if (!current) return actions.openEdit(thread, single);
-      setOpen(undefined);
-      actions.stopShowing();
-    };
-    return <button type="button" className="simple-pass-toggle" aria-current={current || undefined}
-      title={current ? "Close this edit (Esc)" : "Show on the timeline"} onClick={letGo(toggleEdit)}>{current ? "Close edit" : "See edit"}</button>;
-  }
-  if (!soFar) return <button type="button" className="simple-pass-toggle" aria-expanded={false} title="Show the edits in order"
-    onClick={letGo(() => { reveal(); setOpen("all"); })}>{label}</button>;
-  return <button type="button" className="simple-pass-toggle" data-so-far aria-expanded={expanded}
-    title={expanded ? "Hide the edits" : "Show the edits Scarlet has made so far, in order"}
-    onClick={letGo(() => { if (!expanded) reveal(); setOpen(expanded ? undefined : "all"); })}>{expanded ? "Hide" : `See ${count} ${count === 1 ? "edit" : "edits"} so far`}</button>;
-}
-
-/**
- * A list the editor opens is brought into view. The conversation sits at its latest message, so a list opened on the
- * last request grows downward, under the message box, and the click would seem to do nothing. Only a press asks for
- * it: a list that is open already when its block is drawn again moves nothing.
- */
-function useReveal(open: unknown) {
-  const host = useRef<HTMLDivElement>(null);
-  const asked = useRef(false);
-  useEffect(() => {
-    if (!asked.current) return;
-    asked.current = false;
-    if (open) {
-      const rows = host.current?.querySelector(".simple-pass-list, .simple-edits");
-      // When a row is already selected, useKeepSelectedInView keeps it in view; otherwise bring the first row in.
-      if (rows && !rows.querySelector('[aria-current="true"]')) rows.querySelector(":scope > li > button")?.scrollIntoView?.({ block: "nearest" });
-    }
-  }, [open]);
-  return [host, () => { asked.current = true; }] as const;
-}
-
-/** What a request changed in the video: one sentence, its figures in bold, and on the same line the link that opens its edits. */
-function Made({ parts, link }: { parts: readonly SentencePart[]; link?: ReactNode }) {
-  if (!parts.length) return null;
-  return <p className="simple-made-line"><span className="simple-made">{parts.map((part, i) => typeof part === "string" ? part : <b key={i}>{part.strong}</b>)}</span>{link}</p>;
-}
-
-/** One row of a pass's lists: an edit, a call, a rejected edit or a call decided before the pass applied. */
-interface PassRow {
-  key: string;
-  /** The row by its first version, which a revision or a rejection doesn't change. */
-  id: string;
-  /** The rows this one took the place of: an edit's earlier versions. */
-  was?: string[];
-  at: number;
-  displayAt: number;
-  /** Where its marker lights on the timeline while the pointer is over the row. */
-  mark?: number;
-  hover?: HoveredReviewRow;
-  label: string;
-  /** The order a call reached the editor in, never shown; 0 for any other row. */
-  n: number;
-  callIndex?: number;
-  num?: number;
-  state?: string;
-  decision?: string;
-  value?: string;
-  word?: string;
-  revised: boolean;
-  rejected: boolean;
-  skipped: boolean;
-  forYou: boolean;
-  onlyForYou: boolean;
-  busy: boolean;
-  pending: boolean;
-  needs: boolean;
-  /** Scarlet stopped work on it to ask the editor something: the row waits on them again, and says Needs your answer. */
-  asks: boolean;
-  sentBack: boolean;
-  decided: boolean;
-  version: number;
-  title?: string;
-  on: boolean;
-  open?: () => void;
-  /** Take back Keep on this row from its hover control. */
-  unkeep?: () => void;
-  unkeepTip?: string;
-  fresh: boolean;
-  /** Structured hover tooltip content for the beta edits rail. */
-  tip?: RowTooltipInfo;
-  /** Seconds removed when this row is a cut (used to sum removed time on grouped `+N` rows). */
-  removedSeconds?: number;
-}
-
-/** A row as a list draws it: one edit or call, or a moment, with the tab it is under. */
-interface Entry {
-  key: string;
-  row: PassRow;
-  members?: PassRow[];
-  more?: string;
-  moment?: string;
-  unfolded?: boolean;
-  place: RowPlace;
-  at: number;
-  num?: number;
-}
-
-/**
  * What a dialogue pass made, as its block in the chat. Its rows are drawn in the column of edits beside the chat
  * (`useReviewRail`, which SimpleWorkspaceBeta always provides), every list at once: Needs review with open calls and
  * flagged edits, the edits Scarlet didn't flag under Safe edits, Working with the rows Scarlet has, and Done every
@@ -273,11 +148,8 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   listLoaded?: boolean;
   /** The row key whose question is currently displayed over the message box, so it lights up. */
   askingRowKey?: string }) {
-  const reviewed = useReviewed(projectId, thread);
-  const canUnkeep = useCanUnkeep(projectId, thread);
-  const revising = useRevising(thread);
-  const rejecting = useRejecting(thread);
-  const adding = useAdding(thread);
+  const facts = usePassFacts({ projectId, thread, edits, rejected, actions, listedNeed, working });
+  const { canUnkeep, pass, decidedCallEditKeys, need, moments, totalRows, fold, single, empty, waiting } = facts;
   const [open, setOpen] = listState;
   const [host, reveal] = useReveal(open);
   // The column of edits beside the chat, where the rows are drawn.
@@ -288,205 +160,17 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const threadChanges = useMemo(() => [...thread.changes, ...thread.flagged ?? []], [thread.changes, thread.flagged]);
   const clipsBySpot = useMemo(() => editClipIdsBySpot(threadChanges, edits, timeline), [threadChanges, edits, timeline]);
   const editByKey = useMemo(() => new Map(edits.map(e => [editKey(e), e])), [edits]);
-  const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
-  const openCalls = pass?.calls.filter(c => c.state === "open").length ?? 0;
-  // Calls the editor decided before the pass applied are rows of Done: approved cuts link to their applied edit row,
-  // and skipped calls (or approved keep proposals) are decided rows of their own.
-  const { decidedCallEditKeys, decidedCallRows } = useMemo(
-    () => decidedPassCalls(pass ? undefined : thread, edits, rejected),
-    [pass, thread, edits, rejected],
-  );
-  const isForYouEdit = (e: Omit<ThreadEdit, "at">) => !!e.check || decidedCallEditKeys.has(editKey(e));
-  const isForYouRejected = (e: Omit<ThreadEdit, "at">) => !!e.wasCheck || decidedCallEditKeys.has(editKey(e)) || listedBefore(listedNeed.current, e);
-  // What waits on the editor: an open call and a flagged edit not yet kept. One sent back for revision waits on Scarlet,
-  // until its request stops to ask the editor something: then it is their turn again.
-  const need = waitingPassRows(pass?.calls, edits, isForYouEdit, { reviewed, revising });
   const tab = tabShown(open);
-  // While the pass makes its final check of the finished cut, the fixes it applies are marked New in the list: nothing
-  // else tells them from the cuts that went in before (2026-11-14).
-  const rerun = working ? thread.tasks.find(t => !!t.repeatAudit?.returns && !!t.startedAt && isWorking(t.state)) : undefined;
-  const fresh = useMemo(() => new Set(rerun ? thread.changes.filter(c => c.taskId === rerun.id && (c.createdAt ?? "") >= rerun.startedAt!).map(c => c.id) : []),
-    [rerun, thread.changes]);
-  // Edits that overlap on the timeline exactly are one row, a moment. Its own edits open under it on a press of
-  // "+ 4 edits", and fold again on the next.
-  const moments = useMemo(() => listMoments(edits), [edits]);
-  const totalRows = edits.length + (pass?.calls.length ?? 0);
-  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
-  const single = !working && !pass?.running && totalRows === 1 ? edits[0] : undefined;
   // A single preview follows the open card. An explicitly opened list keeps the timeline on the whole pass.
   const fullList = open === "all" && edits.length > 0;
   // Beside the column of edits there is no list of every edit to open: one left open from the line that used to open
   // the edits Scarlet didn't flag lets go.
   useEffect(() => { if (open === "all") setOpen(undefined); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
-  // A line mounted with its list already open is the same list, moved with its request between the conversation and
-  // the place above the message box. It leaves the timeline where it is, so an edit of another request the editor has
-  // open stays open. The list has the timeline back when that edit closes.
-  const moved = useRef(fullList);
-  useEffect(() => {
-    if (!fullList) { moved.current = false; return; }
-    actions.listOpen(thread.id, true, moved.current);
-    return () => { actions.listOpen(thread.id, false); actions.lightMark(); };
-  }, [fullList, thread.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  // A pass that has only just begun has nothing to sum up yet. Its rows appear with its first calls, or once it is done.
-  // Every hook runs before the early return below so hooks stay stable when rows arrive.
-  const empty = !edits.length && !pass && !decidedCallRows.length && !rejected.length;
-  const count = edits.length || pass?.cuts || 0;
-  // While Scarlet is still on a pass that has asked about no cut, nothing needs the editor. The block is the pass's
-  // stages then: no count of the cuts staged so far, which would sit still between its parts, and nothing to schedule.
-  const quiet = !!pass?.running && !pass.calls.length;
-  // Every call is made but the pass isn't applied: it applies now or, while Scarlet still checks, when it finishes.
-  // Under revision it waits for the revised cut to come back as a call. Before Scarlet has checked any staged cut there
-  // is nothing to schedule: its calls haven't arrived. Only its calls hold it: a cut it already applied that asks for a
-  // look is kept on its own card, and waits there whether or not the rest of the pass has gone in.
-  const waiting = pass && !quiet && !openCalls && !pass.scheduled && !pass.revising && !pass.unchecked;
-  const showing = actions.showing, listening = actions.listening;
-  const rows: PassRow[] = [
-    ...edits.map((e): PassRow => {
-      const key = editKey(e);
-      const forYou = isForYouEdit(e);
-      const seen = reviewed(e);
-      // A revision on its way: the row says so until the new version lands, whether or not the editor had kept the
-      // edit. A cut the pass applied through its calls counts as kept, so a guard on that left its row as it was.
-      const sent = revising(e);
-      // One that came back revised with no reason from Scarlet says so until it is kept, as any other list's row does.
-      const revised = e.check === REVISED_CHECK && !seen && !sent;
-      const needs = !!e.check && !seen && !sent;
-      const asks = asksEditor(sent);
-      const sentBack = !!e.check && !seen && !!sent;
-      // Ticked once the editor has kept it: any edit kept, an approved pass call, or a cut that went in with the pass
-      // through its calls. That is what Keep's next row, the watch and the timeline's dots go by, so the tick agrees
-      // with them (the editor's call, 2026-11-23).
-      const decided = !needs && !sent && (seen || decidedCallEditKeys.has(key));
-      const decision = decided ? (e.marker ? "Done" : "Kept") : undefined;
-      // Where it stands while Scarlet is actively working on it (Revising…, Up next, Queued, Needs your answer).
-      // Once revised, v2 sits beside the title and the row keeps its type tag on the right.
-      const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : undefined;
-      const at = (e as ThreadEdit).at ?? e.range.start;
-      const displayAt = (!seen && !sent ? e.reviewRange?.start : undefined) ?? at;
-      const unkeepable = decided && !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(key));
-      const label = (e.reason && e.summary) || e.label;
-      const version = e.previous.length ? e.previous.length + 1 : 0;
-      const editChange = changeForEdit(thread, e.changeId);
-      const removed = !!e.beforeCut || e.kind === "cut" ? cutRemovedSeconds(e, editChange) : undefined;
-      const tip = editRowTooltip(e, { change: editChange, timeline, media, fps, version, status: word ?? decision });
-      return { key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey),
-        at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
-        label, n: 0, num: undefined,
-        state: word ?? decision ?? (version ? `v${version}` : undefined), decision, value: editRowWord(e), word, revised, rejected: false, skipped: false,
-        forYou, onlyForYou: false,
-        // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
-        busy: !!sent && isWorking(sent.state), pending: !!sent, needs, asks, sentBack, decided,
-        version, title: revised || e.reason ? undefined : e.check,
-        on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e),
-        ...(unkeepable && {
-          unkeep: () => {
-            actions.lightMark();
-            unkeepEdits(projectId, thread.id, [e]);
-            recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: [e], name: label });
-          },
-          unkeepTip: "Move back to Needs review",
-        }),
-        fresh: fresh.has(e.changeId), tip, removedSeconds: removed };
-    }),
-    // A call goes by its time, as on its card and in the box's tag.
-    ...(pass?.calls ?? []).map((c): PassRow => {
-      const callWord = c.state === "revising" ? (revisionWord(c.run, { recheck: !!c.run && isRecheck(c.run), nextQueuedId: actions.nextQueuedId }) ?? "Revising…") : undefined;
-      const tip = callRowTooltip({ summary: c.summary, reason: c.reason, tag: c.tag, length: c.length, state: c.state, version: c.version, earlier: c.earlier, word: callWord });
-      return { key: callRowKey(c), id: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at,
-        hover: { threadId: thread.id, call: c.index },
-        label: c.summary, n: c.n, callIndex: c.index, num: undefined, needs: c.state === "open", asks: c.state === "revising" && asksEditor(c.run), sentBack: c.state === "revising",
-        decided: c.state === "approved" || c.state === "skipped", skipped: c.state === "skipped",
-        decision: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : undefined,
-        state: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : callWord ?? (c.version > 1 ? `v${c.version}` : undefined),
-        value: c.state === "approved" ? "Kept" : c.state === "skipped" ? "Rejected" : callWord ?? c.tag,
-        busy: c.state === "revising" && isWorking(c.run?.state), pending: c.state === "revising",
-        version: c.version > 1 ? c.version : 0, title: c.earlier && `v${c.version - 1}: ${c.earlier.reason ?? "Scarlet’s earlier version."}${c.earlier.note ? `\nYou: “${c.earlier.note}”` : ""}`,
-        on: listening?.changeId === pass!.change.id && listening.index === c.index, word: undefined, revised: false, rejected: false,
-        forYou: true, onlyForYou: false, fresh: false, tip, removedSeconds: c.tag === "Cut" ? c.length : undefined,
-        ...(c.state === "approved" && !pass!.deciding && pass!.unkeepCall && {
-          unkeep: () => { actions.lightMark(); pass!.unkeepCall!(c.index); },
-          unkeepTip: "Move back to Needs review",
-        }),
-        // A call sent back opens from its row in Working, as an edit sent back does: its card says where its revision
-        // stands, and ↑ ↓ then step through Working's rows.
-        open: () => pass!.openCall(c.index) };
-    }),
-    // An edit the editor rejected is out of the video. Its row stays in Done, with a × where a kept one has its tick
-    // and "Rejected" where it said how much it took.
-    ...rejected.map((e): PassRow => {
-      const forYou = isForYouRejected(e);
-      const key = editKey(e);
-      const editChange = changeForEdit(thread, e.changeId);
-      const tip = editRowTooltip(e, { change: editChange, timeline, media, fps });
-      return { key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey), at: e.range.start, displayAt: e.range.start, mark: undefined,
-        hover: { threadId: thread.id, editKey: key },
-        label: e.label, n: 0, num: undefined, state: "Rejected", decision: "Rejected",
-        value: "Rejected", word: undefined, revised: false, rejected: true, skipped: false,
-        forYou, onlyForYou: false, busy: false, pending: false, needs: false, asks: false, sentBack: false, decided: false, version: 0,
-        title: undefined, on: !!showing && (matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing)),
-        open: () => actions.openEdit(thread, e), fresh: false, tip };
-    }),
-    // Calls decided before the pass applied that produced no applied edit (skipped cuts, or approved keep proposals).
-    // A rejected one opens as a rejected edit's row does: lit, on the timeline where it was, with its note and Rejected.
-    ...decidedCallRows.map((c): PassRow => {
-      const ref = rejectedCallRef(c.changeId, c.index);
-      const tip = decidedCallRowTooltip(c);
-      return { key: c.key, id: c.key, at: c.at, displayAt: c.at, mark: undefined,
-        hover: undefined,
-        label: c.label, n: 0, num: undefined,
-        state: c.approved ? "Kept" : "Rejected", decision: c.approved ? "Kept" : "Rejected",
-        value: c.approved ? "Kept" : "Rejected", word: undefined,
-        revised: false, rejected: !c.approved, skipped: false, forYou: true, onlyForYou: true, busy: false, pending: false, needs: false, asks: false, sentBack: false,
-        decided: c.approved, version: 0, title: undefined, on: !c.approved && !!showing && matchesEdit(showing, ref),
-        open: c.approved ? undefined : () => actions.openEdit(thread, ref), fresh: false, tip };
-    }),
-  ].sort((a, b) => a.at - b.at);
-  // The pass's calls and the edits that ask for a look: while any of them is listed the pass has something to say.
-  const calls = pass ? rows.filter(r => r.n > 0 || r.forYou) : [];
-  // Rows go by moments, at the time of the first of its edits. The moment's row stands for all of them: ticked once
-  // they're all kept, Revising… while Scarlet is on one (or Up next / Queued while one waits its turn), and lit while
-  // the moment is open. Its own edits show only once it is unfolded, or while one of them is open on its own, each
-  // without a time: they all play in the moment's stretch. An edit that asks for a look and a call stay one a row.
-  const momentOf = new Map<string, Moment<Omit<ThreadEdit, "at">>>();
-  for (const m of moments) if (m.edits.length > 1) for (const e of m.edits) momentOf.set(editKey(e), m);
-  const byKey = new Map(rows.map(row => [row.key, row]));
-  // A request that itself waits on the editor (a question, or one that stopped early) keeps its row in Needs review.
-  const asks = new Set(nests.flatMap(nest => nest.needs ? [nest.key] : []));
-  const placeOf = (r: PassRow): RowPlace => r.needs || r.asks ? "you" : r.pending ? "working" : r.decided || r.rejected || r.onlyForYou ? "done" : "optional";
-  const entries: Entry[] = [];
-  const momentsDrawn = new Set<string>();
-  for (const row of rows) {
-    const moment = momentOf.get(row.key);
-    if (!moment) { entries.push({ key: row.key, row, place: asks.has(row.key) ? "you" : placeOf(row), at: row.at, num: row.num }); continue; }
-    if (momentsDrawn.has(moment.key)) continue;
-    momentsDrawn.add(moment.key);
-    const members = moment.members.flatMap(e => {
-      const member = byKey.get(editKey(e));
-      // One of its edits opened on its own from here is that edit alone: Keep and Revise are about it.
-      return member ? [{ ...member, on: member.on && !!actions.showingSingle, open: member.open && (() => actions.openEdit(thread, e, undefined, true)) }] : [];
-    });
-    const main = byKey.get(moment.key) ?? row;
-    const others = moment.edits.filter(e => e !== moment.main);
-    const sent = members.find(m => m.asks) ?? members.find(m => m.busy) ?? members.find(m => m.word === "Up next") ?? members.find(m => m.pending);
-    const more = others.length === 1 ? `+ ${(others[0]!.beforeCut ? "cut" : editKindWord(others[0] as ThreadEdit)?.toLowerCase()) ?? "1 edit"}` : `+ ${others.length} edits`;
-    const allDecided = members.every(m => m.decided);
-    const unkeepMembers = allDecided ? moment.edits.filter(e => !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(editKey(e)))) : [];
-    const momentRange = { start: Math.min(...moment.edits.map(e => e.range.start)), end: Math.max(...moment.edits.map(e => e.range.end)) };
-    const momentTip = momentRowTooltip(main.label, members.map(m => ({ label: m.label, value: m.value, kind: m.tip?.meta })), momentRange, sent?.word ?? (allDecided ? main.decision ?? "Kept" : undefined));
-    entries.push({ key: main.key, row: { ...main, displayAt: Math.min(...members.map(m => m.displayAt)), on: main.on && !actions.showingSingle,
-      decided: allDecided, decision: allDecided ? main.decision ?? "Kept" : undefined, word: sent?.word ?? main.word, asks: !!sent?.asks, busy: !sent?.asks && members.some(m => m.busy),
-      revised: !sent && members.some(m => m.revised), pending: members.some(m => m.pending),
-      unkeep: unkeepMembers.length > 0 ? () => {
-        actions.lightMark();
-        unkeepEdits(projectId, thread.id, unkeepMembers);
-        recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepMembers, name: main.label });
-      } : undefined,
-      unkeepTip: unkeepMembers.length > 0 ? "Move back to Needs review" : undefined,
-      was: members.flatMap(m => m.was ?? []), title: members.map(m => m.label).join("\n"), tip: momentTip }, members, more, moment: moment.key,
-      unfolded: unfolded.has(moment.key) || members.some(m => m.on),
-      place: members.some(m => asks.has(m.key)) ? "you" : rowPlace(members, { waits: m => m.needs || m.asks, sent: m => m.pending, kept: m => m.decided }),
-      at: Math.min(...members.map(m => m.at)) });
-  }
+  useListOpen(actions, thread.id, fullList);
+  // Every row is drawn, in the column, where a call sent back opens from its row in Working as an edit sent back does:
+  // its card says where its revision stands, and ↑ ↓ then step through Working's rows.
+  const { calls, entries } = passEntries(facts, { projectId, thread, edits, rejected, actions, nests },
+    { drawRows: true, backToReview: true, openRevising: true, rail: { timeline, media, fps } });
   // Needs review, Working and Done are all in the column at once, so a kept or sent-back edit moves straight there
   // without lingering where it was.
   const inPlace = (place: RowPlace) => entries.filter(e => e.place === place);
@@ -511,35 +195,13 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     const shown = tab === "you" ? at === "you" || at === "optional" : at === tab;
     if (!shown) setOpen(at === "you" || at === "optional" ? undefined : at);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // What it came to, once Scarlet is done, while calls still wait too: what it applied so far, with the link that opens
-  // every edit after it. Until its cuts are applied, a pass that finished with no call to make says how many it has ready.
-  // The edits the sentence would name are said by their rows while the lists on screen have one for each of them.
-  const named = (e: Omit<ThreadEdit, "at">) => !e.beforeCut && !e.marker && !e.elsewhere;
-  const keysOf = ({ row, members }: Entry) => [row.key, ...members?.map(m => m.key) ?? []];
-  const onScreen = new Set(drawn.flatMap(list => list.rows.flatMap(keysOf)));
-  const rowsName = edits.filter(named).every(e => onScreen.has(editKey(e)));
-  const made: SentencePart[] | undefined = edits.length ? working ? undefined : madeSentence(edits, lengthLabel, true, rowsName)
-    : calls.length || quiet || decidedCallRows.length || rejected.length ? undefined : [{ strong: plural(count, "cut") }, " ready."];
-  // Folded, a request about any of the moment's edits sits under the moment's row; unfolded, under its edit's.
-  const under = ({ row, members, unfolded: momentOpen }: Entry) => nests.filter(nest => nest.key === row.key || (!momentOpen && !!members?.some(m => m.key === nest.key)));
-  const fold = (key: string) => setUnfolded(was => { const next = new Set(was); if (!next.delete(key)) next.add(key); return next; });
-  // The list follows the cut or edit that's open, so stepping with arrows or Keep never leaves its row out of sight.
-  let selectedKey: string | undefined;
-  if (!empty) {
-    scan: for (const list of drawn) {
-      let before = 0;
-      for (const entry of list.rows) {
-        const { row, members, unfolded: momentOpen } = entry;
-        if (row.on) { selectedKey = `${list.id}:${before}:${row.key}`; break scan; }
-        before += 1 + under(entry).length;
-        if (momentOpen && members) for (const m of members) {
-          if (m.on) { selectedKey = `${list.id}:${before}:member:${m.key}`; break scan; }
-          before += 1 + nests.filter(nest => nest.key === m.key && m.key !== row.key).length;
-        }
-      }
-    }
-  }
-  useKeepSelectedInView(host, selectedKey, ".simple-pass-list [aria-current=\"true\"]");
+  // What it came to, with See edit after it for a request's one edit. The edits the sentence would name are said by
+  // their rows, every one of which is in the column.
+  const onScreen = new Set(drawn.flatMap(list => list.rows.flatMap(entryKeys)));
+  const rowsName = edits.filter(namedEdit).every(e => onScreen.has(editKey(e)));
+  const made = passMade(facts, edits, rejected, calls, working, rowsName);
+  const under = (entry: Entry) => nestsUnder(nests, entry);
+  useKeepSelectedInView(host, !empty ? selectedRowKey(drawn, nests) : undefined, ".simple-pass-list [aria-current=\"true\"]");
   // Report structured rows to the unified beta edits column so every section sorts by video time and combines
   // cross-request edits touching the same clip or stretch.
   const railRows: RailRow[] | undefined = empty ? undefined : entries.map((entry): RailRow => {
@@ -639,7 +301,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   if (empty) return null;
   // A request whose row is under a list is drawn there, under that row, and nowhere else. One about a cut or edit with
   // no row at all still shows, under what the pass made.
-  const placed = new Set(entries.flatMap(keysOf));
+  const placed = new Set(entries.flatMap(entryKeys));
   const soFar = (!!working || !!pass?.running) && !made;
   const canSeeAll = edits.length > 0;
   const seeProps = { thread, actions, single, rows: totalRows + rejected.length, count: totalRows, soFar, list: listState, reveal, column: true };
@@ -652,7 +314,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     <div className="simple-pass-line req-row">
       {!made && seeEvery}
       {/* The pass goes in once its calls are decided and Scarlet finishes checking. */}
-      {waiting && pass.deciding && <span className="simple-pass-ok">Applying…</span>}
+      {waiting && pass?.deciding && <span className="simple-pass-ok">Applying…</span>}
       <span className="req-right">{aside}</span>
     </div>
     {/* Only a failed apply offers Retry, after the reason. */}
@@ -678,11 +340,8 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   listLoaded?: boolean;
   /** The row key whose question is currently displayed over the message box, so it lights up. */
   askingRowKey?: string }) {
-  const reviewed = useReviewed(projectId, thread);
-  const canUnkeep = useCanUnkeep(projectId, thread);
-  const revising = useRevising(thread);
-  const rejecting = useRejecting(thread);
-  const adding = useAdding(thread);
+  const facts = useThreadFacts({ projectId, thread, edits, rejected, actions });
+  const { reviewed, canUnkeep, revising, rejecting, adding, gone, showing, shownEdit, groups, need, openEdit, openId } = facts;
   const [open, setOpen] = list;
   const [host, reveal] = useReveal(open);
   const rail = useReviewRail()!;
@@ -691,35 +350,9 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const fps = useProjectStore(s => s.current?.project.settings.fps);
   const threadChanges = useMemo(() => [...thread.changes, ...thread.flagged ?? []], [thread.changes, thread.flagged]);
   const clipsBySpot = useMemo(() => editClipIdsBySpot(threadChanges, edits, timeline), [threadChanges, edits, timeline]);
-  const gone = rejected ?? noRejected;
-  // An edit open on the timeline: the one that's open, or one that opens with it when none is.
-  const showing = actions.showing;
-  const shownEdit = showing && edits.find(e => matchesEdit(showing, e));
-  // Edits of one name that overlap exactly are one edit, on one row of the list: Needs review counts the rows that wait.
-  const groups = useMemo(() => editGroups(edits), [edits]);
-  // So does one sent back whose request has stopped to ask the editor something: it is their turn again.
-  const need = useMemo(() => waitingRows(edits, { reviewed, revising }), [edits, reviewed, revising]);
   const tab = tabShown(open);
-  // Where each row is: every edit and every rejected one is in exactly one list. A request that itself waits on the
-  // editor (a question, or one that stopped early) keeps its row in Needs review. Working and Done are right below,
-  // so a decided or sent-back edit moves there at once.
-  const asks = new Set(nests.flatMap(nest => nest.needs ? [nest.key] : []));
-  const rowOf = new Map<string, string>(), placeOf = new Map<string, RowPlace>();
-  const tracked: { key: string; place: RowPlace }[] = [];
-  for (const { members } of groups) {
-    const row = members.map(m => m.edit), key = editKey(row[0]!);
-    const place = row.some(e => asks.has(editKey(e))) ? "you"
-      : rowPlace(row, { waits: e => asksEditor(revising(e)) || (!!e.check && !reviewed(e) && !revising(e)), sent: e => !!revising(e), kept: e => reviewed(e) });
-    for (const e of row) rowOf.set(editKey(e), key);
-    placeOf.set(key, place);
-    tracked.push({ key, place });
-  }
-  for (const e of gone) {
-    const key = editKey(e);
-    rowOf.set(key, key);
-    placeOf.set(key, "done");
-    tracked.push({ key, place: "done" });
-  }
+  // Each row's list. Working and Done are right below, so a decided or sent-back edit moves there at once.
+  const { rowOf, placeOf, tracked } = threadRowPlaces(facts, nests);
   const place = (e: Omit<ThreadEdit, "at">) => placeOf.get(rowOf.get(editKey(e)) ?? "");
   const onScreen = (e: Omit<ThreadEdit, "at">) => { const at = place(e); return tab === "you" ? at === "you" || at === "optional" : at === tab; };
   const countOf = (at: RowPlace) => tracked.filter(row => row.place === at).length;
@@ -727,8 +360,6 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   // An edit opened from somewhere else (the timeline, ⌘Z) shows the list that holds it: Needs review for one that
   // waits, Working for one sent back, Done for one decided. One opened from the list, stepped to or moved on to is in
   // the list shown already.
-  const openEdit = showing && (shownEdit ?? gone.find(e => matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing)));
-  const openId = openEdit ? editKey(openEdit.previous[0] ?? openEdit) : undefined;
   const ownOpen = useRef<string>(undefined);
   const lastOpen = heldOpen ?? ownOpen;
   useEffect(() => {
