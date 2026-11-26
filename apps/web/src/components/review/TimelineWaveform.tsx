@@ -1,12 +1,12 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { clipEnd, timelineToSource, volumeDbAt, type MediaAsset, type Timeline, type VolumeKeyframe } from "@scarlet/timeline";
+import { clipEnd, timelineToSource, volumeDbAt, type AudioTrackSelection, type MediaAsset, type Timeline, type VolumeKeyframe } from "@scarlet/timeline";
 import type { WaveformResponse } from "@scarlet/shared";
 import { originalClipAt } from "./thumbs";
 import { api } from "../../lib/client";
 import { useArrival, wavePhase } from "./laneLoading";
 
 /** `levels`: the clip's volume keyframes, in seconds from `start`, on top of `gain`, as the render plays them. */
-type Span = { id: string; start: number; end: number; sourceIn: number; speed: number; gain: number; fadeIn: number; fadeOut: number;
+type Span = { id: string; track: AudioTrackSelection; start: number; end: number; sourceIn: number; speed: number; gain: number; fadeIn: number; fadeOut: number;
   levels?: readonly VolumeKeyframe[]; ingesting?: boolean };
 /**
  * scaleWith: another version on the same clock, such as the other side of a Before/After comparison.
@@ -19,7 +19,7 @@ export type WaveformMedia = { source?: MediaAsset; timeline?: Timeline | null; m
 function audioSpans({ source, timeline, media, original }: WaveformMedia, start: number, end: number): Span[] {
   const hasSound = (m: MediaAsset) => m.hasAudio !== false && (m.kind === "video" || m.kind === "audio") && m.status !== "failed";
   if (source) return hasSound(source) && start < (source.duration ?? end)
-    ? [{ id: source.id, start: 0, end: source.duration ?? end, sourceIn: 0, speed: 1, gain: 1, fadeIn: 0, fadeOut: 0, ingesting: source.status === "ingesting" }] : [];
+    ? [{ id: source.id, track: source.audioTrack ?? 0, start: 0, end: source.duration ?? end, sourceIn: 0, speed: 1, gain: 1, fadeIn: 0, fadeOut: 0, ingesting: source.status === "ingesting" }] : [];
   const assets = new Map(media.filter(hasSound).map(m => [m.id, m]));
   const spans: Span[] = [];
   if (!timeline) return spans;
@@ -37,7 +37,7 @@ function audioSpans({ source, timeline, media, original }: WaveformMedia, start:
       if (clip?.kind !== "media") continue;
       const asset = assets.get(clip.mediaId);
       if (asset) {
-        spans.push({ id: asset.id, start: from, end: to, sourceIn: timelineToSource(clip, from), speed: clip.speed, gain: 1, fadeIn: 0, fadeOut: 0, ingesting: asset.status === "ingesting" });
+        spans.push({ id: asset.id, track: asset.audioTrack ?? 0, start: from, end: to, sourceIn: timelineToSource(clip, from), speed: clip.speed, gain: 1, fadeIn: 0, fadeOut: 0, ingesting: asset.status === "ingesting" });
       }
     }
     return spans;
@@ -49,7 +49,7 @@ function audioSpans({ source, timeline, media, original }: WaveformMedia, start:
       const asset = assets.get(clip.mediaId);
       const out = clipEnd(clip);
       if (!asset || clip.timelineIn >= end || out <= start) continue;
-      spans.push({ id: clip.mediaId, start: clip.timelineIn, end: out, sourceIn: clip.sourceIn,
+      spans.push({ id: clip.mediaId, track: asset.audioTrack ?? 0, start: clip.timelineIn, end: out, sourceIn: clip.sourceIn,
         speed: clip.speed, gain: clip.volume, fadeIn: clip.audioFadeIn, fadeOut: clip.audioFadeOut,
         ...(clip.volumeKeyframes?.length && { levels: clip.volumeKeyframes }), ingesting: asset.status === "ingesting" });
     }
@@ -60,7 +60,7 @@ function audioSpans({ source, timeline, media, original }: WaveformMedia, start:
 /** How many source windows are kept, the latest used last. */
 const KEPT_PEAKS = 32;
 // Completed and in-flight source windows are shared by the cut and comparison views.
-const peakCache = new Map<string, { id: string; from: number; to: number; points: number; read: Promise<WaveformResponse> }>();
+const peakCache = new Map<string, { id: string; track: AudioTrackSelection; from: number; to: number; points: number; read: Promise<WaveformResponse> }>();
 /** How much coarser than asked a window read already may be and still answer: a few bars more per bucket than drawn. */
 const COARSE_ENOUGH = 0.75;
 const peakPoints = (from: number, to: number) => Math.min(8192, Math.max(128, Math.ceil((to - from) * 100)));
@@ -80,13 +80,13 @@ function peaksWithin(wave: WaveformResponse, from: number, to: number): Waveform
  * new working cut of a pass, whose window is a little shorter than the last and so asks for a little finer peaks than
  * the capped read already has; on 2026-11-21 each of those took 15 s under the pass's load and the sound never drew.
  */
-export function sourcePeaks(id: string, from: number, to: number) {
-  const key = JSON.stringify([id, from, to]);
+export function sourcePeaks(id: string, from: number, to: number, track: AudioTrackSelection = 0) {
+  const key = JSON.stringify([id, track, from, to]);
   const points = peakPoints(from, to);
   let entry = peakCache.get(key);
   let within = false;
   if (!entry) {
-    entry = [...peakCache.values()].findLast(held => held.id === id && held.from <= from && held.to >= to
+    entry = [...peakCache.values()].findLast(held => held.id === id && held.track === track && held.from <= from && held.to >= to
       && held.points / (held.to - held.from) >= COARSE_ENOUGH * points / (to - from));
     within = !!entry;
   }
@@ -95,10 +95,10 @@ export function sourcePeaks(id: string, from: number, to: number) {
       if (peakCache.get(key)?.read === read) peakCache.delete(key);
       throw error;
     });
-    entry = { id, from, to, points, read };
+    entry = { id, track, from, to, points, read };
   }
   // The one used last is the last to go.
-  const held = JSON.stringify([entry.id, entry.from, entry.to]);
+  const held = within ? JSON.stringify([entry.id, entry.track, entry.from, entry.to]) : key;
   peakCache.delete(held);
   peakCache.set(held, entry);
   while (peakCache.size > KEPT_PEAKS) peakCache.delete(peakCache.keys().next().value!);
@@ -107,22 +107,22 @@ export function sourcePeaks(id: string, from: number, to: number) {
 
 /** Read each recording once per visible window, even when a dialogue edit has hundreds of cuts. */
 async function readPeaks(spans: Span[], start: number, end: number, cancelled: () => boolean) {
-  const windows = new Map<string, { from: number; to: number }>();
+  const windows = new Map<string, { from: number; to: number; track: AudioTrackSelection }>();
   for (const span of spans) {
     if (span.ingesting) continue;
     const from = span.sourceIn + (Math.max(start, span.start) - span.start) * span.speed;
     const to = span.sourceIn + (Math.min(end, span.end) - span.start) * span.speed;
     if (to <= from) continue;
     const existing = windows.get(span.id);
-    windows.set(span.id, { from: Math.min(existing?.from ?? from, from), to: Math.max(existing?.to ?? to, to) });
+    windows.set(span.id, { from: Math.min(existing?.from ?? from, from), to: Math.max(existing?.to ?? to, to), track: span.track });
   }
   const results = new Map<string, WaveformResponse>();
   const queue = windows.entries();
   async function read() {
-    for (const [id, { from, to }] of queue) {
+    for (const [id, { from, to, track }] of queue) {
       if (cancelled()) return;
       try {
-        results.set(id, await sourcePeaks(id, from, to));
+        results.set(id, await sourcePeaks(id, from, to, track));
       } catch { /* Missing audio must not block video scrubbing. */ }
     }
   }
@@ -130,7 +130,7 @@ async function readPeaks(spans: Span[], start: number, end: number, cancelled: (
   return results;
 }
 
-export function waveformBars(spans: Span[], waves: Map<string, WaveformResponse>, start: number, duration: number, count: number) {
+export function waveformBars(spans: Omit<Span, "track">[], waves: Map<string, WaveformResponse>, start: number, duration: number, count: number) {
   const peaks = new Float32Array(count);
   const energy = new Float32Array(count);
   const cutEdges = new Map<number, { time: number; delta: number }[]>();
@@ -204,15 +204,32 @@ function barsPath(samples: Float32Array, scale: number) {
   }).join("");
 }
 
+const NO_SPANS: Span[] = [];
+
+/** Keep the same span list while its contents and window match, so unrelated media updates don't drop and redraw the bars. */
+function useStableSpans(next: Span[], start: number, duration: number) {
+  const held = useRef<{ key: string; spans: Span[] }>(undefined);
+  return useMemo(() => {
+    const key = JSON.stringify([start, duration, next]);
+    if (held.current?.key === key) return held.current.spans;
+    held.current = { key, spans: next };
+    return next;
+  }, [next, start, duration]);
+}
+
 export const TimelineWaveform = memo(function TimelineWaveform({ timeline, source, media, mediaPaused, original, scaleWith, audioFrom, start, duration,
   visibleStart = start, visibleSpan = duration, hold, onLoading }: WaveformMedia & { start: number; duration: number; visibleStart?: number; visibleSpan?: number;
   /** Keep the ripple a moment longer while the picture lane is about to land, so both arrive together. */
   hold?: boolean; onLoading?(loading: boolean): void }) {
   const lane = useRef<HTMLDivElement>(null);
   const [count, setCount] = useState(0);
-  const shown = useMemo(() => audioSpans({ timeline: audioFrom ?? timeline, source, media, original }, start, start + duration), [audioFrom, timeline, source, media, original, start, duration]);
-  const reference = useMemo(() => scaleWith && !source ? audioSpans({ timeline: scaleWith, media }, start, start + duration) : [],
-    [scaleWith, source, media, start, duration]);
+  const shown = useStableSpans(
+    useMemo(() => audioSpans({ timeline: audioFrom ?? timeline, source, media, original }, start, start + duration), [audioFrom, timeline, source, media, original, start, duration]),
+    start, duration);
+  const reference = useStableSpans(
+    useMemo(() => scaleWith && !source ? audioSpans({ timeline: scaleWith, media }, start, start + duration) : NO_SPANS,
+      [scaleWith, source, media, start, duration]),
+    start, duration);
   // One read covers both versions; the reference only sets the scale.
   const spans = useMemo(() => reference.length ? [...shown, ...reference] : shown, [shown, reference]);
   const preparing = useMemo(() => spans.some(span => span.ingesting), [spans]);
