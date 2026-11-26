@@ -2712,9 +2712,9 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     if (was && was === wordsInCall.current && next) wordsInCall.current = next;
     box.setAgentContext(next, next && was?.changeId ? was : undefined);
     // In the new layout the stretch is in the words themselves, where the cursor is; an end that moves changes them in
-    // place.
-    if (beta) {
-      const words = marked ? preciseRange(marked.start, marked.end) : "";
+    // place, and a stretch taken off leaves them as the editor wrote them.
+    if (beta && marked) {
+      const words = preciseRange(marked.start, marked.end);
       const wasWords = was?.markedRange ? preciseRange(was.markedRange.start, was.markedRange.end) : undefined;
       if (words !== wasWords) insertInDraft(words, wasWords);
     }

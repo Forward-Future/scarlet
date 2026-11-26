@@ -16058,3 +16058,20 @@ it("switches live between the default layout and the new one, which share one wo
   expect(container.querySelector(".simple-review-dock")).not.toBeNull();
   localStorage.clear();
 });
+
+it("leaves the times a marked stretch wrote into the message when the stretch is taken off, in the new layout", async () => {
+  await inNewLayout(async () => {
+    beforeClipReady();
+    await show();
+    const marked = () => (useUiStore.getState().agentContext as AgentContext | null)?.markedRange;
+    await act(async () => useUiStore.getState().setAgentDraft("Tighten the pauses here "));
+    await markOnRuler(11, 16);
+    expect(marked()).toBeDefined();
+    const written = useUiStore.getState().agentDraft;
+    expect(written).not.toBe("Tighten the pauses here ");
+    // The × on the stretch takes the stretch off the timeline; the words stay as the editor has them.
+    await act(async () => { container.querySelector<HTMLButtonElement>(".timeline-range-clear")!.click(); });
+    expect(marked()).toBeUndefined();
+    expect(useUiStore.getState().agentDraft).toBe(written);
+  });
+});
