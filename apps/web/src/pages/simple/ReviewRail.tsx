@@ -333,7 +333,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     </>;
   };
 
-  return <ChatRail compact={compact} hidden={nothing} railRef={host} id="simple-review-rail" className="review-rail" label="Edit lists"
+  return <ChatRail compact={compact} railRef={host} id="simple-review-rail" className="review-rail" label="Edit lists"
     side="left" resizes="edits" storageKey="scarlet.simpleReviewWidth" initialWidth={reviewRailWidth}
     minWidth={REVIEW_RAIL_MIN} beside="simple-chat" reserve={reserve}>
     <header className="review-rail-head">
@@ -359,7 +359,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
         {renderSectionList("you")}
         {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Safe edits ({optional})</span></div>}
         <div className="review-low-body" role="group" aria-label="Safe edits" hidden={!showConfident}>{renderSectionList("low")}</div>
-        {forYouRows === 0 && !showConfident && <p className="simple-review-empty">Nothing waits on you.</p>}
+        {forYouRows === 0 && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
       </div>
     </div>
     <div className="review-rail-foot">

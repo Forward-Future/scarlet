@@ -150,7 +150,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
   const section = useRef<HTMLElement>(null);
   const inView = useNearView(section, ".simple-chat");
   const asksForALook = useRef(false);
-  const { listed, rejected, located, head } = useThreadEdits(projectId, thread, inView || !!passList[0] || actions.marked === thread.id
+  const { listed, rejected, located, settled: listLoaded, head } = useThreadEdits(projectId, thread, inView || !!passList[0] || actions.marked === thread.id
     || (!!pinned && thread.tasks.some(t => t.id === pinned)) || !!rail || (!!reportReviewMarkers && (!!reportEvery || asksForALook.current)));
   asksForALook.current = listed.some(edit => !!edit.check);
   const reviewed = useReviewed(projectId, thread);
@@ -223,7 +223,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     ?? (pendingPass ? runs.find(run => !aboutOne(run) && run.attempts.some(t => t.id === waitingPass?.taskId)) ?? runs.find(run => !aboutOne(run)) : undefined)
     ?? runs[0];
   // A rejected edit keeps its row, also when it was the request's only edit: nothing else says it was rejected (2026-11-23).
-  const hasRows = listed.length > 0 || rejected.length > 0 || (summed && (actions.pass?.threadId === thread.id || hasDecidedCalls));
+  const hasRows = listed.length > 0 || rejected.length > 0 || (summed && (actions.pass?.threadId === thread.id || (listLoaded && hasDecidedCalls)));
   // With no line for the pass (it was thrown away), its list is closed: a pass staged again starts folded. A pass that
   // went in leaves the thread's edits, and the list of those still waiting on the editor stays open: their place in
   // the chat must not go with the calls (2026-11-16).
@@ -253,7 +253,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
         return <div key={i} className="simple-msg from-scarlet"><span className="simple-who">Scarlet</span><Said text={entry.fullText ?? entry.text} /></div>;
       case "change":
         // An applied change with no request behind it says what it did once: in the sentence over its edits.
-        if (entry.change.state === "approved" && hasRows) return null;
+        if (entry.change.state === "approved" && (hasRows || !listLoaded)) return null;
         return <ChangeReply key={i} thread={thread} entry={entry} actions={actions} />;
       case "system":
         return <div key={i} className={`simple-note${entry.tone === "bad" ? " is-bad" : ""}`}>{entry.text}</div>;
@@ -304,7 +304,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     if (run === owner || !aboutOne(run) || pinned === run.root) return false;
     if (run.task.state === "cancelled" || run.task.state === "failed") return overtaken(run);
     // One paused for its transcripts ended as done, and stopped early all the same: it stays, with its way to finish.
-    if (run.task.state !== "done" || !!runEnded(run.task) || !targets.get(run.root)) return false;
+    if (run.task.state !== "done" || !!runEnded(run.task) || (listLoaded && !targets.get(run.root))) return false;
     const final = finalOf(run);
     // Done with no change and not a word from Scarlet: there is nothing for it to say by staying. That an attempt
     // stopped and was picked up again is no word of Scarlet's: of those lines only the last attempt's own reason reads.
@@ -433,8 +433,8 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
       return { key, node: unit(about, true), needs: about.task.state === "waiting_for_user" || !runIsActive(about.task), version };
     });
     const rows = run === owner && hasRows ? (aside: ReactNode) => summed
-      ? <PassSummary projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />
-      : <ThreadResult projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} /> : undefined;
+      ? <PassSummary projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} aside={aside} list={passList} listedNeed={passListed} working={runIsActive(task)} nests={nests} spent={spent} linger={linger} lastOpen={lastOpen} listLoaded={listLoaded} askingRowKey={askingRowKey} />
+      : <ThreadResult projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} aside={aside} working={runIsActive(task)} nests={nests} spent={spent} list={passList} listedNeed={passListed} wasShowing={wasShowing} linger={linger} lastOpen={lastOpen} listLoaded={listLoaded} askingRowKey={askingRowKey} /> : undefined;
     // A request about one cut or edit says what it did there, and its row opens that cut or edit on the timeline.
     const target = targets.get(run.root);
     const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
@@ -575,7 +575,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     if (closingReply(item) && runOf.has(item.replyTo!)) return [];
     // An applied edit no request made is said once, by the sentence that lists it below, with its link (2026-11-14:
     // "Put the camera in the bottom-right corner" read twice).
-    if (!owner && hasRows && item.kind === "change" && item.change.state === "approved") return [];
+    if (!owner && (hasRows || !listLoaded) && item.kind === "change" && item.change.state === "approved") return [];
     // What a queued request says is in the tray.
     return item.taskId ? [] : [loose(item, i)];
   });
@@ -583,8 +583,8 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
   for (const run of runs) if (!placed.has(run.root) && !settled(run) && !nested.has(run.root)) nodes.push(unit(run));
   // Edits with no request behind them, such as an older change, still list in a card of their own.
   if (!owner && hasRows) nodes.push(<div key="edits" className="req">{summed
-    ? <PassSummary projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />
-    : <ThreadResult projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={!!located} askingRowKey={askingRowKey} />}</div>);
+    ? <PassSummary projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={listLoaded} askingRowKey={askingRowKey} />
+    : <ThreadResult projectId={projectId} thread={thread} threadOrder={threadOrder} edits={listed} rejected={rejected} actions={actions} list={passList} listedNeed={passListed} linger={linger} lastOpen={lastOpen} listLoaded={listLoaded} askingRowKey={askingRowKey} />}</div>);
   return <section ref={section} className="simple-turn" data-log-label="Edit thread" aria-label={thread.title} data-thread={thread.id}>
     {nodes}
   </section>;
