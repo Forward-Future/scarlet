@@ -186,7 +186,7 @@ export function listPlaces<T extends ListedEdit>(thread: Pick<Thread, "changes">
 type WaitsOn<T> = { reviewed(edit: T): boolean; revising(edit: T): { state: Task["state"] } | undefined };
 
 /**
- * How many rows of a request's For you list wait on the editor: the number on its For you tab, and on its band while
+ * How many rows of a request's Needs review list wait on the editor: the number on its Needs review tab, and on its band while
  * the request is folded. A flagged edit waits until it is kept or sent back, and again while the request it was sent
  * back with has stopped to ask the editor something. An edit made in several places is one row.
  */
@@ -195,7 +195,7 @@ export function waitingRows<T extends ListedEdit>(edits: readonly T[], { reviewe
 }
 
 /**
- * The same for a dialogue pass, whose For you list has a row for each call and each edit: the calls still open, the
+ * The same for a dialogue pass, whose Needs review list has a row for each call and each edit: the calls still open, the
  * flagged edits that wait, and any call or edit whose request has stopped to ask the editor something.
  */
 export function waitingPassRows<T extends ListedEdit>(calls: readonly { state: string; run?: { state: Task["state"] } }[] | undefined, edits: readonly T[],

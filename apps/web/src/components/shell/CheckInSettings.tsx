@@ -32,7 +32,7 @@ export function CheckInSettings() {
           <PreferenceSelect id="check-in" value={value} disabled={busy} options={steps} onChange={next => void choose(next)} />
         </div>
       </div>
-      <p className="transcription-status text-muted">{CHECK_IN_SHARE[value].replace(/^a/, "A")} of the cuts that take words out: the ones Scarlet thinks most likely to be wrong. They go into the video either way and wait in For you until you keep them. The same share of the lines said twice that Scarlet would leave in comes to you as a call: Keep takes one out.</p>
+      <p className="transcription-status text-muted">{CHECK_IN_SHARE[value].replace(/^a/, "A")} of the cuts that take words out: the ones Scarlet thinks most likely to be wrong. They go into the video either way and wait in Needs review until you keep them. The same share of the lines said twice that Scarlet would leave in comes to you as a call: Keep takes one out.</p>
       {error && <InlineError>{error}</InlineError>}
     </section>
   );
