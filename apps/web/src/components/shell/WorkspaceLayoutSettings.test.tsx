@@ -1285,4 +1285,89 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       root = createRoot(container);
     }
   });
+
+  it("keeps Working and Done headers pinned outside their scrollable bodies in the beta rail", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const change = db.changes.find(c => c.id === "chg_approved_2") ?? db.changes[0]!;
+    const ownerThreadId = buildThreads({ changes: db.changes, tasks: db.tasks, notes: db.notes })
+      .find(t => t.changes.some(c => c.id === change.id))!.id;
+    const workingTask = Task.parse({
+      id: "task_beta_working_sticky",
+      projectId: PRJ,
+      kind: "edit",
+      agent: "claude",
+      instruction: "Polish caption timing",
+      state: "running",
+      createdBy: { type: "human", name: "Editor" },
+      changeIds: [],
+      context: { changeId: change.id, editIndex: 0, threadId: ownerThreadId },
+      createdAt: "2026-11-26T10:00:00.000Z",
+    });
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: [...db.tasks.filter(t => t.state !== "waiting_for_user"), workingTask],
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === ownerThreadId ? [
+        { changeId: change.id, spot: 0, label: "Polish caption timing", range: { start: 1, end: 3 }, previous: [] },
+        { changeId: change.id, spot: 1, label: "Rejected outro clip", range: { start: 5, end: 8 }, previous: [], rejected: true as const },
+      ] : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    const foot = container.querySelector<HTMLElement>(".review-rail-foot")!;
+    const [workingHead, doneHead] = [...foot.querySelectorAll<HTMLButtonElement>(":scope > .review-sec")];
+    const [workingBody, doneBody] = [...foot.querySelectorAll<HTMLElement>(":scope > .review-sec-body")];
+    expect(workingHead?.textContent).toBe("Working1");
+    expect(doneHead?.textContent).toBe("Done1");
+    expect(workingHead?.nextElementSibling).toBe(workingBody);
+    expect(doneHead?.nextElementSibling).toBe(doneBody);
+    expect(workingBody?.hidden).toBe(false);
+    expect(doneBody?.hidden).toBe(true);
+
+    // Expanding Done opens both bodies inside the non-scrolling flex column foot.
+    await act(async () => doneHead!.click());
+    await act(async () => {});
+    expect(workingBody?.hidden).toBe(false);
+    expect(doneBody?.hidden).toBe(false);
+
+    // CSS keeps the footer non-scrolling, pins both headers (flex: none), and scrolls each section body independently.
+    const { readFileSync } = await import("node:fs");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    const footRule = /\[data-new-layout\]\s+\.review-rail-foot\s*\{([^}]*)\}/.exec(betaCss)?.[1] ?? "";
+    expect(footRule).toMatch(/display:\s*flex/);
+    expect(footRule).toMatch(/flex-direction:\s*column/);
+    expect(footRule).toMatch(/overflow:\s*hidden/);
+    expect(footRule).not.toMatch(/overflow-y:\s*auto/);
+    const secRule = /\[data-new-layout\]\s+\.review-sec\s*\{([^}]*)\}/.exec(betaCss)?.[1] ?? "";
+    expect(secRule).toMatch(/flex:\s*none/);
+    const bodyRule = /\[data-new-layout\]\s+\.review-sec-body\s*\{([^}]*)\}/.exec(betaCss)?.[1] ?? "";
+    expect(bodyRule).toMatch(/overflow-y:\s*auto/);
+    expect(bodyRule).toMatch(/min-height:\s*0/);
+  });
 });
