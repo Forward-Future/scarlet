@@ -3339,7 +3339,7 @@ it("sums a dialogue pass up on one card, and makes its calls in the card on the 
   // reason. It has no picker and no script.
   expect([...call().querySelectorAll(".edit-card-bar > .edit-card-count, .edit-card-bar .edit-card-title")].map(e => e.textContent))
     .toEqual(["Cut 3:50", "Breath before the price."]);
-  expect(call().querySelector(".edit-card-text > .edit-card-what")?.textContent).toMatch(/^Takes out /);
+  expect(call().querySelector(".edit-card-text > .edit-card-what")?.textContent).toMatch(/^Cut /);
   // The time says it all, so nothing more is on hover.
   expect(call().querySelector(".edit-card-count")?.getAttribute("title")).toBeNull();
   // The note is one row, and the controls another under it.
@@ -3533,7 +3533,7 @@ it("keeps a pass's non-overlapping edits as separate rows even when they share a
   await show();
   await act(async () => {});
   const turn = turnFor("chg_approved_2");
-  expect(turn.querySelector(".simple-made")?.textContent).toBe("Took out 1:00 in 2 cuts, and made 4 sound fixes.");
+  expect(turn.querySelector(".simple-made")?.textContent).toBe("Cut 1:00 in 2 cuts, and made 4 sound fixes.");
   const rows = () => editRowsIn(turn);
   // In the Priority list, the flagged fade at 0:13 is pinned first, then the confident edits in timeline order.
   expect(rows().map(r => [r.querySelector(".simple-pass-words")?.textContent, r.querySelector(".simple-pass-value")?.textContent])).toEqual([
@@ -4408,8 +4408,8 @@ it("keeps the other calls' dots on the timeline while a call is open, so one pre
   // has a dashed edge while it still waits on the editor's decision.
   await openCall("Breath before the price.");
   expect(container.querySelector(".simple-timeline-band")?.classList.contains("is-proposed")).toBe(true);
-  // Its footage isn't out of the video yet, so the band says what the cut takes out, not what it took.
-  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Takes out · 1.0 s");
+  // Its footage isn't out of the video yet, so the band has a dashed edge and names the cut's length.
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Cut · 1.0 s");
   expect(dots().map(d => [d.dataset.state, d.classList.contains("is-on")])).toEqual([["check", false], ["check", true], ["check", false]]);
   // A press on one opens that call in the card, and the timeline zooms to it.
   const strip = container.querySelector<HTMLElement>(".simple-timeline-hover")!;
@@ -4465,8 +4465,8 @@ it("shows the cuts already in the video around an open call as grey gaps, After 
   await openCall("Breath before the price.");
   await act(async () => {});
   expect(gaps().map(gap => [gap.textContent, gap.classList.contains("is-skipped")])).toEqual([["Cut at 0:07", true]]);
-  // The call's own band says what it takes out: unlike the grey cuts beside it, its footage is still in the video.
-  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Takes out · 1.0 s");
+  // The call's own band names the cut and its length.
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Cut · 1.0 s");
   expect(onVideo()).toBe("Showing cut at 0:06 · After");
   expect(markStates()).toEqual(["check", "check", "check"]);
   // After plays as the video runs now: over the call's footage, then over the cut's.
@@ -4480,8 +4480,8 @@ it("shows the cuts already in the video around an open call as grey gaps, After 
   expect(usePlayerStore.getState().scrubGesture).toBeUndefined();
   expect(beforeIcon(call())).toEqual(["BeforeAfter\\", "Before", "true", "Back to After (\\)"]);
   expect(call().querySelector(".edit-card-before.is-flash")).not.toBeNull();
-  expect([...call().querySelector(".edit-card-switched")!.children].map(part => part.textContent)).toEqual(["Before", "The cut at 0:07 took this part out."]);
-  expect(onVideo()).toBe("Showing what the cut at 0:07 took out · Before");
+  expect([...call().querySelector(".edit-card-switched")!.children].map(part => part.textContent)).toEqual(["Before", "This part was cut at 0:07."]);
+  expect(onVideo()).toBe("Showing cut at 0:07 · Before");
   // It plays now, so it's only outlined. The call's card is otherwise as it was.
   expect(gaps()[0]!.classList.contains("is-skipped")).toBe(false);
   expect(call().querySelector(".edit-card-count")?.textContent).toBe("Cut 0:06");
@@ -4730,7 +4730,7 @@ const workingCutMoves = async (start: number, end: number) => {
 const callWords = async () => {
   vi.mocked(api.retakes).mockClear();
   await click(call().querySelector(".edit-card-words")!);
-  if (!call().querySelector('[aria-label="Words this cut takes out"]')) return undefined;
+  if (!call().querySelector('[aria-label="Words cut here"]')) return undefined;
   const [, mediaId, start, end] = vi.mocked(api.retakes).mock.lastCall!;
   return { mediaId, start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000 };
 };
@@ -5107,7 +5107,7 @@ it("offers Retry transcript on a call's words when the pass's version can't be l
   await click(buttonIn(passage(), "Retry transcript")!);
   for (let i = 0; i < 4; i++) await act(async () => {});
   expect(version).toHaveBeenCalledTimes(3);
-  expect([passage().querySelector('[title="The engine is restarting."]'), !!passage().querySelector('[aria-label="Words this cut takes out"]')]).toEqual([null, true]);
+  expect([passage().querySelector('[title="The engine is restarting."]'), !!passage().querySelector('[aria-label="Words cut here"]')]).toEqual([null, true]);
   expect(container.querySelector(".simple-timeline-band")).not.toBeNull();
 });
 
@@ -7061,7 +7061,7 @@ it("labels a length in seconds under a minute, as minutes and seconds above and 
   expect(lengthLabel(4335)).toBe("1:12:15");
   // So does the sentence that sums a long pass's cuts.
   const cut = (start: number, end: number) => ({ label: "A stumble", beforeCut: { version: "ver_1", removed: { start, end } } });
-  expect(sentenceText(madeSentence([cut(0, 3600), cut(4000, 4735)], lengthLabel))).toBe("Took out 1:12:15 in 2 cuts.");
+  expect(sentenceText(madeSentence([cut(0, 3600), cut(4000, 4735)], lengthLabel))).toBe("Cut 1:12:15 in 2 cuts.");
 });
 
 it("plans each cut's listen on the uncut video: After closes the cut up, a long Before skips its middle", () => {
@@ -7228,11 +7228,11 @@ it("revises just the applied edit that's showing, even with a pass waiting, and 
   const bar = editPanel()!;
   expect(buttonIn(bar, "Apply")).toBeUndefined();
   expect(reviewDock()!.querySelector(".simple-pass-list button.is-on .simple-pass-value")?.textContent).toBe("Cut");
-  expect(container.textContent).toContain("Took out · 2.4 s");
+  expect(container.textContent).toContain("Cut · 2.4 s");
   // It quotes what the cut took out, struck through, and plays on the version before it: the timeline shades what came out
   // and After steps over it.
   expect(beforeTimeline).toHaveBeenCalledWith(PRJ, "v_before");
-  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Took out · 2.4 s");
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Cut · 2.4 s");
   // The timeline is on the version before the cut, where the waiting pass's times don't hold: its calls draw no dot here.
   expect(container.querySelector(".simple-timeline-mark")).toBeNull();
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing “Keep the image test” · After");
@@ -8627,7 +8627,7 @@ it("plays an applied cut's After from the version the cut made, so the join soun
   await click(buttonIn(turnFor("chg_approved_2"), "See edit")!);
   await act(async () => {});
   // The timeline stays on the version before, shading what came out, and the listen is in its clock.
-  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Took out · 2.4 s");
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Cut · 2.4 s");
   expect(audition).toHaveBeenLastCalledWith({ start: 8, end: 15.4, skips: [{ start: 10, end: 12.4, removed: true }] }, expect.any(Number));
   // The picture and sound come from the working cut, where the join is inside the rendered media.
   expect(player.mediaTime(9)).toBe(9);
@@ -8831,11 +8831,11 @@ it("greys out the pass's other cuts on After, and a click into one plays it in B
   // The card says whose footage is playing, and only that: the lit icon under it is the way back and names its key,
   // so the line has no button and no key box of its own.
   const notice = container.querySelector(".edit-card-switched")!;
-  expect([...notice.children].map(part => part.textContent)).toEqual(["Before", "The cut at 0:06 took this part out."]);
+  expect([...notice.children].map(part => part.textContent)).toEqual(["Before", "This part was cut at 0:06."]);
   expect(notice.querySelector("button, kbd")).toBeNull();
   expect(beforeIcon(editPanel()!)).toEqual(["BeforeAfter\\", "Before", "true", "Back to After (\\)"]);
   expect(container.querySelector(".edit-card-before.is-flash[aria-pressed='true']")).not.toBeNull();
-  expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing what the cut at 0:06 took out · Before");
+  expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 0:06 · Before");
   // On Before the footage plays, so it's only outlined.
   expect(gap().classList.contains("is-skipped")).toBe(false);
   expect(gap().textContent).toBe("Cut at 0:06");
@@ -9820,9 +9820,9 @@ it("shows Scarlet's recheck of an approved cut under that call, with why and non
   // in view under the row, and isn't said again under its work. The row says Rechecking…, not Revising… (2026-11-22).
   const heading = under!.querySelector(".subunit-msg");
   expect([heading?.querySelector(".simple-revising.is-auto")?.textContent, heading?.querySelector("p")?.textContent])
-    .toEqual(["Auto", "AutoThe footage changed after you approved it."]);
+    .toEqual(["Auto", "AutoThe footage changed after you kept it."]);
   expect(under!.querySelector(".req .is-note")).toBeNull();
-  expect(under!.textContent!.split("The footage changed after you approved it.").length - 1).toBe(1);
+  expect(under!.textContent!.split("The footage changed after you kept it.").length - 1).toBe(1);
   expect(under!.closest("li")?.querySelector(":scope > button .simple-pass-value")?.textContent).toBe("Rechecking…");
   expect(under!.textContent).not.toMatch(/keep|Kept the original delivery|The video changed|Recheck this cut/);
 });
@@ -9872,7 +9872,7 @@ it("says where Scarlet's recheck stands once, at the right of its Auto heading, 
   expect(said("Couldn’t finish")).toBe(1);
   expect(under().querySelector(".req-status, .req-state")).toBeNull();
   // Its reason heads it throughout, and is never said again under its work.
-  expect(said("The footage changed after you approved it.")).toBe(1);
+  expect(said("The footage changed after you kept it.")).toBe(1);
 });
 
 it("keeps a request about one cut in the conversation while it's stopped early, and takes it out once it's done", async () => {
@@ -12923,7 +12923,7 @@ it("opens a cut unlit with its words folded when it is opened again, after Befor
   await act(async () => {});
   expect(beforeIcon(editPanel()!)).toEqual(["BeforeAfter\\", "Before", "false", "Play Before (\\)"]);
   // Its first line says what it took out, over Scarlet's note.
-  expect(editPanel()!.querySelector(".edit-card-text > .edit-card-what")?.textContent).toMatch(/^Took out /);
+  expect(editPanel()!.querySelector(".edit-card-text > .edit-card-what")?.textContent).toMatch(/^Cut /);
   expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing “Keep the image test” · After");
   expect(transcriptLink().getAttribute("aria-expanded")).toBe("false");
   expect(openHead()!.querySelector(".edit-passage")).toBeNull();
@@ -13209,7 +13209,7 @@ it("says a cut's length the same way in its row, its mark and on the timeline", 
   expect(rows().map(r => r.querySelector(".simple-pass-value")?.textContent)).toEqual(["Cut", "Cut"]);
   await click(rows()[0]!);
   await act(async () => {});
-  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Took out · 10 s");
+  expect(container.querySelector(".simple-timeline-band")?.textContent).toBe("Cut · 10 s");
   await click(transcriptLink());
   expect(openHead()!.querySelector(".edit-passage-cut")?.textContent).toBe("10 s");
 });

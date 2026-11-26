@@ -7,21 +7,21 @@ const say = (edits: Parameters<typeof madeSentence>[0]) => sentenceText(madeSent
 
 it("says how much the cuts took out, with the figures in bold", () => {
   const parts = madeSentence([cut(0, 60), cut(100, 171)], length);
-  expect(sentenceText(parts)).toBe("Took out 2:11 in 2 cuts.");
+  expect(sentenceText(parts)).toBe("Cut 2:11 in 2 cuts.");
   expect(parts.filter(part => typeof part !== "string")).toEqual([{ strong: "2:11" }, { strong: "2 cuts" }]);
 });
 
 it("counts what isn't a cut by what it did, after the cuts", () => {
   expect(say([cut(0, 60), cut(100, 171), { label: "Punch in on Matt", kind: "zoom" }, { label: "Punch in on the guest", kind: "zoom" }, { label: "Host full-frame", kind: "reframe" }]))
-    .toBe("Took out 2:11 in 2 cuts, and made 2 zooms and 1 reframe.");
+    .toBe("Cut 2:11 in 2 cuts, and made 2 zooms and 1 reframe.");
   // A kind with no word of its own is an edit beside the others.
-  expect(say([cut(0, 60), cut(100, 171), { label: "Assemble the call" }])).toBe("Took out 2:11 in 2 cuts, and made 1 other edit.");
+  expect(say([cut(0, 60), cut(100, 171), { label: "Assemble the call" }])).toBe("Cut 2:11 in 2 cuts, and made 1 other edit.");
 });
 
 it("counts a music dip and a voice cleanup by what they did", () => {
-  expect(say([cut(0, 60), cut(100, 171), { label: "Dip the music under speech", kind: "dip" }])).toBe("Took out 2:11 in 2 cuts, and made 1 music dip.");
+  expect(say([cut(0, 60), cut(100, 171), { label: "Dip the music under speech", kind: "dip" }])).toBe("Cut 2:11 in 2 cuts, and made 1 music dip.");
   expect(say([cut(0, 60), { label: "Clean the voice", kind: "voice" }, { label: "Dip the bed", kind: "dip" }, { label: "Dip the outro", kind: "dip" }]))
-    .toBe("Took out 1:00 in 1 cut, and made 1 voice cleanup and 2 music dips.");
+    .toBe("Cut 1:00 in 1 cut, and made 1 voice cleanup and 2 music dips.");
 });
 
 it("names a few edits that aren't cuts, and counts many by kind", () => {
@@ -45,7 +45,7 @@ it("counts an edit made in several places once, and says so when it is the only 
   expect(say([same, same, same])).toBe("Camera full screen, in 3 places.");
   expect(say([same, same, { label: "music bed", kind: "audio" }])).toBe("Made 2 edits: Camera full screen, music bed.");
   // Over a list with a row for each place, the sentence counts the places, as that list does.
-  expect(sentenceText(madeSentence([cut(0, 60), same, same, same], length, true))).toBe("Took out 1:00 in 1 cut, and made 3 reframes.");
+  expect(sentenceText(madeSentence([cut(0, 60), same, same, same], length, true))).toBe("Cut 1:00 in 1 cut, and made 3 reframes.");
 });
 
 it("says nothing for a request with no edits, and counts cuts whose length isn't known", () => {
@@ -56,7 +56,7 @@ it("says nothing for a request with no edits, and counts cuts whose length isn't
 it("counts the graphics a request made, and says what Scarlet said about a single one", () => {
   const lower = (name: string) => ({ label: `Lower third: ${name}`, kind: "graphic" as const });
   expect(say([lower("Daniel"), lower("Matt")])).toBe("Made 2 graphics.");
-  expect(say([cut(0, 60), lower("Daniel"), lower("Matt")])).toBe("Took out 1:00 in 1 cut, and made 2 graphics.");
+  expect(say([cut(0, 60), lower("Daniel"), lower("Matt")])).toBe("Cut 1:00 in 1 cut, and made 2 graphics.");
   expect(say([{ ...lower("Daniel"), summary: "Added a lower third naming Daniel as he first speaks." }])).toBe("Added a lower third naming Daniel as he first speaks.");
   expect(say([lower("Daniel"), { label: "Punch in", kind: "zoom" }])).toBe("Made 2 edits: Lower third: Daniel, Punch in.");
 });
@@ -69,14 +69,14 @@ it("counts transitions beside the other edits a request made", () => {
 
 it("counts split edits by what they are, beside the cuts and other edits a request made", () => {
   const split = (n: number) => ({ label: `J cut at 0:0${n}`, kind: "split" as const });
-  expect(say([cut(0, 30), split(1), split(2), split(3), split(4)])).toBe("Took out 0:30 in 1 cut, and made 4 split edits.");
+  expect(say([cut(0, 30), split(1), split(2), split(3), split(4)])).toBe("Cut 0:30 in 1 cut, and made 4 split edits.");
   expect(say([{ label: "Zoom", kind: "zoom" as const }, split(1), split(2), split(3), split(4)])).toBe("Made 1 zoom and 4 split edits.");
 });
 
 it("counts the spots Scarlet marked for the editor on their own, since they changed nothing in the video", () => {
   const spot = (label: string) => ({ label, kind: "other" as const, marker: true as const });
   expect(say([cut(0, 60), cut(100, 171), { label: "Punch in", kind: "zoom" }, spot("Fall Guys comparison footage"), spot("Boat comparison footage")]))
-    .toBe("Took out 2:11 in 2 cuts, and made 1 zoom, and marked 2 spots for you.");
+    .toBe("Cut 2:11 in 2 cuts, and made 1 zoom, and marked 2 spots for you.");
   expect(say([spot("Fall Guys comparison footage"), spot("Boat comparison footage")])).toBe("Marked 2 spots for you.");
   expect(say([{ label: "Punch in", kind: "zoom" }, spot("Boat comparison footage")])).toBe("Made 1 edit: Punch in, and marked 1 spot for you.");
   expect(say([{ ...spot("Boat comparison footage"), summary: "Marked where the boat comparison belongs." }])).toBe("Marked where the boat comparison belongs.");
@@ -85,7 +85,7 @@ it("counts the spots Scarlet marked for the editor on their own, since they chan
 it("counts a marker listed in several places as the one edit it is", () => {
   const spot = (label: string) => ({ label, kind: "other" as const, marker: true as const });
   const boat = spot("Boat comparison footage");
-  expect(say([cut(0, 60), boat, boat])).toBe("Took out 1:00 in 1 cut, and marked 1 spot for you.");
+  expect(say([cut(0, 60), boat, boat])).toBe("Cut 1:00 in 1 cut, and marked 1 spot for you.");
   expect(say([boat, boat])).toBe("Boat comparison footage, in 2 places.");
   expect(say([boat, boat, spot("Fall Guys comparison footage")])).toBe("Marked 2 spots for you.");
 });
@@ -93,15 +93,15 @@ it("counts a marker listed in several places as the one edit it is", () => {
 it("says footage put back as what was done to it, never as something made", () => {
   const back = { label: "Restored the first sound", kind: "restore" as const };
   expect(say([cut(0, 60), cut(100, 171), back, { label: "Frame the chart", kind: "reframe" }, { label: "Frame the card", kind: "reframe" }]))
-    .toBe("Took out 2:11 in 2 cuts, put back 1 passage, and made 2 reframes.");
-  expect(say([cut(0, 60), cut(100, 171), back, { ...back, label: "Restored the pause" }])).toBe("Took out 2:11 in 2 cuts and put back 2 passages.");
+    .toBe("Cut 2:11 in 2 cuts, put back 1 passage, and made 2 reframes.");
+  expect(say([cut(0, 60), cut(100, 171), back, { ...back, label: "Restored the pause" }])).toBe("Cut 2:11 in 2 cuts and put back 2 passages.");
   expect(say([back, ...["A", "B", "C", "D"].map(label => ({ label, kind: "zoom" as const }))])).toBe("Put back 1 passage and made 4 zooms.");
 });
 
 it("counts clips from another file put into the video as inserts, not as footage put back", () => {
   const clip = (label: string) => ({ label, kind: "insert" as const });
   expect(say([cut(0, 60), cut(100, 171), clip("Kontorovich clip"), clip("Ellenberg clip"), { label: "Sponsor spot", kind: "other" as const, marker: true as const }]))
-    .toBe("Took out 2:11 in 2 cuts, and made 2 inserts, and marked 1 spot for you.");
+    .toBe("Cut 2:11 in 2 cuts, and made 2 inserts, and marked 1 spot for you.");
 });
 
 it("leaves the edits' names to the rows while the open list has one for each of them", () => {
@@ -116,7 +116,7 @@ it("leaves the edits' names to the rows while the open list has one for each of 
 it("counts each zoom/punch-in separately even when they share a label", () => {
   const punch = { label: "Punch in", kind: "zoom" as const };
   expect(say([punch, punch])).toBe("Made 2 zooms.");
-  expect(say([cut(0, 60), punch, punch, punch])).toBe("Took out 1:00 in 1 cut, and made 3 zooms.");
+  expect(say([cut(0, 60), punch, punch, punch])).toBe("Cut 1:00 in 1 cut, and made 3 zooms.");
   expect(say([{ label: "Punch in on Matt", kind: "zoom" as const }, { label: "Punch in on the demo", kind: "zoom" as const }]))
     .toBe("Made 2 edits: Punch in on Matt, Punch in on the demo.");
 });

@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- Standardized wording across Scarlet so cuts always say "Cut" (instead of "Took out", "Takes out", "Removed", or "Trimmed") on timeline bands, edit cards, chat summaries, and drag readouts, and aligned remaining labels like "Safe edits", "Model selector", "Model host", "Suggestion", and "the video".
 - Style guides are out of beta and always on: find them in Settings › Style guides and use @name in chat or skills without turning on a beta switch.
 - Keeping safe edits no longer floods a message with repeated learnings; Scarlet now checks one at a time and caps each message at two waiting rules.
 - Pulling a suggested cut down to nothing to put it back now always keeps the footage, even on a cut Scarlet had suggested keeping.

@@ -149,7 +149,7 @@ export function DesktopDiagnostics() {
             </div>
 
             <div className="diag-row">
-              <dt>Agent host</dt>
+              <dt>Model host</dt>
               <dd>
                 {!host ? (
                   <div className="flex items-center gap-2 text-[12.5px] text-muted">

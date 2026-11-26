@@ -26,7 +26,7 @@ export function providerStatus(id: ExtraProvider, agent: AgentAvailability | und
   const n = agent.models?.length ?? 0;
   if (!n) return "Running, but none of its models can use tools, which editing needs.";
   const count = `${n} ${n === 1 ? "model" : "models"}`;
-  return id === "openrouter" ? `${count}. Turn on the ones you want in Model picker above.` : `${count} ready${customUrl ? ` · ${customUrl}` : ""}`;
+  return id === "openrouter" ? `${count}. Turn on the ones you want in Model selector above.` : `${count} ready${customUrl ? ` · ${customUrl}` : ""}`;
 }
 
 /**

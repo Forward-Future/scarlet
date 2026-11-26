@@ -194,13 +194,13 @@ it("lets hover-only edge handles drag an open cut's start or end edge, shows liv
   await act(async () => root.render(
     <TimelineScrubber start={0} duration={20} playhead={5} fps={30} frameAt={() => undefined}
       onSeek={t => seeks.push(t)} onScrubStart={() => released} onBand={onBand}
-      highlight={{ key: "cut-1", view: { start: 0, end: 10 }, band: { start: 2, end: 4 }, bandLabel: "Took out · 2.0 s" }}
+      highlight={{ key: "cut-1", view: { start: 0, end: 10 }, band: { start: 2, end: 4 }, bandLabel: "Cut · 2.0 s" }}
       cutAdjust={{
         bounds: { minStart: 1, maxStart: 4, minEnd: 2, maxEnd: 6 },
         tone: "cut",
-        bandPrefix: "Took out",
+        bandPrefix: "Cut",
         describeEdge: (edge, oldTime, newTime) => ({
-          text: edge === "start" && newTime > oldTime ? "Put back “really”" : "Take out “and”",
+          text: edge === "start" && newTime > oldTime ? "Put back “really”" : "Cut “and”",
           tone: newTime > oldTime ? "put-back" : "take-out",
           delta: `${newTime > oldTime ? "+" : "−"}${Math.abs(newTime - oldTime).toFixed(2)} s`,
         }),

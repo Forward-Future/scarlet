@@ -147,13 +147,13 @@ export function useCutAdjust({
       const shown = crossed.slice(0, MAX_READOUT_WORDS).map(w => w.text).join(" ");
       const more = crossed.length > MAX_READOUT_WORDS ? " …" : "";
       return {
-        text: `${restoring ? "Put back" : "Take out"} “${shown}${more}”`,
+        text: `${restoring ? "Put back" : "Cut"} “${shown}${more}”`,
         tone: restoring ? "put-back" : "take-out",
         delta: signed,
       };
     }
     return {
-      text: restoring ? "Put back" : "Take out",
+      text: restoring ? "Put back" : "Cut",
       tone: restoring ? "put-back" : "take-out",
       delta: signed,
     };
@@ -415,7 +415,7 @@ export function useCutAdjust({
       return {
         bounds: appliedBounds,
         tone: "cut",
-        bandPrefix: "Took out",
+        bandPrefix: "Cut",
         removeLabel: "Put back",
         describeEdge: describeCutEdge,
         onCommit: next => { void commitApplied(next); },
@@ -435,7 +435,7 @@ export function useCutAdjust({
       return {
         bounds: callBounds,
         tone: "call",
-        bandPrefix: "Takes out",
+        bandPrefix: "Cut",
         removeLabel: "Put back",
         describeEdge: describeCutEdge,
         onCommit: next => { void commitCall(next); },

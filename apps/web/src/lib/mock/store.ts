@@ -141,7 +141,7 @@ export class MockStore {
   /** Fails a run no online host can take. Returns whether it did. */
   failWithoutHost(task: Task): boolean {
     if (task.hostId) return false;
-    this.failTask(task, `No online agent host has ${AGENT_LABEL[task.agent]} signed in.`);
+    this.failTask(task, `No online model host has ${AGENT_LABEL[task.agent]} signed in.`);
     return true;
   }
   conversation(taskId: string) {

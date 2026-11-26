@@ -74,5 +74,5 @@ export function CutSide({ project, timeline, url, window, parkedAt, active, fps,
       } } : undefined} />;
   }
   return <CutStream project={project} timeline={timeline} version={timeline.version} joins={joins}
-    proposed={label === "Proposed draft"} onStart={noop} parkedAt={parkedAt} />;
+    proposed={label === "Suggested video"} onStart={noop} parkedAt={parkedAt} />;
 }

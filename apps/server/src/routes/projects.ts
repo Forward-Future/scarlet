@@ -128,7 +128,7 @@ export function projectRoutes(ctx: Ctx) {
       const project = requireProjectHeader(ctx, c.req.param("id"));
       const thread = projectThread(project.id, c.req.param("threadId"));
       if (threadRevision(thread) !== revision || (done && (thread.active || thread.question || thread.status === "working")))
-        throw conflict("thread_changed", "This thread is still changing. Try again when its agent finishes.");
+        throw conflict("thread_changed", "This thread is still changing. Try again when Scarlet finishes.");
       const completed = { ...project.completedThreads };
       if (done) completed[thread.id] = revision;
       else delete completed[thread.id];
