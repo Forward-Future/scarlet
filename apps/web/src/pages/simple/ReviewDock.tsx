@@ -61,7 +61,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   store: ReviewDockStore;
   /** Thread ids in conversation order (oldest first) for deterministic tie-breaking. */
   threadIds: readonly string[];
-  /** Active tab/filter state (`undefined`/`"all"` = Needs review All, `"need"` = Needs review Needs you only, `"working"`, `"done"`). */
+  /** Active tab state (`undefined` = Needs review, `"working"`, `"done"`). */
   list: PassList;
   /** Number of requests in the chat above; an increase collapses held blank tab space. */
   laterRequests?: number;
@@ -87,7 +87,6 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const loadedOf = new Map(reports.map(r => [r.threadId, r.listLoaded] as const));
   const hasTabs = reports.some(r => r.hasForYou);
   const tab: ReviewTab = tabShown(open);
-  if (hasTabs && tab === "you") linger.needsOnly = open === "need";
 
   // Merge all threads' entries (deduplicated across cross-thread flags) in timeline order for tracking, Working, and Done.
   const deduped = hasTabs ? dedupeDockEntries(reports.flatMap(r => r.entries)) : [];
@@ -96,14 +95,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const inPlace = (place: RowPlace) => allEntries.filter(e => e.place === place);
   const optional = hasTabs ? inPlace("optional") : [];
   const need = hasTabs ? inPlace("you").filter(e => e.row.needs || e.row.asks).length : 0;
-  const needsOnly = hasTabs && tab === "you" && open === "need" && need > 0;
-  const optionalShown = hasTabs && tab === "you" && !needsOnly;
-  const allLoaded = reports.length > 0 && reports.every(r => r.listLoaded !== false);
-
-  // Automatically drop the "Needs you" filter once edit lists have loaded and no flagged edits remain so confident edits stay visible.
-  useEffect(() => {
-    if (hasTabs && allLoaded && open === "need" && need === 0 && optional.length > 0) setOpen(undefined);
-  }, [hasTabs, allLoaded, open, need, optional.length, setOpen]);
+  const optionalShown = hasTabs && tab === "you";
 
   // While a pass's confident edits are shown in the dock (and its list has settled), notify the workspace so the timeline shows its cuts too.
   const openPassThreadId = optionalShown
@@ -160,7 +152,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     tab,
     counts: { you: youBaseRows + lowRows.length, working: workingCount, done: doneRows },
     youBase: youBaseRows,
-    hasLowRisk: need > 0 && optional.length > 0,
+    hasLowRisk: false,
     lowOpen: optionalShown,
     nestedCount,
     laterRequests,
@@ -194,7 +186,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
       }]
       : [];
 
-  // Auto-switch tabs/filter when an edit or call is opened from outside (timeline dot, ⌘Z, Learnings, Show →).
+  // Auto-switch tabs when an edit or call is opened from outside (timeline dot, ⌘Z, Learnings, Show →).
   const onEntry = hasTabs ? allEntries.find(e => e.row.on || e.members?.some(m => m.on)) : undefined;
   const openId = onEntry?.row.id;
   const lastOpen = useRef<string | undefined>(undefined);
@@ -203,7 +195,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     lastOpen.current = openId;
     if (!hasTabs || !onEntry || openId === was) return;
     const shown = tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalShown) : onEntry.place === tab;
-    if (!shown) setOpen(onEntry.place === "you" ? (linger.needsOnly ? "need" : undefined) : onEntry.place === "optional" ? undefined : onEntry.place);
+    if (!shown) setOpen(onEntry.place === "you" || onEntry.place === "optional" ? undefined : onEntry.place);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset dock list state only when review tabs disappear after having been shown (never on initial mount before turns report).
@@ -253,7 +245,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   if (!hasTabs && !untabbedReport && !passApplying && !passErrorReport) return null;
 
   const showNeeded = () => {
-    setOpen(linger.needsOnly ? "need" : undefined);
+    setOpen(undefined);
     const waitingOpen = allEntries.some(e => (e.row.on && (e.row.needs || e.row.asks)) || e.members?.some(m => m.on && (m.needs || m.asks)));
     const confidentOpen = !waitingOpen && need === 0 && allEntries.some(e => e.row.on && e.place === "optional");
     if (!waitingOpen && !confidentOpen) {
@@ -377,14 +369,6 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
       {hasTabs && <DockReviewTabs need={need} optional={optional.length} working={workingCount} done={doneCount}
         list={listState} reveal={reveal} showNeeded={showNeeded} />}
       {seeTab}
-      {hasTabs && tab === "you" && need > 0 && optional.length > 0 && (
-        <div className="review-filter-bar" role="group" aria-label="Filter edits">
-          <button type="button" className="review-filter-chip" aria-pressed={!needsOnly}
-            onClick={letGo(() => setOpen(undefined))}>All {need + optional.length}</button>
-          <button type="button" className="review-filter-chip is-warn" aria-pressed={needsOnly}
-            onClick={letGo(() => setOpen("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
-        </div>
-      )}
       {drawn.map(list => <Fragment key={list.id}>
         {list.rows.length > 0 ? rowList(list) : list.id !== "all" && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
       </Fragment>)}

@@ -127,7 +127,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
     expect(container.querySelector(".review-tier-sep .review-tier-label")?.textContent).toBe("Safe edits (1)");
     expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 1 safe edit");
-    expect([...container.querySelectorAll(".review-filter-chip")].map(b => b.textContent)).toEqual(["All 3", "Needs you 2"]);
+    expect(container.querySelector(".review-filter-bar")).toBeNull();
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
     // Working and Done banners stay visible at the foot even when empty (Working above Done), separated by a divider line, chat doesn't repeat "Needs review N", and every row leads with its time, never a number.
@@ -282,18 +282,13 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => stopBtn.click());
     expect(cancelSpy).toHaveBeenCalledWith("task_beta_revise");
 
-    // #14 & #3: Filter to Needs you (hiding confident edits), then open the confident edit via Keep/click flow, confirm filter returns to All and Keep moves straight to Done.
-    const needsChip = [...container.querySelectorAll<HTMLButtonElement>(".review-filter-chip")]
-      .find(b => b.textContent?.includes("Needs you"))!;
-    await act(async () => needsChip.click());
-    expect(needsChip.getAttribute("aria-pressed")).toBe("true");
-    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(true);
+    // #14 & #3: Safe edits sit directly below flagged edits with no filter bar, and Keep moves straight to Done.
+    expect(container.querySelector(".review-filter-bar")).toBeNull();
+    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(false);
     const musicRow = [...container.querySelectorAll<HTMLButtonElement>(".review-low-body button.simple-edit")]
       .find(b => b.textContent?.includes("music bed"))!;
     await act(async () => musicRow.click());
     await act(async () => {});
-    expect(needsChip.getAttribute("aria-pressed")).toBe("false");
-    expect(container.querySelector(".review-low-body")?.hasAttribute("hidden")).toBe(false);
     // Keep music bed -> moves straight to Done without lingering in confident edits.
     const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")]
       .find(b => b.textContent?.trim() === "Keep")!;

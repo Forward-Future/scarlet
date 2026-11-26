@@ -466,14 +466,7 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-tab-sep { color: var(--color-dim); font-weight: 400; }
 /* Working's and Done's counts are quiet: only what waits on the editor is amber. */
 .simple-review-tab-tally { color: var(--color-muted); font-variant-numeric: tabular-nums; }
-/* Priority list filter strip and subtle tier divider in the bottom dock. */
-.simple-review-dock .review-filter-bar { display: flex; flex: none; align-items: center; gap: 6px; padding: 0 0 8px; flex-wrap: wrap; }
-.simple-review-dock .review-filter-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border: 1px solid var(--color-line); border-radius: 999px;
-  background: none; color: var(--color-muted); font: inherit; font-size: 11.5px; font-weight: 500; font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap; }
-.simple-review-dock .review-filter-chip:is(:hover, :focus-visible) { border-color: var(--color-dim); color: var(--color-fg); }
-.simple-review-dock .review-filter-chip[aria-pressed="true"] { border-color: var(--color-muted); background: var(--color-raised); color: var(--color-fg); }
-.simple-review-dock .review-filter-chip.is-warn[aria-pressed="true"] { border-color: rgba(237, 194, 133, .55); background: rgba(237, 194, 133, .14); color: var(--color-warn); }
-.simple-review-dock .review-filter-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--color-warn); flex: none; }
+/* Subtle tier divider in the bottom dock. */
 .simple-review-dock .review-tier-sep { margin: 7px 8px 4px; padding-top: 7px; border-top: 1px solid var(--color-line);
   font-size: 11.5px; font-weight: 500; color: var(--color-dim); font-variant-numeric: tabular-nums; list-style: none; }
 .simple-review-dock .review-tier-sep.is-first { margin-top: 2px; padding-top: 2px; border-top: 0; }
