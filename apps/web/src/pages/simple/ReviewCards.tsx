@@ -140,27 +140,6 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
   </section>;
 }
 
-/** A slim card for an edit Scarlet is currently revising (or waiting on an answer for), in the beta layout. */
-export function WorkingEditCard({ label, status, asking, onStop, onAnswer }: {
-  label: string;
-  status: string;
-  asking?: boolean;
-  onStop?(): void;
-  onAnswer?(): void;
-}) {
-  return <section className="edit-card is-working" role="region" aria-label="Edit in progress">
-    <div className="edit-card-bar working-card-bar">
-      <span className={`working-card-badge is-ring${asking ? " is-ask" : ""}`} aria-hidden="true" />
-      <span className="working-card-title" title={label}>{label}</span>
-      <span className={`working-card-status${asking ? " is-ask" : ""}`} role="status">· {status}</span>
-      <span className="working-card-actions">
-        {asking && onAnswer && <button type="button" className="working-card-btn is-ask" onClick={letGo(onAnswer)}>Answer</button>}
-        {onStop && <button type="button" className="working-card-btn" onClick={letGo(onStop)}>Stop</button>}
-      </span>
-    </div>
-  </section>;
-}
-
 export function AppliedEditCard({ projectId, focusThread, reviewingEdit, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
