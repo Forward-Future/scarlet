@@ -57,7 +57,7 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
  * Priority list (flagged edits pinned on top, confident edits right below), Working, Done,
  * and See all lists stay fixed at the bottom while new messages flow above them.
  */
-export function ReviewDock({ store, threadIds, list: listState, laterRequests = 0, onListOpen, onKeepConfident, flashedThreadId }: {
+export function ReviewDock({ store, threadIds, list: listState, laterRequests = 0, onListOpen, onKeepConfident }: {
   store: ReviewDockStore;
   /** Thread ids in conversation order (oldest first) for deterministic tie-breaking. */
   threadIds: readonly string[];
@@ -69,8 +69,6 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   onListOpen?(threadId: string, open: boolean, moved?: boolean): void;
   /** Keep all confident edits at once (with ⌘Z undo). */
   onKeepConfident?(): void;
-  /** Thread whose rows briefly flash after clicking Show → in chat. */
-  flashedThreadId?: string;
 }) {
   useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
   const [linger] = useState(() => new ReviewLinger());
@@ -289,7 +287,6 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         const leaving = !!heldRow?.leaving && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
         const canUnkeepRow = !!row.unkeep && !leaving;
         const isLowRow = id === "you" && lowKeys.has(entry.key);
-        const flashed = !!flashedThreadId && flashedThreadId === entry.threadId;
         return <Fragment key={row.key}>
           {splitAt !== undefined && idx === splitAt && (
             <li className={splitAt === 0 ? "review-tier-sep is-first" : "review-tier-sep"} role="presentation">
@@ -304,8 +301,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
           )}
           <li className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
             data-thread={entry.threadId}
-            data-low-risk={isLowRow ? "" : undefined}
-            data-flash={flashed ? "" : undefined}>
+            data-low-risk={isLowRow ? "" : undefined}>
             <button type="button"
               className={[
                 row.on && "is-on",

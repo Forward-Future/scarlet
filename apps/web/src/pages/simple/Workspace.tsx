@@ -164,15 +164,6 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   const [dock] = useState(() => new ReviewDockStore());
   const dockHasTabs = useSyncExternalStore(dock.subscribeHasTabs, dock.hasTabsSnapshot, dock.hasTabsSnapshot);
   const [dockList, setDockList] = useState<OpenList>(() => savedDockList(current.id));
-  const [flashedThread, setFlashedThread] = useState<string>();
-  const flashTimer = useRef<number>(0);
-  useEffect(() => () => clearTimeout(flashTimer.current), []);
-  // The request's rows light up a moment in the dock, or in the new layout's column of edits.
-  const flashThread = useCallback((threadId: string) => {
-    clearTimeout(flashTimer.current);
-    setFlashedThread(threadId);
-    flashTimer.current = window.setTimeout(() => setFlashedThread(undefined), 1150);
-  }, []);
   const dockListOf = useRef(current.id);
   useEffect(() => {
     if (beta) return;
@@ -1034,50 +1025,6 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
       && tasks.filter(t => t.kind !== "transcribe" && t.state === "waiting_for_user" && !!t.question).length === 1 ? replyThread.question.id : undefined,
     cutName,
     callTime: (changeId, cutIndex) => callAtTime({ changeId, cutIndex }),
-    showThread(threadId) {
-      if (beta) {
-        const view = rail.view();
-        const match = (list: readonly UnifiedRailRow[]) => list.find(r => r.threadIds.includes(threadId) && !!r.open);
-        const waitingRow = match(view.sections.you);
-        const confidentRow = match(view.sections.low);
-        const workingRow = match(view.sections.working);
-        const doneRow = match(view.sections.done);
-        if (waitingRow) {
-          waitingRow.open?.();
-        } else if (confidentRow) {
-          setRailOpen(was => was.low ? was : { ...was, low: true });
-          confidentRow.open?.();
-        } else if (workingRow) {
-          setRailOpen(was => was.working ? was : { ...was, working: true });
-          workingRow.open?.();
-        } else if (doneRow) {
-          setRailOpen(was => was.done ? was : { ...was, done: true });
-          doneRow.open?.();
-        }
-        flashThread(threadId);
-        return;
-      }
-      const report = dock.get(threadId);
-      if (!report) return;
-      const waiting = report.entries.find(e => e.place === "you" && !e.row.rejected && !!e.row.open);
-      const confident = report.entries.find(e => e.place === "optional" && !e.row.rejected && !!e.row.open);
-      const workingEntry = report.entries.find(e => e.place === "working" && !!(e.row.stepOpen ?? e.row.open));
-      const doneEntry = report.entries.find(e => e.place === "done" && !!e.row.open);
-      if (waiting) {
-        if (tabShown(dockList) !== "you") setDockList(undefined);
-        waiting.row.open?.();
-      } else if (confident) {
-        setDockList(undefined);
-        confident.row.open?.();
-      } else if (workingEntry) {
-        setDockList("working");
-        (workingEntry.row.stepOpen ?? workingEntry.row.open)?.();
-      } else if (doneEntry) {
-        setDockList("done");
-        doneEntry.row.open?.();
-      }
-      flashThread(threadId);
-    },
   };
   // The pass goes in once nothing is left to decide: no call waits on the editor and no cut is with Scarlet. The editor's
   // last call does this itself; this covers a pass that gets there another way, such as a run that ends with every
@@ -3012,7 +2959,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
               {beta && !compact && queueRows}
             </div>
             {!beta && <ReviewDock key={current.id} store={dock} threadIds={threadIds} list={[dockList, setDockList]} laterRequests={ordered.length}
-              onListOpen={listOpen} onKeepConfident={keepConfident} flashedThreadId={flashedThread} />}
+              onListOpen={listOpen} onKeepConfident={keepConfident} />}
             {beta && compact && <div ref={setPinHost} className="simple-pin" aria-label="Working on now" />}
             {beta && compact && queueRows}
             {/* The tag in the box shows where a message goes. This line says it for screen readers only. */}
@@ -3024,7 +2971,6 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
         </ChatRail>
         {beta && <ReviewRail projectId={current.id} store={rail} compact={compact} reserve={transcript ? TRANSCRIPT_RAIL_MIN : 0}
           open={railOpen} onOpen={(section, open) => setRailOpen(was => ({ ...was, [section]: open }))}
-          flashedThreadId={flashedThread}
           selected={reviewingEdit ? editKey(reviewingEdit) : listening ? `call/${listening.index}` : undefined}
           onDoneLow={keepLowRisk} onHover={lightMark} />}
         <div className="workspace-stage simple-stage">
