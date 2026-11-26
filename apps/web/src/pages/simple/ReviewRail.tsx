@@ -341,13 +341,15 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
             ? <span className="review-rail-count" title={`${need} ${need === 1 ? "needs" : "need"} you`}>{need}</span>
             : <span className="review-rail-total">{optional}</span>)}
       </h2>
-      {onDoneLow && optional > 0 && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
     </header>
     <div className="review-rail-scroll">
       <div className="review-rail-list" role="group" aria-label="Needs review">
         {renderSectionList("you")}
-        {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Safe edits ({optional})</span></div>}
+        {showConfident && <div className={need > 0 || forYouRows > 0 ? "review-tier-sep" : "review-tier-sep is-first"}>
+          <span className="review-tier-label">Safe edits ({optional})</span>
+          {onDoneLow && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
+            onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
+        </div>}
         <div className="review-low-body" role="group" aria-label="Safe edits" hidden={!showConfident}>{renderSectionList("low")}</div>
         {forYouRows === 0 && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
       </div>

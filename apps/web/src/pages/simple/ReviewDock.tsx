@@ -19,9 +19,8 @@ const TIME_ORDER: ListOrder = { numbers: false };
 
 const doneLabel = (count: number) => count === 1 ? "Keep the safe edit" : `Keep all ${count} safe edits`;
 
-function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], reveal, showNeeded, onKeepConfident }: {
+function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], reveal, showNeeded }: {
   need: number; optional: number; working: number; done: number; list: PassList; reveal(): void; showNeeded(): void;
-  onKeepConfident?(): void;
 }) {
   const tab = tabShown(open);
   const total = need + optional;
@@ -49,10 +48,6 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
       title={working ? `${working} with Scarlet` : undefined} onClick={letGo(show("working"))}>Working{tally(working)}</button>
     <button type="button" className="simple-review-tab" aria-label="Done" aria-pressed={tab === "done"}
       title={done ? `${done} decided` : undefined} onClick={letGo(show("done"))}>Done{tally(done)}</button>
-    {tab === "you" && optional > 0 && onKeepConfident && (
-      <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onKeepConfident)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>
-    )}
   </div>;
 }
 
@@ -176,7 +171,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         id: "you",
         label: hasCalls ? "Calls and edits for you" : "Edits for you",
         rows: [...youRows, ...lowRows],
-        splitAt: youRows.length > 0 && lowRows.length > 0 ? youRows.length : undefined,
+        splitAt: lowRows.length > 0 && (youRows.length > 0 || optional.length > 0) ? youRows.length : undefined,
       }]
       : [{
         id: tab,
@@ -224,7 +219,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     askedReveal.current = false;
     lastRevealSeq.current = revealSeq;
     if (!rows.querySelector('[aria-current="true"]')) {
-      rows.querySelector(":scope > li > button")?.scrollIntoView?.({ block: "nearest" });
+      rows.querySelector(":scope > li:not(.review-tier-sep) > button")?.scrollIntoView?.({ block: "nearest" });
     }
   }, [open, untabbedReport?.threadId, revealSeq, drawn.length]);
 
@@ -297,7 +292,15 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         const flashed = !!flashedThreadId && flashedThreadId === entry.threadId;
         return <Fragment key={row.key}>
           {splitAt !== undefined && idx === splitAt && (
-            <li className="review-tier-sep" role="presentation"><span>Safe edits ({optional.length})</span></li>
+            <li className={splitAt === 0 ? "review-tier-sep is-first" : "review-tier-sep"} role="presentation">
+              <span className="review-tier-sep-row">
+                <span className="review-tier-label">Safe edits ({optional.length})</span>
+                {optional.length > 0 && onKeepConfident && (
+                  <button type="button" className="review-head-keep" title={doneLabel(optional.length)} aria-label={doneLabel(optional.length)}
+                    onClick={letGo(onKeepConfident)}>Keep {optional.length} safe {optional.length === 1 ? "edit" : "edits"}</button>
+                )}
+              </span>
+            </li>
           )}
           <li className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
             data-thread={entry.threadId}
@@ -364,7 +367,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   return <div className="simple-review-dock" role="region" aria-label="Edit lists">
     <div ref={host} className="simple-pass" role="group" aria-label={isPassDock ? "Dialogue pass" : "Edits"}>
       {hasTabs && <DockReviewTabs need={need} optional={optional.length} working={workingCount} done={doneCount}
-        list={listState} reveal={reveal} showNeeded={showNeeded} onKeepConfident={onKeepConfident} />}
+        list={listState} reveal={reveal} showNeeded={showNeeded} />}
       {seeTab}
       {drawn.map(list => <Fragment key={list.id}>
         {list.rows.length > 0 ? rowList(list) : list.id !== "all" && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
