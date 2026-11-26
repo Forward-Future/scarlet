@@ -13,6 +13,12 @@ import { clipEnd, findClipLocation } from "./time.js";
 const MEET = 1e-9;
 /** A piece of a clip shorter than this is never wanted: a time this near a clip's edge means the edge. */
 const SLIVER = 0.001;
+/**
+ * How far a centered audio crossfade's overlap can drift from its stored fade durations and still be recognized as
+ * that crossfade: well under a frame at any rate, matching `TOUCHING_SECONDS` in `joinCrossfade.ts` so sub-millisecond
+ * rounding or frame-snapping never breaks straightening, undo, or cut-edge dragging.
+ */
+export const CROSSFADE_TOL = 0.004;
 
 export const AddClipOp = z.object({
   op: z.literal("addClip"),
@@ -405,8 +411,9 @@ export function straightenCrossfades(track: Track, start: number, end: number) {
     for (let j = i + 1; j < clips.length && clips[j]!.timelineIn < leftEnd - MEET; j++) {
       const right = clips[j]!;
       const overlap = leftEnd - right.timelineIn;
-      if (right.kind !== "media" || right.timelineIn <= left.timelineIn + MEET || Math.abs(left.audioFadeOut - overlap) > 1e-6 ||
-          Math.abs(right.audioFadeIn - overlap) > 1e-6 || start > leftEnd + MEET || end < right.timelineIn - MEET) continue;
+      if (right.kind !== "media" || right.timelineIn <= left.timelineIn + MEET || overlap <= MEET ||
+          Math.abs(left.audioFadeOut - overlap) > CROSSFADE_TOL ||
+          Math.abs(right.audioFadeIn - overlap) > CROSSFADE_TOL || start > leftEnd + MEET || end < right.timelineIn - MEET) continue;
       const join = right.timelineIn + overlap / 2;
       clips[i] = { ...trimTail(left, join), audioFadeOut: 0 };
       clips[j] = { ...trimHead(right, join), audioFadeIn: 0 };

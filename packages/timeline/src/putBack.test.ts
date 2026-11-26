@@ -147,3 +147,78 @@ it("adjusts an opening cut and a closing cut cleanly", () => {
   expect(timelineDuration(restoredClose)).toBeCloseTo(19);
   expect(restoredClose.tracks[0]!.clips[0]).toMatchObject({ timelineIn: 0, sourceIn: 0, sourceOut: 19 });
 });
+
+it("adjusts and puts back cuts whose audio crossfades drifted sub-millisecond or were cleaned asymmetrically", () => {
+  const rate = 29.970037204161414;
+  const twoFrames = 2 / rate;
+  const oneFrame = 1 / rate;
+  // Sub-millisecond rounded crossfade (e.g. 0.57 ms shorter overlap than audioFadeOut/audioFadeIn, as after frame-snapping).
+  const drifted = emptyTimeline("project");
+  drifted.tracks[0]!.clips = [
+    makeMediaClip("take", 0, 10, 0, { id: "v_l", volume: 0 }),
+    makeMediaClip("take", 26, 40, 10, { id: "v_r", volume: 0 }),
+  ];
+  drifted.tracks[1]!.clips = [
+    makeMediaClip("take", 0, 10 + oneFrame - 0.00057, 0, { id: "a_l", audioFadeOut: twoFrames }),
+    makeMediaClip("take", 26 - oneFrame, 40, 10 - oneFrame, { id: "a_r", audioFadeIn: twoFrames }),
+  ];
+  const bounds = cutAdjustBounds(drifted, 10, 16, rate)!;
+  expect(bounds.maxStartDelta).toBeCloseTo(16, 4);
+  expect(bounds.minEndDelta).toBeCloseTo(-16, 4);
+  const moved = adjustCut(drifted, 10, 16, 0, -1, rate)!;
+  expect(timelineDuration(moved)).toBeCloseTo(25, 2);
+  // Crossfade is replayed cleanly on the audio track, and a second consecutive drag succeeds too.
+  const [aLeft, aRight] = moved.tracks[1]!.clips;
+  expect(aLeft!.kind === "media" && aLeft.audioFadeOut).toBeGreaterThan(0.05);
+  expect(aRight!.kind === "media" && aRight.audioFadeIn).toBeGreaterThan(0.05);
+  expect(cutAdjustBounds(moved, 10, 15, rate)).toBeDefined();
+  expect(putBackCut(drifted, 10, 16, rate)).toBeDefined();
+
+  // Asymmetric cleaned audio join: left ends right at join with a 1-frame fade out; right still leads 1 frame early with a 2-frame fade in.
+  const asym = emptyTimeline("project");
+  asym.tracks[0]!.clips = [
+    makeMediaClip("take", 0, 10, 0, { id: "v_l", volume: 0 }),
+    makeMediaClip("take", 14, 24, 10, { id: "v_r", volume: 0 }),
+  ];
+  asym.tracks[1]!.clips = [
+    makeMediaClip("take", 0, 10, 0, { id: "a_l", audioFadeOut: oneFrame }),
+    makeMediaClip("take", 14 - oneFrame, 24, 10 - oneFrame, { id: "a_r", audioFadeIn: twoFrames }),
+  ];
+  expect(cutAdjustBounds(asym, 10, 4, rate)).toBeDefined();
+  const movedAsym = adjustCut(asym, 10, 4, 0.5, 0, rate)!;
+  expect(timelineDuration(movedAsym)).toBeCloseTo(20.5, 2);
+  const [al2, ar2] = movedAsym.tracks[1]!.clips;
+  expect(al2!.kind === "media" && [clipEnd(al2), al2.audioFadeOut]).toEqual([expect.closeTo(10.5, 3), expect.closeTo(oneFrame, 3)]);
+  expect(ar2!.kind === "media" && [ar2.timelineIn, ar2.audioFadeIn]).toEqual([expect.closeTo(10.5 - oneFrame, 3), expect.closeTo(twoFrames, 3)]);
+  expect(cutAdjustBounds(movedAsym, 10.5, 3.5, rate)).toBeDefined();
+  expect(putBackCut(asym, 10, 4, rate)).toBeDefined();
+});
+
+it("adjusts synced multi-track opening cuts and closing cuts with an audio fade-out tail", () => {
+  // Opening cut: camera track has full 10 s pre-roll while synced screen recording started 1.5 s later (8.5 s pre-roll).
+  const open = emptyTimeline("project");
+  const cam = makeTrack("video", "Camera", "v2");
+  open.tracks[0]!.clips = [makeMediaClip("screen", 8.5, 30, 0, { id: "s0", volume: 0 })];
+  cam.clips = [makeMediaClip("cam", 10, 31.5, 0, { id: "c0", volume: 0 })];
+  open.tracks[1]!.clips = [makeMediaClip("cam", 10, 31.5, 0, { id: "a0" })];
+  open.tracks.push(cam);
+  const openBounds = cutAdjustBounds(open, 0, 10, FPS)!;
+  expect(openBounds.minEndDelta).toBeCloseTo(-8.5, 4);
+  expect(openBounds.maxEndDelta).toBeGreaterThan(20);
+  const movedOpen = adjustCut(open, 0, 10, 0, -2, FPS)!;
+  expect(timelineDuration(movedOpen)).toBeCloseTo(23.5, 4);
+  expect(movedOpen.tracks[0]!.clips[0]).toMatchObject({ timelineIn: 0, sourceIn: 6.5 });
+  expect(movedOpen.tracks[2]!.clips[0]).toMatchObject({ timelineIn: 0, sourceIn: 8 });
+
+  // Closing cut: video ends at 18 s while dialogue track carries a 1-frame fade-out tail to 18 + 1/30 s.
+  const close = emptyTimeline("project");
+  const tail = 1 / FPS;
+  close.tracks[0]!.clips = [makeMediaClip("take", 0, 18, 0, { id: "v", volume: 0 })];
+  close.tracks[1]!.clips = [makeMediaClip("take", 0, 18 + tail, 0, { id: "a", audioFadeOut: 2 / FPS })];
+  const closeBounds = cutAdjustBounds(close, 18, 5, FPS)!;
+  expect(closeBounds.maxStartDelta).toBeCloseTo(5, 4);
+  const movedClose = adjustCut(close, 18, 5, 1, 0, FPS)!;
+  expect(movedClose.tracks[0]!.clips[0]).toMatchObject({ sourceOut: 19 });
+  expect(clipEnd(movedClose.tracks[1]!.clips[0]!)).toBeCloseTo(19 + tail, 4);
+  expect(movedClose.tracks[1]!.clips[0]!.kind === "media" && movedClose.tracks[1]!.clips[0]!.audioFadeOut).toBeCloseTo(2 / FPS, 4);
+});
