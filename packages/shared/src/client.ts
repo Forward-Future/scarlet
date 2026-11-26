@@ -21,6 +21,7 @@ import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usag
 import type { GraphicRenderResponse, SaveStyleGuideRequest } from "./graphics.js";
 import type { Skill, SkillVersion, EditSkillRequest, UpsertSkillRequest } from "./skills.js";
 import type {
+  ActiveStyleGuide,
   CreateStyleGuideRequest,
   EditStyleGuideRequest,
   StyleGuideAsset,
@@ -688,6 +689,9 @@ export class ScarletClient extends ClientTransport {
   // Style guides
   styleGuides() {
     return this.get<{ styleGuides: StyleGuideRecord[] }>("/style-guides");
+  }
+  activeStyleGuides(opts?: { projectId?: string; taskId?: string }) {
+    return this.get<{ styleGuides: ActiveStyleGuide[] }>(withQuery("/style-guides/active", opts ?? {}));
   }
   styleGuide(styleGuideId: string) {
     return this.get<{ styleGuide: StyleGuideRecord; edits?: Task[] }>(`/style-guides/${apiPathId(styleGuideId)}`);

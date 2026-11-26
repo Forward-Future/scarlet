@@ -545,7 +545,8 @@ export class RenderQueue {
       };
       const onProgress = (p: number) => { progress = Math.min(1, Math.max(0, p)); publishProgress(); };
       const onWarning = (warning: string) => this.ctx.log(`[render] ${id} warning: ${clip(warning, 300)}`);
-      const opts = { mediaRoot: this.ctx.paths.media(project.id), quality: render.quality ?? "preview", height: render.height, hwaccel: render.hwaccel, onProgress, onWarning, signal } as const;
+      const fontDirs = [this.ctx.paths.styleGuidesLibrary, this.ctx.paths.attachments(project.id)];
+      const opts = { mediaRoot: this.ctx.paths.media(project.id), quality: render.quality ?? "preview", height: render.height, fontDirs, hwaccel: render.hwaccel, onProgress, onWarning, signal } as const;
       if (render.kind === "full" || render.kind === "export") {
         const custom = render.kind === "export" ? {
           exportHeight: render.height, exportRange: render.range ?? undefined, omitCaptions: render.exportOptions?.omitCaptions,

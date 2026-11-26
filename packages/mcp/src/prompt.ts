@@ -5,7 +5,7 @@
  * and includes the applicable skills verbatim.
  */
 import { CHECK_IN_SHARE, modelDisplayName, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type StyleGuideRecord, type Task } from "@scarlet/shared";
-import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
+import type { CaptionStyle, Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
 import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
 
@@ -109,6 +109,7 @@ export interface PromptContext {
     name: string;
     description: string;
     instructions: string;
+    captionStyle?: Partial<CaptionStyle>;
     reason: "mentioned" | "default";
     assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
   }>;
@@ -128,7 +129,7 @@ const fileKind = (mime: string | undefined, name: string) => FILE_KINDS.find(([t
 
 /** The project's style guide, as the editor gave it. */
 function styleGuideSection(guide: NonNullable<PromptContext["styleGuide"]>): string {
-  const lines = [`# Style guide\n\nThe editor gave this project a style guide, "${guide.name}", for every graphic made in it.`];
+  const lines = [`# Style guide\n\nThe editor gave this project a style guide, "${guide.name}", for captions, lower thirds, boxes, and graphics made in it.`];
   if (guide.path) lines.push(`It is in the ${fileKind(guide.mime, guide.path)} at ${guide.path}.`);
   if (guide.text?.trim()) lines.push(guide.path ? `What they wrote with it:\n\n${guide.text.trim()}` : guide.text.trim());
   return lines.join("\n\n");
@@ -143,17 +144,27 @@ function libraryStyleGuidesSection(guides: NonNullable<PromptContext["librarySty
     const lines = [`## @${g.name}`, why];
     if (g.description.trim()) lines.push(`Summary: ${g.description.trim()}`);
     if (g.instructions.trim()) lines.push("", g.instructions.trim());
+    if (g.captionStyle && Object.keys(g.captionStyle).length) {
+      lines.push(
+        "",
+        "### Caption style",
+        "`captions_generate` applies these caption defaults automatically for this style guide; override individual fields in `style` only when this request asks for something different:",
+        "```json",
+        JSON.stringify(g.captionStyle, null, 2),
+        "```",
+      );
+    }
     if (g.assets.length) {
       lines.push(
         "",
         "### Style guide files",
-        "Link fonts and images directly by their absolute path in `graphic_render` (Scarlet copies them into the graphic). Inspect images, PDFs or text with `attachment_read(styleGuideId, assetId)`.",
+        "Link fonts and images directly by their absolute path in `graphic_render` (Scarlet copies them into the graphic). Attached font files also resolve automatically when named in `captions_generate` / `CaptionStyle.fontFamily`. Inspect images, PDFs or text with `attachment_read(styleGuideId, assetId)`.",
         ...g.assets.map(a => `- "${a.name}" (${fileKind(a.mime, a.name)}, ${fileSize(a.size)}), styleGuideId="${g.id}", assetId="${a.id}", at ${a.path}`),
       );
     }
     return lines.join("\n");
   });
-  return `# Style guides\n\nFollow these visual style rules whenever you create or revise motion graphics, titles, callouts, or overlays.\n\n${blocks.join("\n\n---\n\n")}`;
+  return `# Style guides\n\nFollow these visual style rules whenever you create or revise captions, lower thirds, callout boxes, motion graphics, titles, or overlays.\n\n${blocks.join("\n\n---\n\n")}`;
 }
 
 /** Prompt for designing or updating a library style guide in chat (with attached files and live 16:9 preview). */
@@ -168,15 +179,15 @@ function buildStyleGuideEditPrompt(ctx: PromptContext, edit: NonNullable<PromptC
   const sections: string[] = [
     `# You are designing a reusable style guide in Scarlet
 
-The editor is building a visual style guide named \`@${guide.name}\` for their motion graphics (chapter titles, lower thirds, stat callouts, end cards). They see only this chat and the live 16:9 visual preview beside it — never raw rules text — so the preview is how they judge your work.
+The editor is building a visual style guide named \`@${guide.name}\` for their captions, lower thirds, callout boxes, and motion graphics (chapter titles, stat callouts, end cards). They see only this chat and the live 16:9 visual preview beside it — never raw rules text — so the preview is how they judge your work.
 
 ## How to work
 
 - When the editor attached files to their message, inspect images, SVGs, PDFs or text files with \`attachment_read(styleGuideId="${guide.id}", assetId="...")\`. Use the editor's words to know which files are brand assets to embed (logos, fonts) vs visual references to match (screenshots, inspiration). If they attached files without a message, inspect each file and apply it to the style guide.
 - Link attached fonts in \`@font-face\` and attached logos/images in \`<img>\` using their exact absolute disk \`path\` listed below.
 - ${hasPreview ? "This style guide already has a preview. Call `style_guide_preview_get` first so you preserve what the editor already likes and change only what they asked for." : "This style guide has no preview yet."}
-- Save a concise 1-line \`description\` (plain words summarizing the look, e.g. "Warm ivory, terracotta accents, geometric sans") and thorough \`instructions\` with \`style_guide_update\`. Include exact hex colors, typography + font file paths, layout rhythm, spacing, contrast rules, motion feel, and how each brand asset should be used so future motion graphics match consistently.
-- Always call \`style_guide_preview_render\` to render a crisp 1920×1080 (16:9) visual style sheet showing the look in action (for example: a Chapter Title, a Stat Callout, and a Lower Third arranged cleanly on a solid dark or brand-appropriate canvas so every element is immediately legible at thumbnail and full size). If \`missingFonts\` is returned, switch to an installed font from \`installedFonts\` or ask the editor with \`task_question\` if they requested a custom font.
+- Save a concise 1-line \`description\` (plain words summarizing the look, e.g. "Warm ivory, terracotta accents, geometric sans"), thorough \`instructions\`, and a matching structured \`captionStyle\` with \`style_guide_update\`. Include exact hex colors, typography + font file paths, caption look (font, weight, color, accent/highlight, box/background, position), lower thirds, callout boxes, layout rhythm, spacing, contrast rules, motion feel, and how each brand asset should be used so captions and graphics match consistently. Populate \`captionStyle\` (fontFamily, fontWeight, fontSize, color, backgroundColor, outlineColor, outlineWidth, highlightColor, y, align, maxWidth, uppercase) so \`captions_generate\` automatically matches this style guide.
+- Always call \`style_guide_preview_render\` to render a crisp 1920×1080 (16:9) visual style sheet showing the look in action (for example: a Chapter Title, a Callout Box, a Lower Third, and a Caption sample arranged cleanly on a solid dark or brand-appropriate canvas so every element is immediately legible at thumbnail and full size). If \`missingFonts\` is returned, switch to an installed font from \`installedFonts\` or ask the editor with \`task_question\` if they requested a custom font.
 - \`task_question\` pauses and asks the editor when a key creative decision truly needs their input.
 
 End with one or two short, plain sentences telling the editor what you created or updated — no jargon, no tool names, no hex dumps unless they asked.`,
@@ -184,6 +195,7 @@ End with one or two short, plain sentences telling the editor what you created o
       `# Style guide: @${guide.name}`,
       `Description: ${guide.description.trim() || "(none yet)"}`,
       `Current rules:\n${guide.instructions.trim() || "(none yet)"}`,
+      ...(guide.captionStyle && Object.keys(guide.captionStyle).length ? [`Current caption style:\n${JSON.stringify(guide.captionStyle, null, 2)}`] : []),
       ...(newFiles.length ? ["Files attached to this message:\n" + newFiles.map(formatAsset).join("\n")] : []),
       ...(existingFiles.length ? ["Earlier files on this style guide:\n" + existingFiles.map(formatAsset).join("\n")] : []),
     ].join("\n\n"),
