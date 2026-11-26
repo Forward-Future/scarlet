@@ -134,4 +134,44 @@ describe("picture lane", () => {
     await expect(lane.run(async () => { throw new Error("decode failed"); }, { priority: true })).rejects.toThrow("decode failed");
     expect(lane.editorLooking()).toBe(true);
   });
+
+  it("lets one of the agent's GPU decodes past the slots only while the editor looks, never into the editor's kept slot", async () => {
+    let now = 0;
+    const lane = new PictureLane(2, 1, () => now);
+    const started: string[] = [];
+    const add = (name: string, options: { priority?: boolean; gpu?: boolean } = {}) => {
+      const g = gate();
+      const done = lane.run(async () => { started.push(name); await g.opened; }, options);
+      return { release: g.open, done };
+    };
+    const [agent1, agent2, agent3, cpu] = [add("agent 1", { gpu: true }), add("agent 2", { gpu: true }), add("agent 3", { gpu: true }), add("cpu")];
+    await tick();
+    // Nobody looking: the slots alone.
+    expect(started).toEqual(["agent 1", "agent 2"]);
+    const scrub = add("scrub", { priority: true });
+    await tick();
+    // The editor's frame takes its kept slot, and the waiting GPU decode goes past the slots; the CPU one waits.
+    expect(started).toEqual(["agent 1", "agent 2", "scrub", "agent 3"]);
+    const [agent4, agent5] = [add("agent 4", { gpu: true }), add("agent 5", { gpu: true })];
+    await tick();
+    // Only one past the slots.
+    expect(started).toEqual(["agent 1", "agent 2", "scrub", "agent 3"]);
+    // A second frame of the editor's still goes first when a slot frees.
+    const scrub2 = add("scrub 2", { priority: true });
+    agent1!.release(); await agent1!.done; await tick();
+    expect(started.at(-1)).toBe("scrub 2");
+    now = 1_000;
+    scrub.release(); await scrub.done;
+    scrub2.release(); await scrub2.done; await tick();
+    expect(started.at(-1)).toBe("cpu");
+    now = 7_000;
+    // Looked away: the rest wait for slots of their own.
+    agent3!.release(); await agent3!.done; await tick();
+    expect(started).not.toContain("agent 4");
+    agent2!.release(); await agent2!.done; await tick();
+    cpu!.release(); await cpu!.done; await tick();
+    expect(started.slice(-2)).toEqual(["agent 4", "agent 5"]);
+    for (const job of [agent4!, agent5!]) { job.release(); await job.done; }
+    expect(lane.queued).toBe(0);
+  });
 });

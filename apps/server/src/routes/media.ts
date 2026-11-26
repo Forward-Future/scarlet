@@ -23,7 +23,7 @@ import { transcriptReader } from "../services/transcriptReader.js";
 import { otherInputReader } from "../services/otherInput.js";
 import { afterAudioTrackChange } from "../services/audioTrackChange.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
-import { frameDecoder, framePriority, pictureLane } from "../services/pictureWork.js";
+import { frameDecoder, frameGoesToGpu, framePriority, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { ingestMedia, removeUnreadableMedia, writeHashedFile } from "../services/ingest.js";
 import { settleAlignment, startTranscription, transcriptionHeld } from "../services/transcription.js";
@@ -551,8 +551,10 @@ export function mediaRoutes(ctx: Ctx) {
     };
     // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.
     const priority = framePriority(c.req.query("priority"));
+    // An agent's frame that goes to the GPU while the editor looks may run past the lane's slots then.
+    const gpu = await frameGoesToGpu(ctx.settings().render.hwaccel, priority, hdr);
     try {
-      const jpeg = await frames.get(key, signal => ctx.track(pictureLane(ctx).run(() => frame(signal), { priority, signal }), media.projectId), {
+      const jpeg = await frames.get(key, signal => ctx.track(pictureLane(ctx).run(() => frame(signal), { priority, signal, gpu }), media.projectId), {
         priority, signal: c.req.raw.signal,
       });
       return new Response(new Uint8Array(jpeg), { headers: { "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=3600" } });
