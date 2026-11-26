@@ -124,8 +124,9 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => {});
     expect(container.querySelector("[data-new-layout]")).not.toBeNull();
     expect(container.querySelector(".review-rail")).not.toBeNull();
-    expect(container.querySelector(".review-tier-sep")?.textContent).toContain("Safe edits");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 1 safe edit");
+    expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
+    expect(container.querySelector(".review-tier-sep .review-tier-label")?.textContent).toBe("Safe edits (1)");
+    expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 1 safe edit");
     expect([...container.querySelectorAll(".review-filter-chip")].map(b => b.textContent)).toEqual(["All 3", "Needs you 2"]);
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
@@ -777,7 +778,9 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       ["1:59", "Haiku 5.5 title", null, "Graphic"],
     ]);
     expect(container.querySelector(".review-rail-head .review-rail-total")?.textContent).toBe("3");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
+    expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
+    expect(container.querySelector(".review-tier-sep.is-first .review-tier-label")?.textContent).toBe("Safe edits (3)");
+    expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
 
     // Clicking the +1 batch row opens the card with a 1 of 2 stepper and "Keep all 2", keeping all underlying thread edits together.
     await act(async () => lowRows[0]!.click());
@@ -881,7 +884,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(safeRows[0]!.querySelector(".simple-pass-words")?.textContent).toBe("Haiku 5.5 title");
     expect(safeRows[0]!.querySelector(".edit-batch-plus")?.textContent).toBe("+2");
     expect(safeRows[0]!.querySelector(".simple-edit-value")?.textContent).toBe("Graphic");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
+    expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
+    expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
 
     // Click the +2 row: opens card with stepper 1 of 3, Keep all 3, Reject just this edit, and shows all 3 batch marks on the timeline.
     await act(async () => safeRows[0]!.click());
@@ -933,7 +937,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => {});
     expect(unkeepSpy).toHaveBeenCalledTimes(1);
     expect(container.querySelector('.review-low-body[aria-label="Safe edits"] .edit-batch-plus')?.textContent).toBe("+2");
-    expect(container.querySelector(".review-head-keep")?.textContent).toBe("Keep 3 safe edits");
+    expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
+    expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
   });
 
   it("keeps the middle edits column visible on a newly opened project with no edits yet", async () => {
