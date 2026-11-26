@@ -133,7 +133,7 @@ export function registerMulticamTools(deps: MulticamToolsDeps) {
       let env = envelopes.get(mediaId);
       if (!env) {
         const asset = assets.get(mediaId);
-        env = asset ? await readEnvelope(asset).catch(() => new Float64Array()) : new Float64Array();
+        env = asset ? await readEnvelope(asset).catch(withoutOnce(`failed to read the levels of ${mediaId} for sync`, new Float64Array())) : new Float64Array();
         envelopes.set(mediaId, env);
       }
       const lo = Math.max(0, Math.round(from * syncRate));
@@ -348,7 +348,7 @@ export function registerMulticamTools(deps: MulticamToolsDeps) {
 
       // Verify sync on the built timeline reusing already-loaded envelopes.
       const syncPairs = await timelineSync(built.timeline, detail.project.media, detail.project.settings.fps, levelsFromMap(envelopes, assets))
-        .catch(() => []);
+        .catch(withoutOnce("failed to verify sync on the built timeline", []));
       const names = new Map(detail.project.media.map(m => [m.id, m.name]));
       const syncText = syncSummary(syncPairs, names, detail.project.settings.fps);
 
@@ -410,11 +410,11 @@ export function registerMulticamTools(deps: MulticamToolsDeps) {
       const transcripts = new Map<string, TranscriptWord[]>();
       const audibleIds = [...new Set(audible.map(a => a.mediaId))];
       await Promise.all(audibleIds.map(async id => {
-        const words = await transcriptWords(id, false).catch(() => null);
+        const words = await transcriptWords(id, false).catch(withoutOnce(`failed to read the words of ${id} for multicam`, null));
         if (words?.length) transcripts.set(id, words);
       }));
       if (!transcripts.size && audibleIds.length === 1) {
-        const words = await transcriptWords(audibleIds[0]!, true).catch(() => null);
+        const words = await transcriptWords(audibleIds[0]!, true).catch(withoutOnce(`failed to read the words of ${audibleIds[0]} for multicam`, null));
         if (words?.length) transcripts.set(audibleIds[0]!, words);
       }
 
@@ -428,7 +428,7 @@ export function registerMulticamTools(deps: MulticamToolsDeps) {
       await Promise.all([...waveIds].map(async id => {
         const asset = assets.get(id);
         if (!asset || !carriesAudio(asset) || !asset.duration) return;
-        const env = await readEnvelope(asset).catch(() => null);
+        const env = await readEnvelope(asset).catch(withoutOnce(`failed to read the levels of ${id} for multicam`, null));
         if (env?.length) envelopes.set(id, env);
       }));
 
@@ -515,7 +515,7 @@ export function registerMulticamTools(deps: MulticamToolsDeps) {
 
       // 7. Run timeline sync verification reusing the loaded envelopes.
       const syncPairs = await timelineSync(tl, project.media, project.settings.fps, levelsFromMap(envelopes, assets))
-        .catch(() => []);
+        .catch(withoutOnce("failed to verify sync on the multicam timeline", []));
       const names = new Map(project.media.map(m => [m.id, m.name]));
       const syncText = syncSummary(syncPairs, names, project.settings.fps);
 

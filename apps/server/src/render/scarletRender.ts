@@ -12,6 +12,9 @@ import { originalPlaybackType } from "../files.js";
 import { clipRange, rangesOverlap, sha256, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { ProbeResult, RenderAdapter, RenderOptions, WaveformCache, WaveformData } from "./adapter.js";
 
+/** Where the renderer's own diagnostic lines go: the engine sets it to its log at startup. */
+export const renderLog = R.renderLog;
+
 function hwaccel(opts: RenderOptions): R.HwAccel {
   const h = (opts as { hwaccel?: string }).hwaccel;
   return h === "none" || h === "nvenc" || h === "qsv" || h === "amf" || h === "videotoolbox" ? h : "auto";
@@ -44,6 +47,7 @@ async function cacheInputs(project: Project, timeline: Timeline, root: string, r
 
 export const scarletRenderAdapter: RenderAdapter = {
   async probeMedia(path: string, signal?: AbortSignal): Promise<ProbeResult> {
+    // A failure is the caller's to log: each one that carries on without the facts says so with its media and consequence.
     const probe = await R.probeMedia(path, { signal });
     const fields = R.probeToAssetFields(probe);
     const kind = R.detectMediaKind(probe, path);
@@ -79,11 +83,22 @@ export const scarletRenderAdapter: RenderAdapter = {
   },
 
   extractFrame(path, t, opts) {
-    return R.extractFrame(path, t, opts);
+    // A frame that fails altogether is logged by its route (frame_fallback, or the request's failure).
+    return R.extractFrame(path, t, {
+      ...opts,
+      onFallback: reason => R.logRender(() => `[media] frame: ${R.logReason(reason, 300)}`, `frame-fallback:${reason.slice(0, 40)}`),
+    });
   },
 
   async makeProxy(input, output, opts) {
-    await R.makeProxy(input, output, { ...opts, hwaccel: hwaccel(opts as RenderOptions) });
+    const started = Date.now();
+    const result = await R.makeProxy(input, output, { ...opts, hwaccel: hwaccel(opts as RenderOptions) });
+    // A scrub window is a few seconds of work, made as the editor scrubs: only what it fell back from is kept.
+    for (const warning of result.warnings) R.logRender(`[media] proxy: ${R.logReason(warning, 300)}`, `proxy-warning:${warning}`);
+    if (!opts.range) {
+      R.logRender(`[media] proxy encoded with ${result.encoder ?? "libx264"} in ${R.logElapsed(Date.now() - started)}: ` +
+        `${result.duration.toFixed(1)} s, ${result.hasVideo ? (opts.height ? `${opts.height}p` : "default height") : "sound only"}${result.warnings.length ? `, ${result.warnings.length} fallbacks` : ""}`);
+    }
   },
 
   async hardwareProxies(accel) {

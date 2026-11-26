@@ -5,7 +5,8 @@
 import { stripVars } from "../detect.js";
 import { parseCodexQuota } from "../quota.js";
 import { COMPACTED, COMPACTING, DEFAULT_STALL_MS, nextPlanEvent, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult } from "./types.js";
-import { asRecord, jsonLine, spawnLines } from "./spawn.js";
+import { asRecord, jsonLine, runnerLog, spawnLines } from "./spawn.js";
+import { clip } from "../logText.js";
 import { codexUsage, createUsageReporter, tokenCount } from "./usage.js";
 import { codexResult, newCodexState, parseCodexEvent, type CodexItem } from "./codexParse.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
@@ -83,6 +84,7 @@ function serverError(value: unknown) {
  */
 export async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessEnv, file: string, args: string[], home: string): Promise<RunAgentResult | undefined> {
   const state = newCodexState();
+  const runLog = runnerLog(opts, "codex");
   const serviceTier = opts.serviceTier ?? (opts.fast ? "fast" : undefined);
   let threadId: string | undefined;
   let turnId: string | undefined;
@@ -188,18 +190,28 @@ export async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessE
   };
 
   let pending = 1;
+  // For the host's log: lines that weren't JSON, and the requests of Codex's own Scarlet turned down, by method name.
+  let notJson = 0;
+  const refusedRequests = new Set<string>();
   const handle = spawnLines(file, args, {
     cwd: opts.cwd, env: { ...stripVars(env, ["CODEX_HOME", "CODEX_SQLITE_HOME"]), CODEX_HOME: home }, interactive: true, signal: opts.signal,
-    timeoutMs: opts.timeoutMs, stallMs: opts.stallMs ?? DEFAULT_STALL_MS, interrupt,
+    timeoutMs: opts.timeoutMs, stallMs: opts.stallMs ?? DEFAULT_STALL_MS, interrupt, log: opts.log, task: opts.task,
     onLine(line) {
       if (completed) return;
       const message = jsonLine(line);
-      if (!message) return;
+      if (!message) {
+        notJson++;
+        return;
+      }
       const id = message.id;
       const method = string(message.method);
       if (method) {
         if (id !== undefined) {
           // This client never authorizes Codex's built-in approval or input requests.
+          if (!refusedRequests.has(method)) {
+            refusedRequests.add(method);
+            runLog(`asked for ${clip(method, 60)}, which Scarlet turns down`);
+          }
           send({ id, error: { code: -32601, message: "This request is unavailable in Scarlet" } });
           return;
         }
@@ -258,6 +270,7 @@ export async function runCodexServer(opts: RunAgentOptions, env: NodeJS.ProcessE
     capabilities: { experimentalApi: true, requestAttestation: false } } });
   const outcome = await handle.done;
   clearTimeout(stopTimer);
+  if (notJson) runLog(`app-server wrote ${notJson} output line${notJson === 1 ? "" : "s"} that weren't JSON`);
   // Startup can fail on older CLIs. Never retry a turn that may already have edited the project.
   if (!turnRequested && !outcome.aborted && !outcome.timedOut) {
     opts.onCodexFallback?.(startupFailure ?? "app_server_unavailable");

@@ -188,7 +188,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
             : checkDialogueJoin(tl, project, range, pages, "spoken" in resolved ? resolved.spoken : undefined, pace, "air" in resolved ? resolved.air : undefined);
           const played = frameAligned(checked, project.settings.fps);
           const nearbyWords = dialogueJoinWords(tl, project, played, pages);
-          const heard = await cutReading(tl, project, played, mediaId => transcriptWords(mediaId, false).catch(() => null));
+          const heard = await cutReading(tl, project, played, mediaId => transcriptWords(mediaId, false).catch(withoutOnce(`failed to read the words of ${mediaId} beside a cut`, null)));
           const continuity = acousticRetakeJoin(tl, project, range, scanReader.acousticRetakePages.values());
           const { repeatAtJoin, partialWordRepeat, pickupRepeats, unread } = await checkKeptWords(tl, project, played, nearbyWords, planSources.readKeptWords,
             undefined, undefined, { at: played.start, preview: () => dialogueCutPreview(tl, project.media, [played], crossfadeFrames / project.settings.fps) });
@@ -411,7 +411,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
               .map(h => candidate({ at: h.start, seconds: round2(h.end - h.start), text: h.text, context: h.context,
                 mediaId: h.mediaId, sourceSeconds: [h.source.start, h.source.end] }, "heard", h.mediaId, h.source.start));
           // An extra reading: a version or an engine that can't give it leaves the receipt as it was.
-          })().catch(() => []);
+          })().catch(withoutOnce(`failed to read the words heard only in the part on ${continueFrom}`, []));
           // Short pieces left stranded between two cuts on the continued timeline, under the pace the pass last gave the
           // repeat check (piecesUnder), so this list and the closing check agree on what a stutter piece is.
           const short = await (async () => {
@@ -422,7 +422,7 @@ export function registerDialogueTools(deps: DialogueToolsDeps) {
             return shortPiecesInPart(after, margin, left.transcripts, under)
               .filter(p => fresh("shortPiece", p.mediaId, p.source.start)).slice(0, 30)
               .map(({ source, ...p }) => candidate(p, "shortPiece", p.mediaId, source.start));
-          })().catch(() => []);
+          })().catch(withoutOnce(`failed to find the short pieces left in the part on ${continueFrom}`, []));
           // The repeat check comes after those words: where it reads a language from the scan, it saves pages they'd read.
           const recheck = checkedVersion() === tl.version || task?.repeatAudit?.version === tl.version
             ? await checkRepeats(continueFrom).catch((error: Error) => {

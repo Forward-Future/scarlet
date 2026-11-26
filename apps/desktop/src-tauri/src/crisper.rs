@@ -135,6 +135,7 @@ async fn run_setup(mut cmd: Command, limit: Duration, setups: &'static Setups) -
     let child = cmd.spawn().map_err(|e| format!("Could not start CrisperWhisper setup. {e}"))?;
     let pid = child.id();
     if let Some(pid) = pid {
+        log::info!("CrisperWhisper setup running (pid {pid})");
         setups.0.lock().unwrap_or_else(|e| e.into_inner()).push(pid);
     }
     let _tracked = Tracked(setups, pid);
@@ -160,7 +161,8 @@ pub async fn install_crisper_model(state: State<'_, AppState>, directory: PathBu
     let cmd = setup_command(&state.paths, &directory).inspect_err(|e| log::warn!("CrisperWhisper setup not started: {e}"))?;
     log::info!("CrisperWhisper setup started");
     let started = std::time::Instant::now();
-    let output = run_setup(cmd, SETUP_LIMIT, &SETUPS).await.inspect_err(|e| log::warn!("CrisperWhisper setup failed: {e}"))?;
+    let output = run_setup(cmd, SETUP_LIMIT, &SETUPS).await
+        .inspect_err(|e| log::warn!("CrisperWhisper setup failed after {}: {e}", util::human_duration(started.elapsed())))?;
     if output.status.success() {
         log::info!("CrisperWhisper setup done in {}", util::human_duration(started.elapsed()));
         return Ok(());
@@ -172,7 +174,7 @@ pub async fn install_crisper_model(state: State<'_, AppState>, directory: PathBu
         log::warn!("CrisperWhisper setup failed: no suitable Python 3.12 ({}): {reason}", output.status);
         return Err(format!("{reason}. {NEED_PYTHON}"));
     }
-    log::warn!("CrisperWhisper setup failed ({}): {reason}", output.status);
+    log::warn!("CrisperWhisper setup failed after {} ({}): {reason}", util::human_duration(started.elapsed()), output.status);
     Err(reason)
 }
 

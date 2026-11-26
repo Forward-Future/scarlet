@@ -21,6 +21,7 @@ import { newId } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, HttpError, notFound } from "../errors.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import { actorFor, logActivity } from "./activity.js";
 import { getValidYouTubeAccessToken, getYouTubeStatus, markYouTubeNeedsReconnect } from "./youtubeAuth.js";
 
@@ -278,6 +279,7 @@ export function startYouTubePublish(
   }
 
   emitUpload(ctx, entry.job);
+  ctx.log(`[youtube] upload started id=${job.id} project=${logId(projectId)} render=${logId(render.id)} visibility=${req.visibility}${reusedRender ? " reusedRender=true" : ""}`);
   const signal = AbortSignal.any([entry.controller.signal, ctx.projectSignal(projectId), ctx.shutdown]);
 
   const pipeline = runPublishPipeline(ctx, user, entry, render, req, signal).finally(() => {
@@ -349,6 +351,8 @@ async function runPublishPipeline(
     emitUpload(ctx, entry.job);
   };
 
+  const started = Date.now();
+  let retries = 0;
   try {
     let lastProgressAt = 0;
     const render = await waitForRenderReady(ctx, initialRender, progress => {
@@ -366,6 +370,8 @@ async function runPublishPipeline(
       throw new HttpError(500, "render_empty", "The rendered video file was empty.");
     }
 
+    if (!entry.job.reusedRender) ctx.log(`[youtube] upload id=${entry.job.id} render ready after ${humanDuration(Date.now() - started)}`);
+    const uploadStarted = Date.now();
     update({ phase: "uploading", progress: 0, bytesUploaded: 0, bytesTotal: info.size });
 
     const { videoId } = await uploadVideoResumable(ctx, {
@@ -375,6 +381,7 @@ async function runPublishPipeline(
       description: req.description,
       visibility: req.visibility,
       signal,
+      onRetry: () => { retries++; },
       onProgress: (uploaded, total) => {
         const t = Date.now();
         if (t - lastProgressAt < PROGRESS_THROTTLE_MS && uploaded < total) return;
@@ -401,7 +408,7 @@ async function runPublishPipeline(
       watchUrl,
       finishedAt: now(),
     });
-    ctx.log(`[youtube] upload complete id=${entry.job.id} visibility=${req.visibility}${entry.job.reusedRender ? " reusedRender=true" : ""}`);
+    ctx.log(`[youtube] upload complete id=${entry.job.id} visibility=${req.visibility}${entry.job.reusedRender ? " reusedRender=true" : ""} size_mb=${Math.round(info.size / 1024 / 1024)} upload=${humanDuration(Date.now() - uploadStarted)} total=${humanDuration(Date.now() - started)}${retries ? ` retries=${retries}` : ""}`);
     logActivity(ctx, {
       projectId: entry.job.projectId,
       actor: actorFor(user),
@@ -418,6 +425,8 @@ async function runPublishPipeline(
   } catch (err) {
     if (signal.aborted || entry.job.phase === "cancelled" || (err instanceof Error && err.name === "AbortError")) {
       if (entry.job.phase !== "cancelled") {
+        // The editor's own cancel logs itself; this is the project closing or Scarlet quitting.
+        ctx.log(`[youtube] upload stopped id=${entry.job.id} reason=${ctx.shutdown.aborted ? "shutdown" : ctx.projectSignal(entry.job.projectId).aborted ? "project_closed" : "aborted"} after ${humanDuration(Date.now() - started)}`);
         entry.job = { ...entry.job, phase: "cancelled", finishedAt: now() };
         emitUpload(ctx, entry.job);
       }
@@ -425,14 +434,18 @@ async function runPublishPipeline(
     }
     let code = "youtube_upload_failed";
     let message = "Couldn’t upload to YouTube. Try again.";
+    let detail = "";
     if (err instanceof HttpError) {
       code = err.code;
       message = err.message;
+      detail = ` status=${err.status}`;
     } else if (isNetworkFailure(err)) {
       code = "youtube_offline";
       message = "Couldn’t reach YouTube. Check your internet connection and try again.";
+    } else {
+      detail = `: ${clip((err as Error)?.message ?? String(err))}`;
     }
-    ctx.log(`[youtube] upload failed id=${entry.job.id} code=${code}`);
+    ctx.log(`[youtube] upload failed id=${entry.job.id} code=${code} phase=${entry.job.phase} after=${humanDuration(Date.now() - started)}${retries ? ` retries=${retries}` : ""}${detail}`);
     update({
       phase: "failed",
       error: message,
@@ -452,6 +465,8 @@ async function uploadVideoResumable(
     visibility: YouTubePublishRequest["visibility"];
     signal: AbortSignal;
     onProgress: (uploaded: number, total: number) => void;
+    /** A chunk that is sent again after a dropped connection or a server error. */
+    onRetry?: () => void;
   },
 ): Promise<{ videoId: string }> {
   const uploadBase = (ctx.options.youtube?.uploadBaseUrl ?? DEFAULT_UPLOAD_BASE).replace(/\/+$/, "");
@@ -489,6 +504,7 @@ async function uploadVideoResumable(
       throw new HttpError(503, "youtube_offline", "Couldn’t reach YouTube. Check your internet connection and try again.");
     }
     if (initRes.status === 401 && attempt === 0) {
+      ctx.log("[youtube] upload session refused the access token: refreshing it once");
       accessToken = await getValidYouTubeAccessToken(ctx, { forceRefresh: true });
       continue;
     }
@@ -541,6 +557,7 @@ async function uploadVideoResumable(
         } catch (err) {
           if (opts.signal.aborted) throw err;
           if (retry < MAX_CHUNK_RETRIES) {
+            opts.onRetry?.();
             await sleepWithSignal(400 * (retry + 1), opts.signal);
             const resumed = await queryUploadOffset(ctx, sessionUri, opts.fileSize, opts.signal);
             if (resumed !== null && resumed > offset) {
@@ -554,6 +571,7 @@ async function uploadVideoResumable(
         }
 
         if (putRes.status >= 500 && retry < MAX_CHUNK_RETRIES) {
+          opts.onRetry?.();
           await sleepWithSignal(400 * (retry + 1), opts.signal);
           const resumed = await queryUploadOffset(ctx, sessionUri, opts.fileSize, opts.signal);
           if (resumed !== null && resumed > offset) {

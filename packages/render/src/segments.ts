@@ -10,7 +10,7 @@ import path from "node:path";
 import { mergeRanges, planPlaybackSegments, planSegments, timelineDuration } from "@scarlet/timeline";
 import type { Clip, Project, Timeline, TimeRange } from "@scarlet/timeline";
 import { withRenderEncoder } from "./encoder.js";
-import { FfmpegError, LOCAL_MEDIA_INPUT, failureReason, runFfmpeg, sampleCount } from "./exec.js";
+import { FfmpegError, LOCAL_MEDIA_INPUT, failureReason, logElapsed, logRender, runFfmpeg, sampleCount } from "./exec.js";
 import { copyOriginalPicture, wholeOriginalPicture } from "./pictureCopy.js";
 import { renderProgramAudio } from "./programAudio.js";
 import { outputSize, renderRange, type RenderOptions } from "./render.js";
@@ -298,6 +298,7 @@ export async function renderFullCached(
       attempt => renderFullCached(project, timeline, cacheDir, output, attempt));
   }
   const pictureOnly = quality === "delivery" || opts.exportHeight !== undefined;
+  const started = Date.now();
   const visible = opts.omitCaptions ? { ...timeline, tracks: timeline.tracks.filter(t => t.kind !== "caption") } : timeline;
   const picture = pictureOnly ? deliveryPicture(project, visible) : visible;
   const ranges = exportSegments(!pictureOnly && !opts.omitCaptions && opts.segmentSeconds === undefined
@@ -401,6 +402,9 @@ export async function renderFullCached(
   opts.onProgress?.(1);
 
   const reused = segments.filter(segment => segment.cached).length;
+  logRender(() => `[render] ${quality} ${pictureOnly ? "export" : "render"} of ${segments.length} section${segments.length === 1 ? "" : "s"}` +
+    ` assembled in ${logElapsed(Date.now() - started)}: ${segments.length - reused} encoded with ${encoder}${runs.length < todo.length ? ` in ${runs.length} runs` : ""},` +
+    ` ${reused} reused from the cache${sound ? ", sound mixed separately" : ""}`);
   return {
     output,
     duration: total,

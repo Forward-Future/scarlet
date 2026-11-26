@@ -158,6 +158,7 @@ async fn check(app: &AppHandle) -> Result<Option<String>, String> {
         inner.noted = None;
     }
     log::info!("release update: downloading {version} (running {})", update.current_version);
+    let started = Instant::now();
     let progress = updates.inner.clone();
     // The package is checked against the release's signature before it comes back.
     let downloaded = update.download(move |chunk, total| {
@@ -166,7 +167,9 @@ async fn check(app: &AppHandle) -> Result<Option<String>, String> {
             *size = total;
         }
     }, || {}).await;
-    let kept = downloaded.map_err(|e| format!("download of {version} failed: {e}")).and_then(|bytes| keep(&bytes));
+    let took = crate::util::human_duration(started.elapsed());
+    let size = downloaded.as_ref().map_or(0, Vec::len);
+    let kept = downloaded.map_err(|e| format!("download of {version} failed after {took}: {e}")).and_then(|bytes| keep(&bytes));
     let mut inner = updates.inner.lock().unwrap();
     inner.downloading = None;
     let file = match kept {
@@ -184,7 +187,7 @@ async fn check(app: &AppHandle) -> Result<Option<String>, String> {
     // The release on offer until now gives way to the newer one.
     if !inner.installing {
         inner.ready = Some((update, file));
-        log::info!("release update: {version} is ready to install");
+        log::info!("release update: {version} is ready to install (downloaded {size} bytes in {took})");
     }
     Ok(Some(version))
 }
@@ -264,12 +267,14 @@ pub fn restart(app: &AppHandle, version: &str) -> Result<(), String> {
         app.exit(0);
         return Ok(());
     }
+    let started = Instant::now();
     let installed = install(update, &file);
     if let Err(error) = installed {
         log::error!("release update: installing {version} failed: {error}");
         updates.inner.lock().unwrap().installing = false;
         return Err("Couldn’t install the update. Try again, or quit Scarlet to install it.".into());
     }
+    log::info!("release update: installed {version} in {}; restarting", crate::util::human_duration(started.elapsed()));
     // The exit stops the host and engine, then the new version opens in this one's place.
     app.request_restart();
     Ok(())

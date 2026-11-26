@@ -10,8 +10,11 @@ import { type AgentId, type BatchSummariesResponse, type BatchSummaryItem, type 
 import { BATCH_SUMMARY_SYSTEM } from "@scarlet/mcp/prompt";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
+import { clip, humanDuration, throttledPerCtx } from "../logText.js";
 import { taskFailureReason } from "../telemetry/failureReason.js";
 import { createTask } from "./tasks.js";
+
+const noSummarizer = throttledPerCtx();
 
 const HOST_ONLINE_MS = 90_000;
 const DIRECT_TIMEOUT_MS = 15_000;
@@ -231,7 +234,7 @@ async function callDirectAi(ctx: Ctx, provider: DirectProvider, model: string, u
     const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return sanitizeBatchTitle(json.choices?.[0]?.message?.content) ?? null;
   } catch (err) {
-    ctx.log(`[batch-summary] direct ${provider} failed: ${err instanceof Error ? err.message : String(err)}`);
+    ctx.log(`[batch-summary] direct ${provider} failed: ${clip(err instanceof Error ? err.message : String(err))}`);
     return null;
   }
 }
@@ -305,8 +308,11 @@ export async function summarizeBatches(
       let run = flights.get(flightKey);
       if (!run) {
         const prompt = buildBatchSummaryPrompt(item);
+        const started = Date.now();
         run = callDirectAi(ctx, direct.provider, direct.model, prompt).then(title => {
           if (title) saveBatchSummary(ctx, projectId, item.key, title);
+          // The title is the model's words, so only whether there was one is logged.
+          ctx.log(`[batch-summary] direct ${direct.provider} ${direct.model} for ${projectId}: ${title ? "title saved" : "no usable title"} in ${humanDuration(Date.now() - started)}`);
           return title;
         }).finally(() => {
           if (flights.get(flightKey) === run) flights.delete(flightKey);
@@ -333,13 +339,18 @@ export async function summarizeBatches(
 
   // No direct API key: fall back to a silent zero-tool CLI side-check on any online signed-in host.
   const hostAgent = pickOnlineSummaryAgent(ctx);
-  if (!hostAgent) return { summaries, pending: [] };
+  if (!hostAgent) {
+    // Asked again each time the edits list draws, so this is logged once a minute.
+    noSummarizer(ctx)(projectId, `[batch-summary] no API key and no signed-in assistant online: ${missing.length} batch${missing.length === 1 ? "" : "es"} in ${projectId} stay untitled`);
+    return { summaries, pending: [] };
+  }
 
   const existing = ctx.repos.tasks.select(
     "project_id = ? AND kind = 'batch_summary'",
     [projectId],
     "created_at DESC, rowid DESC",
   );
+  let created = 0;
   for (const item of missing) {
     const prior = existing.find(t => t.context.batchSummary?.key === item.key && t.state !== "cancelled");
     if (prior) {
@@ -370,7 +381,9 @@ export async function summarizeBatches(
       createdBy: { type: "scarlet", name: "Scarlet" },
     });
     pending.push(item.key);
+    created++;
   }
+  if (created) ctx.log(`[batch-summary] ${created} batch${created === 1 ? "" : "es"} in ${projectId} go to a ${hostAgent.agent}${hostAgent.model ? ` ${hostAgent.model}` : ""} side check (no API key)`);
   return { summaries, pending };
 }
 

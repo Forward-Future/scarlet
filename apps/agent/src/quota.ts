@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentAvailability, QuotaBucket, SubscriptionQuota } from "@scarlet/shared";
 import type { CliAgent } from "./modelCatalog.js";
-import { asRecord, jsonLine, spawnLines } from "./runners/spawn.js";
+import { humanDuration, stderrTail } from "./logText.js";
+import { asRecord, jsonLine, spawnLines, type SpawnOutcome } from "./runners/spawn.js";
 
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -308,11 +309,22 @@ export function parseGeminiQuota(
   return { ...(formattedPlan ? { plan: formattedPlan } : {}), buckets, fetchedAt };
 }
 
-/** Query the installed CLI for live subscription quota remaining without spending tokens. */
+/** Why a probe's CLI gave no answer, for the log: its time limit, or how it exited and what it last said on stderr. */
+function probeEnd(outcome: SpawnOutcome): string {
+  if (outcome.timedOut) return `got no answer in ${humanDuration(PROBE_TIMEOUT_MS)}`;
+  const tail = stderrTail(outcome.stderr, 300);
+  return `exited with code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ""}${tail ? `; stderr: ${tail}` : ""}`;
+}
+
+/**
+ * Query the installed CLI for live subscription quota remaining without spending tokens. `log` hears why a probe found
+ * none, when its CLI failed or answered with something unreadable; a plan with no quota to report says nothing.
+ */
 export async function probeSubscriptionQuota(
   agent: CliAgent,
   file: string,
   env: NodeJS.ProcessEnv,
+  log: (msg: string) => void = () => undefined,
 ): Promise<SubscriptionQuota | undefined> {
   const cwd = await mkdtemp(join(tmpdir(), "scarlet-quota-"));
   try {
@@ -327,9 +339,15 @@ export async function probeSubscriptionQuota(
         },
       });
       const outcome = await proc.done;
-      if (outcome.timedOut || outcome.code !== 0) return undefined;
+      if (outcome.timedOut || outcome.code !== 0) {
+        log(`probe ${probeEnd(outcome)}`);
+        return undefined;
+      }
       const trimmed = stdout.trim();
-      if (!trimmed) return undefined;
+      if (!trimmed) {
+        log("probe printed nothing");
+        return undefined;
+      }
       try {
         return parseGeminiQuota(JSON.parse(trimmed));
       } catch {
@@ -340,6 +358,7 @@ export async function probeSubscriptionQuota(
             if (parsed) return parsed;
           } catch { /* keep trying */ }
         }
+        log("probe printed no JSON it could read");
         return undefined;
       }
     }
@@ -347,6 +366,7 @@ export async function probeSubscriptionQuota(
     if (agent === "claude") {
       let usagePayload: unknown;
       let done = false;
+      let refused = false;
       const proc = spawnLines(
         file,
         ["--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"],
@@ -363,6 +383,7 @@ export async function probeSubscriptionQuota(
             if (resp?.request_id !== "usage") return;
             done = true;
             if (resp.subtype !== "error") usagePayload = resp.response;
+            else refused = true;
             proc.child.stdin?.end();
             proc.kill();
           },
@@ -371,7 +392,9 @@ export async function probeSubscriptionQuota(
       proc.child.stdin?.write(JSON.stringify({ type: "control_request", request_id: "init", request: { subtype: "initialize" } }) + "\n");
       proc.child.stdin?.write(JSON.stringify({ type: "control_request", request_id: "usage", request: { subtype: "get_usage" } }) + "\n");
       proc.child.stdin?.end();
-      await proc.done;
+      const outcome = await proc.done;
+      if (refused) log("probe: Claude Code refused get_usage");
+      else if (!done) log(`probe ${probeEnd(outcome)} before its usage reply`);
       return usagePayload ? parseClaudeQuota(usagePayload) : undefined;
     }
 
@@ -381,6 +404,7 @@ export async function probeSubscriptionQuota(
     let gotRateLimits = false;
     let gotAccount = false;
     let done = false;
+    let failedStep: string | undefined;
     const finish = () => {
       if (done) return;
       done = true;
@@ -397,13 +421,14 @@ export async function probeSubscriptionQuota(
         const rec = jsonLine(line);
         if (!rec) return;
         if (rec.id === 1) {
-          if (rec.error) { finish(); return; }
+          if (rec.error) { failedStep = "initialize"; finish(); return; }
           proc.child.stdin?.write(JSON.stringify({ method: "initialized" }) + "\n");
           proc.child.stdin?.write(JSON.stringify({ id: 2, method: "account/rateLimits/read", params: {} }) + "\n");
           proc.child.stdin?.write(JSON.stringify({ id: 3, method: "account/read", params: {} }) + "\n");
         } else if (rec.id === 2) {
           gotRateLimits = true;
           if (!rec.error) rateLimitsResult = rec.result;
+          else failedStep = "account/rateLimits/read";
           if (gotAccount) finish();
         } else if (rec.id === 3) {
           gotAccount = true;
@@ -417,7 +442,9 @@ export async function probeSubscriptionQuota(
       method: "initialize",
       params: { clientInfo: { name: "scarlet", version: "0.1.4" }, capabilities: { experimentalApi: true } },
     }) + "\n");
-    await proc.done;
+    const outcome = await proc.done;
+    if (failedStep) log(`probe: app-server refused ${failedStep}`);
+    else if (!done) log(`probe ${probeEnd(outcome)} before its rate limits reply`);
     return rateLimitsResult ? parseCodexQuota(rateLimitsResult, accountResult) : undefined;
   } finally {
     await rm(cwd, { recursive: true, force: true });

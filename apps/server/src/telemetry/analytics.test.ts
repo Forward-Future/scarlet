@@ -341,7 +341,7 @@ describe("when a send fails", () => {
 
     clock.at += 1;
     await t.flush();
-    expect(logs).toEqual(["[telemetry] dropped 1 event(s) after 3 failed sends"]);
+    expect(logs).toEqual(["[telemetry] dropped 1 event(s) after 3 failed sends (last: HTTP 503)"]);
     await t.flush();
     expect(sent).toHaveLength(3);
 

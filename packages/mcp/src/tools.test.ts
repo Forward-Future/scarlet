@@ -1384,7 +1384,12 @@ describe("what goes to stderr when a read fails and the tool answers without it"
       const saved = JSON.parse((result.content[0] as { text: string }).text);
       expect(saved).toMatchObject({ continueFrom: "applied" });
       expect(saved).not.toHaveProperty("keptSilences");
-      expect(logged()).toEqual(["[scarlet-mcp] failed to place the kept silences on applied: Scarlet server error 500 (engine_error): The database is busy."]);
+      // The extra readings the receipt goes on without say why on stderr too, but only the kept silences are measured.
+      expect([...logged()].sort()).toEqual([
+        "[scarlet-mcp] failed to find the short pieces left in the part on applied: Scarlet server error 500 (engine_error): The database is busy.",
+        "[scarlet-mcp] failed to place the kept silences on applied: Scarlet server error 500 (engine_error): The database is busy.",
+        "[scarlet-mcp] failed to read the words heard only in the part on applied: Scarlet server error 500 (engine_error): The database is busy.",
+      ]);
       // The result says what it was answered without, so its silence about kept silences isn't read as none.
       expect(result.content.at(-1)).toEqual({ type: "text",
         text: "Not measured: failed to place the kept silences on applied (Scarlet server error 500 (engine_error): The database is busy.)." });

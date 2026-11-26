@@ -7,7 +7,7 @@ import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT, type AudioTrackSelection } from "@scarlet/timeline";
 import { audioMapArgs } from "./audioTrack.js";
-import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
+import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, logRender, runFfmpeg, threadedAvcPreview } from "./exec.js";
 import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
 import { toneMapFilters } from "./hdr.js";
@@ -150,12 +150,15 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
     // The final pass re-reads the original for its audio and rewrites the file, so it keeps a share of the bar.
     const PARTS = 0.9;
     const parts: Array<{ name: string; start: number }> = [];
+    let kept = 0, count = 0;
     for (let i = 0; i * span < pictureDuration - 0.000001; i++) {
       opts.signal?.throwIfAborted();
+      count++;
       const start = i * span, end = Math.min(pictureDuration, (i + 1) * span);
       // A VFR checkpoint can begin between pictures. Older parts after the first rounded that offset to milliseconds.
       const name = (i > 0 && !probe.previewClock ? "pts-" : "") + i + ".mp4", path = join(dir, name);
-      if (!(await stat(path).catch(() => null))?.size) {
+      if ((await stat(path).catch(() => null))?.size) kept++;
+      else {
         const temp = path + "." + randomUUID() + ".part.mp4";
         try {
           await runFfmpeg(["-y", ...video.input, "-ss", String(start), ...LOCAL_MEDIA_INPUT, "-i", input,
@@ -191,6 +194,8 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
         "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
         onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
     } finally { await rm(manifest, { force: true }); }
+    // The engine logs every finished proxy; this says only what it can't, that an earlier run's parts were reused.
+    if (kept) logRender(`[media] proxy resumed: ${kept} of ${count} parts kept from an earlier run, ${count - kept} encoded now`);
     opts.onProgress?.(1);
     return { output, duration: probe.duration, hasVideo, hasAudio: probe.hasAudio, encoder, warnings };
   }

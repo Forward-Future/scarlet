@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { heardAudio, heardAudioKey } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
-import { logId } from "../logText.js";
+import { humanDuration, logId } from "../logText.js";
 import type { MediaWithStatus } from "../repo/projects.js";
 import { getTranscriptionProvider } from "../transcribe/index.js";
 import { errorMessage } from "../util.js";
@@ -37,12 +37,17 @@ export async function remakeTrackPreview(ctx: Ctx, media: Media) {
   const temp = `${proxy}.${randomUUID()}.part.mp4`;
   const signal = ctx.mediaSignal(media.projectId);
   const height = Math.min(ctx.settings().render.previewHeight, media.height ?? 720);
+  const began = performance.now();
   try {
     await ctx.render.makeProxy(join(ctx.paths.media(media.projectId), media.path), temp, { height, audioTrack: media.audioTrack, signal,
       onFallback: stage => ctx.log(`[media] proxy_fallback media=${logId(media.id)} project=${logId(media.projectId)} height=${height} stage=${stage}`) });
     const current = ctx.repos.projects.getMedia(media.id);
-    if (!current || !hearsSameTrack(current, media)) return;
+    if (!current || !hearsSameTrack(current, media)) {
+      ctx.log(`[media] ${media.id} preview of audio track ${heardKey(media)} set aside: another track was chosen while it was made`);
+      return;
+    }
     await rename(temp, proxy);
+    ctx.log(`[media] ${media.id} preview remade from audio track ${heardKey(media)} at ${height}p in ${humanDuration(performance.now() - began)}`);
     ctx.bus.publish({ type: "media.previewReady", projectId: media.projectId, mediaId: media.id });
   } catch (error) {
     // A pause or Trash stops it; the preview then plays from parts made on demand, which hear the chosen track too.
@@ -89,7 +94,11 @@ export async function afterAudioTrackChange(ctx: Ctx, before: Media, after: Medi
 
   // The previews. Those made from the old track are this file's alone (a copy of the recording under its hash may hear
   // another track), so they go, and the new track's are made.
-  const old = await sourcePreviews.filesOf(ctx, before).catch(() => []);
+  const old = await sourcePreviews.filesOf(ctx, before).catch(error => {
+    // Not finding them leaves the old track's previews on disk until a sweep, not wrong ones in use: names follow the track.
+    ctx.log(`[media] ${after.id} couldn't list the previews of its previous audio track: ${errorMessage(error)}`);
+    return [];
+  });
   await Promise.all(old.map(path => rm(path, { recursive: true, force: true })
     .catch(error => ctx.log(`[media] ${after.id} left ${path} behind: ${errorMessage(error)}`))));
   if (after.kind === "video") {

@@ -161,11 +161,17 @@ pub(crate) fn kill_group_now(pid: u32) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).creation_flags(crate::util::CREATE_NO_WINDOW).stdout(quiet()).stderr(quiet()).status();
+        // A nonzero exit only says the tree had already ended. Not starting at all leaves it running.
+        if let Err(e) = std::process::Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).creation_flags(crate::util::CREATE_NO_WINDOW).stdout(quiet()).stderr(quiet()).status() {
+            log::warn!("could not run taskkill to stop agent CLI {pid}: {e}");
+        }
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).stdout(quiet()).stderr(quiet()).status();
+        // A nonzero exit only says nothing was left to signal. Not starting at all leaves the group running.
+        if let Err(e) = std::process::Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).stdout(quiet()).stderr(quiet()).status() {
+            log::warn!("could not run kill for agent CLI group {pid}: {e}");
+        }
         let _ = std::process::Command::new("kill").args(["-KILL", &pid.to_string()]).stdout(quiet()).stderr(quiet()).status();
     }
 }

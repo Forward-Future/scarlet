@@ -24,6 +24,10 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
   // Keep the native buffer and its prepared frame when its version and frame grid still match.
   }, [project.id, project.settings.fps, timeline.version, version]); // eslint-disable-line react-hooks/exhaustive-deps
   const { ranges } = plan;
+  // A cut that can't be planned never opens a stream, so the stream's own lines say nothing about it.
+  useEffect(() => {
+    if (plan.error) playbackLog("stream plan-failed", { version, error: plan.error.slice(0, 200) });
+  }, [plan, version]);
   const [status, setStatus] = useState<"idle" | "waiting" | "ready">("idle");
   const [preroll, setPreroll] = useState<AbortSignal>();
   const [prerollProgress, setPrerollProgress] = useState<{ done: number; total: number }>();

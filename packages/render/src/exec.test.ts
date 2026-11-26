@@ -342,3 +342,32 @@ describe("what a build offers", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
+
+describe("renderLog", () => {
+  it("writes nothing until the engine sets a log, then throttles repeats by key and never throws", async () => {
+    const { logRender, renderLog } = await import("./exec.js");
+    const lines: string[] = [];
+    const before = renderLog.log;
+    try {
+      renderLog.log = undefined;
+      logRender(() => { throw new Error("not formatted without a log"); });
+      renderLog.log = line => lines.push(line);
+      logRender("[render] one");
+      logRender("[render] repeated", "test-key");
+      logRender("[render] repeated", "test-key");
+      logRender(() => { throw new Error("formatting failed"); });
+      renderLog.log = () => { throw new Error("log failed"); };
+      expect(() => logRender("[render] lost")).not.toThrow();
+    } finally { renderLog.log = before; }
+    expect(lines).toEqual(["[render] one", "[render] repeated"]);
+  });
+
+  it("gives a failure's reason without the folders of its files, and elapsed time as the engine writes it", async () => {
+    const { logElapsed, logReason } = await import("./exec.js");
+    expect(logReason(new Error("/Users/someone/My Movies/clip.mov: No such file or directory"))).toBe("clip.mov: No such file or directory");
+    expect(logReason(new Error("Error opening input file C:\\Users\\someone\\clip.mov."))).toBe("Error opening input file clip.mov.");
+    expect(logReason(new Error("decode/encode at 1/30"))).toBe("decode/encode at 1/30");
+    expect(logElapsed(850)).toBe("850ms");
+    expect(logElapsed(62_000)).toBe("1m 2s");
+  });
+});

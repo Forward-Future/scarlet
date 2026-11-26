@@ -10,6 +10,7 @@ import { rootCertificates } from "node:tls";
 import { resolveFfmpeg, resolveFfprobe } from "@scarlet/render";
 import type { Ctx } from "../context.js";
 import { badRequest, HttpError, notFound } from "../errors.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import { FfmpegError, run } from "../render/ffmpeg.js";
 import { publicWebAddress } from "./publicWeb.js";
 import { DOWNLOADERS, VideoDownloader } from "./videoDownloader.js";
@@ -115,6 +116,10 @@ function said(error: unknown): string {
   return (line ?? text.trim().split("\n").pop() ?? "").replace(/^ERROR:\s*/, "").replace(/^\[[^\]]+\]\s*\S+:\s*/, "").slice(0, 400) || "the site gave no reason";
 }
 
+/** yt-dlp's reason for the log, without any address it names: a query can carry a token. */
+const reasonForLog = (error: unknown) => clip(said(error).replace(/\bhttps?:\/\/\S+/gi, "an address"));
+const took = (began: number) => humanDuration(performance.now() - began);
+
 async function ytDlp(ctx: Ctx, args: string[], signal: AbortSignal, around?: Awaited<ReturnType<typeof surroundings>>): Promise<Buffer> {
   const { ffmpegDir, env } = around ?? await surroundings(ctx);
   return (await downloader(ctx)).run(["--ignore-config", "--no-playlist", "--no-warnings", "--no-progress", ...(ffmpegDir ? ["--ffmpeg-location", ffmpegDir] : []), ...args], { signal, env });
@@ -165,10 +170,12 @@ function read(ctx: Ctx, url: string, signal: AbortSignal): Promise<Reading> {
       () => { if (readings.get(url) === known) readings.delete(url); return read(ctx, url, signal); });
   }
   const reading = (async () => {
+    const began = performance.now();
     const folder = await mkdtemp(join(tmpdir(), "scarlet-web-video-"));
     try {
       const out = await ytDlp(ctx, ["-J", "--", url], signal).catch((error: Error) => {
         if (signal.aborted) throw error;
+        ctx.log(`[web-video] couldn't read a video's page after ${took(began)}: ${reasonForLog(error)}`);
         throw new HttpError(502, "video_failed", `Couldn't read that video: ${said(error)}`);
       });
       const raw = JSON.parse(out.toString("utf8")) as Record<string, unknown>;
@@ -177,7 +184,9 @@ function read(ctx: Ctx, url: string, signal: AbortSignal): Promise<Reading> {
       await publicOnly(raw);
       const info = join(folder, "info.json");
       await writeFile(info, out);
-      return { folder, info, about: about(raw, url), raw, at: Date.now() };
+      const read = about(raw, url);
+      ctx.log(`[web-video] read a video's page in ${took(began)}: ${read.duration ? `${Math.round(read.duration)} s long` : "length unknown"}`);
+      return { folder, info, about: read, raw, at: Date.now() };
     } catch (error) {
       await rm(folder, { recursive: true, force: true });
       throw error;
@@ -239,15 +248,20 @@ export function captionLines(file: string, body: string): CaptionLine[] {
 
 async function readCaptions(ctx: Ctx, reading: Reading, signal: AbortSignal): Promise<Captions | undefined> {
   const track = captionTrack(reading.raw);
-  if (!track) return;
+  if (!track) { ctx.log("[web-video] the video has no captions to read"); return; }
+  const began = performance.now();
   await ytDlp(ctx, ["--load-info-json", reading.info, "--skip-download", track.automatic ? "--write-auto-subs" : "--write-subs",
     "--sub-langs", track.language, "--sub-format", "json3/vtt/best", "-o", join(reading.folder, "captions")], signal).catch((error: Error) => {
     if (signal.aborted) throw error;
+    ctx.log(`[web-video] couldn't read captions after ${took(began)}: ${reasonForLog(error)}`);
     throw new HttpError(502, "video_failed", `Couldn't read that video's captions: ${said(error)}`);
   });
   const file = (await readdir(reading.folder)).find(name => name.startsWith("captions.") && /\.(json3|vtt)$/.test(name));
-  if (!file) return;
-  return { ...track, lines: captionLines(file, await readFile(join(reading.folder, file), "utf8")) };
+  const kind = `${clip(track.language, 20)}${track.automatic ? ", automatic" : ""}`;
+  if (!file) { ctx.log(`[web-video] the site gave no caption file (${kind}) after ${took(began)}`); return; }
+  const lines = captionLines(file, await readFile(join(reading.folder, file), "utf8"));
+  ctx.log(`[web-video] read ${lines.length} caption lines (${kind}) in ${took(began)}`);
+  return { ...track, lines };
 }
 
 /**
@@ -298,30 +312,43 @@ export async function saveWebVideoPart(ctx: Ctx, projectId: string, raw: string,
   if (!(to > range.from)) throw badRequest("bad_range", length ? `That part is past the video's end: it is ${length} seconds long.` : "`to` comes after `from`.");
   if (to - range.from > MAX_PART_SECONDS) throw badRequest("bad_range", `One call saves up to ${MAX_PART_SECONDS / 60} minutes. Ask for a shorter part, or for the parts one at a time.`);
   const folder = await mkdtemp(join(tmpdir(), "scarlet-web-video-part-"));
+  const began = performance.now();
   try {
     const around = await surroundings(ctx);
     await ytDlp(ctx, ["--load-info-json", reading.info, "--download-sections", `*${range.from}-${to}`, "--force-keyframes-at-cuts",
       "-S", `res:${range.height},vcodec:h264,acodec:aac`, "--merge-output-format", "mp4", "-o", join(folder, "part.%(ext)s")], signal, around).catch((error: Error) => {
       if (signal.aborted) throw error;
+      ctx.log(`[web-video] couldn't download a ${Math.round(to - range.from)} s part for ${logId(projectId)} after ${took(began)}: ${reasonForLog(error)}`);
       // The addresses a reading holds stop working; the next call reads the page again.
       const known = readings.get(url);
       if (known) forget(url, known);
       throw new HttpError(502, "video_failed", `Couldn't download that part: ${said(error)}`);
     });
     const name = (await readdir(folder)).find(n => n.startsWith("part.") && !n.endsWith(".part"));
-    if (!name) throw new HttpError(502, "video_failed", "The site gave no video for that part.");
+    if (!name) {
+      ctx.log(`[web-video] yt-dlp finished without a file for ${logId(projectId)} after ${took(began)}`);
+      throw new HttpError(502, "video_failed", "The site gave no video for that part.");
+    }
     const file = join(folder, name);
     const probed = JSON.parse((await run(resolveFfprobe(), ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration",
       "-of", "json", file], { signal })).toString("utf8")) as { streams?: Array<{ width?: number; height?: number }>; format?: { duration?: string } };
     const duration = Number(probed.format?.duration) || to - range.from;
+    // The part is still usable without its picture: the call returns it with none.
     const poster = await run(resolveFfmpeg(), ["-hide_banner", "-loglevel", "error", "-nostdin", "-ss", String(duration / 2), "-i", file, "-frames:v", "1",
-      "-vf", "scale=960:-2:force_original_aspect_ratio=decrease", "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"], { signal }).catch(() => undefined);
+      "-vf", "scale=960:-2:force_original_aspect_ratio=decrease", "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"], { signal }).catch((error: unknown) => {
+      // ffmpeg names its input in what it says: the part's working folder is left out.
+      const text = error instanceof FfmpegError ? error.stderr || error.message : error instanceof Error ? error.message : String(error);
+      if (!signal.aborted) ctx.log(`[web-video] couldn't take a picture from a part for ${logId(projectId)}: ${clip(text.split(folder).join("<part>"))}`);
+      return undefined;
+    });
     const id = randomUUID();
     parts.set(id, { folder, file, projectId });
     // A part nobody came for doesn't stay on the disk.
     setTimeout(() => { if (parts.delete(id)) void rm(folder, { recursive: true, force: true }); }, KEEP_MS).unref();
+    const size = (await stat(file)).size;
+    ctx.log(`[web-video] saved a ${Math.round(duration)} s part for ${logId(projectId)} (${size} bytes, ${probed.streams?.[0]?.height ?? "?"}p) in ${took(began)}`);
     return { about: reading.about, part: { id, from: range.from, to, duration: Math.round(duration * 1000) / 1000, width: probed.streams?.[0]?.width, height: probed.streams?.[0]?.height,
-      size: (await stat(file)).size, ...(poster?.length && { poster: poster.toString("base64") }) } };
+      size, ...(poster?.length && { poster: poster.toString("base64") }) } };
   } catch (error) {
     await rm(folder, { recursive: true, force: true });
     throw error;
