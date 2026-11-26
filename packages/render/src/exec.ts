@@ -5,7 +5,7 @@
  */
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { availableParallelism, homedir } from "node:os";
+import { availableParallelism, homedir, loadavg } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import { isSea } from "node:sea";
 
@@ -38,6 +38,16 @@ export const INDEXED_MP4_INPUT = ["-nofind_stream_info", "-f", "mov"] as const;
 // Eight AVC decode threads beat VideoToolbox on the 4K fixture. Restrict the
 // auto policy to high-core Macs where dialogue analysis can run alongside it.
 export const threadedAvcPreview = process.platform === "darwin" && process.arch === "arm64" && availableParallelism() >= 16;
+
+/**
+ * Whether the machine has twice as much work as cores or more, by the last minute's load. A 4K decode on the CPU then
+ * gets a share of its cores, while the GPU's decoder is not shared the same way: at five times as much work as cores, ten seconds of a
+ * 4K recording took 17.4 s on the CPU and 5.0 s with VideoToolbox, against 0.5 s and 2.6 s on an idle machine
+ * (M-series, 2026-11-22 and 2026-11-13). Windows reports no load, so it never counts as busy.
+ */
+export function machineBusy(load = loadavg()[0]!, cores = availableParallelism()): boolean {
+  return load > 2 * cores;
+}
 
 /** Some containers need a packet scan even when their catalog entry has an
  * index. Retry using FFmpeg's ordinary stream discovery in that case.

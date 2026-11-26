@@ -845,6 +845,10 @@ describe("render", () => {
     expect(timelinePreviewDecoder("videotoolbox", "videotoolbox")).toBe("videotoolbox");
     expect(timelinePreviewDecoder("auto", "cuda")).toBe("cuda");
     expect(timelinePreviewDecoder("none", undefined)).toBeUndefined();
+    // A picture the editor waits on decodes on a high-core Mac's CPU while it has room; HEVC included.
+    expect(timelinePreviewDecoder("auto", "videotoolbox", true)).toBe(ffmpeg.threadedAvcPreview ? undefined : "videotoolbox");
+    expect(timelinePreviewDecoder("videotoolbox", "videotoolbox", true)).toBe("videotoolbox");
+    expect(timelinePreviewDecoder("auto", "cuda", true)).toBe("cuda");
   });
 
   it("uses the probed playback codec for hardware decoding older imports", async () => {
