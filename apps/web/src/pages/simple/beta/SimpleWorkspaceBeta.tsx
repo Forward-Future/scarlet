@@ -229,7 +229,7 @@ export function SimpleWorkspaceBeta() {
   // that's still running saves a part every few hundred milliseconds, each a new proposal on the newest working cut, and
   // following each put up a new player before the last had played a frame. Once the video stops, the call goes onto the
   // newest part, as it does whenever a part arrives while it's paused.
-  const passPlaying = usePlayerStore(s => s.playing) && !!listenedTo;
+  const passPlaying = usePlayerStore(s => !!listenedTo && s.playing);
   const heldPass = useRef<Change>(undefined);
   const held = heldPass.current;
   const holdPass = passPlaying && !!livePass && !!held && held.id !== livePass.id && held.fromVersion === head &&

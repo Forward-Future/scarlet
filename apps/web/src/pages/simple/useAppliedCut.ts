@@ -71,7 +71,8 @@ export function useAppliedCut({ current, reviewingEdit, focusThread, threadTimel
   // While the cut plays, After stays on the version it started on. A pass applying its next cuts moves the video on
   // every moment, and following it put up a new player each time, before the last had played a frame: nothing
   // played. Once the editor pauses, or the cut changes or another opens, it takes up the video as it runs now.
-  const playingNow = usePlayerStore(s => s.playing);
+  // Only an applied cut's After holds while it plays, so the page isn't drawn again on every play and pause otherwise.
+  const playingNow = usePlayerStore(s => !!reviewingEdit?.beforeCut && s.playing);
   const heldAfter = useRef<{ key?: string; source?: typeof latestAfter }>(undefined);
   const afterKey = reviewingEdit && editPlaybackKey(reviewingEdit, undefined, cutBase);
   // A cut the editor just rejected holds it too, for the moment it takes to leave the timeline: the video without it
