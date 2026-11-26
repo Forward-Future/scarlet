@@ -203,6 +203,14 @@ describe("the skills Scarlet comes with", () => {
       expect(skills.map(s => s.name).sort()).toEqual(BUNDLED_SKILLS.map(s => s.folder).sort());
       expect(seedSkillList(fresh.ctx, BUNDLED_SKILLS)).toBe(0);
       expect(fresh.ctx.repos.skills.select().every(s => s.version === 1)).toBe(true);
+      // Bundled multi-cam workflow is enabled by default, discoverable unpinned, and loaded verbatim when pinned.
+      const multicam = skills.find(s => s.name === "multi-cam")!;
+      expect(multicam).toMatchObject({ name: "multi-cam", enabled: true, source: "bundled", bundledName: "multi-cam" });
+      expect(multicam.content).toContain("timeline_sync_multicam");
+      expect(multicam.content).toContain("multicam_analyze");
+      expect(multicam.content).toContain("timeline_switch_cameras");
+      expect(assistantSkills([multicam], [], true)[0]?.content).toContain("Read this workflow");
+      expect(assistantSkills([multicam], [multicam.id], true)).toEqual([multicam]);
     } finally {
       await fresh.ctx.close();
     }
@@ -562,7 +570,7 @@ describe("skills that the workflows replaced", () => {
   ].join("\n");
 
   it("ships the stock skills in skills/, and removes unedited copies of the rest on upgrade", async () => {
-    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "b-roll", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "music-under-speech", "punch-in", "speed-through-waits", "split-edits"]);
+    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "b-roll", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "multi-cam", "music-under-speech", "punch-in", "speed-through-waits", "split-edits"]);
     const stock = createSkill(app.ctx, null, { name: "smooth-audio-cuts", scope: "team", content: smoothing }, { source: "bundled" });
     const run = uses([stock.id]);
     app.ctx.repos.tasks.put({ ...run, state: "done" });
