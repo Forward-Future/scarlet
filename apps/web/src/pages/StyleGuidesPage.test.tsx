@@ -12,7 +12,6 @@ import { useHostsStore } from "../stores/hosts";
 import { useSkillsStore } from "../stores/skills";
 import { useStyleGuidesStore } from "../stores/styleGuides";
 import { useUiStore } from "../stores/ui";
-import { StyleGuidesBetaSettings } from "../components/shell/StyleGuidesBetaSettings";
 import { SettingsPage } from "./SettingsPage";
 import { StyleGuideEditorPage } from "./StyleGuideEditorPage";
 import { StyleGuidesPage } from "./StyleGuidesPage";
@@ -87,7 +86,7 @@ it("edits name, default toggle, attached files in chat, and deletes a style guid
   const db = buildDb();
   const host = db.hosts.find(h => h.online)!;
   useHostsStore.setState({ hosts: [host] });
-  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" }, styleGuidesBeta: true });
+  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
 
   let guide = sampleGuide({ isDefault: false });
   useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
@@ -178,12 +177,11 @@ it("edits name, default toggle, attached files in chat, and deletes a style guid
   }
 });
 
-it("offers @style autocomplete in chat and highlights known @style mentions in skills only when beta is enabled", async () => {
+it("offers @style autocomplete in chat and highlights known @style mentions in skills", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const guide = sampleGuide({ name: "tech-brief", description: "Dark slate panels with cyan badges." });
   useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
   useSkillsStore.setState({ skills: [], status: "ready", error: null });
-  useUiStore.setState({ styleGuidesBeta: false });
 
   function Harness() {
     const ref = useRef<HTMLTextAreaElement>(null);
@@ -215,26 +213,15 @@ it("offers @style autocomplete in chat and highlights known @style mentions in s
 
   try {
     await act(async () => root.render(<RouterProvider router={router} />));
-    // Off by default: no @style highlighting and no @ popover
-    expect(el.querySelectorAll(".skill-keyword")).toHaveLength(0);
-    const textarea = el.querySelector<HTMLTextAreaElement>("#chat-box")!;
-    await act(async () => {
-      textarea.focus();
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Make a title @te");
-      textarea.setSelectionRange(16, 16);
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    expect(el.textContent).not.toContain("Style guides");
-
-    // Turn on Style guides (Beta): @tech-brief highlights in skills and @ opens popover in chat
-    await act(async () => useUiStore.setState({ styleGuidesBeta: true }));
     const keywords = [...el.querySelectorAll(".skill-keyword")];
     expect(keywords).toHaveLength(1);
     expect(keywords[0]!.textContent).toBe("@tech-brief");
     expect(keywords[0]!.getAttribute("data-kind")).toBe("style");
 
+    const textarea = el.querySelector<HTMLTextAreaElement>("#chat-box")!;
     await act(async () => {
       textarea.focus();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Make a title @te");
       textarea.setSelectionRange(16, 16);
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     });
@@ -255,16 +242,11 @@ it("offers @style autocomplete in chat and highlights known @style mentions in s
   }
 });
 
-it("keeps Style guides hidden in Settings until the user turns on Style guides (Beta)", async () => {
+it("shows Style guides in Settings without a beta toggle", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const db = buildDb();
-  let current = { ...db.settings, styleGuidesBeta: false };
-  vi.spyOn(api, "settings").mockImplementation(async () => ({ settings: current, transcriptionAvailable: true }));
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
   vi.spyOn(api, "localModelStatus").mockResolvedValue({ state: "ready" });
-  const updateSettings = vi.spyOn(api, "updateSettings").mockImplementation(async patch => {
-    current = { ...current, ...patch };
-    return { settings: current };
-  });
 
   const el = document.createElement("div");
   document.body.append(el);
@@ -276,22 +258,9 @@ it("keeps Style guides hidden in Settings until the user turns on Style guides (
 
   try {
     await act(async () => root.render(<RouterProvider router={router} />));
-    const nav = () => el.querySelector('nav[aria-label="Settings sections"]')?.textContent ?? "";
-    expect(nav()).not.toContain("Style guides");
-
-    const toggle = el.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Style guides (Beta)"]')!;
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    await act(async () => toggle.click());
-    expect(updateSettings).toHaveBeenCalledWith({ styleGuidesBeta: true });
-    expect(useUiStore.getState().styleGuidesBeta).toBe(true);
-    expect(nav()).toContain("Style guides");
-
-    // Turning it back off hides the tab again
-    await act(async () => toggle.click());
-    expect(updateSettings).toHaveBeenCalledWith({ styleGuidesBeta: false });
-    expect(nav()).not.toContain("Style guides");
-    // Ensure direct StyleGuidesBetaSettings component stays usable standalone
-    expect(StyleGuidesBetaSettings).toBeTypeOf("function");
+    const nav = el.querySelector('nav[aria-label="Settings sections"]')?.textContent ?? "";
+    expect(nav).toContain("Style guides");
+    expect(el.querySelector('[role="switch"][aria-label="Style guides (Beta)"]')).toBeNull();
   } finally {
     await act(async () => root.unmount());
     el.remove();

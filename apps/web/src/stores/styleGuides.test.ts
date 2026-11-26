@@ -3,18 +3,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { StyleGuideRecord } from "@scarlet/shared";
 import { api } from "../lib/client";
 import { commandStyleGuideIds, useStyleGuidesStore } from "./styleGuides";
-import { useUiStore } from "./ui";
 
 const guide = { id: "sg_brand", name: "brand", isDefault: false } as StyleGuideRecord;
-let beta: boolean;
 
 beforeEach(() => {
-  beta = useUiStore.getState().styleGuidesBeta;
-  useUiStore.setState({ styleGuidesBeta: true });
   useStyleGuidesStore.setState({ styleGuides: [], status: "idle", error: null });
 });
 afterEach(() => {
-  useUiStore.setState({ styleGuidesBeta: beta });
   vi.restoreAllMocks();
 });
 

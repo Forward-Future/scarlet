@@ -357,7 +357,7 @@ describe("style_guide_edit authoring flow and project isolation", () => {
 });
 
 describe("prompt resolution priority (chat @mention > skill @mention > default)", () => {
-  it("stays off until Style guides (Beta) is enabled, then applies default and @mention overrides", async () => {
+  it("applies default style guide automatically and honors @mention overrides", async () => {
     const defGuide = (await (await api("POST", "/style-guides", {
       name: "channel-default",
       description: "Default cream look",
@@ -369,20 +369,6 @@ describe("prompt resolution priority (chat @mention > skill @mention > default)"
       description: "Neon cyberpunk look",
       instructions: "NEON_DARK_RULE",
     })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
-
-    // 0. While Style guides (Beta) is off (default), no style guide is injected into prompts.
-    const tOff = (await (await api("POST", `/projects/${project.id}/tasks`, {
-      agent: "claude",
-      instruction: "Add a chapter card in @neon-dark",
-      context: { styleGuideIds: [altGuide.id] },
-    })).json() as { task: Task }).task;
-    const pOff = await prompt(tOff);
-    expect(pOff).not.toContain("DEFAULT_CREAM_RULE");
-    expect(pOff).not.toContain("NEON_DARK_RULE");
-
-    // Enable Style guides (Beta) in settings.
-    const enableRes = await api("PATCH", "/settings", { styleGuidesBeta: true });
-    expect(enableRes.status).toBe(200);
 
     // 1. Plain request with no @mention gets the default style automatically.
     const t1 = (await (await api("POST", `/projects/${project.id}/tasks`, {
