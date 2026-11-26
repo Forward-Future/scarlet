@@ -15,7 +15,7 @@ import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { requestAttempt, requireProjectEditAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
-import { logId, throttledLog } from "../logText.js";
+import { clip, logId, throttledLog } from "../logText.js";
 import { serveFile, serveOriginal } from "../files.js";
 import { getTranscriptionProvider, importTranscriptionPolicy } from "../transcribe/index.js";
 import { AnalysisCache } from "../services/analysisCache.js";
@@ -132,7 +132,11 @@ export function mediaRoutes(ctx: Ctx) {
       const file = await fileInDirectoryAsync(ctx.paths.media(source.projectId), source.path);
       if (file) {
         const signal = AbortSignal.any([ctx.projectSignal(source.projectId), c.req.raw.signal]);
-        const probed = await ctx.track(ctx.render.probeMedia(file, signal), source.projectId).catch(() => undefined);
+        const probed = await ctx.track(ctx.render.probeMedia(file, signal), source.projectId).catch(error => {
+          // The choice is then checked against one track, and a valid second track is refused.
+          if (!signal.aborted) ctx.log(`[media] ${logId(source.id)}: couldn't read its audio tracks: ${clip((error as Error)?.message ?? String(error))}`);
+          return undefined;
+        });
         if (probed?.audioStreams && probed.audioStreams.length > 1) streams = probed.audioStreams;
       }
     }
@@ -246,15 +250,18 @@ export function mediaRoutes(ctx: Ctx) {
   // Expand dropped folders into the video files inside them; individual files and URLs pass through unchanged.
   r.post("/media/expand-paths", async (c) => {
     const { paths } = await jsonBody(c, z.object({ paths: z.array(z.string().min(1).max(4096)).max(1000) }));
-    return c.json(await expandMediaPaths(paths, { signal: c.req.raw.signal }));
+    return c.json(await expandMediaPaths(paths, { signal: c.req.raw.signal, log: line => ctx.log(line) }));
   });
 
   // Show the first frame while a large original is still being copied into the project.
   r.post("/projects/:id/media/import-frame", async c => {
-    requireProjectHeader(ctx, c.req.param("id"));
+    const project = requireProjectHeader(ctx, c.req.param("id"));
     const { path } = await jsonBody(c, z.object({ path: z.string() }));
     if (!isAbsolute(path) || !(await stat(path).catch(() => null))?.isFile()) throw notFound("source file");
-    const hdr = (await ctx.render.probeMedia(path, c.req.raw.signal).catch(() => undefined))?.color?.hdr;
+    const hdr = (await ctx.render.probeMedia(path, c.req.raw.signal).catch(error => {
+      if (!c.req.raw.signal.aborted) ctx.log(`[media] import_frame project=${logId(project.id)}: couldn't read the original's colour, showing it without HDR tone mapping: ${clip((error as Error)?.message ?? String(error))}`);
+      return undefined;
+    }))?.color?.hdr;
     const jpeg = await ctx.render.extractFrame(path, 0, { width: 960, signal: c.req.raw.signal, hdr });
     return new Response(new Uint8Array(jpeg), { headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-store" } });
   });
@@ -361,6 +368,7 @@ export function mediaRoutes(ctx: Ctx) {
     if (task.state === "done") return c.json({ state: "ready" });
     if (task.state === "failed" && task.interrupted) throw conflict("transcription_unavailable",
       "The interrupted transcription cannot resume with the current provider. Retry it from Media.");
+    // The transcription logs its own outcome ([transcribe]) and fails its task.
     ctx.track(done.catch(() => null), project.id);
     return c.json({ state: "processing", taskId: task.id }, 202);
   });
@@ -516,7 +524,7 @@ export function mediaRoutes(ctx: Ctx) {
     const body = await jsonBody(c, z.object({ provider: z.enum(["openai", "whispercpp"]).optional() }));
     requireAudio(media);
     const { status: _s, error: _e, projectId, ...asset } = media;
-    // Runs in the background; the task is returned immediately and updated over WS.
+    // Runs in the background; the task is returned immediately and updated over WS. It logs its own outcome ([transcribe]).
     const { task, done } = startTranscription(ctx, projectId, asset, body.provider, "refuse");
     ctx.track(done.catch(() => null), projectId);
     return c.json({ task }, 202);
@@ -545,7 +553,11 @@ export function mediaRoutes(ctx: Ctx) {
     const area = asked?.map(n => n / 100) as [number, number, number, number] | undefined;
     const grid = c.req.query("grid") === "1" && media.width && media.height ? { width: media.width, height: media.height } : undefined;
     // A file imported before Scarlet read colour has it read here: an HDR original's frame is tone-mapped to SDR.
-    const hdr = media.color ? media.color.hdr : (await ctx.render.probeMedia(file).catch(() => undefined))?.color?.hdr;
+    const hdr = media.color ? media.color.hdr : (await ctx.render.probeMedia(file).catch(error => {
+      // Asked again with every scrub of an older import, so once a minute per file.
+      frameFallback(`color/${media.id}`, `[media] color_probe_failed media=${logId(media.id)} project=${logId(media.projectId)}, frames shown without HDR tone mapping: ${clip((error as Error)?.message ?? String(error))}`);
+      return undefined;
+    }))?.color?.hdr;
     const key = JSON.stringify([file, media.hash, source.size, source.mtimeMs, source.ctimeMs, t, w, preview, area, !!grid, hdr]);
     const frame = async (demand: AbortSignal) => {
       const signal = AbortSignal.any([demand, ctx.projectSignal(media.projectId)]);
@@ -554,9 +566,9 @@ export function mediaRoutes(ctx: Ctx) {
         const picture = await previewPictures(ctx.paths.media(media.projectId), { signal })(media, t, t + 1 / media.fps, minimumHeight);
         if (picture) {
           try { return await ctx.render.extractFrame(picture.file, Math.max(0, t - picture.start), { width: w, signal, indexedMp4: true, fps: media.fps }); }
-          catch {
+          catch (error) {
             signal.throwIfAborted();
-            frameFallback(media.id, `[media] frame_fallback media=${logId(media.id)} project=${logId(media.projectId)} reason=cached_preview`);
+            frameFallback(media.id, `[media] frame_fallback media=${logId(media.id)} project=${logId(media.projectId)} reason=cached_preview: ${clip((error as Error)?.message ?? String(error))}`);
           }
         }
       }

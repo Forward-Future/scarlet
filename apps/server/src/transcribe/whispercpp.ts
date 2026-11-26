@@ -215,13 +215,14 @@ export class WhisperCppProvider implements TranscriptionProvider {
         // The adapter maps the dialogue prompt to its own verbatim mode, so a prompt changes nothing it reads.
         try {
           await crisperWorker.transcribe({ binary, args: ["-I", "-B", script, "--serve", "-m", model, "-t", String(whisperThreads())], wav, out: base,
-            language: language || this.opts.language || "auto", progress: !!onProgress, signal, onStderrLine });
+            language: language || this.opts.language || "auto", progress: !!onProgress, signal, onStderrLine, log: this.opts.log });
           return await this.readRun(base);
         } catch (error) {
           // A standalone adapter installed before the worker existed reads one file per run, and refuses --serve
           // without -f. It still reads that way.
           if (!(error instanceof FfmpegError && /unrecognized arguments: --serve|arguments are required: -f/.test(error.stderr))) throw error;
           oneShotAdapters.add(script);
+          this.opts.log?.("[transcribe] This CrisperWhisper adapter can't stay running between readings, so it starts once for each window until Scarlet restarts.");
         }
       }
       const args = script ? ["-I", "-B", script] : [];

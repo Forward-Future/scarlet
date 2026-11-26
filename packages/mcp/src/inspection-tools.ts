@@ -360,7 +360,7 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
         return json({ mediaId, reading: state.error ? `The recording's edges could not be read: ${state.error}` : "The recording's edges are still being read: call again for where each area holds and what is unset.", areas });
       }
       // What the edit as it stands plays of each unset stretch: those are the ones a save will ask about.
-      const timeline = await baseTimeline().catch(() => null);
+      const timeline = await baseTimeline().catch(withoutOnce("failed to read the timeline for the unset areas it plays", null));
       const plays = (timeline?.tracks ?? []).filter(t => t.kind === "video" && !t.hidden).flatMap(t => t.clips)
         .filter((c): c is MediaClip => c.kind === "media" && c.enabled !== false && c.mediaId === mediaId);
       const unset = state.unset.map(([from, to]) => {
@@ -373,7 +373,7 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
       const images = await Promise.all(shown.map(async u => {
         try {
           return { look: u.look, ...await sourceFrame(mediaId, u.look, 1280, undefined, true) };
-        } catch { return undefined; }
+        } catch (err) { return withoutOnce(`failed to read a picture of ${mediaId} where its areas are unset`, undefined)(err); }
       }));
       const seen = images.filter((i): i is NonNullable<typeof i> => !!i);
       const body = { mediaId, ...(stillLooking && { stillLooking: `${stillLooking} frame${stillLooking === 1 ? " is" : "s are"} still being looked at: call again for their areas` }), areas, unset: unset.slice(0, 60), ...(unset.length > 60 && { moreUnset: unset.length - 60 }),

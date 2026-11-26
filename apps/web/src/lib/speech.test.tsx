@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { flushAppLog, startAppLog, stopAppLog } from "./appLog";
 import { api } from "./client";
 import type { RecorderResult } from "./recorder";
 import { useSpeech } from "./speech";
@@ -66,4 +67,19 @@ it("reports why when the engine can't transcribe, or when the text can't be sent
   expect(failed).toHaveBeenLastCalledWith("Scarlet is offline");
   expect(failed).toHaveBeenCalledTimes(2);
   expect(speech.busy).toBe(false);
+});
+
+it("logs how each transcription went by its size and time, never by its words", async () => {
+  const lines: string[] = [];
+  startAppLog(written => lines.push(...written));
+  try {
+    const send = vi.spyOn(api, "speechToText").mockResolvedValue({ text: " trim the intro " });
+    await act(() => speech.handle(recording));
+    send.mockRejectedValue(new Error("Speech model is still downloading"));
+    await act(() => speech.handle(recording));
+    flushAppLog();
+  } finally { stopAppLog(); }
+  expect(lines.some(line => /\[voice\].* transcribed .*bytes=5 chars=14/.test(line))).toBe(true);
+  expect(lines.some(line => /\[voice\].* transcribe-failed .*name=Error/.test(line))).toBe(true);
+  expect(lines.join("\n")).not.toMatch(/trim the intro|downloading/);
 });

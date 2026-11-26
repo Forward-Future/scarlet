@@ -243,12 +243,17 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const heardKept = new Set<string>();
   const keptThread = ctx.task && ["edit", "note", "revise"].includes(ctx.task.kind) ? ctx.task.context.threadId ?? ctx.task.id : undefined;
   let keptAskedAt = 0;
+  let keptFailure: string | undefined;
   async function keptLine() {
     if (!keptThread || Date.now() - keptAskedAt < 5000) return undefined;
     keptAskedAt = Date.now();
     try {
       return keptEditsNote((await client.keptEdits(ctx.projectId, keptThread)).kept, heardKept);
-    } catch {
+    } catch (err) {
+      // Asked again on the next call: say why once, not every few seconds.
+      const why = describeError(err);
+      if (why !== keptFailure && !diagnosticSessionClosed) console.error(`[scarlet-mcp] task ${ctx.taskId}: failed to read the edits the editor kept: ${why}`);
+      keptFailure = why;
       return undefined;
     }
   }

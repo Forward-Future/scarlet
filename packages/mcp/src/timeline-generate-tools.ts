@@ -71,7 +71,7 @@ export interface TimelineGenerateToolsDeps {
 export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
   const { tool, client, projectId, taskId, task, caps, session, errors, proposePipeline, useStagedCut } = deps;
   const { getProject, peekTimeline, baseTimeline, headTimelineOrNull, transcriptWords, edgesInSound, edgeInSoundText, planSources, edgeWaitMs } = session;
-  const { withoutUnlessPreparing } = errors;
+  const { withoutUnlessPreparing, withoutOnce, unavailableOnce } = errors;
   const { recordingAreas, propose, presetInsetOver, presetInsetText } = proposePipeline;
   const intentInput = makeIntentInput(Boolean(taskId));
 
@@ -116,7 +116,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       const place = () => framingOps(before, project.media, project.settings,
         framings.map((f, i) => ({ at: f.at, show: fraction(f.show), within: f.within ? fraction(f.within) : withinOnRecord[i], over: f.over, ...(f.ease && { ease: f.ease }), inset: corners[i] })), { mediaId, trackId, to });
       let plan = place();
-      const areasOnRecord = await recordingAreas(mediaId, 5).catch(() => undefined);
+      const areasOnRecord = await recordingAreas(mediaId, 5).catch(withoutOnce(`failed to read the areas viewers may see in ${mediaId}`, undefined));
       if (areasOnRecord?.done && areasOnRecord.areas.length) {
         withinOnRecord = framings.map((f, i) => {
           const at = plan.frames[i]?.sourceTime;
@@ -133,7 +133,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
           const read = await client.get<{ done: boolean; spans: Array<{ text: string; box: [number, number, number, number] }> }>(
             `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/screen-text?from=${f.sourceTime}&to=${f.sourceTime + 1}&wait=${framings[i]!.inset === "clear" ? 20 : 2}`);
           return read.done ? read.spans : undefined;
-        } catch { return undefined; }
+        } catch (err) { unavailableOnce(`failed to read the screen text of ${mediaId} for framing`, err); return undefined; }
       }));
       // `clear`: the inset's own corner when no text of the frame is under it there, else the corner it is in, else
       // another with none. Moving it moves the frame that keeps `show` clear of it, so each choice is checked again
@@ -172,7 +172,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
           const read = await client.get<{ done: boolean; cuts: RecordingCut[] }>(
             `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/picture-cuts?from=${srcMin}&to=${srcMax}&wait=2`);
           return read.cuts;
-        } catch { return undefined; }
+        } catch (err) { unavailableOnce(`failed to read where ${mediaId} cuts for framing`, err); return undefined; }
       })() : undefined;
       const beforeClip = before.tracks
         .filter(t => t.kind === "video" && !t.hidden && (!trackId || t.id === trackId))
@@ -422,7 +422,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         next: "Choose destination new or supply replaceTrackId. No tracks were changed." });
       const target = typeof destination === "object" ? tracks.find(t => t.id === destination.replaceTrackId) : undefined;
       if (typeof destination === "object" && !target) throw new Error("Choose a caption track on the current version.");
-      const activeGuides = (await client.activeStyleGuides?.({ projectId, taskId }).catch(() => ({ styleGuides: [] })))?.styleGuides ?? [];
+      const activeGuides = (await client.activeStyleGuides?.({ projectId, taskId }).catch(withoutOnce("failed to read the active style guides for captions", { styleGuides: [] })))?.styleGuides ?? [];
       const styledGuide = activeGuides.find(g => g.captionStyle && Object.keys(g.captionStyle).length > 0);
       const guideStyle = styledGuide?.captionStyle;
       const sources = new Set(detail.project.media.filter(carriesAudio).map(m => m.id));

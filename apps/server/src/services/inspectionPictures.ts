@@ -93,7 +93,11 @@ export function inspectionPictures(ctx: Ctx) {
           const origin = cached.range?.start ?? 0;
           return await pictureLane(ctx).run(() =>
             contactSheet(file, { start: range.start - origin, end: range.end - origin }, { origin, fps, count, mode, focus, signal }), { signal });
-        } catch { signal.throwIfAborted(); } // A missing or damaged preview can be sampled from the original cut.
+        } catch (error) {
+          // A missing or damaged preview can be sampled from the original cut.
+          signal.throwIfAborted();
+          retried("preview", `[inspection] the rendered preview of ${timeline.version} couldn't be read: sampling the original cut instead: ${clip((error as Error)?.message ?? String(error), 300)}`);
+        }
       }
 
       const activity = mode === "activity";

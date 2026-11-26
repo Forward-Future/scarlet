@@ -20,6 +20,8 @@ export interface RowTooltipContext {
   media?: readonly Pick<MediaAsset, "id" | "name">[];
   fps?: number;
   status?: string;
+  /** The model at work on it now, while Scarlet adds or revises it ("B-roll · Gemini 3 Pro" when handed off). */
+  by?: string;
   version?: number;
   places?: number;
 }
@@ -142,17 +144,17 @@ function humanizeDetail(kind: EditLike["kind"], raw: string): string {
       const verb = dipped[2] === "down" ? "lowered" : "raised";
       return `${subject}${verb} to ${dipped[3]}`;
     }
-    const leveled = /^(.+?)\s+([+−-]\d+ dB)$/.exec(first);
-    if (leveled) {
-      const subject = leveled[1] === "Sound" ? "" : `${leveled[1]} `;
-      const dir = leveled[2]!.startsWith("+") ? "louder" : "quieter";
-      return `${subject}${dir} (${leveled[2]})`;
-    }
     const added = /^Added (.+?),\s*([+−-]\d+ dB|muted|at full level)$/.exec(first);
     if (added) {
       if (added[2] === "muted") return `Added ${added[1]} (muted)`;
       if (added[2] === "at full level") return `Added ${added[1]}`;
       return `Added ${added[1]} (${added[2]})`;
+    }
+    const leveled = /^(.+?)\s+([+−-]\d+ dB)$/.exec(first);
+    if (leveled) {
+      const subject = leveled[1] === "Sound" ? "" : `${leveled[1]} `;
+      const dir = leveled[2]!.startsWith("+") ? "louder" : "quieter";
+      return `${subject}${dir} (${leveled[2]})`;
     }
     return first.replace(/^Sound muted$/, "Muted").replace(/at full level$/, "at full volume");
   }
@@ -522,6 +524,7 @@ export function editRowTooltip(edit: EditLike, ctx: RowTooltipContext = {}): Row
 
   if (ctx.places && ctx.places > 1) parts.push(`in ${ctx.places} places`);
   if (ctx.status && ctx.status !== "Rejected") parts.push(ctx.status);
+  if (ctx.by) parts.push(ctx.by);
 
   // Quiet detail line underneath: review cue when waiting, to-do ask, or Scarlet's reason when distinct from the row title.
   const waitingCheck = !edit.rejected && ctx.status !== "Kept" && ctx.status !== "Done" && edit.check && edit.check !== REVISED_CHECK

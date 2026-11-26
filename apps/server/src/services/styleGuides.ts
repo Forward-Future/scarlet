@@ -35,6 +35,8 @@ import { newId, type Author, type CaptionStyle, type MediaAsset } from "@scarlet
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
+import { clip, humanDuration, throttledPerCtx } from "../logText.js";
+import { errorMessage } from "../util.js";
 import { actorFor, authorName, logActivity, quote } from "./activity.js";
 import { ingestMedia } from "./ingest.js";
 import { assistantSkills } from "./skills.js";
@@ -225,7 +227,10 @@ export async function saveStyleGuideAsset(
   const detected = mime && mime !== "application/octet-stream" ? mime.slice(0, 200) : mimeFor(basename(file));
   let duration: number | undefined;
   if ((detected?.startsWith("audio/") || AUDIO_EXTENSION.test(file)) && size > 0) {
-    const probed = await ctx.render.probeMedia(file, signal).catch(() => null);
+    const probed = await ctx.render.probeMedia(file, signal).catch((error: unknown) => {
+      if (!signal?.aborted) ctx.log(`[style-guides] ${guideId}: the length of sound ${id} couldn’t be read, it is saved without one: ${clip(errorMessage(error).split(file).join("<sound>").split(basename(file)).join("<sound>"))}`);
+      return null;
+    });
     if (probed && probed.duration > 0) duration = Math.round(probed.duration * 1000) / 1000;
   }
   const asset: StyleGuideAsset = {
@@ -381,6 +386,7 @@ export async function importStyleGuideSoundToProject(
 
   const existingMedia = project.media.find(m => m.kind === "audio" && m.hash === hash);
   if (existingMedia) {
+    ctx.log(`[style-guides] sound ${body.builtInId || body.soundId?.startsWith("builtin:") ? "built-in" : "from a style guide"} is already ${existingMedia.id} in ${projectId}: reused`);
     return {
       media: existingMedia,
       name: soundName,
@@ -475,6 +481,7 @@ export async function renderStyleGuidePreview(
   const width = body.width ?? PREVIEW_WIDTH;
   const height = body.height ?? PREVIEW_HEIGHT;
   const at = body.at ?? 0.5;
+  const started = Date.now();
   const previewDir = ctx.paths.styleGuidePreview(guideId);
   const staging = `${previewDir}.${randomUUID()}`;
   await mkdir(staging, { recursive: true, mode: 0o700 });
@@ -500,6 +507,7 @@ export async function renderStyleGuidePreview(
       signal,
     });
     if (drawn.missingFonts.length) {
+      ctx.log(`[style-guides] ${guideId}: preview not saved, ${drawn.missingFonts.length} font${drawn.missingFonts.length === 1 ? " is" : "s are"} missing (${humanDuration(Date.now() - started)})`);
       return {
         missingFonts: drawn.missingFonts,
         ...(drawn.installedFonts.length && { installedFonts: drawn.installedFonts }),
@@ -514,10 +522,13 @@ export async function renderStyleGuidePreview(
     const jpeg = await ctx.render
       .extractFrame(pngPath, 0, { width: 960, signal })
       .then(buf => buf.toString("base64"))
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        if (!signal?.aborted) ctx.log(`[style-guides] ${guideId}: the preview's small picture couldn’t be made: ${clip(errorMessage(error))}`);
+        return undefined;
+      });
 
     await mkdir(dirname(previewDir), { recursive: true, mode: 0o700 });
-    await swapInFolder(staging, previewDir);
+    await swapInFolder(staging, previewDir, line => ctx.log(`[style-guides] ${guideId} preview: ${line}`));
     swapped = true;
 
     const updatedAt = now();
@@ -526,6 +537,7 @@ export async function renderStyleGuidePreview(
       if (!current) throw notFound(`style guide ${guideId}`);
       return updateStyleGuide(ctx, null, current, { preview: { updatedAt, width, height } });
     }, "immediate")();
+    ctx.log(`[style-guides] ${guideId}: preview saved ${width}x${height} in ${humanDuration(Date.now() - started)}${drawn.problems.length ? `, ${drawn.problems.length} problem${drawn.problems.length === 1 ? "" : "s"} on the page` : ""}`);
 
     return {
       styleGuide: saved,
@@ -540,6 +552,8 @@ export async function renderStyleGuidePreview(
   }
 }
 
+const previewFailures = throttledPerCtx();
+
 export async function styleGuidePreviewSource(ctx: Ctx, guideId: string, signal?: AbortSignal) {
   const guide = ctx.repos.styleGuides.get(guideId);
   if (!guide) throw notFound(`style guide ${guideId}`);
@@ -552,7 +566,11 @@ export async function styleGuidePreviewSource(ctx: Ctx, guideId: string, signal?
   const jpeg = await ctx.render
     .extractFrame(pngPath, 0, { width: 960, signal })
     .then(buf => buf.toString("base64"))
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      // Asked for each time the guide's page opens, so a picture that can't be read is logged once a minute.
+      if (!signal?.aborted) previewFailures(ctx)(guideId, `[style-guides] ${guideId}: the saved preview's picture couldn’t be read: ${clip(errorMessage(error))}`);
+      return undefined;
+    });
   return {
     html,
     width: guide.preview?.width ?? PREVIEW_WIDTH,
@@ -603,8 +621,9 @@ function cleanLinkedName(rel: string): string {
 function summarizeGraphicStyle(name: string, html: string, assets: StyleGuideAsset[]): string {
   const colors = [...new Set(html.match(/#(?:[0-9a-f]{3,8})\b|rgba?\([^)]+\)/gi) ?? [])].slice(0, 12);
   const fonts = [...new Set(
-    Array.from(html.matchAll(/font-family\s*:\s*([^;}"'\n]+)/gi), m => m[1]!.trim()),
-  )].slice(0, 6);
+    // A family list may quote names ("Brand Serif", serif); a quote that runs into markup ends an HTML attribute instead.
+    Array.from(html.matchAll(/font-family\s*:\s*((?:"[^"\n<>;{}]*"|'[^'\n<>;{}]*'|[^;}"'\n<>])+)/gi), m => m[1]!.replace(/["']/g, "").trim()),
+  )].filter(Boolean).slice(0, 6);
   const lines = [
     `Saved from the project graphic "${name}". Match its visual language across captions, lower thirds, chapter titles, callout boxes, and overlays.`,
   ];
@@ -631,6 +650,7 @@ export async function createStyleGuideFromGraphic(
 
   const cleanTitle = media.name.replace(/\.mov$/i, "");
   const description = body.description?.trim() || `Saved from ${cleanTitle}`;
+  const started = Date.now();
 
   // Create the guide first so its directory ID is reserved, then copy assets and render the preview.
   const created = ctx.db.transaction(
@@ -675,17 +695,23 @@ export async function createStyleGuideFromGraphic(
     const width = media.width && media.width > 0 ? media.width : PREVIEW_WIDTH;
     const height = media.height && media.height > 0 ? media.height : PREVIEW_HEIGHT;
     const at = media.duration ? Math.min(media.duration * 0.5, 1.5) : 0.5;
+    const savedLine = `[style-guides] ${updated.id} saved from graphic ${media.id} with ${copiedAssets.length} file${copiedAssets.length === 1 ? "" : "s"}`;
     try {
       const rendered = await renderStyleGuidePreview(ctx, updated.id, { html: rewrittenHtml, width, height, at }, signal);
-      if (rendered.styleGuide) return rendered.styleGuide;
+      if (rendered.styleGuide) {
+        ctx.log(`${savedLine} in ${humanDuration(Date.now() - started)}`);
+        return rendered.styleGuide;
+      }
     } catch (error) {
       // If Chrome isn't installed in a headless environment, keep the saved style guide + assets without failing the save.
       if (!(error instanceof ChromeNotFound)) {
-        ctx.log(`[style-guides] initial preview render skipped for ${updated.id}: ${(error as Error).message}`);
+        ctx.log(`[style-guides] initial preview render skipped for ${updated.id}: ${clip(errorMessage(error))}`);
       }
     }
+    ctx.log(`${savedLine}, without a preview, in ${humanDuration(Date.now() - started)}`);
     return ctx.repos.styleGuides.get(updated.id) ?? updated;
   } catch (error) {
+    ctx.log(`[style-guides] saving ${created.id} from graphic ${media.id} failed after ${humanDuration(Date.now() - started)} and it was removed: ${clip(errorMessage(error))}`);
     ctx.db.transaction(() => {
       const current = ctx.repos.styleGuides.get(created.id);
       if (current) deleteStyleGuide(ctx, current, null);
@@ -862,7 +888,10 @@ export function importStyleGuideDefinition(
   const baseName = fileName.replace(/\.(?:style\.)?json$/i, "");
   const existingAssetIds = new Set(existing?.assets.map(a => a.id) ?? []);
   const parsed = parseStyleGuideDefinitionJson(rawText, { fallbackName: baseName, existingAssetIds });
-  if (!parsed) return { imported: false };
+  if (!parsed) {
+    ctx.log(`[style-guides] the file isn't a style guide definition${existing ? ` for ${existing.id}` : ""}: it goes to Scarlet in chat`);
+    return { imported: false };
+  }
 
   const styleGuide = ctx.db.transaction(() => {
     if (existing) {
@@ -899,5 +928,6 @@ export function importStyleGuideDefinition(
     );
   }, "immediate")();
 
+  ctx.log(`[style-guides] definition imported ${existing ? "into" : "as a new guide,"} ${styleGuide.id}`);
   return { imported: true, styleGuide };
 }

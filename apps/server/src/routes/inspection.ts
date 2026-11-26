@@ -7,6 +7,7 @@ import { applyOps, diffTimelines, timelineDuration, TimelineOp, type MediaAsset,
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest, conflict, notFound } from "../errors.js";
+import { clip, logId, throttledLog } from "../logText.js";
 import { prepareCutReview } from "../services/changes.js";
 import { sharedDialogueDetector } from "../services/dialogueDetections.js";
 import { transcribeForDialogue } from "../services/transcription.js";
@@ -69,6 +70,8 @@ export function inspectionRoutes(ctx: Ctx) {
   type Analysis = Pick<InspectionWindow, "jpeg" | "columns" | "timestamps" | "events" | "wav" | "note">;
   const cache = new AnalysisCache<Analysis>(a =>
     a.jpeg.length + (a.wav?.length ?? 0) + (a.events?.length ?? 0) * 64 + a.timestamps.length * 8, 24 * 1024 * 1024);
+  // A source without a usable preview copy misses it on every sheet of a pass, so once a minute per source.
+  const noCopy = throttledLog(ctx.log);
 
   // Sheet tiles are at most 320x180 and activity compares 192x108 frames, so a source's verified
   // preview copy shows what its original would, decoding about six times faster than 4K.
@@ -78,8 +81,13 @@ export function inspectionRoutes(ctx: Ctx) {
     const root = ctx.paths.media(project.id);
     // A sheet's tiles and a window's activity are pictures at their times, so a recording without a steady frame rate
     // is read from its whole copy too.
-    return await previewPictures(root)(media, range.start, range.end, height).catch(() => undefined)
-      ?? await previewCopyByTime(root, media, height).catch(() => undefined);
+    return await previewPictures(root)(media, range.start, range.end, height).catch(error => {
+      noCopy(`pictures/${media.id}`, `[inspection] Preview pictures of ${logId(media.id)} unavailable, trying its whole copy: ${clip((error as Error)?.message ?? String(error))}`);
+      return undefined;
+    }) ?? await previewCopyByTime(root, media, height).catch(error => {
+      noCopy(`copy/${media.id}`, `[inspection] Preview copy of ${logId(media.id)} unavailable, reading its original: ${clip((error as Error)?.message ?? String(error))}`);
+      return undefined;
+    });
   }
 
   /** The file to listen to, and what to hear from it: a confirmed voice's input, or the track the editor chose. */

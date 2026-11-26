@@ -121,16 +121,22 @@ Times are in UTC. Scarlet rotates the log at 5 MB and keeps the five previous fi
 | Log tag | Where to look |
 | --- | --- |
 | `[engine] [task]`, `[host]` | Queue blockers, claim, completion, cancellation, recovery and retry. Host completion records the requested state and the state acknowledged by the engine. |
+| `[scarlet-agent]`, `[host] quota-refresh` | Each assistant CLI run: how it was started (flag names only, never the prompt), its exit code or signal, elapsed time and stderr tail on failure, stalls, time limits, retries and unreadable output lines. Assistant detection, model catalog refreshes and subscription quota checks when their result changes. |
 | `[engine] [mcp]` | Tool names, elapsed time, outcomes and counts of missing measurements for the attempt. |
-| `[engine] [transcribe]`, `[engine] [audio]` | Transcript progress, audio work and queue delays. **Finish when ready** resumes a paused edit once its transcripts are saved. |
+| `[engine] [transcribe]`, `[engine] [audio]` | Transcript progress, audio work and queue delays, helper processes starting and exiting, and GPU to CPU fallbacks. **Finish when ready** resumes a paused edit once its transcripts are saved. |
+| `[engine] [ingest]`, `[engine] [web-video]` | Footage added from a file or a link: bytes downloaded or copied, fingerprinting, preview copies and where an import stopped. Web video pages, captions and parts saved for B-roll (never the address). |
+| `[engine] [db]`, `[engine] [lifecycle]` | Library schema migrations with their times, lookup index rebuilds, engine startup time and what a quit waited for. |
+| `[engine] [cleanup]`, `[engine] [telemetry]` | Voice-note cleanup outcomes (provider, model, time, never the note) and dropped usage reports. |
 | `[engine] [edit]`, `[project]`, `[render]`, `[media]`, `[activity]` | Applied changes and versions, render warnings, footage and project history. |
+| `[engine] [graphics]`, `[skills]`, `[review]`, `[inspection]`, `[align]`, `[whisper]` | Graphics and style guide renders, skill changes, review decisions, picture checks and their fallbacks, word alignment and the transcription runtime in use. |
 | `[ui] [action]`, `[ui] [nav]` | The control or shortcut used and the page it opened. |
 | `[ui] [request]` | What became of each message: the draft starting and emptying (its length, never its words), each press of send and what it did (`send`, `send-ignored reason=…`, `send-refused`, `send-failed`), and the request the engine made of it (`created task=…`, `answered`, `revision-created`, `note-created`). |
 | `[ui] [voice]`, `[ui] [marks]`, `[ui] [timeline]`, `[ui] [export]` | Recordings started and stopped and why, marks on a frame, ranges set and cleared, and each export's outcome. |
 | `[ui] [api]`, `[engine] [http]` | The window’s request, the engine’s response, failures and slow calls. |
 | `[engine] [transfer]`, `[export]` | File reads and native saves. The engine logs bytes read from disk and the desktop logs bytes received and where the save stopped. |
 | `[ui] [realtime]`, `[engine] [ws]` | Events that changed the interface and connections that dropped or recovered. |
-| `[ui] [playback]` | Player state, transport commands, streams, dropped frames and stalls. A new `el=` identifies a replacement video element. |
+| `[ui] [playback]` | Player state, transport commands, streams, dropped frames and stalls, and each change in a cut's preview cache (`cache …`) with its time to ready. A new `el=` identifies a replacement video element. |
+| `[desktop]` | Engine and agent host start, readiness time and stop, FFmpeg installs, update downloads, storage scans and events that failed to reach the window. |
 | `[ui] [error]` | UI, microphone, asset and export errors. Search for `WARN` or `ERROR` across the log for failures from other components. |
 
 By default, the desktop host stops an agent after ten minutes without CLI output. In `desktop.json`, `stallMinutes` controls that interval and `timeoutMinutes` sets an optional total run limit. Zero disables the corresponding limit. A stopped run keeps its saved work, and **Resume** continues from there.

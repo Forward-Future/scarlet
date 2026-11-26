@@ -4,7 +4,7 @@ import { AimRow } from "./AimRow";
 import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { asksEditor, editGroups, listPlaces, noEdits, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
+import { asksEditor, editGroups, listPlaces, noEdits, pressAdd, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
 import { clock as clockLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
 import { editKey, keepEdits, unkeepEdits } from "../../lib/keptEdits";
@@ -101,32 +101,46 @@ export function addInstruction(ask?: string) {
   return `The editor asked you to add what this to-do asks for${ask?.trim() ? `: “${ask.trim()}”` : ""}. Make or find it, put it in the video at this spot, and mark the to-do resolved.`;
 }
 
+/** Why an Add didn't go, by its to-do: the card went on at the press, so the reason waits on the to-do's card. */
+const addFailures = new Map<string, string>();
+
 /**
  * Add on a to-do's card: Scarlet is asked to make or find what the to-do says to add and put it in the video there,
  * with the same agent and the same target as typing it would. The editor pressed Add and wrote nothing, so the
  * request reads "Add it" under its to-do's tag, in the chat and in the queue; what Scarlet is told is the instruction.
+ * `onPress` comes with the press, so the card can go on at once and a quick run of A presses adds every to-do: the
+ * to-do counts as queued from then. `onSent` follows once the request is in; `onFailed` if it couldn't be sent.
  */
-export function AddTodo({ projectId, thread, target, ask, onSent }: { projectId: string; thread: Thread; target: AgentContext;
-  ask?: string; onSent(task: Task): void }) {
+export function AddTodo({ projectId, thread, target, ask, onPress, onSent, onFailed }: { projectId: string; thread: Thread; target: AgentContext;
+  ask?: string; onPress?(): void; onSent(task: Task): void; onFailed?(): void }) {
   const { effective, unavailableReason } = useAgentAvailability();
   const createTask = useProjectStore(s => s.createTask);
   const head = useProjectStore(s => s.current?.project.head ?? undefined);
+  const failureKey = `${thread.id} ${target.changeId} ${target.editIndex}`;
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => addFailures.get(failureKey) ?? "");
   async function add() {
     // One request per press: pressed again while the first is on its way, it sends nothing more.
     if (busy) return;
     if (!effective) { setError(unavailableReason); return; }
     setBusy(true);
     setError("");
+    addFailures.delete(failureKey);
+    const sending = createTask(projectId, { kind: "edit", ...effective, instruction: addInstruction(ask),
+      context: { version: head, ...requestPosition(target), threadId: thread.id, message: ADD_MESSAGE } });
+    const done = target.changeId && target.editIndex !== undefined ? pressAdd(thread.id, target.changeId, target.editIndex) : undefined;
+    onPress?.();
     try {
-      const task = await createTask(projectId, { kind: "edit", ...effective, instruction: addInstruction(ask),
-        context: { version: head, ...requestPosition(target), threadId: thread.id, message: ADD_MESSAGE } });
+      const task = await sending;
       recordEditReview(projectId, target, "revise");
       onSent(task);
     } catch (e) {
-      setError(errorMessage(e));
+      const message = errorMessage(e);
+      addFailures.set(failureKey, message);
+      setError(message);
+      onFailed?.();
     } finally {
+      done?.();
       setBusy(false);
     }
   }

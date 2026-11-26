@@ -5,6 +5,7 @@ import type { Task, User } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest } from "../errors.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import { ffmpeg } from "../render/ffmpeg.js";
 import { errorMessage } from "../util.js";
 import { proposeChange } from "./changes.js";
@@ -130,6 +131,7 @@ export async function createSampleProject(ctx: Ctx, user: User): Promise<Project
   const mediaId = newId("med");
   const relPath = `${mediaId}.mp4`;
   const mediaPath = join(ctx.paths.media(project.id), relPath);
+  const began = performance.now();
 
   try {
     await generateSampleVideo(mediaPath);
@@ -287,12 +289,15 @@ export async function createSampleProject(ctx: Ctx, user: User): Promise<Project
     ctx.bus.publish({ type: "task.updated", projectId: project.id, task: finished });
 
     // Pre-build waveform in the background (12 s clip finishes in milliseconds).
-    void getWaveform(ctx, { ...media, projectId: project.id }, true).catch(() => {});
+    void getWaveform(ctx, { ...media, projectId: project.id }, true)
+      .catch(error => ctx.log(`[project] the sample's waveform couldn't be made ahead: ${clip(errorMessage(error))}`));
 
     const saved = ctx.repos.projects.get(project.id)!;
     ctx.bus.publish({ type: "project.updated", projectId: saved.id, project: saved });
+    ctx.log(`[project] sample project ${logId(project.id)} made in ${humanDuration(performance.now() - began)}`);
     return saved;
   } catch (err) {
+    ctx.log(`[project] sample project ${logId(project.id)} couldn't be made after ${humanDuration(performance.now() - began)}: ${clip(errorMessage(err))}`);
     ctx.repos.projects.softDelete(project.id);
     await rm(ctx.paths.project(project.id), { recursive: true, force: true }).catch(() => {});
     throw err;

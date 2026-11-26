@@ -29,7 +29,7 @@ type Facet = EditKind | "picture" | "marker" | "neutral";
  * `ask`: what a to-do marker asks of the editor, in its own words. `restated`: this step wrote those words, as against
  * a move of a marker that only still says them.
  */
-type Placed = { facet: Facet; range?: TimeRange; ask?: string; restated?: boolean };
+type Placed = { facet: Facet; range?: TimeRange; ask?: string; restated?: boolean; markerId?: string };
 type MarkerFields = { time?: unknown; text?: unknown; kind?: unknown; resolved?: unknown };
 
 const AUDIO_KEYS = new Set(["volume", "audioFadeIn", "audioFadeOut"]);
@@ -279,12 +279,16 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         const patch = op.op === "addMarker" ? op.marker as MarkerFields | undefined
           : op.patch && typeof op.patch === "object" ? op.patch as MarkerFields : undefined;
         if (patch?.resolved === true) return [{ facet: "neutral" }];
+        const markerId = op.op === "addMarker"
+          ? (typeof (op.marker as { id?: unknown } | undefined)?.id === "string" ? (op.marker as { id: string }).id : undefined)
+          : (typeof op.markerId === "string" ? op.markerId : undefined);
         const saved = op.op === "updateMarker" ? markerNow(op.markerId) : undefined;
         const time = typeof patch?.time === "number" ? patch.time : saved?.time;
         const text = typeof patch?.text === "string" ? patch.text : saved?.text;
         const kind = patch?.kind ?? saved?.kind;
         const at = time !== undefined ? now(time) : undefined;
         return [{ facet: "marker", range: at !== undefined ? { start: at, end: at } : undefined,
+          ...(markerId && { markerId }),
           ...(kind === "todo" && text?.trim() && { ask: text.trim(), restated: typeof patch?.text === "string" }) }];
       }
       case "removeMarker":
@@ -362,6 +366,29 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
   /** The edit has no step of its own and none the change couldn't place: Scarlet named it and changed nothing there. */
   nothing: boolean[];
 } {
+  const found = placeEdits(change, ranges, clocks, rippleJoins);
+  return {
+    kinds: found.map(({ verdict }) => verdict === "marker" ? "other" : verdict),
+    markers: found.map(({ verdict }) => verdict === "marker"),
+    asks: found.map(({ verdict, here }) => {
+      if (verdict !== "marker") return;
+      const asked = [...new Set(here.flatMap(f => f.ask ? [f.ask] : []))];
+      return asked.length ? asked.join(" ") : undefined;
+    }),
+    restated: found.map(({ verdict, here }) => verdict === "marker" && here.some(f => f.ask && f.restated)),
+    nothing: found.map(f => !!f.nothing),
+  };
+}
+
+/** Marker IDs placed on each marker-only edit in `ranges` (empty for edits that changed the video). */
+export function editMarkerIds(change: Change, ranges: TimeRange[], clocks: Clocks = {},
+  rippleJoins?: readonly { range: TimeRange; facet?: "restore" }[]): string[][] {
+  return placeEdits(change, ranges, clocks, rippleJoins).map(({ verdict, here }) =>
+    verdict === "marker" ? [...new Set(here.flatMap(f => f.markerId ? [f.markerId] : []))] : []);
+}
+
+function placeEdits(change: Change, ranges: TimeRange[], clocks: Clocks = {},
+  rippleJoins?: readonly { range: TimeRange; facet?: "restore" }[]) {
   // Known joins stand for the steps, so only the markers are read from them, and only when there are any.
   const marks = rippleJoins && ((change.ops ?? []) as Op[]).some(op => op.op === "addMarker" || op.op === "updateMarker");
   const steps = !rippleJoins || marks ? opFacets(change, clocks).filter(f => f.facet !== "neutral") : [];
@@ -405,15 +432,18 @@ export function classifyEdits(change: Change, ranges: TimeRange[], clocks: Clock
       return own.length ? verdict(own) : unplaced;
     });
   }
-  return {
-    kinds: found.map(({ verdict }) => verdict === "marker" ? "other" : verdict),
-    markers: found.map(({ verdict }) => verdict === "marker"),
-    asks: found.map(({ verdict, here }) => {
-      if (verdict !== "marker") return;
-      const asked = [...new Set(here.flatMap(f => f.ask ? [f.ask] : []))];
-      return asked.length ? asked.join(" ") : undefined;
-    }),
-    restated: found.map(({ verdict, here }) => verdict === "marker" && here.some(f => f.ask && f.restated)),
-    nothing: found.map(f => !!f.nothing),
-  };
+  return found;
+}
+
+/** Marker IDs added, updated, or removed by a change's ops. */
+export function touchedMarkerIds(change: Change): string[] {
+  const ids = new Set<string>();
+  for (const op of (change.ops ?? []) as Op[]) {
+    if (op.op === "addMarker" && op.marker && typeof op.marker === "object" && typeof (op.marker as { id?: unknown }).id === "string") {
+      ids.add((op.marker as { id: string }).id);
+    } else if ((op.op === "updateMarker" || op.op === "removeMarker") && typeof op.markerId === "string") {
+      ids.add(op.markerId);
+    }
+  }
+  return [...ids];
 }

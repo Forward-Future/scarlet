@@ -30,7 +30,7 @@ import { notify } from "../notify.js";
 import { removalOutsideSelection, rippleOutsideSelection } from "../selectedRemoval.js";
 import { editsDialogue, FINISHED_TASK } from "../tasks.js";
 import { ensureProjectHead, resolveTimeline, storeValidatedVersion } from "../timeline.js";
-import { anchorOriginal, authorFor, editorAskedSince, putAway, saveChange, threadOf, threadOfChange } from "./common.js";
+import { anchorOriginal, authorFor, editorAskedSince, putAway, saveChange, threadOf } from "./common.js";
 import { fadeJoins, proposalJoins } from "./joinCrossfades.js";
 import { alternativeAlreadyChosen, approveChange, rejectChange } from "./lifecycle.js";
 import { scheduleSpotCheck, spotWindows } from "./spotChecks.js";
@@ -284,12 +284,11 @@ export function persistProposal(ctx: Ctx, user: User, projectId: string, body: P
       (previous.timelineEdits?.length ? previous.timelineEdits.length + (previous.leftOut?.joins.length ?? 0) : undefined) ??
       previous.cutReasons?.length ?? previous.ranges.length);
     const key = JSON.stringify([replaces.changeId, replaces.spot]);
-    // An edit another request made counts as this thread's while this thread flagged it: the editor revises it from here.
-    const ownOrFlagged = previous && (threadOfChange(ctx, previous) === threadId ||
-      (previous.flags ?? []).some(flag => { const raiser = ctx.repos.tasks.get(flag.taskId); return !!raiser && threadOf(raiser) === threadId; }));
-    if (!previous || previous.projectId !== projectId || previous.state !== "approved" || !ownOrFlagged ||
+    // Any approved edit in the same project can be revised by a later request (for example a follow-up in the chat
+    // updating earlier B-roll To-dos or graphics); the replaced edit leaves its earlier request's list once applied.
+    if (!previous || previous.projectId !== projectId || previous.state !== "approved" ||
         replaces.spot >= (count ?? 0) || replacements.has(key)) {
-      throw badRequest("invalid_replacement", "Choose an individual edit in this thread to revise.");
+      throw badRequest("invalid_replacement", "Choose an individual approved edit in this project to revise.");
     }
     replacements.add(key);
   }

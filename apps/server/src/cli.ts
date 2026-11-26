@@ -76,9 +76,9 @@ async function runServe(argv: string[]) {
   }
   // Analysis workers and agent tool connections use the same executable.
   // Initialize the HTTP engine only in the process that will serve requests.
-  const [{ serve }, { createApp }, { accessToken, localUser, publishDesktopSession }, { attachWebSocket }, { DEFAULT_POSTHOG_KEY, SCARLET_VERSION }] = await Promise.all([
+  const [{ serve }, { createApp }, { accessToken, localUser, publishDesktopSession }, { attachWebSocket }, { DEFAULT_POSTHOG_KEY, SCARLET_VERSION }, { humanDuration }] = await Promise.all([
     import("@hono/node-server"), import("./app.js"), import("./auth.js"), import("./ws.js"),
-    import("./telemetry/config.js"),
+    import("./telemetry/config.js"), import("./logText.js"),
   ]);
   const solo = args.solo === true;
   const port = Number(args.port ?? process.env.SCARLET_PORT ?? (solo ? 0 : 4000));
@@ -122,7 +122,7 @@ async function runServe(argv: string[]) {
       transcription = `unreadable (${(err as Error).message})`;
     }
     const telemetry = ctx.telemetry.unavailable ? "unavailable" : ctx.telemetry.active ? "on" : "off";
-    ctx.log(`[lifecycle] ready port=${boundPort} version=${SCARLET_VERSION} node=${process.version} solo=${solo} transcription=${transcription} telemetry=${telemetry} data=${dataDir}`);
+    ctx.log(`[lifecycle] ready port=${boundPort} version=${SCARLET_VERSION} node=${process.version} solo=${solo} transcription=${transcription} telemetry=${telemetry} startup=${humanDuration(process.uptime() * 1000)} data=${dataDir}`);
   };
   const server = serve({ fetch: app.fetch, port, hostname }, (info: AddressInfo) => {
     const user = localUser(ctx);

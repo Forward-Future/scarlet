@@ -48,10 +48,17 @@ export function attachWebSocket(server: Server, ctx: Ctx, otherUpgrade?: (req: I
           try {
             msg = JSON.parse(data.toString());
           } catch {
+            refused("unreadable", "[ws] ignored a client message that isn’t JSON");
             return;
           }
           const parsed = WsClientMessage.safeParse(msg);
-          if (!parsed.success) return;
+          // A window and engine from different builds can disagree on a message: subscribing would silently stop.
+          if (!parsed.success) {
+            const type = (msg as { type?: unknown } | null)?.type;
+            refused(`unknown:${typeof type === "string" ? type.slice(0, 40) : "?"}`,
+              `[ws] ignored a client message the engine doesn’t understand: type=${typeof type === "string" && /^[a-z.]{1,40}$/i.test(type) ? type : "unknown"}`);
+            return;
+          }
           const m = parsed.data;
           if (m.type === "subscribe") {
             const found = !!ctx.repos.projects.header(m.projectId);

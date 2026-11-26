@@ -53,12 +53,13 @@ function preservePendingSuggestions(ctx: Ctx, levels: LegacyDialogueSettings["ai
 }
 
 export function migrateDialogueSettings(ctx: Ctx) {
-  ctx.db.transaction(() => {
+  const outcome = ctx.db.transaction((): string | undefined => {
     // ServerSettings strips retired fields. Read the original row, then consume it in the same transaction
     // as the skill revisions so an interrupted upgrade or a second engine cannot import the choices twice.
     const row = ctx.db.prepare("SELECT json_extract(json, '$.dialogue') AS dialogue FROM settings WHERE id = 1 AND json_type(json, '$.dialogue') = 'object'")
       .get() as { dialogue: string } | undefined;
     if (!row) return;
+    let outcome: string;
     const legacy: LegacyDialogueSettings = JSON.parse(row.dialogue);
     preservePendingSuggestions(ctx, legacy.aiCuts);
     const lines = editorialPreferences(legacy);
@@ -74,6 +75,7 @@ export function migrateDialogueSettings(ctx: Ctx) {
       defaultFade && guide.source !== "bundled" && guide.source !== "seed" && !/crossfade/i.test(guide.content)
         ? [...lines, "Use a 2-frame audio crossfade at dialogue joins."] : lines;
     if (guides.length) {
+      let updated = 0;
       for (const guide of guides) {
         const own = preferencesFor(guide);
         if (!own.length) continue;
@@ -82,7 +84,9 @@ export function migrateDialogueSettings(ctx: Ctx) {
         const source = guide.source === "bundled" || guide.source === "seed" ? undefined : guide.source;
         const content = `${guide.content}\n\n## Editor preferences for dialogue cuts\n\nUse these preferences in place of the general defaults above.\n\n${preferences}\n`;
         updateSkill(ctx, null, { ...guide, source }, { content });
+        updated++;
       }
+      outcome = `wrote ${lines.length} ${lines.length === 1 ? "preference" : "preferences"} into ${updated} of ${guides.length} dialogue ${guides.length === 1 ? "guide" : "guides"}`;
     } else if (lines.length) {
       // The editor may have deleted the workflow or chosen an empty library. Keep their choices recoverable
       // without restoring a deleted guide or activating a replacement.
@@ -92,7 +96,10 @@ export function migrateDialogueSettings(ctx: Ctx) {
       const description = "Preferences saved for dialogue cuts in an earlier version of Scarlet.";
       const content = `---\nname: ${name}\ndescription: ${description}\n---\n\n# Dialogue preferences\n\n${preferences}\n`;
       createSkill(ctx, null, { name, content, description, scope: "team", enabled: false }, { source: "dialogue-settings" });
-    }
+      outcome = `saved ${lines.length} ${lines.length === 1 ? "preference" : "preferences"} in a new disabled skill, since no dialogue guide was found`;
+    } else outcome = "found no preferences to keep";
     ctx.db.prepare("UPDATE settings SET json = json_remove(json, '$.dialogue') WHERE id = 1").run();
+    return outcome;
   }, "immediate")();
+  if (outcome) ctx.log(`[skills] moved the dialogue settings of an earlier version: ${outcome}`);
 }

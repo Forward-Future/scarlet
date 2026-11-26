@@ -332,6 +332,7 @@ function resumeTranscriptions(ctx: Ctx, projectId?: string, mediaId?: string): v
       }
       if (completedTranscriptAfter(ctx, task.projectId, media.id, task.createdAt ?? "")) continue;
       const { task: restarted, done } = startTranscription(ctx, task.projectId, media, chosen, "interrupt", { interrupted: task });
+      // The restarted run logs its own failure ("[transcribe] … failed"); this only keeps the rejection from going unhandled.
       ctx.track(done.catch(() => null), task.projectId);
       ctx.log(`[task] ${task.id} was interrupted; continuing transcription of ${media.id} as ${restarted.id}`);
     } catch (err) {

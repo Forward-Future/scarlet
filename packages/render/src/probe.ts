@@ -6,7 +6,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { AudioStreamInfo, MediaAsset, MediaKind } from "@scarlet/timeline";
-import { LOCAL_MEDIA_INPUT, failureReason, resolveFfprobe, runCapture, runFfmpeg } from "./exec.js";
+import { LOCAL_MEDIA_INPUT, failureReason, logElapsed, logReason, logRender, resolveFfprobe, runCapture, runFfmpeg } from "./exec.js";
 import { pictureColorOf, type PictureColor } from "./hdr.js";
 
 export interface ProbeResult {
@@ -171,14 +171,18 @@ const probeCache = new Map<string, { stamp: string; json: string; measured?: num
  */
 async function measuredDuration(file: string, signal?: AbortSignal): Promise<number> {
   let end = 0;
+  const started = Date.now();
   try {
     await runFfmpeg([...LOCAL_MEDIA_INPUT, "-i", file, "-map", "0:v?", "-map", "0:a?", "-c", "copy", "-f", "null", "-"],
       { signal, onProgress: seconds => { end = Math.max(end, seconds); } });
-  } catch {
+  } catch (error) {
     signal?.throwIfAborted();
+    logRender(() => `[media] a file without a stated length couldn't be read to its end (${logReason(error)}): ${end > 0 ? `counted ${end.toFixed(1)} s` : "its length stays unknown"}`, "measured-duration");
     // A file that ends early still says how far it got.
     if (!(end > 0)) return 0;
+    return end;
   }
+  logRender(`[media] a file without a stated length was measured from its packets: ${end.toFixed(1)} s in ${logElapsed(Date.now() - started)}`, `measured:${file}`);
   return end;
 }
 

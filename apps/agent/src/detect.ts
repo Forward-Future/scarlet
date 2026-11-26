@@ -301,7 +301,7 @@ export async function detect(opts: DetectOptions = {}): Promise<AgentAvailabilit
   const clis = await Promise.all(results.map(async (r) => {
     const path = r.installed && r.loggedIn !== false ? await o.find(cliBinary(r.id)) : null;
     const catalog = path ? await (opts.catalog ?? discoverModels)(r.id as CliAgent, path, runnerEnv(r.id, results, env)).catch((err) => {
-      if (err instanceof ModelCatalogError) log(`[host] model-catalog provider=${r.id} reason=${err.reason}`);
+      if (err instanceof ModelCatalogError) log(`[host] model-catalog provider=${r.id} reason=${err.reason}${err.detail ? ` detail=${JSON.stringify(err.detail)}` : ""}`);
       else log(`could not read the ${r.id} model list: ${errMsg(err)}`);
       return undefined;
     }) : undefined;

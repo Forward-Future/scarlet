@@ -18,7 +18,7 @@
  * from those clips and from audio tracks, mixed. No transforms, fades, captions
  * or colour clips (gaps render black/silent).
  */
-import { audioMapArgs, LOCAL_MEDIA_INPUT, extractWaveformFull as decodeWaveform, hashFile, renderPlaybackSegment, type WaveformCache as BinaryWaveformCache } from "@scarlet/render";
+import { audioMapArgs, LOCAL_MEDIA_INPUT, extractWaveformFull as decodeWaveform, hashFile, logReason, logRender, renderPlaybackSegment, type WaveformCache as BinaryWaveformCache } from "@scarlet/render";
 import { join } from "node:path";
 import type { MediaAsset, MediaClip, MediaKind, Project, Timeline, TimeRange } from "@scarlet/timeline";
 import { clipEnd, timelineDuration, timelineToSource } from "@scarlet/timeline";
@@ -220,7 +220,10 @@ async function makeProxy(input: string, output: string, opts: Parameters<RenderA
   const h = Math.max(2, Math.round((opts.height ?? 540) / 2) * 2);
   // The preview plays the track the editor chose, or every track mixed, named by number: left to itself FFmpeg plays
   // the stream with the most channels.
-  const probed = await probeMedia(input).catch(() => undefined);
+  const probed = await probeMedia(input).catch((error: unknown) => {
+    logRender(() => `[media] proxy: couldn't read the file's streams first, so ffmpeg picks its tracks: ${logReason(error)}`, "fallback-proxy-probe");
+    return undefined;
+  });
   const duration = probed?.duration;
   const audioOnly = probed?.kind === "audio";
   const streams = probed ? [...audioOnly ? [] : ["-map", "0:v:0"],
