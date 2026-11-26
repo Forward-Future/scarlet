@@ -39,6 +39,7 @@ import {
   resolveFontFile,
   resolveVideoEncoder,
   runCapture,
+  sampleAspectRatio,
   segmentKey,
   snapRange,
   spawnStats,
@@ -980,6 +981,7 @@ describe("render", () => {
     ]);
     const pngProbe = await probeMedia(sarPng);
     expect((pngProbe.raw as { streams?: Array<{ sample_aspect_ratio?: string }> }).streams?.[0]?.sample_aspect_ratio).toBe("8:9");
+    expect(sampleAspectRatio(pngProbe)).toBe(1);
     project.media.push({
       id: "sar-still", kind: "image", name: "sar-still.png", path: "sar-still.png",
       width: 320, height: 180, hasAudio: false, hasAlpha: false,
