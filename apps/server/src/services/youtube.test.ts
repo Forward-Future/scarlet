@@ -199,6 +199,8 @@ async function startMockGoogleServer(): Promise<{ baseUrl: string; state: MockYo
     res.end("not found");
   });
 
+  // Slow Windows runners leave a pooled connection idle past the 5 s default; reusing it resets.
+  server.keepAliveTimeout = 30_000;
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", () => resolve()));
   const addr = server.address() as AddressInfo;
   return {
@@ -257,7 +259,7 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
     rmSync(fixtureDir, { recursive: true, force: true });
   });
 
-  function makeApp(opts: { env?: NodeJS.ProcessEnv; oauthTimeoutMs?: number; uploadChunkBytes?: number; logs?: string[] } = {}) {
+  function makeApp(opts: { env?: NodeJS.ProcessEnv; uploadChunkBytes?: number; logs?: string[] } = {}) {
     const dataDir = mkdtempSync(join(fixtureDir, "lib-"));
     const scarlet = createApp({
       dataDir,
@@ -269,7 +271,7 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
         revokeUrl: `${mockGoogle.baseUrl}/revoke`,
         apiBaseUrl: mockGoogle.baseUrl,
         uploadBaseUrl: mockGoogle.baseUrl,
-        oauthTimeoutMs: opts.oauthTimeoutMs ?? 30_000,
+        oauthTimeoutMs: 30_000,
         uploadChunkBytes: opts.uploadChunkBytes ?? 256 * 1024,
       },
     });
@@ -413,7 +415,7 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
   });
 
   it("supports custom OAuth Client ID fallback in Settings, cancellation, timeout, token refresh, and disconnect", async () => {
-    const { scarlet, api } = makeApp({ env: {}, oauthTimeoutMs: 180 });
+    const { scarlet, api } = makeApp({ env: {} });
 
     // Without env or custom client ID, connect fails cleanly
     const unconfigured = await api<{ status: YouTubeConnectionStatus }>("GET", "/settings/youtube");
@@ -440,6 +442,7 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
     await expect(fetch(cancelUri)).rejects.toThrow();
 
     // Timeout closes loopback listener and reports clear message
+    scarlet.ctx.options.youtube!.oauthTimeoutMs = 180;
     const timedStart = await api<{ authUrl: string }>("POST", "/settings/youtube/connect", {});
     const timedUri = new URL(timedStart.json.authUrl).searchParams.get("redirect_uri")!;
     await sleep(280);
@@ -447,6 +450,7 @@ describe("YouTube Publishing Kit & Direct Connect", () => {
     expect(afterTimeout.json.status.state).toBe("error");
     expect(afterTimeout.json.status.error).toMatch(/timed out/i);
     await expect(fetch(timedUri)).rejects.toThrow();
+    scarlet.ctx.options.youtube!.oauthTimeoutMs = 30_000;
 
     // Connect cleanly, then force refresh -> gets new access token
     await completeMockOAuth(api);
