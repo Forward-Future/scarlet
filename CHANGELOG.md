@@ -6,6 +6,11 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Hovering an added sound in the edits list now reads "Added Warm bed (−6 dB)" instead of "Added Warm bed, quieter (−6 dB)".
+- Dragging the edge of a voice edit on its own audio track now gives the time to or takes it from the sound beside it, instead of refusing or leaving a silent gap.
+- A style guide saved from a graphic now lists fonts whose names are in quotes, such as "Brand Serif", instead of an empty line.
+- Built-in style guide sounds now play correctly when only their ending is asked for.
+- Accented names in Settings › Models › Task models keep their letters together, so "Étalonnage" no longer becomes "e-talonnage".
 - Rejecting an edit now moves straight to the next edit in line instead of staying on the rejected card.
 - Taking back a rejected edit with ⌘Z now simply brings the edit back, without an extra "Undo · Rejected" line in the chat or a second row for it.
 - After an export, the Export window still offers the folder for Resolve, Final Cut or Premiere, and Back from it.

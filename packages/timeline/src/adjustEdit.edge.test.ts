@@ -299,9 +299,7 @@ describe("rolls", () => {
     expect(editAdjustBounds(tl, { start: 5, end: 8 }, FPS, assets, { kind: "zoom", clipIds: ["other"] })).toBeUndefined();
   });
 
-  // Bug: on a non-main track the overlay match always wins first (its single-clip bounds always move), so a voice edit
-  // split on the dialogue audio track can't roll into its neighbour, and narrowing it leaves a silent gap.
-  it.fails("rolls a voice edit on an audio track", () => {
+  it("rolls a voice edit on an audio track", () => {
     const tl = baseTimeline([
       track("v1", "video", [mc("v_full", "m_broll", 0, 10, 0)]),
       track("a1", "audio", [mc("a1", "m_main", 0, 4, 0), mc("a2", "m_main", 4, 6, 4, { volume: 1.5 }), mc("a3", "m_main", 6, 20, 6)]),

@@ -603,8 +603,9 @@ function cleanLinkedName(rel: string): string {
 function summarizeGraphicStyle(name: string, html: string, assets: StyleGuideAsset[]): string {
   const colors = [...new Set(html.match(/#(?:[0-9a-f]{3,8})\b|rgba?\([^)]+\)/gi) ?? [])].slice(0, 12);
   const fonts = [...new Set(
-    Array.from(html.matchAll(/font-family\s*:\s*([^;}"'\n]+)/gi), m => m[1]!.trim()),
-  )].slice(0, 6);
+    // A family list may quote names ("Brand Serif", serif); a quote that runs into markup ends an HTML attribute instead.
+    Array.from(html.matchAll(/font-family\s*:\s*((?:"[^"\n<>;{}]*"|'[^'\n<>;{}]*'|[^;}"'\n<>])+)/gi), m => m[1]!.replace(/["']/g, "").trim()),
+  )].filter(Boolean).slice(0, 6);
   const lines = [
     `Saved from the project graphic "${name}". Match its visual language across captions, lower thirds, chapter titles, callout boxes, and overlays.`,
   ];

@@ -147,8 +147,10 @@ export function styleGuideRoutes(ctx: Ctx) {
     if (rangeHeader) {
       const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
       if (m) {
-        const start = m[1] ? Number(m[1]) : Math.max(0, total - Number(m[2] || total));
-        const end = m[2] ? Math.min(total - 1, Number(m[2])) : total - 1;
+        // "bytes=-N" asks for the last N bytes; "bytes=A-" from A to the end.
+        const suffix = !m[1] && !!m[2];
+        const start = suffix ? Math.max(0, total - Number(m[2])) : m[1] ? Number(m[1]) : 0;
+        const end = m[2] && !suffix ? Math.min(total - 1, Number(m[2])) : total - 1;
         if (start >= 0 && start <= end && end < total) {
           const slice = wav.subarray(start, end + 1);
           return new Response(Buffer.from(slice), {

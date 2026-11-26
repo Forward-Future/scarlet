@@ -142,17 +142,17 @@ function humanizeDetail(kind: EditLike["kind"], raw: string): string {
       const verb = dipped[2] === "down" ? "lowered" : "raised";
       return `${subject}${verb} to ${dipped[3]}`;
     }
-    const leveled = /^(.+?)\s+([+−-]\d+ dB)$/.exec(first);
-    if (leveled) {
-      const subject = leveled[1] === "Sound" ? "" : `${leveled[1]} `;
-      const dir = leveled[2]!.startsWith("+") ? "louder" : "quieter";
-      return `${subject}${dir} (${leveled[2]})`;
-    }
     const added = /^Added (.+?),\s*([+−-]\d+ dB|muted|at full level)$/.exec(first);
     if (added) {
       if (added[2] === "muted") return `Added ${added[1]} (muted)`;
       if (added[2] === "at full level") return `Added ${added[1]}`;
       return `Added ${added[1]} (${added[2]})`;
+    }
+    const leveled = /^(.+?)\s+([+−-]\d+ dB)$/.exec(first);
+    if (leveled) {
+      const subject = leveled[1] === "Sound" ? "" : `${leveled[1]} `;
+      const dir = leveled[2]!.startsWith("+") ? "louder" : "quieter";
+      return `${subject}${dir} (${leveled[2]})`;
     }
     return first.replace(/^Sound muted$/, "Muted").replace(/at full level$/, "at full volume");
   }

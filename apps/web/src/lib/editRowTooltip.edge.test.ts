@@ -241,8 +241,7 @@ describe("editRowTooltip", () => {
       expect(added(0, "med_raw")).toBe("Audio · Added sound (muted) · 4.0 s");
     });
 
-    // Bug: humanizeDetail's "Sound −6 dB" pattern runs before the "Added …, −6 dB" one and swallows it, so the comma stays and the added branch never runs.
-    it.fails("says a sound file the change added at a set level in brackets", () => {
+    it("says a sound file the change added at a set level in brackets", () => {
       expect(editRowTooltip(edit({ label: "Music", kind: "audio" }), ctx(change({ ops: [
         { op: "addClip", trackId: "trk_a1", clip: mediaClip({ id: "new", mediaId: "med_music", volume: 0.5 }) },
       ] } as Partial<Change>))).meta).toBe("Audio · Added Warm bed (−6 dB)");

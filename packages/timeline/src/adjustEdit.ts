@@ -430,6 +430,12 @@ function resolveEditTarget(head: Timeline, range: TimeRange, fps: number, media?
     const dip = findDipMatch(head, range, fps, opts.clipIds);
     return dip && hasAnyMovement(dip.bounds, range, fps) ? { kind: "dip" as const, match: dip } : undefined;
   }
+  // A voice or audio edit split out of continuous sound on an audio track rolls into its neighbours, as on the main
+  // video; an overlay match there would always win (a lone clip can always move) and leave a gap instead.
+  if (opts?.kind === "audio" || opts?.kind === "voice") {
+    const audioRoll = findRollMatch(head, range, fps, opts);
+    if (audioRoll?.track.kind === "audio" && hasAnyMovement(audioRoll.bounds, range, fps)) return { kind: "roll" as const, match: audioRoll };
+  }
   const overlay = findOverlayMatch(head, range, fps, media, opts);
   if (overlay && hasAnyMovement(overlay.bounds, range, fps)) return { kind: "overlay" as const, match: overlay };
   const roll = findRollMatch(head, range, fps, opts);

@@ -449,11 +449,16 @@ describe("saving a project graphic as a style guide", () => {
     expect(ctx().repos.styleGuides.get(missingFont.id)).toBeTruthy();
   });
 
-  // Bug: summarizeGraphicStyle's font-family pattern (styleGuides.ts:606) stops at a quote, so a quoted family is listed as an empty "- " bullet.
-  it.fails("lists a quoted font family under the guide's typography", async () => {
+  it("lists a quoted font family under the guide's typography", async () => {
     graphic("med_quoted", { "index.html": `<style>h1{font-family: "Brand Serif", serif}</style><h1>Hi</h1>` });
     const g = await save("med_quoted", "quoted-font");
-    expect(g.instructions).toMatch(/## Typography\n- \S*Brand Serif/);
+    expect(g.instructions).toContain("## Typography\n- Brand Serif, serif");
+  });
+
+  it("reads a font set in a tag's style attribute without the markup after it", async () => {
+    graphic("med_inline", { "index.html": `<h1 style="font-family: Inter">Hi</h1><p style="font-family: 'Brand Sans', sans-serif">x</p>` });
+    const g = await save("med_inline", "inline-font");
+    expect(g.instructions).toContain("## Typography\n- Inter\n- Brand Sans, sans-serif");
   });
 
   it("cuts a very long page short in the guide's reference", async () => {

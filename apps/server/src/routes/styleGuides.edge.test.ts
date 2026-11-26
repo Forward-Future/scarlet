@@ -139,8 +139,7 @@ describe("built-in starter sounds", () => {
     }
   });
 
-  // Bug: a suffix range "bytes=-N" takes N as the end byte too (routes/styleGuides.ts:151), so start > end and the whole file is sent.
-  it.fails("serves the last bytes for a suffix range", async () => {
+  it("serves the last bytes for a suffix range", async () => {
     const suffix = await api("GET", "/style-guides/sounds/builtin/crisp-tick", undefined, { Range: "bytes=-100" });
     expect(suffix.status).toBe(206);
     expect(suffix.headers.get("content-range")).toBe(`bytes ${total - 100}-${total - 1}/${total}`);

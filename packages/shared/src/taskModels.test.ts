@@ -57,8 +57,7 @@ describe("taskModelId", () => {
     expect(taskModelId("Café", [])).toBe("cafe");
   });
 
-  // Bug: NFKD splits "É" into "E" + a combining accent, and the accent is replaced with "-" instead of being dropped.
-  it.fails("drops an accent inside a word instead of splitting the word", () => {
+  it("drops an accent inside a word instead of splitting the word", () => {
     expect(taskModelId("Étalonnage", [])).toBe("etalonnage");
   });
 

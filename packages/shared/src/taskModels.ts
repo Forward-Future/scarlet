@@ -39,7 +39,7 @@ export function taskModelChoice(type: Pick<TaskModelType, "model">): { agent: st
 
 /** A new type's id from its name, unlike the ids already taken. */
 export function taskModelId(name: string, taken: readonly string[]): string {
-  const base = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "task";
+  const base = name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "task";
   let id = base, n = 2;
   while (taken.includes(id)) id = `${base}-${n++}`;
   return id;
