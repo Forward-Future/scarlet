@@ -60,7 +60,7 @@ export interface DialoguePlanRequest {
   repeatHint?: string;
   range?: TimeRange;
   only?: DialogueCutKind;
-  /** /tighten-pauses-here: pauses only, in a local passage. */
+  /** The local-pauses operation (its built-in command): pauses only, in a local passage. */
   localPauses: boolean;
   /** The task's selection, which bounds the plan. */
   anchor?: Task["context"];

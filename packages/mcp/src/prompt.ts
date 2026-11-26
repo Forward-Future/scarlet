@@ -4,7 +4,7 @@
  * provides context (timestamps, clip ids, notes, the change being revised)
  * and includes the applicable skills verbatim.
  */
-import { BUILT_IN_STYLE_SOUNDS, CHECK_IN_SHARE, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type StyleGuideColorLook, type StyleGuideRecord, type StyleGuideSound, type StyleGuideTransition, type Task } from "@scarlet/shared";
+import { BUILT_IN_STYLE_SOUNDS, CHECK_IN_SHARE, modelDisplayName, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type StyleGuideColorLook, type StyleGuideRecord, type StyleGuideSound, type StyleGuideTransition, type Task } from "@scarlet/shared";
 import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
 import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
@@ -310,7 +310,7 @@ function talkingToYouSection(words: string): string {
   return `# How the editor wants you to write to them\n\nThe editor wrote this in Scarlet's settings for everything you write to them: what you say you will do, your updates, the reason on each edit, your questions and your closing sentences. It is about how you say things; where Scarlet shows your words and how long they can be, above, still holds.\n\n${words.trim()}`;
 }
 
-const modelName = (by: { agent: string; model?: string; label?: string }) => by.label ?? (by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent);
+const modelName = modelDisplayName;
 
 /** The kinds of work the editor gave other models (Task models), for the request that hands them off. */
 function taskModelsSection(types: NonNullable<PromptContext["taskModels"]>): string {

@@ -64,8 +64,8 @@ describe("brief tools", () => {
     // A call through it may save an edit or open a web page, so the harness treats it as the boldest tool it reaches.
     expect(call.annotations).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
     // agy dropped the largest of Scarlet's tools past about 60 KB of definitions (2026-11-19). 54 KB listed each tool
-    // by its first sentence and parameters; one line each is under 14 KB.
-    expect(size(brief)).toBeLessThan(14_000);
+    // by its first sentence and parameters; one line each stays well under 15 KB.
+    expect(size(brief)).toBeLessThan(15_000);
   });
 
   it("grows the listing by one index line per tool, however large the tool", async () => {

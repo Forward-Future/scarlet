@@ -1,4 +1,10 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { configDefaults, defineConfig } from "vitest/config";
+
+// The shipped skills and the record of retired ones are compiled from skills/ (src/bundledSkills.ts, not in git). Build
+// them before any test, so a checkout that hasn't run a full build never tests against an old copy.
+execFileSync(process.execPath, [fileURLToPath(new URL("./scripts/gen-skills.mjs", import.meta.url))], { stdio: "ignore" });
 
 export default defineConfig({
   test: {

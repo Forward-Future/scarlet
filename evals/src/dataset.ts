@@ -11,6 +11,7 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { builtInCommand, skillRuns } from "../../packages/shared/src/skillCommands.ts";
 import { cli, isMain, list, main } from "./args.ts";
 import { evidencePath, listCases, scanPath, timelinePath, type CaseFile, type Suite } from "./case.ts";
 import { Engine } from "./engine.ts";
@@ -75,11 +76,13 @@ export async function buildCase(engine: Engine, opts: BuildOptions): Promise<{ f
   if (!sourceVersion) throw new Error("Name the version to cut from with --source, or derive it with --from-task.");
 
   const task = artifacts?.task;
+  // With nothing named, a case is a dialogue pass guided by whichever skills the library has for it.
+  const pass = builtInCommand("first-cut").name;
   const skillIds = opts.skills?.length
     ? opts.skills.map(s => skills.find(k => k.id === s || k.name === s)?.id ?? s)
-    : task?.context.skillIds ?? skills.filter(k => k.name === "dialogue-pass").map(k => k.id);
+    : task?.context.skillIds ?? skills.filter(k => k.enabled !== false && skillRuns({ content: k.content ?? "" }).includes(pass)).map(k => k.id);
   const request: CaseFile["request"] = {
-    instruction: opts.instruction ?? String(task?.context.message ?? task?.instruction ?? "/dialogue-pass"),
+    instruction: opts.instruction ?? String(task?.context.message ?? task?.instruction ?? `/${pass}`),
     skillIds,
     skillNames: skillIds.map(id => skills.find(k => k.id === id)?.name).filter((n): n is string => !!n),
     ...((opts.mediaId ?? task?.context.mediaId) && { mediaId: opts.mediaId ?? task?.context.mediaId }),

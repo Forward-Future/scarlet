@@ -1,17 +1,18 @@
-import { carriesAudio, clipEnd, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
+import { carriesAudio, clipEnd, sourceAt, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 import { syncRate } from "./audio-sync.js";
 
 // Two recordings of the same event that play together (a camera inset over a screen capture, a separate mic
-// under a camera) stay in line only while every pair of their clips keeps one offset. A cut that trims one
-// track and not the other, or a timeline rewritten by hand, breaks that without anything sounding wrong.
+// under a camera, or synced multi-cam angles) stay in line only while every pair of their clips keeps one
+// offset. A cut that trims one track and not the other, or a timeline rewritten by hand, breaks that without
+// anything sounding wrong.
 
 export interface OutOfLine { from: number; to: number; offset: number; differsBy: number }
 export interface HeardSpot { at: number; late: number }
 export interface PairSync {
   reference: string;
   secondary: string;
-  /** The offset most of their shared time plays at: secondary source seconds plus this = reference source seconds. */
+  /** The offset most of their shared time plays at: secondary source seconds (divided by speed) plus this = reference source seconds (divided by speed). */
   offset: number;
   togetherSeconds: number;
   /** Stretches, in timeline seconds, where the two play at another offset. */
@@ -27,15 +28,19 @@ type Levels = (mediaId: string, from: number, to: number) => Promise<number[]>;
 interface Together { reference: MediaClip; secondary: MediaClip; from: number; to: number; offset: number }
 
 const r3 = round3;
-const placement = (clip: MediaClip) => clip.sourceIn - clip.timelineIn;
+/** Clock-drift speed adjustments stay close to 1x; speed-up effects (e.g. 2x–4x) are left out of sync checks. */
+const MAX_DRIFT_SPEED_DELTA = 0.02;
+const isSyncSpeed = (speed: number | undefined) => Math.abs((speed ?? 1) - 1) <= MAX_DRIFT_SPEED_DELTA;
+/** Where a clip's source 0 lands relative to timeline 0, invariant across cuts even with drift-compensated speed. */
+const placement = (clip: MediaClip) => clip.sourceIn / (clip.speed ?? 1) - clip.timelineIn;
 
-/** Every stretch where clips of two different recordings play at once, both at normal speed. */
+/** Every stretch where clips of two different recordings play at once, both at normal or drift-compensated speed. */
 function together(timeline: Timeline, media: Map<string, MediaAsset>) {
   const firstTrack = new Map<string, number>();
   const clips: MediaClip[] = [];
   timeline.tracks.forEach((track, index) => {
     for (const clip of track.clips) {
-      if (clip.kind !== "media" || clip.enabled === false || (clip.speed ?? 1) !== 1) continue;
+      if (clip.kind !== "media" || clip.enabled === false || !isSyncSpeed(clip.speed)) continue;
       const kind = media.get(clip.mediaId)?.kind;
       if (kind !== "video" && kind !== "audio") continue;
       clips.push(clip);
@@ -57,8 +62,17 @@ function together(timeline: Timeline, media: Map<string, MediaAsset>) {
       const key = `${reference.mediaId}\u0000${secondary.mediaId}`;
       const list = pairs.get(key) ?? [];
       const offset = placement(reference) - placement(secondary);
-      // A camera's picture and its sound on two tracks meet the other recording at the same stretch: count it once.
-      if (!list.some(t => Math.abs(t.from - from) < 1e-3 && Math.abs(t.to - to) < 1e-3 && Math.abs(t.offset - offset) < 1e-3)) {
+      // A camera's picture on Program and on its hidden angle track (or picture and detached sound) meet the other
+      // recording at the same offset over overlapping stretches: collapse covered stretches at the same offset so
+      // `togetherSeconds` and `heard` spots aren't double-counted, while keeping any out-of-line stretch distinct.
+      const sameOffset = (t: Together) => Math.abs(t.offset - offset) < 1e-3;
+      const enclosing = list.find(t => sameOffset(t) && t.from <= from + 1e-3 && t.to >= to - 1e-3);
+      if (!enclosing) {
+        // Drop smaller stretches already contained inside this new same-offset stretch.
+        for (let i = list.length - 1; i >= 0; i--) {
+          const prev = list[i]!;
+          if (sameOffset(prev) && from <= prev.from + 1e-3 && to >= prev.to - 1e-3) list.splice(i, 1);
+        }
         list.push({ reference, secondary, from, to, offset });
       }
       pairs.set(key, list);
@@ -166,17 +180,20 @@ async function whole(asset: MediaAsset, levels: Levels) {
 
 /** Compare one shared stretch at the 3 s where both recordings vary most. */
 function compare(t: Together, a: number[], b: number[]): HeardSpot | undefined {
-  const base = t.reference.sourceIn - t.reference.timelineIn, shift = t.secondary.sourceIn - t.secondary.timelineIn;
   const first = Math.ceil(t.from * syncRate), last = Math.floor(t.to * syncRate) - WINDOW;
   let best: number | undefined, bestScore = 1e-5;
   for (let i = first; i <= last; i += syncRate / 2) {
-    const r = Math.round(i + base * syncRate), s = Math.round(i + shift * syncRate);
+    const tlSec = i / syncRate;
+    const r = Math.round(sourceAt(t.reference, tlSec) * syncRate);
+    const s = Math.round(sourceAt(t.secondary, tlSec) * syncRate);
     if (r < 0 || s - SEARCH < 0 || r + WINDOW > a.length || s + WINDOW + SEARCH > b.length) continue;
     const score = Math.min(variance(a, r, WINDOW), variance(b, s, WINDOW));
     if (score > bestScore) { bestScore = score; best = i; }
   }
   if (best === undefined) return;
-  const r = Math.round(best + base * syncRate), s = Math.round(best + shift * syncRate);
+  const tlSec = best / syncRate;
+  const r = Math.round(sourceAt(t.reference, tlSec) * syncRate);
+  const s = Math.round(sourceAt(t.secondary, tlSec) * syncRate);
   const lag = lagBetween(a.slice(r, r + WINDOW), b.slice(s - SEARCH, s + WINDOW + SEARCH), SEARCH);
   return lag === undefined ? undefined : { at: r3((best + WINDOW / 2) / syncRate), late: r3(lag) };
 }
