@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
+  serializeStyleGuideDefinition,
   slugifyStyleGuideName,
   type StyleGuideAsset,
   type StyleGuideRecord,
@@ -51,6 +52,7 @@ export function StyleGuideEditorPage() {
   const { styleGuideId } = useParams();
   const isNew = !styleGuideId;
   const navigate = useNavigate();
+  const location = useLocation();
 
   const library = useStyleGuidesStore(s => s.styleGuides);
   const storeGuide = useStyleGuidesStore(s => (styleGuideId ? s.styleGuides.find(g => g.id === styleGuideId) : undefined));
@@ -91,6 +93,9 @@ export function StyleGuideEditorPage() {
 
   const [ask, setAsk] = useState("");
   const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [importingFile, setImportingFile] = useState(false);
+  const consumedInitialFiles = useRef(false);
   const [sending, setSending] = useState(false);
   const [askErr, setAskErr] = useState<string | null>(null);
 
@@ -194,6 +199,7 @@ export function StyleGuideEditorPage() {
   }, 'dialog[open], [role="menu"], [data-shortcut-overlay]');
 
   const stageItems = (items: Array<File | { path: string }>) => {
+    setImportNote(null);
     setStagedFiles(prev => [
       ...prev,
       ...items.map(source => ({
@@ -204,16 +210,83 @@ export function StyleGuideEditorPage() {
     ]);
   };
 
+  const handleIncomingFiles = async (items: Array<File | { path: string }>) => {
+    if (!items.length) return;
+    setAskErr(null);
+    const toStage: Array<File | { path: string }> = [];
+    let latestImported: StyleGuideRecord | null = null;
+    let latestImportedName = "";
+
+    for (const item of items) {
+      const fileName = item instanceof File ? item.name : item.path.split(/[\\/]/).pop() || "file";
+      if (/\.json$/i.test(fileName)) {
+        setImportingFile(true);
+        try {
+          const targetId = latestImported?.id ?? guide?.id;
+          const res = await api.importStyleGuideFile(item, { ...(targetId && { styleGuideId: targetId }), name: fileName });
+          if (res.imported) {
+            latestImported = res.styleGuide;
+            latestImportedName = fileName;
+            setLoaded(res.styleGuide);
+            setName(res.styleGuide.name);
+            setIsDefault(res.styleGuide.isDefault);
+            useStyleGuidesStore.getState().apply(res.styleGuide);
+            continue;
+          }
+        } catch (e) {
+          setAskErr(errorMessage(e));
+          continue;
+        } finally {
+          setImportingFile(false);
+        }
+      }
+      toStage.push(item);
+    }
+
+    if (latestImported) {
+      setImportNote(`Imported settings from ${latestImportedName}.`);
+      if (isNew) {
+        createdHere.current = latestImported.id;
+        navigate(`/settings/style-guides/${latestImported.id}`, { replace: true });
+      }
+    }
+    if (toStage.length) {
+      stageItems(toStage);
+      boxRef.current?.focus();
+    }
+  };
+
+  // Pick up any style file dropped on the Style Guides gallery page before navigating to /new.
+  useEffect(() => {
+    if (consumedInitialFiles.current) return;
+    const incoming = (location.state as { initialFiles?: Array<File | { path: string }> } | null)?.initialFiles;
+    if (!incoming?.length) return;
+    consumedInitialFiles.current = true;
+    void handleIncomingFiles(incoming);
+  }, [location.state]);
+
   const { over: dropping, dropProps } = useFileDropTarget(
-    paths => stageItems(paths.map(path => ({ path }))),
-    files => stageItems(Array.from(files)),
+    paths => void handleIncomingFiles(paths.map(path => ({ path }))),
+    files => void handleIncomingFiles(Array.from(files)),
     { ignoreChildLeave: true },
   );
 
+  const exportStyleGuide = () => {
+    if (!guide) return;
+    const payload = JSON.stringify(serializeStyleGuideDefinition(guide), null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${guide.name}.style.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const pickFiles = async () => {
     if (isDesktop()) {
-      const picked = await desktop.pickFile("Attach a logo, font, reference image, audio, or .cube look file").catch(() => null);
-      if (picked) stageItems([{ path: picked }]);
+      const picked = await desktop.pickFile("Attach a style file (.json, .md, .yaml, .pdf), logo, font, audio, or .cube look file").catch(() => null);
+      if (picked) void handleIncomingFiles([{ path: picked }]);
       return;
     }
     fileInputRef.current?.click();
@@ -421,6 +494,17 @@ export function StyleGuideEditorPage() {
         </label>
         <div className="flex-1" />
         <AgentChip direction="down" variant="icon" />
+        {!isNew && guide && (
+          <button
+            type="button"
+            className="btn-quiet"
+            disabled={working}
+            title="Export all settings (graphics, transitions, sounds, color look) as a .style.json file"
+            onClick={exportStyleGuide}
+          >
+            Export
+          </button>
+        )}
         {!isNew && (
           <button
             type="button"
@@ -435,12 +519,12 @@ export function StyleGuideEditorPage() {
         <WindowActions inSettings />
       </div>
 
-      <div className="skill-editor-body">
+      <div {...dropProps} className="skill-editor-body relative">
         <aside className="skill-chat" aria-label="Style guide chat">
           <div className="simple-chat" ref={threadRef}>
             {edits.length === 0 && (
               <div className="style-guide-chat-empty">
-                <p>Describe your look, transitions, sound effects, or camera color — or drop a logo, font, audio clip, or .cube file.</p>
+                <p>Describe your look, transitions, sound effects, or camera color — or drop a style settings file (.json, .md, .yaml, .pdf), logo, font, audio clip, or .cube file anywhere.</p>
                 <p className="text-dim mt-2 text-[12px]">
                   Scarlet updates the live preview tabs beside you and applies this style across projects.
                 </p>
@@ -526,8 +610,16 @@ export function StyleGuideEditorPage() {
             })}
           </div>
 
-          <div {...dropProps} className="composer-dock">
+          <div className="composer-dock">
             <InlineError>{askErr}</InlineError>
+            {importNote && (
+              <div className="sg-import-note">
+                <span>{importNote}</span>
+                <button type="button" className="btn-icon" aria-label="Dismiss import notice" onClick={() => setImportNote(null)}>
+                  <Icon name="x" size={11} />
+                </button>
+              </div>
+            )}
             <div className="composer-input">
               {stagedFiles.length > 0 && (
                 <div className="composer-files" role="group" aria-label="Files attached to your message">
@@ -554,16 +646,16 @@ export function StyleGuideEditorPage() {
                   const files = Array.from(e.clipboardData?.files ?? []);
                   if (!files.length) return;
                   e.preventDefault();
-                  stageItems(files);
+                  void handleIncomingFiles(files);
                 }}
               >
                 <div className="composer-row">
                   <button
                     type="button"
                     className="btn-icon shrink-0 text-muted hover:text-fg"
-                    aria-label="Attach logo, font, audio, or look file"
-                    title="Attach logo, font, audio, or .cube look file"
-                    disabled={boxOff || sending}
+                    aria-label="Attach style file, logo, font, audio, or look file"
+                    title="Attach style file (.json, .md, .yaml, .pdf), logo, font, audio, or .cube look file"
+                    disabled={boxOff || sending || importingFile}
                     onClick={() => void pickFiles()}
                   >
                     <Icon name="paperclip" size={14} />
@@ -575,7 +667,7 @@ export function StyleGuideEditorPage() {
                     className="sr-only"
                     onChange={e => {
                       const files = Array.from(e.target.files ?? []);
-                      if (files.length) stageItems(files);
+                      if (files.length) void handleIncomingFiles(files);
                       e.target.value = "";
                     }}
                   />
@@ -608,7 +700,6 @@ export function StyleGuideEditorPage() {
                 </div>
               </div>
             </div>
-            {dropping && <div className="composer-drop" aria-hidden="true">Attach to your message</div>}
           </div>
         </aside>
 
@@ -678,6 +769,7 @@ export function StyleGuideEditorPage() {
                   player={player}
                   onSave={saveSounds}
                   onGuideUpdated={handleGuideUpdated}
+                  onDropStyleFiles={items => void handleIncomingFiles(items)}
                 />
               )}
 
@@ -689,15 +781,16 @@ export function StyleGuideEditorPage() {
                     setAskErr(null);
                     boxRef.current?.focus();
                   }}
-                  onStageFiles={items => {
-                    stageItems(items);
-                    boxRef.current?.focus();
-                  }}
                 />
               )}
             </div>
           </div>
         </main>
+        {dropping && (
+          <div className="sg-drop-overlay" aria-hidden="true">
+            Drop a style settings file (.json, .md, .yaml, .pdf) or brand asset to import or attach to chat
+          </div>
+        )}
       </div>
 
       <Modal open={lightboxOpen && !!previewUrl} onClose={() => setLightboxOpen(false)} title={`@${guide?.name ?? ""}`} width={1080}>

@@ -9,6 +9,8 @@ import { ChromeNotFound, findChrome, renderGraphicStill } from "@scarlet/render"
 import {
   dbToLinearGain,
   findBuiltInStyleSound,
+  parseStyleGuideDefinitionJson,
+  slugifyStyleGuideName,
   StyleGuideRecord,
   synthesizeBuiltInSfxWav,
   isHandOff,
@@ -789,4 +791,60 @@ export function resolvePromptStyleGuides(ctx: Ctx, task: Task, activeSkills: rea
 
   const fallback = all.find(g => g.isDefault);
   return fallback ? format([fallback], "default") : [];
+}
+
+/**
+ * Import a portable JSON file defining a Style Guide's settings (graphics rules, transitions,
+ * sound effects, and camera color look). Returns `{ imported: false }` if the file isn't a
+ * structured Style Guide definition, so callers can pass it to Scarlet in chat instead.
+ */
+export function importStyleGuideDefinition(
+  ctx: Ctx,
+  user: User | null,
+  rawText: string,
+  fileName: string,
+  opts: { styleGuideId?: string } = {},
+): { imported: true; styleGuide: StyleGuideRecord } | { imported: false } {
+  const existing = opts.styleGuideId ? ctx.repos.styleGuides.get(opts.styleGuideId) : undefined;
+  if (opts.styleGuideId && !existing) throw notFound(`style guide ${opts.styleGuideId}`);
+
+  const baseName = fileName.replace(/\.(?:style\.)?json$/i, "");
+  const existingAssetIds = new Set(existing?.assets.map(a => a.id) ?? []);
+  const parsed = parseStyleGuideDefinitionJson(rawText, { fallbackName: baseName, existingAssetIds });
+  if (!parsed) return { imported: false };
+
+  const styleGuide = ctx.db.transaction(() => {
+    if (existing) {
+      return updateStyleGuide(ctx, user, existing, {
+        ...(parsed.description !== undefined && { description: parsed.description }),
+        ...(parsed.instructions !== undefined && { instructions: parsed.instructions }),
+        ...(parsed.isDefault !== undefined && { isDefault: parsed.isDefault }),
+        ...(parsed.transitions !== undefined && { transitions: parsed.transitions }),
+        ...(parsed.sounds !== undefined && { sounds: parsed.sounds }),
+        ...(parsed.colorLook !== undefined && { colorLook: parsed.colorLook }),
+      });
+    }
+    const baseSlug = parsed.name || slugifyStyleGuideName(baseName) || "imported-style";
+    let uniqueName = baseSlug;
+    let suffix = 2;
+    while (findDuplicateStyleGuide(ctx, uniqueName)) {
+      uniqueName = `${baseSlug}-${suffix++}`;
+    }
+    return createStyleGuide(
+      ctx,
+      user,
+      {
+        name: uniqueName,
+        description: parsed.description,
+        instructions: parsed.instructions,
+        isDefault: parsed.isDefault,
+        transitions: parsed.transitions,
+        sounds: parsed.sounds,
+        ...(parsed.colorLook ? { colorLook: parsed.colorLook } : {}),
+      },
+      { source: "import" },
+    );
+  }, "immediate")();
+
+  return { imported: true, styleGuide };
 }

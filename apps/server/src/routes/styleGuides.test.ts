@@ -567,4 +567,56 @@ describe("style guide transitions, sound effects, and camera color looks", () =>
     expect(updated.transitions).toHaveLength(1);
     expect(updated.colorLook?.name).toBe("Warm Studio");
   });
+
+  it("imports a portable .style.json file defining graphics, transitions, sounds, and color look, and reads YAML docs", async () => {
+    const def = {
+      version: 1,
+      name: "dropped-studio-kit",
+      description: "Full dropped style kit",
+      instructions: "## Typography\nUse SF Pro Display.",
+      sounds: [{ name: "Soft whoosh", builtInId: "soft-whoosh", volumeDb: -15 }],
+      transitions: [{ name: "Chapter push", type: "push", duration: 0.4, direction: "left", sound: "Soft whoosh", usageRule: "Between chapters", isDefault: true }],
+      colorLook: { name: "Warm Filmic", notes: "Soft highlight rolloff", adjustments: { exposure: 0.15, warmth: 0.22, highlights: -0.2 } },
+    };
+
+    const form = new FormData();
+    form.append("file", new Blob([JSON.stringify(def)], { type: "application/json" }), "dropped-studio-kit.style.json");
+    const impRes = await api("POST", "/style-guides/import-file", form);
+    expect(impRes.status).toBe(201);
+    const impBody = await impRes.json() as { imported: true; styleGuide: StyleGuideRecord };
+    expect(impBody.imported).toBe(true);
+    expect(impBody.styleGuide.name).toBe("dropped-studio-kit");
+    expect(impBody.styleGuide.transitions).toHaveLength(1);
+    expect(impBody.styleGuide.sounds).toHaveLength(1);
+    expect(impBody.styleGuide.colorLook?.name).toBe("Warm Filmic");
+
+    // Updating an existing guide in place via ?styleGuideId=
+    const updForm = new FormData();
+    updForm.append("file", new Blob([JSON.stringify({ description: "Updated via file drop", colorLook: { name: "Cool Studio", adjustments: { warmth: -0.15 } } })], { type: "application/json" }), "update.style.json");
+    const updRes = await api("POST", `/style-guides/import-file?styleGuideId=${impBody.styleGuide.id}`, updForm);
+    expect(updRes.status).toBe(200);
+    const updBody = await updRes.json() as { imported: true; styleGuide: StyleGuideRecord };
+    expect(updBody.imported).toBe(true);
+    expect(updBody.styleGuide.description).toBe("Updated via file drop");
+    expect(updBody.styleGuide.transitions).toHaveLength(1); // untouched section preserved
+    expect(updBody.styleGuide.colorLook?.name).toBe("Cool Studio");
+
+    // Unrecognized JSON returns { imported: false } so UI routes it to Scarlet in chat
+    const otherForm = new FormData();
+    otherForm.append("file", new Blob([JSON.stringify({ figmaTokens: { primary: "#111" } })], { type: "application/json" }), "tokens.json");
+    const otherRes = await api("POST", "/style-guides/import-file", otherForm);
+    expect(otherRes.status).toBe(200);
+    expect(await otherRes.json()).toEqual({ imported: false });
+
+    // YAML settings file uploaded as asset is readable via attachment_read
+    const yamlForm = new FormData();
+    yamlForm.append("file", new Blob(["transitions:\n  - type: push\n    duration: 0.4\n"], { type: "text/yaml" }), "style.yaml");
+    const yamlUp = await api("POST", `/style-guides/${impBody.styleGuide.id}/assets`, yamlForm);
+    expect(yamlUp.status).toBe(201);
+    const { asset: yamlAsset } = await yamlUp.json() as { asset: StyleGuideAsset };
+    const readRes = await api("POST", `/style-guides/${impBody.styleGuide.id}/assets/${yamlAsset.id}/read`, {});
+    expect(readRes.status).toBe(200);
+    const readDoc = await readRes.json() as { text?: string };
+    expect(readDoc.text).toContain("type: push");
+  });
 });

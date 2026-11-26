@@ -31,12 +31,14 @@ export function SoundsStage({
   player,
   onSave,
   onGuideUpdated,
+  onDropStyleFiles,
 }: {
   guide: StyleGuideRecord | null;
   disabled: boolean;
   player: StyleSoundPlayer;
   onSave(next: StyleGuideSound[]): Promise<void>;
   onGuideUpdated(next: StyleGuideRecord): void;
+  onDropStyleFiles?: (items: Array<File | { path: string }>) => void;
 }) {
   const sounds = guide?.sounds ?? [];
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -47,10 +49,16 @@ export function SoundsStage({
 
   const uploadAudioFiles = async (items: Array<File | { path: string }>) => {
     if (!guide || disabled || busy) return;
-    const valid = items.filter(item => {
+    const isAudio = (item: File | { path: string }) => {
       const name = item instanceof File ? item.name : item.path;
       return AUDIO_FILE.test(name) || (item instanceof File && item.type.startsWith("audio/"));
-    });
+    };
+    const valid = items.filter(isAudio);
+    const nonAudio = items.filter(item => !isAudio(item));
+    if (nonAudio.length && onDropStyleFiles) {
+      onDropStyleFiles(nonAudio);
+      if (!valid.length) return;
+    }
     if (!valid.length) {
       setErr("Drop or choose a .wav, .mp3, .m4a, .aac, .ogg, or .flac sound file.");
       return;

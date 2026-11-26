@@ -2,6 +2,7 @@
 import { z } from "zod/v3";
 import { Id, RenderColor, TransitionDirection, TransitionType } from "@scarlet/timeline";
 import { RunChoice } from "./agents.js";
+import { BUILT_IN_STYLE_SOUNDS, findBuiltInStyleSound } from "./builtInSfx.js";
 import { SkillSlug } from "./skills.js";
 
 export const StyleGuideSlug = SkillSlug;
@@ -219,4 +220,253 @@ export function slugifyStyleGuideName(text: string): string {
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+/** Portable JSON definition for importing/exporting a Style Guide's full settings in one file. */
+const StyleGuideDefinitionSoundInput = z.object({
+  id: Id.optional(),
+  name: z.string().trim().min(1).max(80).optional(),
+  source: z.enum(["builtin", "asset"]).optional(),
+  builtInId: z.string().trim().min(1).max(64).optional(),
+  builtin: z.string().trim().min(1).max(64).optional(),
+  assetId: Id.optional(),
+  volumeDb: z.number().min(-48).max(6).optional(),
+  duration: z.number().positive().max(120).optional(),
+  usageRule: z.string().trim().max(240).optional(),
+});
+
+const StyleGuideDefinitionTransitionInput = z.object({
+  id: Id.optional(),
+  name: z.string().trim().min(1).max(80),
+  type: TransitionType,
+  duration: z.number().positive().max(10).optional(),
+  direction: TransitionDirection.optional(),
+  color: RenderColor.optional(),
+  soundId: z.string().trim().min(1).max(120).optional(),
+  sound: z.string().trim().min(1).max(120).optional(),
+  usageRule: z.string().trim().max(240).optional(),
+  isDefault: z.boolean().optional(),
+});
+
+const StyleGuideDefinitionColorLookInput = z.object({
+  name: z.string().trim().max(80).optional(),
+  notes: z.string().trim().max(500).optional(),
+  lutAssetId: Id.optional(),
+  lutName: z.string().trim().max(255).optional(),
+  adjustments: StyleGuideColorAdjustments.partial().optional(),
+});
+
+const StyleGuideDefinitionSchema = z.object({
+  version: z.number().int().positive().optional(),
+  name: z.string().trim().max(120).optional(),
+  description: z.string().max(1024).optional(),
+  instructions: z.string().max(128 * 1024).optional(),
+  isDefault: z.boolean().optional(),
+  transitions: z.array(StyleGuideDefinitionTransitionInput).max(32).optional(),
+  sounds: z.array(StyleGuideDefinitionSoundInput).max(64).optional(),
+  colorLook: StyleGuideDefinitionColorLookInput.nullable().optional(),
+});
+
+export interface ParsedStyleGuideDefinition {
+  name?: string;
+  description?: string;
+  instructions?: string;
+  isDefault?: boolean;
+  transitions?: StyleGuideTransition[];
+  sounds?: StyleGuideSound[];
+  colorLook?: StyleGuideColorLook | null;
+}
+
+const DEFINITION_SIGNAL_KEYS = ["description", "instructions", "transitions", "sounds", "colorLook"] as const;
+
+function stableId(prefix: string, seed: string, index: number, used: Set<string>): string {
+  const slug = slugifyStyleGuideName(seed).replace(/-/g, "_").slice(0, 32) || String(index + 1);
+  let candidate = `${prefix}_${slug}`;
+  if (!used.has(candidate)) {
+    used.add(candidate);
+    return candidate;
+  }
+  for (let i = 2; i < 200; i++) {
+    candidate = `${prefix}_${slug}_${i}`;
+    if (!used.has(candidate)) {
+      used.add(candidate);
+      return candidate;
+    }
+  }
+  candidate = `${prefix}_${index + 1}_${Date.now()}`;
+  used.add(candidate);
+  return candidate;
+}
+
+/**
+ * Parse a portable JSON file defining a Style Guide's settings (graphics instructions, transitions,
+ * sound effects, and camera color look). Returns `null` if the JSON is not a recognizable Style Guide
+ * definition file (for example, arbitrary brand tokens JSON), so callers can fall back to sending it to Scarlet.
+ */
+export function parseStyleGuideDefinitionJson(
+  rawText: string,
+  opts: { fallbackName?: string; existingAssetIds?: ReadonlySet<string> } = {},
+): ParsedStyleGuideDefinition | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawText);
+  } catch {
+    return null;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  if (!DEFINITION_SIGNAL_KEYS.some(key => key in obj)) return null;
+
+  const parsed = StyleGuideDefinitionSchema.safeParse(obj);
+  if (!parsed.success) return null;
+  const data = parsed.data;
+  const existingAssets = opts.existingAssetIds ?? new Set<string>();
+
+  const slug = data.name ? slugifyStyleGuideName(data.name) : (opts.fallbackName ? slugifyStyleGuideName(opts.fallbackName) : "");
+  const out: ParsedStyleGuideDefinition = {
+    ...(slug ? { name: slug } : {}),
+    ...(data.description !== undefined ? { description: data.description.trim() } : {}),
+    ...(data.instructions !== undefined ? { instructions: data.instructions } : {}),
+    ...(data.isDefault !== undefined ? { isDefault: data.isDefault } : {}),
+  };
+
+  let normalizedSounds: StyleGuideSound[] | undefined;
+  const soundIdByName = new Map<string, string>();
+  const soundIdByBuiltIn = new Map<string, string>();
+  if (data.sounds !== undefined) {
+    const usedIds = new Set<string>();
+    normalizedSounds = [];
+    for (let i = 0; i < data.sounds.length; i++) {
+      const s = data.sounds[i]!;
+      const builtInSlug = s.builtInId ?? s.builtin;
+      const builtIn = builtInSlug
+        ? findBuiltInStyleSound(builtInSlug)
+        : (s.source !== "asset" && s.name ? BUILT_IN_STYLE_SOUNDS.find(b => b.name.toLowerCase() === s.name!.toLowerCase()) : undefined);
+
+      if (s.source === "asset" || (!builtIn && s.assetId)) {
+        if (!s.assetId || !existingAssets.has(s.assetId)) continue;
+        const id = s.id && !usedIds.has(s.id) ? (usedIds.add(s.id), s.id) : stableId("sfx", s.name ?? s.assetId, i, usedIds);
+        const entry = StyleGuideSound.parse({
+          id,
+          name: s.name ?? "Custom sound",
+          source: "asset",
+          assetId: s.assetId,
+          volumeDb: s.volumeDb ?? -14,
+          ...(s.duration !== undefined ? { duration: s.duration } : {}),
+          usageRule: s.usageRule ?? "",
+        });
+        normalizedSounds.push(entry);
+        soundIdByName.set(entry.name.toLowerCase(), entry.id);
+      } else if (builtIn) {
+        const id = s.id && !usedIds.has(s.id) ? (usedIds.add(s.id), s.id) : stableId("sfx", builtIn.id, i, usedIds);
+        const entry = StyleGuideSound.parse({
+          id,
+          name: s.name ?? builtIn.name,
+          source: "builtin",
+          builtInId: builtIn.id,
+          volumeDb: s.volumeDb ?? builtIn.defaultVolumeDb,
+          duration: s.duration ?? builtIn.duration,
+          usageRule: s.usageRule ?? builtIn.defaultUsageRule,
+        });
+        normalizedSounds.push(entry);
+        soundIdByName.set(entry.name.toLowerCase(), entry.id);
+        soundIdByBuiltIn.set(builtIn.id, entry.id);
+      }
+    }
+    out.sounds = normalizedSounds;
+  }
+
+  if (data.transitions !== undefined) {
+    const usedIds = new Set<string>();
+    let seenDefault = false;
+    out.transitions = data.transitions.map((t, i) => {
+      const id = t.id && !usedIds.has(t.id) ? (usedIds.add(t.id), t.id) : stableId("tr", t.name, i, usedIds);
+      const rawSoundRef = t.soundId ?? t.sound;
+      let resolvedSoundId: string | undefined;
+      if (rawSoundRef) {
+        if (normalizedSounds?.some(s => s.id === rawSoundRef)) {
+          resolvedSoundId = rawSoundRef;
+        } else if (soundIdByName.has(rawSoundRef.toLowerCase())) {
+          resolvedSoundId = soundIdByName.get(rawSoundRef.toLowerCase());
+        } else {
+          const built = findBuiltInStyleSound(rawSoundRef);
+          if (built) {
+            resolvedSoundId = soundIdByBuiltIn.get(built.id) ?? `builtin:${built.id}`;
+          } else if (rawSoundRef.startsWith("builtin:")) {
+            resolvedSoundId = rawSoundRef;
+          }
+        }
+      }
+      const isDefault = Boolean(t.isDefault) && !seenDefault;
+      if (isDefault) seenDefault = true;
+      return StyleGuideTransition.parse({
+        id,
+        name: t.name,
+        type: t.type,
+        duration: t.duration ?? 0.4,
+        direction: t.direction ?? "left",
+        ...(t.color ? { color: t.color } : {}),
+        ...(resolvedSoundId ? { soundId: resolvedSoundId } : {}),
+        usageRule: t.usageRule ?? "",
+        isDefault,
+      });
+    });
+  }
+
+  if (data.colorLook !== undefined) {
+    if (data.colorLook === null) {
+      out.colorLook = null;
+    } else {
+      const keepLut = Boolean(data.colorLook.lutAssetId && existingAssets.has(data.colorLook.lutAssetId));
+      out.colorLook = StyleGuideColorLook.parse({
+        name: data.colorLook.name ?? "",
+        notes: data.colorLook.notes ?? "",
+        ...(keepLut ? { lutAssetId: data.colorLook.lutAssetId, lutName: data.colorLook.lutName } : {}),
+        adjustments: StyleGuideColorAdjustments.parse(data.colorLook.adjustments ?? {}),
+      });
+    }
+  }
+
+  return out;
+}
+
+/** Serialize a Style Guide into a clean portable JSON object containing all settings (graphics, transitions, sounds, color look). */
+export function serializeStyleGuideDefinition(guide: StyleGuideRecord): Record<string, unknown> {
+  return {
+    version: 1,
+    name: guide.name,
+    description: guide.description,
+    instructions: guide.instructions,
+    transitions: guide.transitions.map(t => ({
+      id: t.id,
+      name: t.name,
+      type: t.type,
+      duration: t.duration,
+      direction: t.direction,
+      ...(t.color ? { color: t.color } : {}),
+      ...(t.soundId ? { soundId: t.soundId } : {}),
+      usageRule: t.usageRule,
+      isDefault: t.isDefault,
+    })),
+    sounds: guide.sounds.map(s => ({
+      id: s.id,
+      name: s.name,
+      source: s.source,
+      ...(s.builtInId ? { builtInId: s.builtInId } : {}),
+      ...(s.assetId ? { assetId: s.assetId } : {}),
+      volumeDb: s.volumeDb,
+      ...(s.duration !== undefined ? { duration: s.duration } : {}),
+      usageRule: s.usageRule,
+    })),
+    ...(guide.colorLook
+      ? {
+          colorLook: {
+            name: guide.colorLook.name,
+            notes: guide.colorLook.notes,
+            ...(guide.colorLook.lutName ? { lutName: guide.colorLook.lutName } : {}),
+            adjustments: guide.colorLook.adjustments,
+          },
+        }
+      : {}),
+  };
 }

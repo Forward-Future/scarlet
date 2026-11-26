@@ -693,6 +693,19 @@ export class ScarletClient extends ClientTransport {
   createStyleGuideFromGraphic(body: StyleGuideFromGraphicRequest) {
     return this.post<{ styleGuide: StyleGuideRecord }>("/style-guides/from-graphic", body);
   }
+  importStyleGuideFile(file: Blob | { path: string }, opts: { styleGuideId?: string; name?: string } = {}) {
+    const query = opts.styleGuideId ? `?styleGuideId=${encodeURIComponent(opts.styleGuideId)}` : "";
+    const path = `/style-guides/import-file${query}`;
+    if (!(file instanceof Blob)) {
+      return this.post<{ imported: true; styleGuide: StyleGuideRecord } | { imported: false }>(path, {
+        path: file.path,
+        ...(opts.styleGuideId && { styleGuideId: opts.styleGuideId }),
+      });
+    }
+    const fd = new FormData();
+    fd.append("file", file, opts.name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "style-guide.json"));
+    return this.post<{ imported: true; styleGuide: StyleGuideRecord } | { imported: false }>(path, fd);
+  }
   updateStyleGuide(styleGuideId: string, body: UpdateStyleGuideRequest) {
     return this.put<{ styleGuide: StyleGuideRecord }>(`/style-guides/${apiPathId(styleGuideId)}`, body);
   }

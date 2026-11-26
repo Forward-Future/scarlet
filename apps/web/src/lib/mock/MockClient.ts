@@ -849,6 +849,50 @@ export class MockClient implements ScarletApi {
     this.requireAuth();
     return this.createStyleGuide({ name: body.name, description: body.description || "Saved from project graphic", isDefault: body.isDefault });
   }
+  async importStyleGuideFile(
+    file: Blob | { path: string },
+    opts: { styleGuideId?: string; name?: string } = {},
+  ): Promise<{ imported: true; styleGuide: import("@scarlet/shared").StyleGuideRecord } | { imported: false }> {
+    this.requireAuth();
+    if (!(file instanceof Blob)) return this.latency({ imported: false as const }, 80);
+    const text = await file.text();
+    const { parseStyleGuideDefinitionJson, slugifyStyleGuideName } = await import("@scarlet/shared");
+    const fileName = opts.name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "style-guide.json");
+    const baseName = fileName.replace(/\.(?:style\.)?json$/i, "");
+    const existing = opts.styleGuideId ? this.store.db.styleGuides.find(g => g.id === opts.styleGuideId) : undefined;
+    const parsed = parseStyleGuideDefinitionJson(text, {
+      fallbackName: baseName,
+      existingAssetIds: new Set(existing?.assets.map(a => a.id) ?? []),
+    });
+    if (!parsed) return this.latency({ imported: false as const }, 80);
+    if (existing) {
+      const updated = await this.updateStyleGuide(existing.id, {
+        ...(parsed.description !== undefined && { description: parsed.description }),
+        ...(parsed.instructions !== undefined && { instructions: parsed.instructions }),
+        ...(parsed.isDefault !== undefined && { isDefault: parsed.isDefault }),
+        ...(parsed.transitions !== undefined && { transitions: parsed.transitions }),
+        ...(parsed.sounds !== undefined && { sounds: parsed.sounds }),
+        ...(parsed.colorLook !== undefined && { colorLook: parsed.colorLook }),
+      });
+      return { imported: true, styleGuide: updated.styleGuide };
+    }
+    const baseSlug = parsed.name || slugifyStyleGuideName(baseName) || "imported-style";
+    let uniqueName = baseSlug;
+    let n = 2;
+    while (this.store.db.styleGuides.some(g => g.name.toLowerCase() === uniqueName.toLowerCase())) {
+      uniqueName = `${baseSlug}-${n++}`;
+    }
+    const created = await this.createStyleGuide({
+      name: uniqueName,
+      description: parsed.description,
+      instructions: parsed.instructions,
+      isDefault: parsed.isDefault,
+      transitions: parsed.transitions,
+      sounds: parsed.sounds,
+      ...(parsed.colorLook ? { colorLook: parsed.colorLook } : {}),
+    });
+    return { imported: true, styleGuide: created.styleGuide };
+  }
   async updateStyleGuide(styleGuideId: string, body: import("@scarlet/shared").UpdateStyleGuideRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
     this.requireAuth();
     const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);

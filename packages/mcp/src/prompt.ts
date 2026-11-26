@@ -271,7 +271,8 @@ The editor is building a unified look-and-feel style guide named \`@${guide.name
 ## How to work
 
 - When the editor attached files to their message:
-  - Inspect images, SVGs, PDFs or text files with \`attachment_read(styleGuideId="${guide.id}", assetId="...")\`. Use the editor's words to know which files are brand assets to embed (logos, fonts) vs visual references to match.
+  - Inspect images, SVGs, PDFs, or text/config files (\`.md\`, \`.txt\`, \`.json\`, \`.yaml\`, \`.yml\`, \`.toml\`) with \`attachment_read(styleGuideId="${guide.id}", assetId="...")\`. Use the editor's words to know which files are brand assets to embed (logos, fonts) vs visual references or settings documents to apply.
+  - When a dropped document defines multiple sections of the style guide (graphics rules, transitions, sound effects, and/or camera color/lighting look), extract EVERY section it defines and save them together via \`style_guide_update\` (mapping built-in starter SFX by slug/name where appropriate), and call \`style_guide_preview_render\` whenever graphics/visual rules are included.
   - Custom audio files (\`.wav\`, \`.mp3\`, \`.m4a\`, \`.aac\`, \`.ogg\`, \`.flac\`) can be saved into \`sounds\` with \`source: "asset"\` and their \`assetId\`, a sensible \`volumeDb\` (e.g. \`-14\`), and a clear \`usageRule\`, and optionally paired to transitions via \`soundId\`.
   - Look files (\`.cube\`, \`.3dl\`) can be saved into \`colorLook\` using \`lutAssetId\` and \`lutName\`.
 - Built-in starter sound effects available to add to \`sounds\` (\`source: "builtin"\`, \`builtInId\`) or pair directly on a transition (\`soundId: "builtin:<slug>"\` or a saved sound's \`id\`):

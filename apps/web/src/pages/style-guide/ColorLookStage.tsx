@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { StyleGuideColorAdjustments, type StyleGuideRecord } from "@scarlet/shared";
 import { Icon } from "../../components/ui/primitives";
-import { useFileDropTarget } from "../../lib/uiHooks";
 
-const LUT_FILE = /\.(?:cube|3dl)$/i;
 const DEFAULT_ADJ: StyleGuideColorAdjustments = StyleGuideColorAdjustments.parse({});
 
 const PROMPT_STARTERS = [
@@ -186,11 +184,9 @@ const READOUTS: readonly ReadoutSpec[] = [
 export function ColorLookStage({
   guide,
   onSuggestPrompt,
-  onStageFiles,
 }: {
   guide: StyleGuideRecord | null;
   onSuggestPrompt(prompt: string): void;
-  onStageFiles(items: Array<File | { path: string }>): void;
 }) {
   const saved = guide?.colorLook;
   const adj = saved?.adjustments ?? DEFAULT_ADJ;
@@ -242,19 +238,6 @@ export function ColorLookStage({
     };
   }, [dragging]);
 
-  // Dropping a .cube / .3dl file attaches it to the chat composer so all color changes stay prompt-driven.
-  const { over: dropping, dropProps } = useFileDropTarget(
-    paths => {
-      const luts = paths.filter(p => LUT_FILE.test(p)).map(path => ({ path }));
-      if (luts.length) onStageFiles(luts);
-    },
-    files => {
-      const luts = Array.from(files).filter(f => LUT_FILE.test(f.name));
-      if (luts.length) onStageFiles(luts);
-    },
-    { ignoreChildLeave: true },
-  );
-
   const savedMetrics = useMemo(() => {
     if (!saved) return [];
     return READOUTS.filter(spec => Math.abs(adj[spec.key] - DEFAULT_ADJ[spec.key]) > 1e-4).map(spec => ({
@@ -266,11 +249,11 @@ export function ColorLookStage({
 
   if (!saved) {
     return (
-      <div {...dropProps} className={`style-guide-preview-stage ${dropping ? "is-dropping" : ""}`}>
+      <div className="style-guide-preview-stage">
         <div className="style-guide-preview-frame is-empty">
           <span className="style-guide-preview-placeholder-title">Camera color look</span>
           <span className="style-guide-preview-placeholder-body">
-            Describe the color and lighting look in chat, or drop a .cube / .3dl file — Scarlet will save it here and apply it across projects.
+            Describe the color and lighting look in chat, or drop a style file or .cube / .3dl look file anywhere — Scarlet will save it here and apply it across projects.
           </span>
           <div className="sg-prompt-chips">
             {PROMPT_STARTERS.map(starter => (
@@ -285,13 +268,12 @@ export function ColorLookStage({
             ))}
           </div>
         </div>
-        {dropping && <div className="sg-drop-overlay" aria-hidden="true">Attach .cube / .3dl file to your chat message</div>}
       </div>
     );
   }
 
   return (
-    <div {...dropProps} className={`sg-tab-body ${dropping ? "is-dropping" : ""}`}>
+    <div className="sg-tab-body">
       <div className="sg-transition-stage-wrap">
         <div
           ref={stageRef}
@@ -350,11 +332,9 @@ export function ColorLookStage({
         )}
 
         <p className="sg-color-prompt-hint">
-          Describe color or lighting adjustments in chat — or drop a .cube / .3dl file into chat — and Scarlet will update this look.
+          Describe color or lighting adjustments in chat — or drop a style settings file or .cube / .3dl file anywhere — and Scarlet will update this look.
         </p>
       </div>
-
-      {dropping && <div className="sg-drop-overlay" aria-hidden="true">Attach .cube / .3dl file to your chat message</div>}
     </div>
   );
 }

@@ -4,6 +4,8 @@ import {
   dbToLinearGain,
   findBuiltInStyleSound,
   ImportStyleGuideSoundRequest,
+  parseStyleGuideDefinitionJson,
+  serializeStyleGuideDefinition,
   StyleGuideRecord,
   synthesizeBuiltInSfxWav,
   TaskStyleGuideDraft,
@@ -83,5 +85,60 @@ describe("extended StyleGuideRecord schemas", () => {
     expect(TaskStyleGuideDraft.safeParse({ colorLook: null }).success).toBe(true);
     expect(ImportStyleGuideSoundRequest.safeParse({ builtInId: "soft-whoosh" }).success).toBe(true);
     expect(ImportStyleGuideSoundRequest.safeParse({}).success).toBe(false);
+  });
+
+  it("parses and round-trips portable style definition JSON files, rejecting unrelated JSON", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      name: "Studio Editorial",
+      description: "Obsidian cards & warm studio cameras",
+      instructions: "## Palette\n- Surface: #141416",
+      sounds: [
+        { name: "Whoosh", builtInId: "soft-whoosh", volumeDb: -15 },
+      ],
+      transitions: [
+        { name: "Section push", type: "push", duration: 0.4, direction: "left", sound: "Whoosh", usageRule: "Between sections", isDefault: true },
+        { name: "Whip", type: "whip", duration: 0.3, sound: "airy-slide", isDefault: true },
+      ],
+      colorLook: {
+        name: "Warm Studio",
+        notes: "Gentle warmth and lifted shadows",
+        adjustments: { exposure: 0.15, warmth: 0.24, highlights: -0.2 },
+      },
+    });
+    const parsed = parseStyleGuideDefinitionJson(raw);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.name).toBe("studio-editorial");
+    expect(parsed!.sounds).toHaveLength(1);
+    expect(parsed!.sounds![0]!).toMatchObject({ source: "builtin", builtInId: "soft-whoosh", volumeDb: -15 });
+    expect(parsed!.transitions).toHaveLength(2);
+    expect(parsed!.transitions![0]!.soundId).toBe(parsed!.sounds![0]!.id);
+    expect(parsed!.transitions![0]!.isDefault).toBe(true);
+    // Only the first transition keeps isDefault
+    expect(parsed!.transitions![1]!.isDefault).toBe(false);
+    expect(parsed!.transitions![1]!.soundId).toBe("builtin:airy-slide");
+    expect(parsed!.colorLook!.adjustments).toMatchObject({ exposure: 0.15, warmth: 0.24, highlights: -0.2, contrast: 1 });
+
+    // Round-trip via serializeStyleGuideDefinition
+    const full = StyleGuideRecord.parse({
+      id: "sg_rt",
+      name: parsed!.name!,
+      description: parsed!.description,
+      instructions: parsed!.instructions,
+      transitions: parsed!.transitions,
+      sounds: parsed!.sounds,
+      colorLook: parsed!.colorLook ?? undefined,
+    });
+    const exported = JSON.stringify(serializeStyleGuideDefinition(full));
+    const reparsed = parseStyleGuideDefinitionJson(exported);
+    expect(reparsed).toMatchObject({
+      name: "studio-editorial",
+      description: "Obsidian cards & warm studio cameras",
+      colorLook: { name: "Warm Studio" },
+    });
+
+    // Unrelated JSON (e.g. Figma tokens) returns null so Scarlet reads it via chat instead
+    expect(parseStyleGuideDefinitionJson(JSON.stringify({ tokens: { brand: "#ff0000" } }))).toBeNull();
+    expect(parseStyleGuideDefinitionJson("not json")).toBeNull();
   });
 });

@@ -329,3 +329,72 @@ it("renders the Tabbed Stage (Graphics, Transitions, Sounds, Color look) and per
     vi.unstubAllGlobals();
   }
 });
+
+it("imports a dropped structured .style.json file defining all settings directly, and stages freeform docs to chat", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const now = "2026-11-26T11:00:00.000Z";
+  const initial: StyleGuideRecord = {
+    id: "sg_drop",
+    name: "starter",
+    description: "",
+    instructions: "",
+    isDefault: false,
+    assets: [],
+    transitions: [],
+    sounds: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  const importedGuide: StyleGuideRecord = {
+    ...initial,
+    description: "Imported full studio kit",
+    instructions: "Use #141416 panels and Inter.",
+    transitions: [
+      { id: "tr_push", name: "Section push", type: "push", duration: 0.4, direction: "left", soundId: "sfx_whoosh", usageRule: "Between sections", isDefault: true },
+    ],
+    sounds: [
+      { id: "sfx_whoosh", name: "Soft whoosh", source: "builtin", builtInId: "soft-whoosh", volumeDb: -14, duration: 0.45, usageRule: "Section pushes" },
+    ],
+    colorLook: {
+      name: "Warm Studio",
+      notes: "Warm balanced studio look",
+      adjustments: { exposure: 0.1, contrast: 1.05, saturation: 1.04, warmth: 0.2, tint: 0, shadows: 0.1, highlights: -0.15, blacks: 0, whites: 0, gamma: 1 },
+    },
+  };
+  useHostsStore.setState({ hosts: [buildDb().hosts.find(h => h.online)!] });
+  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
+  useStyleGuidesStore.setState({ styleGuides: [initial], status: "ready", error: null });
+  vi.spyOn(api, "styleGuide").mockResolvedValue({ styleGuide: initial, edits: [] });
+  const importFile = vi.spyOn(api, "importStyleGuideFile").mockResolvedValue({ imported: true, styleGuide: importedGuide });
+
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const router = createMemoryRouter([{ path: "/settings/style-guides/:styleGuideId", element: <StyleGuideEditorPage /> }], {
+    initialEntries: [`/settings/style-guides/${initial.id}`],
+  });
+
+  try {
+    await act(async () => root.render(<RouterProvider router={router} />));
+    const fileInput = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const styleJson = new File([JSON.stringify({ description: "Imported full studio kit" })], "studio.style.json", { type: "application/json" });
+    await act(async () => {
+      Object.defineProperty(fileInput, "files", { value: [styleJson], configurable: true });
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(importFile).toHaveBeenCalledWith(styleJson, { styleGuideId: "sg_drop", name: "studio.style.json" });
+    expect(el.textContent).toContain("Imported settings from studio.style.json.");
+    // Tab badges update immediately with the imported transitions, sounds, and color look
+    const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    expect(tabs.map(t => t.textContent?.trim())).toEqual(["Graphics", "Transitions1", "Sounds1", "Color look"]);
+  } finally {
+    await act(async () => root.unmount());
+    el.remove();
+    router.dispose();
+    useStyleGuidesStore.setState(useStyleGuidesStore.getInitialState());
+    useHostsStore.setState(useHostsStore.getInitialState());
+    useUiStore.setState(useUiStore.getInitialState());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});

@@ -1,6 +1,6 @@
 import { parseMultipartRequest } from "@remix-run/multipart-parser/future";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod/v3";
@@ -29,6 +29,7 @@ import {
   deleteStyleGuide,
   deleteStyleGuideAsset,
   findStyleGuideAsset,
+  importStyleGuideDefinition,
   importStyleGuideSoundToProject,
   latestStyleGuideEdit,
   listStyleGuides,
@@ -70,6 +71,56 @@ export function styleGuideRoutes(ctx: Ctx) {
       AbortSignal.any([ctx.shutdown, c.req.raw.signal]),
     );
     return c.json({ styleGuide }, 201);
+  });
+
+  // Import a portable JSON file defining a style guide's full settings (graphics, transitions, sounds, color look).
+  // Returns `{ imported: false }` if the file isn't a structured style guide definition so callers can pass it to Scarlet in chat.
+  r.post("/style-guides/import-file", async (c) => {
+    const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+    const tooLarge = () => new HttpError(413, "attachment_too_large", "A style definition file can be up to 5 MB.");
+    const queryStyleGuideId = c.req.query("styleGuideId") || undefined;
+
+    let rawText = "";
+    let fileName = "style-guide.json";
+    let styleGuideId = queryStyleGuideId;
+
+    if (c.req.header("content-type")?.startsWith("application/json")) {
+      const body = await jsonBody(c, z.object({
+        path: z.string().min(1).max(4096),
+        styleGuideId: z.string().min(1).max(120).optional(),
+      }));
+      styleGuideId = body.styleGuideId ?? styleGuideId;
+      const info = isAbsolute(body.path) ? await stat(body.path).catch(() => null) : null;
+      if (!info?.isFile()) throw notFound("file");
+      if (info.size > MAX_IMPORT_BYTES) return c.json({ imported: false as const });
+      fileName = basename(body.path);
+      rawText = await readFile(body.path, "utf8");
+    } else {
+      if (Number(c.req.header("content-length")) > MAX_IMPORT_BYTES + 64 * 1024) return c.json({ imported: false as const });
+      let found = false;
+      try {
+        for await (const part of parseMultipartRequest(c.req.raw, { maxFileSize: MAX_IMPORT_BYTES, maxParts: 8 })) {
+          if (part.name !== "file" || !part.isFile) continue;
+          found = true;
+          fileName = part.filename || fileName;
+          const chunks: Uint8Array[] = [];
+          let total = 0;
+          for await (const chunk of part) {
+            total += chunk.byteLength;
+            if (total > MAX_IMPORT_BYTES) throw tooLarge();
+            chunks.push(chunk);
+          }
+          rawText = Buffer.concat(chunks).toString("utf8");
+          break;
+        }
+      } catch (error) {
+        multipartError(error, { tooLarge, invalid: () => badRequest("bad_upload", "Incomplete or invalid upload. Please try again.") });
+      }
+      if (!found) throw badRequest("missing_file", "multipart field `file` is required");
+    }
+
+    const result = importStyleGuideDefinition(ctx, c.var.user, rawText, fileName, { styleGuideId });
+    return c.json(result, result.imported ? (styleGuideId ? 200 : 201) : 200);
   });
 
   r.get("/style-guides/sounds/builtin", (c) => {

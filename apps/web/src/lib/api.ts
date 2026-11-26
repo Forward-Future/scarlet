@@ -107,6 +107,7 @@ export type ScarletApi = Pick<
   | "styleGuide"
   | "createStyleGuide"
   | "createStyleGuideFromGraphic"
+  | "importStyleGuideFile"
   | "updateStyleGuide"
   | "deleteStyleGuide"
   | "editStyleGuide"
