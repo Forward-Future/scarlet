@@ -9,6 +9,7 @@ import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { measuredLoudness } from "../render/loudness.js";
 import { faces } from "../services/faces.js";
 import { lipSync } from "../services/lipSync.js";
+import { MOUTH_MAX_STRETCHES, MOUTH_MAX_STRETCH_SECONDS, MOUTH_MAX_TOTAL_SECONDS, mouthActivity } from "../services/mouthActivity.js";
 import { musicBeats } from "../services/musicBeats.js";
 import { pictureCuts } from "../services/pictureCuts.js";
 import { screenMotion } from "../services/screenMotion.js";
@@ -108,6 +109,47 @@ export function perceptionRoutes(ctx: Ctx) {
     const wait = optionalNumberParam(c.req.query("wait"), "wait");
     return lipSync(ctx, media, { ...range, count, seconds }, { waitMs: Math.max(0, Math.min(240, wait ?? 60)) * 1000, signal: opts.signal });
   }));
+
+  // Per-face mouth movement over requested source stretches, for matching speakers to camera angles.
+  r.post("/projects/:projectId/media/:mediaId/mouth-activity", async c => {
+    const media = requireMedia(ctx, c.req.param("mediaId") ?? "", c.req.param("projectId") ?? "");
+    if (media.kind !== "video") throw badRequest("no_picture", "Only a video has a picture to read.");
+    if (!media.duration) throw conflict("not_ready", "The recording is still being prepared. Ask again in a moment.");
+    if (!await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path)) throw notFound("source file");
+    const body = await c.req.json().catch(() => null) as { stretches?: unknown } | null;
+    if (!body || !Array.isArray(body.stretches) || !body.stretches.length || body.stretches.length > MOUTH_MAX_STRETCHES) {
+      throw badRequest("bad_request", `Send stretches: 1 to ${MOUTH_MAX_STRETCHES} { from, to } source ranges.`);
+    }
+    const stretches: Array<{ from: number; to: number }> = [];
+    let total = 0;
+    for (const item of body.stretches) {
+      if (!item || typeof item !== "object" || typeof (item as { from?: unknown }).from !== "number" || typeof (item as { to?: unknown }).to !== "number") {
+        throw badRequest("bad_request", "Each stretch needs numeric from and to in source seconds.");
+      }
+      const { from, to } = item as { from: number; to: number };
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to <= from) {
+        throw badRequest("bad_range", "Choose a positive source range with to > from.");
+      }
+      if (to - from > MOUTH_MAX_STRETCH_SECONDS + 0.05) {
+        throw badRequest("bad_range", `Each stretch can be at most ${MOUTH_MAX_STRETCH_SECONDS} s.`);
+      }
+      total += to - from;
+      stretches.push({ from, to });
+    }
+    if (total > MOUTH_MAX_TOTAL_SECONDS + 0.1) {
+      throw badRequest("bad_range", `Total stretches can be at most ${MOUTH_MAX_TOTAL_SECONDS} s.`);
+    }
+    const wait = optionalNumberParam(c.req.query("wait"), "wait");
+    const signal = c.req.raw.signal;
+    try {
+      const result = await mouthActivity(ctx, media, stretches, { waitMs: Math.max(0, Math.min(120, wait ?? 30)) * 1000, signal });
+      return signal.aborted ? new Response(null, { status: 499 }) : c.json(result);
+    } catch (error) {
+      if (signal.aborted) return new Response(null, { status: 499 });
+      if (error instanceof HttpError) throw error;
+      throw new Error(`mouth activity: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  });
 
   // What of a video's picture viewers may see: the areas given for it and where each holds. A first ask reads the
   // recording's edges and waits up to `wait` seconds (default 30); `done` is false until they are read.

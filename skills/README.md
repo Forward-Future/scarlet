@@ -8,6 +8,7 @@ Every project uses the same library. A skill command pins its guide to the task.
 | Story and pacing | [Fit a target length](fit-length/SKILL.md) | Bring the edit to a running time you name by taking out the passages it needs least, and offer the rest when hitting the number would cost something. |
 | Story and pacing | [Speed through waits](speed-through-waits/SKILL.md) | Play installs, builds, renders and loading fast instead of cutting them, with every track in sync and speech at normal speed. |
 | Story and pacing | [Split edits](split-edits/SKILL.md) | J and L cuts: let the next voice lead into its shot, or a line carry on over the listener, in interviews, conversations and reactions. |
+| Story and pacing | [Multi-camera editing](multi-cam/SKILL.md) | Sync multiple cameras and audio tracks, match speakers to angles, and switch shots with natural pacing for podcasts and interviews. |
 | Sound | [Music under speech](music-under-speech/SKILL.md) | Dip music under speech so every word is clear, and let it swell back up in the pauses and where nobody speaks. |
 | Picture and graphics | [Frame the screen on what I'm doing](frame-screen/SKILL.md) | Frame tight on the pane or passage being used or read, with smooth zooms in and out as the subject changes. |
 | Picture and graphics | [Punch-ins on a talking head](punch-in/SKILL.md) | Cut between the wide framing and a tighter one across jump cuts and on lines that deserve weight, with the face placed from where it actually is. |

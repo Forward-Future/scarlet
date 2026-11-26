@@ -109,12 +109,13 @@ pub(super) fn flush_streams(st: &mut GeminiState, events: &mut Vec<RunnerEvent>)
 /// and `tool_help` and `tool_call`, which the server adds for Gemini. A test keeps this list the same as that file's.
 pub const SCARLET_TOOLS: &[&str] = &[
     "project_get", "timeline_get", "timeline_at", "timeline_diff", "timeline_propose", "timeline_first_cut",
+    "timeline_sync_multicam", "timeline_switch_cameras",
     "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync",
     "transcript_get", "transcript_search", "timeline_transcript", "timeline_join_audit", "waveform_get", "sound_picture",
     "transcript_fix", "media_profile", "music_beats", "audio_sync", "dialogue_scan", "dialogue_check_join", "dialogue_check_repeats", "dialogue_apply_cuts",
     "dialogue_review_inspect", "dialogue_review_save", "dialogue_revise_cut",
     "screen_text", "screen_reading", "screen_motion",
-    "faces", "lip_sync",
+    "faces", "lip_sync", "multicam_analyze",
     "change_get", "change_list", "edit_flag", "notes_list", "note_reply", "note_resolve", "render_request", "render_status",
     "task_log", "task_question", "hand_off", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit",
     "web_capture", "web_video", "graphic_render", "graphic_get", "style_guide_save", "style_guide_update", "style_guide_preview_render", "style_guide_preview_get", "attachment_read",
