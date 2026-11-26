@@ -7,6 +7,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 25, 2026
 
 - Opening a cut from the list now keeps its section lit on the timeline and plays from just before the cut, even when the video changes underneath it while you review.
+- In the beta layout, grouped edits of any kind (cuts, graphics, zooms, B-roll, audio fixes, transitions, and more) are now summarized by AI into a short plain-English title (such as "110 dialogue cuts: pauses & retakes" or "3 model title cards") instead of showing only the first edit's name with a "+N" badge.
+- Removed the "All" and "Needs you" filter buttons from Needs review so flagged edits and safe edits always appear together in one list.
 - Long edits use fewer tokens and finish a little sooner: Scarlet reads the timeline in smaller pieces, no longer has frame requests turned away, and starts each edit already knowing whether there are open review notes (about a fifth fewer tokens on a 27-minute talking-head edit).
 - Dragging the playhead past the left end of the timeline now lands it on 0:00, and past the right end on the last frame, even when the timeline is zoomed in; the timeline scrolls to show it there.
 - The working indicator under the timeline now shows only "Scarlet is editing", without trailing activity text.

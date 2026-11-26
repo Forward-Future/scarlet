@@ -85,7 +85,7 @@ const LISTEN_CHECK_TOOLS: ReadonlySet<string> = new Set(["source_audio"]);
  * tools briefly (Gemini's) gets the same tools whole, and the rest through `tool_call` (`brief-tools.ts`).
  */
 export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["project_get", "timeline_get", "task_log", "task_question"]);
-const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "listen_check", "learning_check", "skill_edit", "style_guide_edit", "skill_from_change"]);
+const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "listen_check", "learning_check", "batch_summary", "skill_edit", "style_guide_edit", "skill_from_change"]);
 /** Tools a request that only tightens local pauses refuses: it saves classified pauses with dialogue_apply_cuts. */
 const NOT_FOR_LOCAL_PAUSES: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "dialogue_check_repeats"]);
 const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
@@ -173,6 +173,8 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
         ? "Scarlet exposes the tools for looking at one frame of a recording and saving what of it viewers may see; an empty MCP resource list is normal."
         : ctx.task?.kind === "listen_check"
         ? "Scarlet exposes the tool for playing one passage of a recording; an empty MCP resource list is normal."
+        : ctx.task?.kind === "batch_summary"
+        ? "Reply with one short plain-English title summarizing the batch of edits in your prompt. Call no tools."
         : "Scarlet exposes project context and editing operations as tools; an empty MCP resource list is normal. project_get returns the current edit and the editor’s selection. Transcript and waveform tools prepare missing data on demand.",
     },
   );
@@ -282,6 +284,7 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
     if (ctx.task?.kind === "learning_check" ? !LEARNING_CHECK_TOOLS.has(name) : name === "learning_suggest") return false;
     if (ctx.task?.kind === "area_check" && !AREA_CHECK_TOOLS.has(name)) return false;
     if (ctx.task?.kind === "listen_check" && !LISTEN_CHECK_TOOLS.has(name)) return false;
+    if (ctx.task?.kind === "batch_summary") return false;
     // A hand-off does one piece of a request's work for the model running it. Nobody waits on its questions: what it
     // can't settle goes back in its closing words.
     if (ctx.task?.kind === "hand_off" && (name === "task_question" || name === "hand_off")) return false;

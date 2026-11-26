@@ -1637,17 +1637,16 @@ export function LegacySimpleWorkspace() {
   /** Next row in the unified fixed bottom dock's Needs review Priority list. */
   function nextDockAfterKeep(hereAt: number): DockEntry | undefined {
     const waitingList = dock.waitingEntries(threadIds);
-    const includeConfident = dockList !== "need" || waitingList.length === 0;
-    const keepList = dock.keepEntries(threadIds, includeConfident);
+    const keepList = dock.keepEntries(threadIds, true);
     const current = keepList.find(e => e.row.on || e.members?.some(m => m.on));
     const confident = keepList.filter(e => e.place === "optional");
     // While on a waiting item, finish remaining waiting items first (wrapping to earlier ones),
-    // then move into confident edits when All is active.
+    // then move into safe edits below.
     if (!current || current.place === "you") {
       return rowAfter(waitingList, current, { at: hereAt }, { numbers: false })
-        ?? (includeConfident ? confident[0] : undefined);
+        ?? confident[0];
     }
-    // While on a confident edit, advance strictly down Confident edits, wrapping back to anything still waiting at the end.
+    // While on a safe edit, advance strictly down Safe edits, wrapping back to anything still waiting at the end.
     return rowNext(confident, current, { at: hereAt }, { numbers: false })
       ?? waitingList.find(e => e !== current);
   }
@@ -1750,11 +1749,11 @@ export function LegacySimpleWorkspace() {
   // decision of the editor's are: one that asks for a look, or a spot marked for them, waits for their own Keep. While
   // a cut, an edit or a call is open the player is on its own passage, and nothing is kept this way.
   const watchedMoments = useMemo(() => {
-    const lowIncluded = dockHasTabs && !explicitAllDock ? dockList !== "need" : !!focusThread && lists[focusThread.id] === "all";
+    const lowIncluded = dockHasTabs && !explicitAllDock ? true : !!focusThread && lists[focusThread.id] === "all";
     if (!focusThread || !lowIncluded || !threadTimeline.moments || !passFocused) return [];
     return threadTimeline.moments
       .filter(m => m.edits.every(e => !e.check && !e.marker) && m.edits.some(e => !reviewed(e) && !revisingEdit(e)));
-  }, [focusThread, lists, dockHasTabs, explicitAllDock, dockList, threadTimeline.moments, passFocused, reviewed, revisingEdit]);
+  }, [focusThread, lists, dockHasTabs, explicitAllDock, threadTimeline.moments, passFocused, reviewed, revisingEdit]);
   const watching = watchedMoments.length > 0 && !reviewingEdit && !listening && !suggestion && !source;
   useWatchedMomentAutoKeep(watching, watchedMoments, current.id, focusThread?.id, head);
   useEditCardShortcuts(workspaceActive && !!reviewingEdit, stepEdit, closeEdit);

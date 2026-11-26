@@ -60,6 +60,7 @@ export function taskRoutes(ctx: Ctx) {
     if (body.kind === "area_check") throw badRequest("not_a_request", "Scarlet starts this check itself, when a save needs it.");
     if (body.kind === "listen_check") throw badRequest("not_a_request", "Scarlet starts this itself, when a request asks to hear a passage.");
     if (body.kind === "hand_off") throw badRequest("not_a_request", "Scarlet starts this itself, when a request hands work to the model chosen for it.");
+    if (body.kind === "batch_summary") throw badRequest("not_a_request", "Scarlet starts this itself, to summarize grouped edits.");
     if (body.kind === "broll_make") throw badRequest("not_a_request", "This kind of run is retired.");
     const { mediaId, version } = body.context ?? {};
     if (mediaId && !ctx.db.prepare("SELECT 1 FROM media WHERE id = ? AND project_id = ?").get(mediaId, project.id)) {
@@ -122,7 +123,7 @@ export function taskRoutes(ctx: Ctx) {
     const state = c.req.query("state");
     // A skill edit and a learning check only borrow the project to run in. Neither is part of its conversation, and a
     // hand-off's edits are the request's that handed it the work.
-    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'style_guide_edit', 'learning_check', 'area_check', 'listen_check', 'hand_off', 'broll_make')" + (state ? " AND state = ?" : ""),
+    const tasks = ctx.repos.tasks.select("project_id = ? AND kind NOT IN ('skill_edit', 'style_guide_edit', 'learning_check', 'area_check', 'listen_check', 'batch_summary', 'hand_off', 'broll_make')" + (state ? " AND state = ?" : ""),
       state ? [project.id, TaskState.parse(state)] : [project.id], "created_at DESC");
     const conversation = c.req.query("events") === "conversation"
       ? ctx.repos.taskEvents.conversations(tasks.filter(t => t.kind !== "transcribe").map(t => t.id)) : undefined;

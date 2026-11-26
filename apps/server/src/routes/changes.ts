@@ -1,11 +1,12 @@
 import { appliedReviewChange, CutAssessment, type Change } from "@scarlet/timeline";
 import { Hono } from "hono";
 import { z } from "zod/v3";
-import { namedTimelineEdits, ApproveRequest, FlagEditRequest, KeepEditsRequest, UnkeepEditsRequest, CutChoicesRequest, ChangeState, DialogueCutsRequest, ProposeChangeRequest, ReviseRequest, StagedCutRevision } from "@scarlet/shared";
+import { namedTimelineEdits, ApproveRequest, BatchSummariesRequest, FlagEditRequest, KeepEditsRequest, UnkeepEditsRequest, CutChoicesRequest, ChangeState, DialogueCutsRequest, ProposeChangeRequest, ReviseRequest, StagedCutRevision } from "@scarlet/shared";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
 import { badRequest } from "../errors.js";
 import { approveChange, changeDiff, flagEdit, keepEdits, keptEdits, unkeepEdits, saveCutAssessments, saveCutChoices, prepareCutReview, proposeChange, scheduleSpotCheck, submitDialogueCuts, rejectChange, reopenChange, reviseChange, reviseStagedCut, unapproveChange, withSpotCapability } from "../services/changes.js";
+import { summarizeBatches } from "../services/batchSummaries.js";
 import { jsonBody, requireProjectHeader, requireScoped, TIMELINE_JSON_BYTES } from "./util.js";
 import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttempt.js";
 import { startDecisionCheck } from "../services/learnings.js";
@@ -77,6 +78,13 @@ export function changeRoutes(ctx: Ctx) {
     const thread = c.req.query("thread");
     if (!thread) throw badRequest("no_thread", "Name the request with ?thread=.");
     return c.json({ kept: keptEdits(ctx, project.id, thread) });
+  });
+
+  // AI-generated short titles for collapsed edit batches in the beta edits column (cached per batch key).
+  r.post("/projects/:id/batch-summaries", async c => {
+    const project = requireProjectHeader(ctx, c.req.param("id"));
+    const body = await jsonBody(c, BatchSummariesRequest);
+    return c.json(await summarizeBatches(ctx, project.id, body.batches));
   });
 
   r.post("/projects/:id/dialogue-cuts", async c => {

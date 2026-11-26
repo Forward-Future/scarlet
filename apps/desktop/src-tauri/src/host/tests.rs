@@ -784,7 +784,7 @@ async fn a_local_model_server_runs_one_request_and_one_check_at_a_time() {
 
 #[test]
 fn side_check_kinds_and_slots_match_the_engine() {
-    assert!(is_side_check("area_check") && is_side_check("learning_check"));
+    assert!(is_side_check("area_check") && is_side_check("learning_check") && is_side_check("batch_summary"));
     assert!(!is_side_check("skill_edit") && !is_side_check("edit") && !is_side_check("revise"));
     assert_eq!((side_check_slots(1), side_check_slots(3), side_check_slots(8)), (2, 6, 12));
 }
