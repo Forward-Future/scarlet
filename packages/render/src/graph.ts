@@ -78,6 +78,11 @@ export interface GraphOptions extends FontOptions {
   transitions?: Pick<TransitionPlan, "motions" | "layers">;
   /** Reuse probed movie headers for seeks when the caller supports discovery fallback. */
   indexedInputs?: boolean;
+  /**
+   * A short read the editor waits on: an HEVC original with wavefront rows or tiles (`ProbeResult.rowParallel`) that
+   * decodes on the CPU uses slice threads, which decode each picture's rows at once, instead of frame threads.
+   */
+  rowThreads?: boolean;
   signal?: AbortSignal;
   pictureSource?: (asset: MediaAsset, from: number, to: number, minimumHeight: number) => Promise<{ file: string; start: number } | undefined>;
   audioOnly?: boolean;
@@ -422,10 +427,13 @@ async function writeFilterGraph(
       const shared = motionsOf(clip.id).length ? undefined : sharedReads?.get(clip);
       const indexedPicture = opts.indexedInputs && !includeAudio;
       let indexedOriginal = !!asset.previewClock && hasIndexedAvc(asset);
+      // Decided once per clip, so the clip's picture and sound still share one input.
+      const rowThreads = !!opts.rowThreads && wantVideo && !still && codec === "hvc1" && (await verifiedProbe(asset))?.rowParallel === true;
       const open = (input: string, start: number, hardware: boolean, duration = p.vis * speed) => addInput([
         ...(indexedPicture && (input !== file || shared || indexedOriginal) ? INDEXED_MP4_INPUT : []),
         ...(hardware && cudaScale ? CUDA_FRAMES_INPUT :
-          hardware && accelerate && opts.decoder !== "cuda" ? ["-hwaccel", "videotoolbox"] : []),
+          hardware && accelerate && opts.decoder !== "cuda" ? ["-hwaccel", "videotoolbox"] :
+          rowThreads && input === file ? ["-thread_type", "slice"] : []),
         ...(start > 0 ? ["-ss", fnum(start)] : []), "-t", fnum(duration),
       ], input);
       const pictureDelay = still ? 0 : Math.max(0, firstPicture - srcStart) / speed;

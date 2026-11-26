@@ -172,7 +172,7 @@ export async function renderTimelineFrame(project: Project, timeline: Timeline, 
   const { width, height } = project.settings;
   const scale = Math.min(1, maxDimension / Math.max(width, height));
   const graph = await buildFilterGraph(project, timeline, range, {
-    pictureSource: inputs?.pictureSource, decoder: inputs?.decoder, mediaRoot, signal, width: width * scale, height: height * scale, singleFrame: true, indexedInputs: true,
+    pictureSource: inputs?.pictureSource, decoder: inputs?.decoder, mediaRoot, signal, width: width * scale, height: height * scale, singleFrame: true, indexedInputs: true, rowThreads: true,
   });
   try {
     return await withStreamInfoFallback(graph.args, signal, async inputArgs => {

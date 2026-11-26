@@ -151,6 +151,7 @@ export async function renderRange(
     directPicture: !!device,
     transitions: opts.transitions,
     indexedInputs: opts.indexedInputs ?? true,
+    rowThreads: opts.editorWaiting,
     signal: opts.signal,
     pictureOnly: opts.pictureOnly,
     pictureSource: resolver && (async (...args) => {
