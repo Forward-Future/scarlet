@@ -323,6 +323,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   agentSelected: false,
   setAgent: (agent) => {
     set({ agent, agentSelected: true });
+    // Which model the next request goes to: a model's name, never anything typed in the box.
+    appLog("action", "model", { agent: agent.agent, model: agent.model?.slice(0, 80), effort: agent.effort, tier: agent.serviceTier }, { key: "model" });
     saveAgent(agent);
   },
   setDefaultAgent: (agent) => {

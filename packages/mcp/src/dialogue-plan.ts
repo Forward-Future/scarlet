@@ -80,6 +80,12 @@ export function dialogueScanPage(mediaId: string, from: number, to: number, audi
 
 const r2 = round2;
 
+/** A planning step the batch goes on without. The planner's own refusals are answers; anything else is noted. */
+const plannedWithout = <T>(sources: DialoguePlanSources, what: string, fallback: T) => (err: unknown): T => {
+  if (!(err instanceof CutNotPlaced || err instanceof NoPauseToTrim)) sources.unavailable?.(what, err);
+  return fallback;
+};
+
 /**
  * A batch as dialogue_apply_cuts saves it, shared with offline replay. A dispute names the cuts whose edges make it,
  * and the rest of the batch is saved without them, so a pass resubmits only what was disputed instead of the whole
@@ -97,7 +103,7 @@ export async function planDialogueBatch(req: DialoguePlanRequest, sources: Dialo
     if (round) edges.push(...rest.disputedEdges);
     for (const i of named) disputed.add(i);
     rest = named.length && req.cuts.some((c, i) => !disputed.has(i) && c.decision !== "keep" && c.picture !== "protect")
-      ? await planDialogueCuts({ ...req, setAside: disputed }, sources).catch(() => undefined) : undefined;
+      ? await planDialogueCuts({ ...req, setAside: disputed }, sources).catch(plannedWithout(sources, "failed to plan the batch with its disputed cuts set aside", undefined)) : undefined;
   }
   return rest?.outcome === "ready" ? { plan: rest, setAside: { cuts: [...disputed].sort((a, b) => a - b), disputedEdges: edges } } : { plan };
 }
@@ -153,7 +159,8 @@ async function resolveAndValidatePlanCuts(req: DialoguePlanRequest, sources: Dia
     // pass, two of eight such held cuts had one.
     const clean = c.mediaId !== undefined && c.fromWord !== undefined && c.toWord !== undefined && "problems" in resolved && resolved.problems.length
       ? await resolveWordCut(tl, { mediaId: c.mediaId, fromWord: c.fromWord, toWord: c.toWord }, sources, true)
-        .then(r => ("alternativeWordRanges" in r ? r.alternativeWordRanges ?? [] : []).filter(a => !a.problems.length)).catch(() => [])
+        .then(r => ("alternativeWordRanges" in r ? r.alternativeWordRanges ?? [] : []).filter(a => !a.problems.length))
+        .catch(plannedWithout(sources, `failed to look for a clean saying of the words cut on ${c.mediaId}`, []))
       : [];
     return { ...rest, start: resolved.start, end: resolved.end, input: i, ...("air" in resolved && resolved.air && { air: resolved.air }),
       ...(clean.length && { cleanAlternatives: clean.map(a => ({ fromWord: a.fromWord, toWord: a.toWord })) }),

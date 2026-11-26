@@ -27,7 +27,7 @@ import type { Render } from "@scarlet/shared";
 import type { Ctx } from "../../context.js";
 import { now } from "../../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../../errors.js";
-import { logId } from "../../logText.js";
+import { clip, logId } from "../../logText.js";
 import { errorMessage, rememberLast } from "../../util.js";
 import { notify } from "../notify.js";
 import { requestCutPlaybackFile, waitForPlayback } from "../playback.js";
@@ -517,6 +517,7 @@ export function recheckApprovedCut(
       noteIds: change.noteIds, message: "Recheck this cut" }, cutConflict: { version: head, range, approved: true },
     instruction: `The editor approved this cut. The passage changed before it could apply. Recheck the current footage and preserve the intended edit. ${reason}` +
       cutRevisionReference(change, { cutIndex: index, time: removed.start, end: removed.end, clipIds: [] }) });
+  ctx.db.afterCommit(() => ctx.log(`[review] ${change.id}: approved cut ${index} moved on ${head} before it could apply, so ${task.id} rechecks it: ${clip(reason)}`));
   return { change: saveChange(ctx, beginRevision(checked, task)), task };
 }
 

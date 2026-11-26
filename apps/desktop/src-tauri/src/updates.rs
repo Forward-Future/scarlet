@@ -265,7 +265,10 @@ pub async fn restart_for_update(app: AppHandle, revision: String) -> Result<(), 
             return Err("Update postponed.".into());
         }
         return tauri::async_runtime::spawn_blocking(move || crate::release_updates::restart(&app, &revision)).await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                log::error!("release update: restart to install did not finish: {e}");
+                e.to_string()
+            })?;
     }
     if !valid_revision(&revision) {
         log::warn!("restart for an update refused: not a revision");

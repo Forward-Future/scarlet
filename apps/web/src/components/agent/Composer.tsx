@@ -463,6 +463,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         if (task) onCreated?.(task);
         clearVoiceTarget(anchor);
       } catch (e) {
+        requestLog("send-failed", { how: "voice-note", bytes: r.blob.size, ...failure(e) }, "warn");
         setError(errorMessage(e));
       } finally {
         setBusy(false);

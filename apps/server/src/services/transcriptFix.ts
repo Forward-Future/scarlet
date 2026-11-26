@@ -53,7 +53,8 @@ export function fixTranscriptWords(ctx: Ctx, projectId: string, fix: TranscriptW
         const saved = ctx.repos.projects.putMedia(projectId, { ...current, transcriptId: id }, current.status, current.error);
         ctx.bus.publish({ type: "media.updated", projectId, media: saved });
       }
-      ctx.log(`[transcript] ${media.id}: "${rule.find}" now reads "${rule.replace}" in ${places.length} place(s)`);
+      // The words themselves are the editor's and the transcript's, so only where and how often is logged.
+      ctx.log(`[transcript] ${media.id}: a word fix changed ${places.length} place(s)${wordsAdded ? `, ${wordsAdded} word(s) added` : ""}`);
       recordings.push({ mediaId: media.id, name: media.name, count: places.length, wordsAdded, places });
     }
     return { recordings };

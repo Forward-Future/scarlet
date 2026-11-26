@@ -81,7 +81,26 @@ describe("the audio helper's queue", () => {
     spawned.helpers[0]!.reply({ note: "fillers.onnx runs on the GPU (webgpu)" });
     spawned.helpers[0]!.reply({ id: 0, result: [] });
     await request;
-    expect(log.mock.calls).toEqual([["[audio] fillers.onnx runs on the GPU (webgpu)"]]);
+    expect(log.mock.calls).toEqual([["[audio] started the audio helper"], ["[audio] fillers.onnx runs on the GPU (webgpu)"]]);
+  });
+
+  it("logs each helper's start and exit, with its code or signal and why it went", async () => {
+    const worker = await load();
+    const log = worker.log = vi.fn();
+    const first = worker.request(fillers("a.wav"));
+    spawned.helpers[0]!.emit("exit", 1, null);
+    await expect(first).rejects.toThrow();
+    const stop = new AbortController();
+    const second = worker.request(fillers("b.wav"), { signal: stop.signal });
+    stop.abort(new Error("stopped"));
+    spawned.helpers[1]!.emit("exit", null, "SIGKILL");
+    await expect(second).rejects.toThrow("stopped");
+    expect(log.mock.calls.map(([line]) => (line as string).replace(/after \S+,/, "after <time>,"))).toEqual([
+      "[audio] started the audio helper",
+      "[audio] the audio helper exited with code 1 after <time>, while it read a fillers request",
+      "[audio] started the audio helper",
+      "[audio] the audio helper exited with signal SIGKILL after <time>, stopped to cancel a fillers request",
+    ]);
   });
 
   it("takes a request that is stopped while it waits out of the queue, without disturbing the helper", async () => {

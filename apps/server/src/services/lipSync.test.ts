@@ -58,7 +58,7 @@ it("keeps every stretch it answered on disk, however its saves land", async () =
   try {
     writeFileSync(join(dir, "cam.mp4"), "");
     const ctx = { paths: { media: () => dir, waveforms: () => dir }, track: <T>(p: T) => p,
-      projectSignal: () => new AbortController().signal } as unknown as Ctx;
+      projectSignal: () => new AbortController().signal, log: () => {} } as unknown as Ctx;
     const media = { id: "med_lipsave", projectId: "prj_1", kind: "video", path: "cam.mp4", duration: 90, width: 1920, height: 1080, fps: 30 } as Parameters<typeof lipSync>[1];
     const result = await lipSync(ctx, media, { count: 3 });
     expect(result.stretches.map(s => s.unmeasured)).toEqual(Array(3).fill("No face is in frame."));

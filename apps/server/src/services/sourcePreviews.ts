@@ -5,7 +5,8 @@ import type { PlaybackCacheStatus, SourceCacheStatus } from "@scarlet/shared";
 import { isPlayableMedia, SOURCE_PREVIEW_SECONDS } from "@scarlet/timeline";
 import { engineIsAlive, type Ctx } from "../context.js";
 import { badRequest } from "../errors.js";
-import { logId, throttledLog } from "../logText.js";
+import { clip, logId, throttledLog } from "../logText.js";
+import { errorMessage } from "../util.js";
 import type { MediaWithStatus } from "../repo/projects.js";
 import { fullProxyVariants, legacyFullPicture, previewIdentity, sourceCheckpointDir } from "./previewPictures.js";
 import { editorFirst } from "./editorFirst.js";
@@ -187,11 +188,17 @@ class SourcePreviews {
       await mkdir(root, { recursive: true });
       if ((await stat(file).catch(() => null))?.size) return;
       const temp = file + "." + randomUUID() + ".part.mp4";
+      const started = performance.now();
       try {
         await ctx.render.makeProxy(identity.file, temp, { audioTrack: media.audioTrack, signal: lifetime });
         await identity.check();
         try { await rename(temp, file); }
         catch (error) { if (!(await stat(file).catch(() => null))?.size) throw error; }
+        ctx.log(`[media] audio_preview_finished media=${logId(media.id)} project=${logId(media.projectId)} outcome=done elapsed_ms=${Math.round(performance.now() - started)}`);
+      } catch (error) {
+        ctx.log(`[media] audio_preview_finished media=${logId(media.id)} project=${logId(media.projectId)} outcome=${lifetime.aborted ? "interrupted" : "failed"} elapsed_ms=${Math.round(performance.now() - started)}` +
+          (lifetime.aborted ? "" : ` ${clip(errorMessage(error))}`));
+        throw error;
       } finally {
         await rm(temp, { force: true }).catch(() => {});
       }

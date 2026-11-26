@@ -6,7 +6,7 @@ import { fileInDirectory, heardAudio, heardAudioKey, speechActivityOf, speechAct
 import { isHandOff, type DialogueDetections, type ServerSettings } from "@scarlet/shared";
 import type { MediaAsset, TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
-import { logId } from "../logText.js";
+import { clip, humanDuration, logId, throttledLog } from "../logText.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { UhmDetector } from "../transcribe/uhm.js";
 import { getTranscriptionProvider } from "../transcribe/index.js";
@@ -102,6 +102,8 @@ export function sharedDialogueDetector(ctx: Ctx) {
 /** First-cut-only evidence, kept separate from the editor's transcript and captions. */
 export function dialogueDetector(ctx: Ctx) {
   const uhm = new UhmDetector(join(ctx.paths.root, "models"));
+  /** The other voice's input fails the same way on every page of a recording: logged once a minute for each. */
+  const voiceRoleFailures = throttledLog(line => ctx.log(line));
   // SQLite owns completed pages. Share in-flight work and run one cold window at a time.
   const acousticWindows = new AnalysisCache<DialogueDetections>(() => 0, 0, 1);
   const keptWindows = new AnalysisCache<DialogueDetections>(r => r.segments.reduce((n, s) => n + 100 * s.words.length, 0), 2 * 1024 * 1024);
@@ -331,6 +333,7 @@ export function dialogueDetector(ctx: Ctx) {
             }
           } catch (err) {
             signal.throwIfAborted();
+            voiceRoleFailures(media.id, `[dialogue] ${media.id} ${from}-${to}: couldn't read the other voice's input: ${clip(err instanceof Error ? err.message : String(err))}`);
             result.voiceRoleIssue = (err as Error).message;
           }
         }
@@ -453,12 +456,15 @@ export function dialogueDetector(ctx: Ctx) {
       let failure: Error | undefined;
       /** The scan has analysed a page and seen it labelled, so later pages run ahead of their labels. */
       let ahead = false;
+      const began = Date.now();
+      let read = 0, reused = 0, stoppedEarly = false;
       try {
         for (let start = from; start < end;) {
           const to = Math.min(end, start + 60);
           if (pages.get(start) !== to) {
-            if (failure || dropped || !currentEdit()) break;
+            if (failure || dropped || !currentEdit()) { stoppedEarly = true; break; }
             const page = await openPage(projectId, media, start, to, edit, policy);
+            read++;
             const pageStart = start;
             const reported = page.ready.then(result => {
               if (!currentEdit() || failure) return;
@@ -478,12 +484,14 @@ export function dialogueDetector(ctx: Ctx) {
             }
             ahead = true;
             if (labeling.size >= 64) await Promise.race(labeling);
-          }
+          } else reused++;
           if (to === end) break;
           start = to - 2;
         }
       } finally { await Promise.all(labeling); }
       if (failure) throw failure;
+      // One line a scan: how much was read now and how much was saved already.
+      if (read) ctx.log(`[dialogue-scan] ${media.id}${announced ? "" : " (ahead of the pass)"}: ${taskId} read ${read} page${read === 1 ? "" : "s"} in ${humanDuration(Date.now() - began)}, ${reused} saved already${stoppedEarly ? "; stopped early" : ""}`);
     }
     const done = ctx.track(scan().catch(err => {
       const task = currentEdit();

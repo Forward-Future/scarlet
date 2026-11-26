@@ -213,6 +213,7 @@ async fn verify_executable(path: &Path) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
+        // Clearing the quarantine flag is best effort: the startup check below says whether the tool runs.
         let _ = tokio::process::Command::new("/usr/bin/xattr")
             .args(["-c"])
             .arg(path)
@@ -227,6 +228,8 @@ async fn verify_executable(path: &Path) -> Result<(), String> {
         .await
         .map_err(|e| format!("Downloaded tool did not start: {e}"))?;
     if !output.status.success() {
+        let said = crate::util::stderr_tail_line(&String::from_utf8_lossy(&output.stderr)).unwrap_or_default();
+        log::warn!("downloaded {} failed its startup check ({}): {said}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(), output.status);
         return Err("Downloaded FFmpeg failed its startup check.".into());
     }
     Ok(())
@@ -249,8 +252,10 @@ pub async fn install(home: &Path, resources: Option<&Path>) -> Result<FfmpegStat
         return Ok(current);
     }
     let archives = platform_archives().ok_or_else(|| {
+        log::warn!("cannot install ffmpeg: no download for this platform");
         "Install FFmpeg with your system’s package manager, then restart Scarlet.".to_string()
     })?;
+    let started = std::time::Instant::now();
 
     let client = reqwest::Client::builder()
         .https_only(true)
@@ -280,7 +285,7 @@ pub async fn install(home: &Path, resources: Option<&Path>) -> Result<FfmpegStat
             log::warn!("failed reading FFmpeg response body: {e}");
             "FFmpeg download was interrupted. Check your connection and try again.".to_string()
         })?;
-        verify_sha256(&bytes, archive.sha256)?;
+        verify_sha256(&bytes, archive.sha256).inspect_err(|_| log::warn!("FFmpeg archive from {} failed its checksum ({} bytes)", archive.url, bytes.len()))?;
 
         let zip_path = work.path().join(format!("archive-{idx}.zip"));
         let mut f = std::fs::File::create(&zip_path)
@@ -323,8 +328,10 @@ pub async fn install(home: &Path, resources: Option<&Path>) -> Result<FfmpegStat
 
     let final_status = status(home, resources);
     if !final_status.installed {
+        log::warn!("FFmpeg was installed in {} but is not found afterwards", crate::util::human_duration(started.elapsed()));
         return Err("FFmpeg was installed, but Scarlet could not verify it. Restart Scarlet and try again.".into());
     }
+    log::info!("FFmpeg install done in {}", crate::util::human_duration(started.elapsed()));
     Ok(final_status)
 }
 

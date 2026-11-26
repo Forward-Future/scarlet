@@ -274,7 +274,10 @@ pub(crate) async fn pick_destination(app: &AppHandle, title: &str, file_name: &s
     if picked.is_none() {
         log::info!("{title}: save dialog cancelled");
     }
-    picked.map(|picked| picked.into_path().map_err(|e| e.to_string())).transpose()
+    picked.map(|picked| picked.into_path().map_err(|e| {
+        log::warn!("{title}: the chosen destination is not a local file");
+        e.to_string()
+    })).transpose()
 }
 
 #[derive(serde::Serialize)]
@@ -472,7 +475,10 @@ pub(crate) fn write_handoff_folder(dest: &Path, files: &[HandoffFile], library: 
     }
     let staged = staging.keep();
     fs::rename(&staged, dest).map_err(|e| {
-        let _ = fs::remove_dir_all(&staged);
+        // Left behind, the hidden half-built folder would sit beside the editor's files.
+        if let Err(left) = fs::remove_dir_all(&staged) {
+            log::warn!("[export] staging-cleanup outcome=failed code={}", left.raw_os_error().unwrap_or(0));
+        }
         format!("Could not save the folder ({})", e.kind())
     })
 }
@@ -480,11 +486,13 @@ pub(crate) fn write_handoff_folder(dest: &Path, files: &[HandoffFile], library: 
 pub(crate) async fn finish_folder_export(app: &AppHandle, state: &AppState, destinations: &ExportDestinations, ticket: u64, files: Vec<HandoffFile>) -> Result<String, String> {
     let path = destinations.path_for(ticket)?;
     let (dest, library, demo) = (path.clone(), state.paths.data_dir.clone(), crate::is_demo(app));
+    let (count, started) = (files.len(), std::time::Instant::now());
     let saved = tauri::async_runtime::spawn_blocking(move || write_handoff_folder(&dest, &files, &library, demo)).await.map_err(|e| e.to_string())?;
+    let took = crate::util::human_duration(started.elapsed());
     // Never where it went: the editor typed the folder's name.
     match &saved {
-        Ok(()) => log::info!("export folder saved"),
-        Err(e) => log::warn!("export folder could not be saved: {e}"),
+        Ok(()) => log::info!("export folder saved ({count} files in {took})"),
+        Err(e) => log::warn!("export folder could not be saved after {took}: {e}"),
     }
     // A ledger error is separate from the folder's outcome, as for a video: `change` logs it.
     let _ = destinations.discard(ticket);
