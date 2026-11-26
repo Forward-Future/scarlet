@@ -1,4 +1,4 @@
-import { threadTimeline, type FlagEditRequest, type KeepEditsRequest, type KeptEdit, type Task, type ThreadEdit, type UnkeepEditsRequest } from "@scarlet/shared";
+import { namedTimelineEdits, threadTimeline, type FlagEditRequest, type KeepEditsRequest, type KeptEdit, type Task, type ThreadEdit, type UnkeepEditsRequest } from "@scarlet/shared";
 import { timelineDuration, type Change } from "@scarlet/timeline";
 import type { Ctx } from "../../context.js";
 import { now } from "../../db.js";
@@ -20,26 +20,44 @@ function groupEditsByChange<T extends { changeId: string }>(ctx: Ctx, projectId:
 }
 
 /**
+ * What Scarlet asked the editor to check on this spot, if anything. An unflagged safe edit has none, so keeping it
+ * only clears the review list rather than settling a doubt Scarlet raised.
+ */
+export function flaggedCheckOf(change: Change, spot: number, keptCheck?: string): string | undefined {
+  if (keptCheck) return keptCheck;
+  const named = namedTimelineEdits(change)?.[spot] ?? change.timelineEdits?.[spot];
+  if (named?.check) return named.check;
+  const flag = change.flags?.findLast(f => f.spot === spot);
+  if (flag?.check) return flag.check;
+  const join = change.appliedReview?.joins[spot];
+  if (join) return change.cutReasons?.find(r => r.check && r.start < join.removed.end && r.end > join.removed.start)?.check;
+  return undefined;
+}
+
+/**
  * The editor kept these edits. Each Keep is recorded on the change it names, with the name and reason to look the
  * editor read then, so a run of the request hears that the doubt is settled (`keptEdits`). Keeping again changes
  * nothing. Caller holds the write lock.
  */
 export function keepEdits(ctx: Ctx, projectId: string, body: KeepEditsRequest) {
   let added = 0;
+  let flagged = 0;
   for (const { change, edits } of groupEditsByChange(ctx, projectId, body.edits)) {
     const kept = [...change.kept ?? []];
     for (const edit of edits) {
       if (kept.some(k => k.spot === edit.spot && k.threadId === body.threadId && k.recheck === edit.recheck)) continue;
       const named = change.timelineEdits?.[edit.spot];
       const label = edit.label ?? named?.label, check = edit.check ?? named?.check;
+      const settledFlag = Boolean(edit.recheck || flaggedCheckOf(change, edit.spot, check));
       kept.push({ spot: edit.spot, threadId: body.threadId, at: now(), ...(edit.recheck && { recheck: edit.recheck }),
         ...(label && { label: label.slice(0, 180) }), ...(check && { check: check.slice(0, 120) }),
         ...(edit.range && body.version && { place: { version: body.version, range: edit.range } }) });
       added++;
+      if (settledFlag) flagged++;
     }
     if (kept.length !== (change.kept?.length ?? 0)) saveChange(ctx, { ...change, kept });
   }
-  return { added };
+  return { added, flagged };
 }
 
 /** The editor took these Keeps back (⌘Z). Taking back one that isn't recorded changes nothing. Caller holds the write lock. */

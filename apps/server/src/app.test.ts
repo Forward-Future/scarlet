@@ -950,6 +950,83 @@ describe("scarlet server", () => {
     await cancelOpen();
   });
 
+  it("ignores unflagged safe-edit keeps, runs learning checks one at a time, and caps and deduplicates learnings per request", async () => {
+    await api("POST", "/skills", { body: { name: "bounded-style", description: "Motion graphics rules", content: "# Motion graphics" } });
+    await api("POST", "/skills", { body: { name: "bounded-other", description: "Other rules", content: "# Other" } });
+    const cancelOpen = async () => {
+      for (const open of scarlet.ctx.repos.tasks.select("state IN ('queued','claimed','running','waiting_for_user')", [])) await api("POST", `/tasks/${open.id}/cancel`);
+    };
+    await cancelOpen();
+    const checks = () => scarlet.ctx.repos.tasks.select("kind = 'learning_check'", [], "rowid ASC");
+
+    const first = (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, { body: { agent: "claude", instruction: "Add 3 model titles." } })).json.task;
+    const second = (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, { body: { agent: "claude", instruction: "Move titles to bottom left." } })).json.task;
+    const [firstCheck, secondCheck] = checks().slice(-2);
+
+    // Learning checks run one at a time, so the second waits until the first finishes and then sees its rules.
+    expect((await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim`, { body: { taskId: firstCheck!.id } })).json.task?.id).toBe(firstCheck!.id);
+    expect((await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim`, { body: { taskId: secondCheck!.id } })).json.task).toBeNull();
+
+    // Unflagged safe-edit keeps neither start a decision check nor pollute recent decisions.
+    await api("POST", `/hosts/${host.id}/claim`, { body: { taskId: first.id } });
+    await api("POST", `/tasks/${first.id}/complete`, { body: { state: "done", summary: "Added 3 titles." } });
+    const stamp = new Date().toISOString();
+    const safeChange: Change = { ...firstChange, id: "chg_safe_titles", threadId: first.id, taskId: first.id, state: "approved", createdAt: stamp, updatedAt: stamp,
+      timelineEdits: [
+        { label: "Opus title", range: { start: 10, end: 13 }, reason: "Introduces Opus." },
+        { label: "Sonnet title", range: { start: 30, end: 33 }, reason: "Introduces Sonnet." },
+        { label: "Haiku title", range: { start: 50, end: 53 }, reason: "Introduces Haiku." },
+      ],
+      kept: undefined, flags: undefined, cutChoices: undefined, appliedReview: undefined, approvedSpots: undefined, restoredCuts: undefined };
+    scarlet.ctx.repos.changes.put(safeChange);
+    const beforeSafe = checks().length;
+    for (const spot of [0, 1, 2]) {
+      await api("POST", `/projects/${project.id}/kept-edits`, { body: { threadId: first.id, edits: [{ changeId: safeChange.id, spot }] } });
+    }
+    expect(checks()).toHaveLength(beforeSafe);
+    const firstPrompt = (await api<{ systemPrompt: string }>("GET", `/tasks/${firstCheck!.id}/prompt`)).json.systemPrompt;
+    expect(firstPrompt).not.toContain(`kept:${safeChange.id}:0`);
+
+    // A flagged change's kept edits do appear and can be cited, but overlapping decisions for the same skill cannot produce duplicate rules.
+    const flaggedChange: Change = { ...safeChange, id: "chg_flagged_titles",
+      timelineEdits: [
+        { label: "Title A", range: { start: 15, end: 18 }, check: "Check placement." },
+        { label: "Title B", range: { start: 35, end: 38 }, check: "Check placement." },
+        { label: "Title C", range: { start: 55, end: 58 }, check: "Check placement." },
+      ] };
+    scarlet.ctx.repos.changes.put(flaggedChange);
+    for (const spot of [0, 1, 2]) {
+      await api("POST", `/projects/${project.id}/kept-edits`, { body: { threadId: first.id, edits: [{ changeId: flaggedChange.id, spot }] } });
+    }
+    const offerFirst = `/projects/${project.id}/tasks/${firstCheck!.id}/learnings`;
+    const r1 = await api<{ learning: Learning }>("POST", offerFirst, { body: { rule: "Place introductory titles in the bottom-left safe area.", skill: "bounded-style",
+      from: { decisions: [`kept:${flaggedChange.id}:0`, `kept:${flaggedChange.id}:1`], what: "title placements you kept" } } });
+    expect(r1.status).toBe(201);
+    const overlap = await api<{ error: { code: string } }>("POST", offerFirst, { body: { rule: "Default introductory titles to bottom left.", skill: "bounded-style",
+      from: { decisions: [`kept:${flaggedChange.id}:0`, `kept:${flaggedChange.id}:1`, `kept:${flaggedChange.id}:2`], what: "title placements you kept" } } });
+    expect([overlap.status, overlap.json.error.code]).toEqual([409, "decisions_already_covered"]);
+    // A different skill is still allowed to cite them, and counts toward the per-request cap of 2 waiting learnings.
+    const r2 = await api<{ learning: Learning }>("POST", offerFirst, { body: { rule: "Give introductory titles extra reading time.", skill: "bounded-other",
+      from: { decisions: [`kept:${flaggedChange.id}:0`, `kept:${flaggedChange.id}:1`], what: "title holds you kept" } } });
+    expect(r2.status).toBe(201);
+    // Retrying an identical rule stays idempotent even at the cap, while a 3rd distinct rule is rejected.
+    expect((await api<{ learning: Learning }>("POST", offerFirst, { body: { rule: "Give introductory titles extra reading time.", skill: "bounded-other" } })).json.learning.id).toBe(r2.json.learning.id);
+    const r3 = await api<{ error: { code: string } }>("POST", offerFirst, { body: { rule: "Keep title animations subtle.", skill: "bounded-style" } });
+    expect([r3.status, r3.json.error.code]).toEqual([409, "too_many_learnings"]);
+
+    // Once the first check finishes, the second check can be claimed and cannot duplicate a rule already offered for the same skill.
+    await api("POST", `/tasks/${firstCheck!.id}/complete`, { body: { state: "done", summary: "Done." } });
+    expect((await api<{ task: Task | null }>("POST", `/hosts/${host.id}/claim`, { body: { taskId: secondCheck!.id } })).json.task?.id).toBe(secondCheck!.id);
+    const dupAcross = await api<{ error: { code: string } }>("POST", `/projects/${project.id}/tasks/${secondCheck!.id}/learnings`, {
+      body: { rule: "place introductory titles in the bottom-left safe area", skill: "bounded-style" },
+    });
+    expect([dupAcross.status, dupAcross.json.error.code]).toEqual([409, "already_offered"]);
+    for (const id of [r1.json.learning.id, r2.json.learning.id]) {
+      await api("POST", `/projects/${project.id}/learnings/${id}/decline`);
+    }
+    await cancelOpen();
+  });
+
   it("keeps a rule Scarlet picked up until the editor approves it, then has the skill revised with it", async () => {
     const skill = (await api<{ skill: Skill }>("POST", "/skills", { body: { name: "learned-style", description: "House rules", content: "---\nname: learned-style\ndescription: House rules\n---\n\nKeep the cold open.\n" } })).json.skill;
     const other = (await api<{ skill: Skill }>("POST", "/skills", { body: { name: "learned-other", content: "# Other" } })).json.skill;
