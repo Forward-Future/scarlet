@@ -159,7 +159,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   const highlightKey = highlightView ? (highlight?.key ?? `${highlightView.start}/${highlightView.end}`) : "";
   // The timeline this one takes the place of, when all that changed is the working cut under it.
   const [carried] = useState(() => kept.current?.subject === subject && kept.current.highlight === highlightKey ? kept.current : undefined);
-  const { view: { from, span }, samples, target, blend, minSpan, zoomBy, fitRange, stopZoom } = useTimelineZoom(track, start, total, playhead, drag, carried?.view);
+  const { view: { from, span }, samples, target, blend, minSpan, zoomBy, fitRange, stopZoom, reveal } = useTimelineZoom(track, start, total, playhead, drag, carried?.view);
   const shownFrom = target?.from ?? from, shownSpan = target?.span ?? span;
   // A timeline that doesn't know the video's length yet has shown nothing to keep, and couldn't zoom to its change.
   useLayoutEffect(() => {
@@ -341,8 +341,21 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     gesture.paint = undefined;
     const rect = slider.current!.getBoundingClientRect();
     if (rect.width <= 0) return;
-    let time = gesture.start + gesture.span * Math.max(0, Math.min(1, (gesture.x - rect.left) / rect.width));
+    // Pulled past either end of the timeline, the playhead goes to the video's first or last frame, however far in the
+    // view is zoomed, and the view turns to show it there. Before, it stopped at the edge of the stretch in view, and
+    // the start of a zoomed-in video couldn't be reached by dragging (#681).
+    const x = gesture.x;
+    const past = x < rect.left ? "start" : x > rect.left + rect.width ? "end" : undefined;
+    if (past) {
+      const view = reveal(past === "start" ? start : end);
+      gesture.start = view.from;
+      gesture.span = view.span;
+    }
+    let time = past === "start" ? start : past === "end" ? end
+      : gesture.start + gesture.span * Math.max(0, Math.min(1, (x - rect.left) / rect.width));
     if (gesture.fine) {
+      // Frame by frame, the far side of an edge is the first or last frame, and steps carry on from there.
+      if (past) gesture.fine = { x: gesture.x, frame: past === "start" ? firstFrame : lastFrame };
       const delta = Math.round((gesture.x - gesture.fine.x) / LOUPE_PX_PER_FRAME);
       const frame = Math.max(firstFrame, Math.min(lastFrame, gesture.fine.frame + delta));
       time = frame / fps;
