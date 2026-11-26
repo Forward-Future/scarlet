@@ -2562,7 +2562,6 @@ export function SimpleWorkspaceBeta() {
     onDecideCall: choice => { if (openCall) void decideCut(choice); },
   });
 
-  const reviewVisible = railView.need + railView.forYouRows + railView.optional + railView.working + railView.done > 0;
   return <ReviewRailContext.Provider value={rail}><AimHostContext.Provider value={aimHost}><EditHoverContext.Provider value={hoveredEdit}>
     <main className="min-h-0 flex flex-1 flex-col" data-new-layout="">
       <Dropzone className="edit-workspace simple-workspace" label="Add footage to this project" notice={notice}
@@ -2570,7 +2569,7 @@ export function SimpleWorkspaceBeta() {
         onFiles={files => { uploads.start(files); setPanel("media"); }}>
         <ChatRail compact={compact} id="simple-chat" className="simple-rail" label="Chat" storageKey="scarlet.simpleChatWidth" initialWidth={simpleRailWidth} minWidth={SIMPLE_RAIL_MIN}
           // Leave room for the edits column and an open Transcript at their narrowest, so resizing either never crowds the player.
-          reserve={(reviewVisible ? REVIEW_RAIL_MIN : 0) + (transcript ? TRANSCRIPT_RAIL_MIN : 0)}>
+          reserve={REVIEW_RAIL_MIN + (transcript ? TRANSCRIPT_RAIL_MIN : 0)}>
           <SimpleHeader projectName={current.project.name} importing={importing} importFailed={importFailed}
             threadInput={replyThread ? replyThread.question ? "answer" : "reply" : undefined} menuSays={menuSays} toLearn={toLearn}
             transcript={transcript} setTranscript={setTranscript} setPanel={setPanel} openLearnings={() => { setLearnFocus(undefined); setPanel("learnings"); }}
