@@ -837,9 +837,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const seeProps = { thread, actions, single, rows: totalRows + rejected.length, count: totalRows, soFar, list: listState, reveal, column: !!rail };
   const seeEvery = rail
     ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
-      : !soFar && canSeeAll && actions.showThread
-        ? <button type="button" className="simple-pass-toggle" title="Show these edits in Needs review" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
-        : null)
+      : null)
     : !tabbed && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const tabs = tabbed && <ReviewListTabs need={need} working={inPlace("working").length} done={inPlace("done").length} list={listState} reveal={reveal} showNeeded={showNeeded} />;
@@ -1027,9 +1025,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const seeProps = { thread, actions, single, rows: groups.length + gone.length, count: groups.length, soFar: working && !made, list, reveal, column: !!rail };
   const seeEvery = rail
     ? (single && canSeeAll ? <EditResultLink {...seeProps} place="inline" />
-      : !(working && !made) && canSeeAll && actions.showThread
-        ? <button type="button" className="simple-pass-toggle" title="Show these edits in Needs review" onClick={letGo(() => actions.showThread!(thread.id))}>Show →</button>
-        : null)
+      : null)
     : !tabbed && canSeeAll && <EditResultLink {...seeProps} place="inline" />;
   const seeTab = !rail && !tabbed && canSeeAll && <EditResultLink {...seeProps} place="tab" />;
   const showNeeded = () => {
