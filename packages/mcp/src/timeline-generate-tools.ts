@@ -96,12 +96,13 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       preview: z.boolean().optional().describe("Work out the frames and show them without saving"),
       ...(caps.images && { picturesFrom: z.number().int().nonnegative().optional().describe("Index of the first framing to picture") }),
       description: z.string().min(1).default("Framed the picture on what is being shown").describe("One short sentence for the chat about what the editor will see"),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("Short plain-English group title for the edits list when this save creates several framing/zoom edits (e.g. '4 zooms on demo screens')"),
       reason: editReasonInput,
       timelineEdits: timelineEditsInput,
       noteIds: z.array(z.string()).optional(),
       fromVersion: z.string().optional().describe("Version the framing applies to. Defaults to the version you last read."),
     },
-    async ({ intent, mediaId, trackId, framings, to, preview, description, reason, timelineEdits, noteIds, fromVersion, ...rest }) => {
+    async ({ intent, mediaId, trackId, framings, to, preview, description, batchTitle, reason, timelineEdits, noteIds, fromVersion, ...rest }) => {
       const picturesFrom = (rest as { picturesFrom?: number }).picturesFrom ?? 0;
       const { project } = await getProject();
       const before = fromVersion ? await peekTimeline(fromVersion) : await baseTimeline();
@@ -220,7 +221,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         .sort((a, b) => (b.to - b.from) - (a.to - a.from));
       const edits = timelineEdits ?? (reason && stretch.end > stretch.start
         ? [{ label: description.slice(0, 180), range: stretch, reason, ...(earlier.length && { replaces: { changeId: earlier[0]!.changeId, spot: 0 } }) }] : undefined);
-      const save = (timelineEdits: typeof edits) => propose({ intent, ops: plan.ops, description, reason, noteIds, timelineEdits }, before);
+      const save = (timelineEdits: typeof edits) => propose({ intent, ops: plan.ops, description, ...(batchTitle && { batchTitle }), reason, noteIds, timelineEdits }, before);
       // An earlier framing the editor has since undone, or another request changed, is no longer this run's to revise: the framing is saved as its own edit.
       const saved = preview ? undefined : await save(edits).catch(error => {
         if (!(error instanceof ScarletApiError && error.code === "invalid_replacement") || timelineEdits) throw error;

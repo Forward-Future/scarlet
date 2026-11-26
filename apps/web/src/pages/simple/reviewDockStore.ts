@@ -339,9 +339,7 @@ export class ReviewDockStore {
   tabNavigable(threadIds: readonly string[], dockList: OpenList): DockEntry[] {
     const tab: ReviewTab = tabShown(dockList);
     if (tab === "you") {
-      const waiting = this.priorityForYou(threadIds, false);
-      const showAll = dockList !== "need" || waiting.length === 0;
-      return this.priorityForYou(threadIds, showAll)
+      return this.priorityForYou(threadIds, true)
         .filter(e => !e.row.rejected && !!(e.row.stepOpen ?? e.row.open));
     }
     const all = this.allEntries(threadIds);
