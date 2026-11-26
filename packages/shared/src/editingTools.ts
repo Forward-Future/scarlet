@@ -18,7 +18,7 @@ export const EDITING_TOOL_GROUPS = [
     tools: ["graphic_render", "graphic_get", "web_capture", "web_video", "style_guide_save", "style_guide_update", "style_guide_preview_render", "style_guide_preview_get", "attachment_read"] },
   { title: "Frame inspection", description: "Examine a source frame or several moments from an edit together.",
     tools: ["media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area"] },
-  { title: "Edit comparison", description: "Listen to source audio, or have a model that hears listen for one that can't, and compare both sides of a proposed edit.",
+  { title: "Edit comparison", description: "Listen to source audio, or have a model that hears listen for one that can't, and compare both sides of a suggested edit.",
     tools: ["change_review_cut", "source_audio", "listen"] },
   { title: "Caption generation", description: "Build a caption track from the transcript.",
     tools: ["captions_generate"] },

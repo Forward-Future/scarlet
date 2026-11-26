@@ -110,7 +110,7 @@ export function editDetail(change: Pick<Change, "ops"> | undefined, edit: { kind
       const clip = op.clip as Clip | undefined;
       if (!clip || !near(rangeOf(clip))) return [];
       if (clip.kind === "caption") return [quote(clip.text)];
-      if (clip.kind === "color") return ["A colour card"];
+      if (clip.kind === "color") return ["A color card"];
       const name = mediaName(clip);
       const track = typeof op.trackId === "string" ? trackOf.get(op.trackId) : undefined;
       const moves = levelWords(clip.volumeKeyframes, clip.volume ?? 1), cleaned = voiceWords(clip.effects);

@@ -2,7 +2,6 @@ import { AboutSettings } from "../components/shell/AboutSettings";
 import { CheckInSettings } from "../components/shell/CheckInSettings";
 import { TalkingToYouSettings } from "../components/shell/TalkingToYouSettings";
 import { WorkspaceLayoutSettings } from "../components/shell/WorkspaceLayoutSettings";
-import { StyleGuidesBetaSettings } from "../components/shell/StyleGuidesBetaSettings";
 import { LocalModelNotice, TranscriptionGuide, useLocalModelStatus, useNeedsCrisperSetup } from "../components/shell/LocalModelNotice";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { StorageSettings } from "../components/shell/StorageSettings";
@@ -325,7 +324,6 @@ const movedTabs: Record<string, string> = { "#tools": "/settings/skills", "#stor
 export function SettingsPage() {
   const returnTo = useUiStore(s => s.settingsReturnTo);
   const setShortcutsOpen = useUiStore(s => s.setShortcutsOpen);
-  const styleGuidesBeta = useUiStore(s => s.styleGuidesBeta);
   const { hash } = useLocation();
   const navigate = useNavigate();
   const skills = useMatch("/settings/skills");
@@ -338,9 +336,7 @@ export function SettingsPage() {
     else navigate(returnTo ?? "/", { replace: !!returnTo });
   });
   if (movedTabs[hash]) return <Navigate replace to={movedTabs[hash]} />;
-  if (styleGuides && !styleGuidesBeta) return <Navigate replace to="/settings" />;
-  const visibleTabs = styleGuidesBeta ? tabs : tabs.filter(t => t.id !== "style-guides");
-  const tab = skills ? "tools" : styleGuides ? "style-guides" : visibleTabs.find(t => t.to === `/settings${hash}`)?.id ?? "general";
+  const tab = skills ? "tools" : styleGuides ? "style-guides" : tabs.find(t => t.to === `/settings${hash}`)?.id ?? "general";
   const backLabel = returnTo ? "Back to project" : "Projects";
   return (
     <div className="flex-1 overflow-y-auto">
@@ -350,7 +346,7 @@ export function SettingsPage() {
             ← {backLabel}
           </Link>
           <nav className="control-tabs" aria-label="Settings sections">
-            {visibleTabs.map((t) => (
+            {tabs.map((t) => (
               <Link key={t.id} to={t.to} aria-current={tab === t.id} className={`rounded-md px-2.5 py-1.5 text-[13px] whitespace-nowrap ${tab === t.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
                 {t.label}
               </Link>
@@ -367,7 +363,6 @@ export function SettingsPage() {
             <CheckInSettings />
             <TalkingToYouSettings />
             <WorkspaceLayoutSettings />
-            <StyleGuidesBetaSettings />
           </>
         )}
         {tab === "models" && (

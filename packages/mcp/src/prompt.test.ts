@@ -101,6 +101,8 @@ describe("the prompt for reading a request for a standing rule", () => {
     // It reads the skill a rule goes into before offering it, so the editor sees what the rule would change, and a
     // rule the skill already has isn't offered.
     expect(prompt).toContain("read the skill it belongs in, in full, with `skills_list`, then offer it with `learning_suggest`");
+    expect(prompt).toContain("Offer at most one rule for a request — or two only when it states two truly separate rules");
+    expect(prompt).toContain("Never offer a rule from decisions that are already behind a rule listed below.");
     expect(prompt).toContain("beside what the skill says that it would change");
     expect(prompt).toContain("a rule the skill or a rule listed below already says, in any wording");
     // A rule is offered only when the editor said it as one, or when the same kind of fix keeps coming back: a single

@@ -58,8 +58,8 @@ export function changeRoutes(ctx: Ctx) {
     const body = await jsonBody(c, KeepEditsRequest);
     const project = requireProjectHeader(ctx, c.req.param("id"));
     ctx.db.transaction(() => {
-      // The last Keep of what the request left the editor has its decisions read for a rule.
-      if (keepEdits(ctx, project.id, body).added) startDecisionCheck(ctx, project.id, body.threadId);
+      // The last Keep of what the request flagged has its decisions read for a rule.
+      if (keepEdits(ctx, project.id, body).flagged) startDecisionCheck(ctx, project.id, body.threadId);
     }, "immediate")();
     return c.body(null, 204);
   });

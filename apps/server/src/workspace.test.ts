@@ -144,6 +144,24 @@ async function checkPassAudio(taskId: string) {
   expect(result).toMatchObject({ version, heard: 0, remaining: 0 });
 }
 
+it("tells the window a host is back when its claim comes before its heartbeat", async () => {
+  const { host } = await (await api("POST", "/hosts/register", { name: "Away", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
+  // Not heard from for longer than the online window.
+  workspace.ctx.repos.hosts.put({ ...workspace.ctx.repos.hosts.get(host.id)!, lastSeenAt: new Date(Date.now() - 10 * 60_000).toISOString() });
+  const published = vi.fn();
+  workspace.ctx.bus.on("ws", published);
+  try {
+    await api("POST", `/hosts/${host.id}/claim`, {});
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({ type: "host.updated", host: expect.objectContaining({ id: host.id, online: true }) }));
+    published.mockClear();
+    // Back already, its next claim says nothing new.
+    await api("POST", `/hosts/${host.id}/claim`, {});
+    expect(published.mock.calls.filter(([e]) => e.type === "host.updated")).toEqual([]);
+  } finally {
+    workspace.ctx.bus.off("ws", published);
+  }
+});
+
 it("returns cancellations missed before a native host subscribed to a new project", async () => {
   const { host } = await (await api("POST", "/hosts/register", {
     name: "test desktop", platform: "test", agents: [{ id: "codex", installed: true }],
@@ -1709,6 +1727,18 @@ it("applies activity filters and page limits before loading documents", async ()
     expect((await response.json()).activity.map((a: { id: string }) => a.id)).toEqual([id]);
     expect(parse).toHaveBeenCalledTimes(1);
   }
+});
+
+it("pages server activity through entries logged in the same millisecond", async () => {
+  const createdAt = "2025-02-01T00:00:00.000Z";
+  for (const id of ["tie-a", "tie-b", "tie-c"]) {
+    workspace.ctx.repos.activity.put({ id, projectId: null, createdAt, type: "note.added", summary: "test",
+      actor: { type: "scarlet", name: "Scarlet" }, data: {} });
+  }
+  const ids = async (path: string) => (await (await api("GET", path)).json()).activity.map((a: { id: string }) => a.id);
+  const first = await ids("/activity?limit=2&before=2025-02-01T00:00:00.001Z");
+  expect(first).toEqual(["tie-c", "tie-b"]);
+  expect(await ids(`/activity?limit=2&before=${createdAt}&beforeId=${first[1]}`)).toEqual(["tie-a"]);
 });
 
 it("uses the project frame rate for proposal previews and version diffs", async () => {
@@ -4406,7 +4436,7 @@ it("applies verified trims once and offers uncertain cuts at their remapped time
   const first = await call(); expect(first.status).toBe(201);
   const { changes } = await first.json();
   expect(changes.map((c: Change)=>c.state)).toEqual(["approved","ready"]);
-  expect(changes[0].description).toBe("Removed 2 s at 0:01.");
+  expect(changes[0].description).toBe("Cut 2 s at 0:01.");
   const saved = ctx.repos.changes.get(changes[1].id)!;
   expect(saved.cutReasons).toMatchObject([{ start: 5, end: 6, reason: "may be a demonstration", originalRange: { start:4.7, end:expect.closeTo(6.2) } }]);
   expect(saved.description).toBe("Review 1 optional dialogue cut");
@@ -4454,7 +4484,7 @@ it("applies verified trims once and offers uncertain cuts at their remapped time
   expect(ctx.repos.projects.get(project.id)!.head).toBe(head);
   await checkPassAudio(task.id);
   const completion = await api("POST", `/tasks/${task.id}/complete`, { state: "done", summary: "Removed the demonstration." });
-  expect((await completion.json()).task.summary).toContain("Removed 2 s at 0:01. Dialogue cuts are pending review.");
+  expect((await completion.json()).task.summary).toContain("Cut 2 s at 0:01. Dialogue cuts are pending review.");
   expect(ctx.repos.tasks.get(task.id)!.summary).not.toContain("Removed the demonstration");
   // What Scarlet said as it finished is kept beside the receipt, for the editor.
   expect(ctx.repos.tasks.get(task.id)!.reply).toBe("Removed the demonstration.");
@@ -4475,7 +4505,7 @@ it.each(["dialogue cuts", "whole timeline"])("finishes a first cut with its own 
   // Done the first time it says so: no second run of the request in between to replace its words.
   expect((await ended.json()).task).toMatchObject({ state: "done", repeatAudit: { remaining: 0, noFindings: true } });
   const done = ctx.repos.tasks.get(pass.id)!;
-  if (kind === "dialogue cuts") expect(done).toMatchObject({ reply: said, summary: expect.stringContaining("Removed 1 s") });
+  if (kind === "dialogue cuts") expect(done).toMatchObject({ reply: said, summary: expect.stringContaining("Cut 1 s") });
   else expect(done).toMatchObject({ summary: said });
 });
 
@@ -4516,7 +4546,7 @@ it("carries a part's staged cuts and their recommendations into the next part of
   expect(ctx.repos.changes.get(review.id)!.replacedBy).toBe(three.changes[1]!.id);
   await checkPassAudio(task.id);
   const completion = await api("POST", `/tasks/${task.id}/complete`, { state: "done" });
-  expect((await completion.json()).task.summary).toBe("Applied “Assemble”. Removed 3 s across 2 cuts. Dialogue cuts are pending review.");
+  expect((await completion.json()).task.summary).toBe("Applied “Assemble”. Cut 3 s across 2 cuts. Dialogue cuts are pending review.");
 });
 
 it("keeps the editor's calls through the pass's next part and applies them as soon as the pass finishes", async () => {
@@ -6056,8 +6086,10 @@ it("removes day-old working files a killed engine left behind, and nothing newer
   for (const [name, file] of Object.entries(files)) if (name !== "freshTmp") utimesSync(file, old, old);
   await ctx.close();
   workspace = openWorkspace();
+  // The orphan copy landed just now, though it carries old times as an imported copy does: its import may still be
+  // under way in another engine, so it stays until a day after it landed.
   expect(Object.fromEntries(Object.entries(files).map(([name, file]) => [name, existsSync(file)]))).toEqual({
-    tmp: false, freshTmp: true, part: false, orphan: false, original: true, proxyPart: false, proxy: true, segmentPart: false });
+    tmp: false, freshTmp: true, part: false, orphan: true, original: true, proxyPart: false, proxy: true, segmentPart: false });
 });
 
 it("carries a run's CLI session to the attempt that resumes it after a quit, and starts cold when the host no longer has it", async () => {

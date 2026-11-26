@@ -87,11 +87,11 @@ function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { c
   </div>;
 }
 
-/** Over a card's row while Before plays footage another cut took out: whose it is. */
+/** Over a card's row while Before plays footage another cut removed: whose it is. */
 function PlayingTakenOut({ at }: { at: string }) {
   return <div className="edit-card-switched" role="status">
     <span className="edit-card-switched-side">Before</span>
-    <span className="edit-card-switched-text">The cut at {at} took this part out.</span>
+    <span className="edit-card-switched-text">This part was cut at {at}.</span>
   </div>;
 }
 
@@ -164,7 +164,7 @@ export function WorkingEditCard({ label, status, asking, onStop, onAnswer }: {
 export function AppliedEditCard({ projectId, focusThread, reviewingEdit, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
-  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject, madeBy }: {
+  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject, madeBy, batch }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
@@ -210,13 +210,29 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, editPla
   onSentReject(sent: { task?: Task; version?: string }): void;
   /** The task model that made it, when the chat's model handed it off. */
   madeBy?: Change["handedOff"];
+  /** When this edit was opened from a collapsed +N batch in the beta edits column, step through its edits and keep them together. */
+  batch?: { index: number; count: number; kept?: boolean; onPrev(): void; onNext(): void };
 }) {
+  const inBatch = !!batch && batch.count > 1;
+  useHotkeys(event => {
+    if (!workspaceActive || !inBatch || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "[" && batch.index > 0) { event.preventDefault(); batch.onPrev(); }
+    else if (event.key === "]" && batch.index < batch.count - 1) { event.preventDefault(); batch.onNext(); }
+  });
   return <section className="edit-card" role="region" aria-label="Applied edit">
     {/* Whose footage is playing, and nothing else: the lit icon in the row under it is the way back, and names its key. */}
     {visiting && <PlayingTakenOut at={visiting.at} />}
     <div className="edit-card-bar">
+      {/* A grouped batch leads with a compact stepper so the editor can inspect each edit on the timeline. */}
+      {inBatch && <span className="edit-card-stepper" role="group" aria-label="Edits in this group">
+        <button type="button" className="edit-card-step" aria-label="Previous edit in group" title="Previous edit ([)"
+          disabled={batch.index <= 0} onClick={letGo(batch.onPrev)}>‹</button>
+        <span className="edit-card-step-count">{batch.index + 1} of {batch.count}</span>
+        <button type="button" className="edit-card-step" aria-label="Next edit in group" title="Next edit (])"
+          disabled={batch.index >= batch.count - 1} onClick={letGo(batch.onNext)}>›</button>
+      </span>}
       {/* A flagged edit still to check leads with its place among the ones that are: nothing else says how many are left. */}
-      {editPlace >= 0 && <span className="edit-card-count" title="Edits still to check">{editPlace + 1} of {flaggedCount}</span>}
+      {!inBatch && editPlace >= 0 && <span className="edit-card-count" title="Edits still to check">{editPlace + 1} of {flaggedCount}</span>}
       {/* The note explains the choice and includes any cue for the editor to check. */}
       {/* It's on up to two lines, so an edit with a short note is a single line. A clipped note opens on a click. */}
       {editDid ? <div className="edit-card-text">{editDid}<EditNote key={editKey(reviewingEdit)} text={editNote(reviewingEdit, !!reviewRange)} /></div>
@@ -256,12 +272,14 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, editPla
         <ReviewActions lead={shownMarker && onSentAdd && rejectTarget && <AddTodo key={`add ${openEditKey}`} projectId={projectId} thread={focusThread}
             target={rejectTarget} ask={reviewingEdit.todo} onSent={onSentAdd} />}
           revise={onRevise}
-          approve={shownMarker ? undefined : onKeep} approveLabel="Keep" approveKey="K" />
+          approve={shownMarker ? undefined : onKeep}
+          approveLabel={inBatch && !batch.kept ? `Keep all ${batch.count}` : "Keep"} approveKey="K" />
         {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
             a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A to-do marked for the editor has it too:
             its marker comes off. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
         {appliedTarget && rejectTarget && <RejectEdit key={`reject ${openEditKey}`} projectId={projectId} thread={focusThread} target={rejectTarget}
           edits={rejectedEdits} editsOn={appliedTarget.version}
+          titleOverride={inBatch ? "Reject just this edit" : undefined}
           onEngine={onEngineReject} onSent={onSentReject} />}
       </span>
     </div>
@@ -312,7 +330,7 @@ export function CallCard({ projectId, pass, openCall, listening, callAt, callHis
         title={`v${callHistory.length}: ${callHistory.at(-1)!.reason ?? "Scarlet’s earlier version."}${callHistory.at(-1)!.note ? `\nYou: “${callHistory.at(-1)!.note}”` : ""}`} />}
       {/* What Keep would take out, struck, over Scarlet's reason. A revision that leaves the footage in has no such line. */}
       {callWords && !conflict && approves(openCall) === "cut" ? <div className="edit-card-text">
-        <CutWordsLine key={`what ${callKey}`} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength} verb="Takes out" />
+        <CutWordsLine key={`what ${callKey}`} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength} verb="Cut" />
         <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} /></div>
         : <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} />}
       {pass.handedOff && <MadeBy by={pass.handedOff} />}

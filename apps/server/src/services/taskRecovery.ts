@@ -42,12 +42,11 @@ function runChoiceOverride(choice: RunChoice) {
  * can repeat, so those are counted.
  */
 function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, lastSeen?: string | null): Task {
-  let saved = settleTask(ctx, task, unstarted, lastSeen);
+  let saved = settleTask(ctx, task, unstarted, quit, lastSeen);
   if (FINISHED_TASK.has(saved.state)) dropWaitingLooks(ctx, saved);
   const attempts = runAttempts(task.projectId, runRoot(task));
-  // Only the attempts that lost their worker count. A pass that came through three quits, or that the editor resumed
-  // by hand, still carries on by itself the first time its worker goes missing.
-  if (!quit && saved.state === "failed" && saved.interrupted) saved = saveTask(ctx, { ...saved, lostWorker: true });
+  // Only the attempts that lost their worker count (`settleTask` marks them). A pass that came through three quits, or
+  // that the editor resumed by hand, still carries on by itself the first time its worker goes missing.
   const lost = quit ? 0 : ctx.repos.tasks.count(`${attempts.where} AND json_extract(json, '$.lostWorker') = 1`, attempts.params);
   const again = quit || lost < LOST_WORKER_ATTEMPTS;
   let carriesOn = false;
@@ -68,7 +67,9 @@ function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, 
     const asked = saved.context.checksTaskId ? ctx.repos.tasks.get(saved.context.checksTaskId) : null;
     if (asked && asked.projectId === saved.projectId
       && !ctx.repos.learnings.count("project_id = ? AND json_extract(json, '$.taskId') = ?", [asked.projectId, asked.id])) {
-      const again = startLearningCheck(ctx, asked);
+      // A check that read the editor's decisions reads them again, with its own words and model: the request's words
+      // may be just a skill's name, which a check of the words doesn't read.
+      const again = saved.context.readsDecisions ? restartDecisionCheck(ctx, saved, asked) : startLearningCheck(ctx, asked);
       if (again) saved = saveTask(ctx, { ...saved, retryTaskId: again.id });
     }
   }
@@ -79,6 +80,18 @@ function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, 
   ctx.db.afterCommit(() => ctx.log(`[task] recovery task=${logId(task.id)} project=${logId(task.projectId)} ` +
     `state=${saved.state} outcome=${outcome} reason=${quit ? "engine_stopped" : "worker_lost"} attempts=${lost}`));
   return saved;
+}
+
+function restartDecisionCheck(ctx: Ctx, check: Task, asked: Task): Task | undefined {
+  try {
+    return createTask(ctx, {
+      projectId: check.projectId, kind: "learning_check", agent: check.agent, model: check.model,
+      effort: check.effort, fast: check.fast, serviceTier: check.serviceTier,
+      instruction: check.instruction, context: { checksTaskId: asked.id, readsDecisions: true }, createdBy: check.createdBy,
+    });
+  } catch (err) {
+    ctx.log(`[learning] the decisions on ${asked.id} weren’t read again for a rule: ${errorMessage(err)}`);
+  }
 }
 
 /** Retire the workers' attempts and leave their requests at the front of the project's held queue. */
@@ -146,10 +159,12 @@ export function resumeProjectEditing(ctx: Ctx, projectId: string, choice: RunCho
   }, "immediate")();
 }
 
-function settleTask(ctx: Ctx, task: Task, unstarted: boolean, lastSeen?: string | null): Task {
+function settleTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, lastSeen?: string | null): Task {
   const finishedAt = now();
   const finish = (saved: Partial<Task>) => {
-    const finished = saveTask(ctx, { ...task, hostId: null, finishedAt, ...saved });
+    // A run cut short while Scarlet stayed open lost its worker. It's marked before it's reported, so it's reported as a crash.
+    const lostWorker = !quit && saved.state === "failed" && saved.interrupted;
+    const finished = saveTask(ctx, { ...task, hostId: null, finishedAt, ...saved, ...(lostWorker && { lostWorker: true }) });
     recordTaskFinished(ctx, finished);
     return finished;
   };

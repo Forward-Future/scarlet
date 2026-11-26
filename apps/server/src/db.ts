@@ -50,6 +50,13 @@ export class Db {
 
   constructor(path: string) {
     this.raw = new DatabaseSync(path);
+    // SQLite's own `'localtime'` on Windows calls Win32 and ignores `TZ`, while V8's `Date` reads both the OS clock and `TZ`.
+    this.raw.function("local_day", (at) => {
+      if (typeof at !== "string") return null;
+      const d = new Date(at);
+      if (Number.isNaN(d.getTime())) return null;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    });
   }
   prepare(sql: string): Statement {
     let s = this.cache.get(sql);

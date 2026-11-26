@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { buildSystemPrompt, type EarlierRequest } from "@scarlet/mcp/prompt";
-import { agentCapabilities, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, isStyleGuideEdit, PROJECT_EDIT_TASK_KINDS, requestText, taskRunKind, workspaceCapabilities, type Skill, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
+import { agentCapabilities, cutText, wellFormed, isAsideTask, isHandOff, isLearningCheck, isListenCheck, isProjectEditTask, isSkillEdit, isStyleGuideEdit, PROJECT_EDIT_TASK_KINDS, requestText, taskRunKind, workspaceCapabilities, type Skill, type Task, type TaskEvent, type TaskPrompt } from "@scarlet/shared";
 import type { Project } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { notFound } from "../errors.js";
@@ -171,10 +171,11 @@ export function taskPrompt(ctx: Ctx, task: Task, opts: { workDir?: string; fresh
   // A listen is launched with its harness's own tools as well: Gemini hears a passage only by opening its file there.
   const launch = { ...(plans && { plan: true }), ...((!aside || listens) && { workspace: true }), refusedTool: aside ? REFUSED_TOOL : REFUSED_OUTSIDE };
   if (resumeSession) {
-    return { systemPrompt, instruction: answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
-      : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`, resumeSession, ...launch };
+    return { systemPrompt: wellFormed(systemPrompt), instruction: wellFormed(answered ? `The editor answered: "${last!.text.trim()}"\nContinue the task with that answer.`
+      : `${task.resumesAfterProjectStop ? PAUSED : INTERRUPTED}\n\n${instruction.trim()}`), resumeSession, ...launch };
   }
-  return { systemPrompt, instruction: firstMessage(instruction.trim()), ...launch };
+  // Every reader takes the prompt: the desktop host's JSON reader refuses a message with half a character in it.
+  return { systemPrompt: wellFormed(systemPrompt), instruction: wellFormed(firstMessage(instruction.trim())), ...launch };
 }
 
 /**
@@ -210,7 +211,7 @@ function firstMessage(instruction: string) {
  */
 const CHAT = { requests: 6, chars: 6000, asked: 600, told: 3, message: 800, edits: 3 };
 
-const clipped = (text: string, max: number) => (text.trim().length > max ? `${text.trim().slice(0, max).trimEnd()}…` : text.trim());
+const clipped = (text: string, max: number) => (text.trim().length > max ? `${cutText(text.trim(), max).trimEnd()}…` : text.trim());
 
 /** The latest things Scarlet showed the editor while it worked on a request, over all its attempts, each said once. */
 function toldEditor(ctx: Ctx, attempts: Task[]): string[] {

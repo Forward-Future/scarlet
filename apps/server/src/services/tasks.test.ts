@@ -576,6 +576,41 @@ it("reads a message for a rule again when a quit cut the read short, and keeps a
   expect(resumed).toMatchObject({ state: "queued", resumeRootId: asked.id, startsBeforeCalls: true });
 });
 
+it("reads the editor's decisions again when a quit cut that read short, on a pass asked for by its skill's name alone", async () => {
+  const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
+  const editor = { type: "human", name: "Editor" } as const;
+  const asked = createTask(app.ctx, { projectId: project.id, kind: "edit", agent: "claude", model: "sonnet", instruction: "/dialogue-pass", state: "done", createdBy: editor });
+  const instruction = "Read the editor’s decisions for a standing rule.";
+  const check = createTask(app.ctx, { projectId: project.id, kind: "learning_check", agent: "claude", model: "opus", instruction,
+    context: { checksTaskId: asked.id, readsDecisions: true }, createdBy: editor });
+  const { body: { task: running } } = await api<{ task: Task }>("POST", `/hosts/${host.id}/claim`, { taskId: check.id });
+  await api("POST", `/tasks/${check.id}/complete`, { state: "cancelled", interrupted: true, ifStartedAt: running.startedAt });
+  const ended = app.ctx.repos.tasks.get(check.id)!;
+  expect(ended).toMatchObject({ state: "failed", interrupted: true });
+  expect(app.ctx.repos.tasks.get(ended.retryTaskId!)).toMatchObject({
+    kind: "learning_check", state: "queued", agent: "claude", model: "opus", instruction, context: { checksTaskId: asked.id, readsDecisions: true },
+  });
+});
+
+it("reports a run whose engine went away as a crash, and one Scarlet quit on as cancelled", async () => {
+  const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
+  const record = vi.spyOn(app.ctx.telemetry, "record");
+  const finished = async (engineLost: boolean) => {
+    const asked = (await api<{ task: Task }>("POST", `/projects/${project.id}/tasks`, { kind: "edit", agent: "claude", instruction: "Cut the pauses" })).body.task;
+    const { body: { task } } = await api<{ task: Task }>("POST", `/hosts/${host.id}/claim`, { taskId: asked.id });
+    record.mockClear();
+    await api("POST", `/tasks/${asked.id}/complete`, { state: "cancelled", interrupted: true, ifStartedAt: task.startedAt, ...(engineLost && { engineLost }) });
+    app.ctx.repos.tasks.put({ ...app.ctx.repos.tasks.get(asked.id)!, state: "cancelled" });
+    const retry = app.ctx.repos.tasks.get(asked.id)!.retryTaskId;
+    if (retry) app.ctx.repos.tasks.put({ ...app.ctx.repos.tasks.get(retry)!, state: "cancelled" });
+    return record.mock.calls.filter(([name]) => name === "task.finished").map(([, props]) => props);
+  };
+  expect(await finished(true)).toEqual([expect.objectContaining({ kind: "edit", state: "failed", failureReason: "crashed", interrupted: true })]);
+  const quit = await finished(false);
+  expect(quit).toEqual([expect.objectContaining({ kind: "edit", state: "cancelled", interrupted: true })]);
+  expect(quit[0]).not.toHaveProperty("failureReason");
+});
+
 it("resumes a run its engine's crash cut short, until crashes keep cutting it short, and a run Scarlet quit on every time", async () => {
   const { body: { host } } = await api<{ host: { id: string } }>("POST", "/hosts/register", { name: "test", platform: "test", agents: [{ id: "claude", installed: true }] });
   // Each attempt is claimed and cut short; the next is the attempt Scarlet resumed it as, if any.

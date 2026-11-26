@@ -261,7 +261,7 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     window.addEventListener("blur", off);
     return () => { window.removeEventListener("keydown", key); window.removeEventListener("keyup", key); window.removeEventListener("blur", off); };
   }, [!!onAddTime]); // eslint-disable-line react-hooks/exhaustive-deps
-  const addNote = shiftHeld && onAddTime && <span className="simple-timeline-add">Click to add this time · drag for a stretch</span>;
+  const addNote = shiftHeld && onAddTime && <span className="simple-timeline-add">Click to add this time · drag for a range</span>;
   // Skipped footage can be heard: a press hands it to the caller. On Before, clicking a dotted cut opens its edit.
   const [hotGap, setHotGap] = useState<string>();
   const pressedGap = useRef<TimelineGap | undefined>(undefined);

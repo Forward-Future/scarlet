@@ -53,7 +53,7 @@ export const isRecheck = (task: Task) => task.kind === "revise" && task.createdB
  * Why Scarlet is rechecking an approved cut. Under the cut's row it heads the recheck where the editor's words head a
  * revision, after an Auto tag, so the editor reads who started it and why before its work (2026-11-22).
  */
-export const RECHECK_WORDS = "The footage changed after you approved it.";
+export const RECHECK_WORDS = "The footage changed after you kept it.";
 /** What the chat says about a suggestion Scarlet is to make again: while the redo waits its turn, then once Scarlet is on it. */
 const REDO_WAITS = "The video changed while this suggestion was waiting. Scarlet will redo it on the video as it is now.";
 const REDOING = "The video changed while this suggestion was waiting. Scarlet is redoing it on the video as it is now.";

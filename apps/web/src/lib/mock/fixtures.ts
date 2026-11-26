@@ -707,7 +707,6 @@ export function buildDb(chatLayouts = false): MockDb {
     talkingToYou: "",
     listening: "auto",
     taskModels: DEFAULT_TASK_MODELS,
-    styleGuidesBeta: false,
   };
 
   return {

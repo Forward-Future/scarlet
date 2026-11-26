@@ -7,7 +7,7 @@ import { errorMessage } from "../../../lib/client";
 import { aimKind, failure, requestLog } from "../../../lib/requestLog";
 import { messageTimestamps, type MessageClock } from "../../../lib/messageTimestamps";
 import { useFileDropTarget } from "../../../lib/uiHooks";
-import { useAttachmentsStore } from "../../../stores/attachments";
+import { MAX_ATTACHMENTS, useAttachmentsStore } from "../../../stores/attachments";
 import { usePictureMarksStore } from "../../../stores/pictureMarks";
 import { player } from "../../../lib/player";
 import { toggleMarking } from "../../../components/player/PictureMarks";
@@ -290,6 +290,8 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     const failed = useAttachmentsStore.getState().byProject[project.id]?.find(a => a.state === "failed" && adding.includes(a.key));
     if (failed) throw new Error(failed.error ?? "Couldn’t add it");
     const files = ready.flatMap(a => a.attachment ?? []);
+    // The marked frame goes as one of the files: past the engine's limit, nothing is uploaded and the box says why.
+    if (files.length + (drawing ? 1 : 0) > MAX_ATTACHMENTS) throw new Error(`A message can carry ${MAX_ATTACHMENTS} files, the marked frame included. Remove one.`);
     const drawn = drawing && await sendMarks(project.id, drawing);
     if (drawn) files.push(drawn.attachment);
     return { files, drawn: drawn?.marks, done: (carried: boolean) => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AgentId, UsageGroup, UsageResponse } from "@scarlet/shared";
+import { isExtraProvider, type AgentId, type UsageGroup, type UsageResponse } from "@scarlet/shared";
 import { api, errorMessage } from "../../lib/client";
 import { plural, relTime, tokenBreakdown, tokenLabel } from "../../lib/format";
 import { AGENT_LABEL, onlineAgents, useHostsStore } from "../../stores/hosts";
@@ -538,7 +538,10 @@ export function UsageSettings() {
                         const friendly = modelCatalog.labels.get(g.key) ?? formatModelId(g.key);
                         primary = friendly;
                         if (friendly !== g.key) secondaryCode = g.key;
-                        providerIconId = inferProviderFromModel(g.key) ?? modelCatalog.owners.get(g.key) ?? null;
+                        // A model a live host serves through Ollama, LM Studio or OpenRouter is that provider's, whatever
+                        // its name suggests (Ollama's gpt-oss is not Codex's).
+                        const owner = modelCatalog.owners.get(g.key);
+                        providerIconId = (owner && isExtraProvider(owner) ? owner : inferProviderFromModel(g.key) ?? owner) ?? null;
                       }
                     }
 

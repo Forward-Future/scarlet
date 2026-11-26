@@ -1,4 +1,4 @@
-import { planText, type AgentEffort, type AgentId, type AgentUsage, type PlanStep, type SubscriptionQuota } from "@scarlet/shared";
+import { cutText, planText, type AgentEffort, type AgentId, type AgentUsage, type PlanStep, type SubscriptionQuota } from "@scarlet/shared";
 import type { ProvidersConfig } from "../config.js";
 
 export type RunnerEventType = "log" | "tool" | "question" | "plan" | "result" | "error";
@@ -183,5 +183,5 @@ export function briefInput(input: unknown, max = 160): string {
   } catch {
     s = String(input);
   }
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+  return s.length > max ? `${cutText(s, max - 1)}…` : s;
 }

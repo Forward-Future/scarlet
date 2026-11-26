@@ -17,7 +17,7 @@ const EMPTY_TAB = {
 
 const TIME_ORDER: ListOrder = { numbers: false };
 
-const doneLabel = (count: number) => count === 1 ? "Keep the confident edit" : `Keep all ${count} confident edits`;
+const doneLabel = (count: number) => count === 1 ? "Keep the safe edit" : `Keep all ${count} safe edits`;
 
 function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], reveal, showNeeded, onKeepConfident }: {
   need: number; optional: number; working: number; done: number; list: PassList; reveal(): void; showNeeded(): void;
@@ -34,7 +34,7 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
   const forYouTitle = need > 0 && optional > 0
     ? `${total} unreviewed (${need} ${need === 1 ? "needs" : "need"} you)`
     : need > 0 ? `${need} ${need === 1 ? "needs" : "need"} you`
-    : optional > 0 ? `${optional} confident ${optional === 1 ? "edit" : "edits"}` : undefined;
+    : optional > 0 ? `${optional} safe ${optional === 1 ? "edit" : "edits"}` : undefined;
   return <div className="simple-review-tabs" role="group" aria-label="Edit lists">
     <button type="button" className="simple-review-tab simple-pass-need" aria-label="For you" aria-pressed={tab === "you"}
       title={forYouTitle} onClick={letGo(showNeeded)}>
@@ -51,7 +51,7 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
       title={done ? `${done} decided` : undefined} onClick={letGo(show("done"))}>Done{tally(done)}</button>
     {tab === "you" && optional > 0 && onKeepConfident && (
       <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onKeepConfident)}>Keep {optional} confident</button>
+        onClick={letGo(onKeepConfident)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>
     )}
   </div>;
 }
@@ -305,7 +305,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         const flashed = !!flashedThreadId && flashedThreadId === entry.threadId;
         return <Fragment key={row.key}>
           {splitAt !== undefined && idx === splitAt && (
-            <li className="review-tier-sep" role="presentation"><span>Confident edits ({optional.length})</span></li>
+            <li className="review-tier-sep" role="presentation"><span>Safe edits ({optional.length})</span></li>
           )}
           <li className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
             data-thread={entry.threadId}

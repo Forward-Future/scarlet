@@ -50,6 +50,33 @@ it("leaves alone a ↓ the page has already taken when its button has the focus,
   }
 });
 
+it("takes ↑ from the menu's button to the last row of an open menu", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    for (const rows of [["Rename", "Archive", "Move to Trash"], ["Rename", "Archive"]]) {
+      await act(async () => root.render(<MemoryRouter><Dropdown label="Actions" button={<span>⋯</span>}>
+        {close => rows.map(row => <MenuItem key={row} onClick={close}>{row}</MenuItem>)}
+      </Dropdown></MemoryRouter>));
+      const button = container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+      // A menu opened from its button keeps the focus there.
+      button.focus();
+      await act(async () => button.click());
+      expect(document.activeElement).toBe(button);
+      await act(async () => { button.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })); });
+      expect(document.activeElement?.textContent).toBe(rows.at(-1));
+      // Close it for the next round.
+      await act(async () => button.click());
+    }
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("opens a floating menu outside the clipped container and returns the keyboard focus on Escape", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const container = document.createElement("div");

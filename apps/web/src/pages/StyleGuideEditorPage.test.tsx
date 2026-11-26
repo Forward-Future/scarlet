@@ -16,7 +16,7 @@ it("leaves Enter to an input method that is composing the style guide's name", a
   const now = "2026-11-24T12:00:00.000Z";
   let guide: StyleGuideRecord = { id: "sg_main", name: "channel-brand", description: "", instructions: "", isDefault: false, assets: [], createdAt: now, updatedAt: now };
   useHostsStore.setState({ hosts: [buildDb().hosts.find(h => h.online)!] });
-  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" }, styleGuidesBeta: true });
+  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
   useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
   vi.spyOn(api, "styleGuide").mockImplementation(async () => ({ styleGuide: guide, edits: [] }));
   const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => ({ styleGuide: (guide = { ...guide, ...patch }) }));
@@ -61,7 +61,7 @@ it("reuses the created style guide and uploaded asset when retrying a failed sen
   };
   const asset = { id: "ast_logo", name: "logo.png", path: "assets/logo.png", size: 128, mime: "image/png", createdAt: now };
   useHostsStore.setState({ hosts: [buildDb().hosts.find(h => h.online)!] });
-  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" }, styleGuidesBeta: true });
+  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
   useStyleGuidesStore.setState({ styleGuides: [], status: "ready", error: null });
   const create = vi.spyOn(api, "createStyleGuide").mockResolvedValue({ styleGuide: created });
   const upload = vi.spyOn(api, "uploadStyleGuideAsset").mockResolvedValue({
@@ -155,7 +155,7 @@ it("sends attached files without requiring a typed message, derives a slug from 
     summary: null,
   };
   useHostsStore.setState({ hosts: [buildDb().hosts.find(h => h.online)!] });
-  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" }, styleGuidesBeta: true });
+  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
   useStyleGuidesStore.setState({ styleGuides: [], status: "ready", error: null });
 
   const create = vi.spyOn(api, "createStyleGuide").mockResolvedValue({ styleGuide: created });

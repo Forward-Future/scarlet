@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { REVISED_CHECK, type ThreadEdit } from "@scarlet/shared";
+import type { ThreadEdit } from "@scarlet/shared";
 import { AimRow } from "../../components/review/AimRow";
 import { EditVersion, RejectedMark } from "../../components/review/ThreadEdits";
 import { ChatRail } from "../../components/shell/ChatRail";
@@ -19,8 +19,8 @@ import { letGo, type HoveredReviewRow } from "./types";
 export const REVIEW_RAIL_MIN = 220;
 /** Default width of the edits column before the user drags its right divider. */
 const reviewRailWidth = (available: number) => available <= 1100 ? 232 : Math.max(260, Math.min(320, available * 0.22));
-/** What Keep confident says it does, on hover and to screen readers. */
-const doneLabel = (count: number) => count === 1 ? "Keep the confident edit" : `Keep all ${count} confident edits`;
+/** What Keep safe edits says it does, on hover and to screen readers. */
+const doneLabel = (count: number) => count === 1 ? "Keep the safe edit" : `Keep all ${count} safe edits`;
 
 const ROW_SELECTOR = "button.simple-edit, .simple-pass-list > li > button";
 const TIP_DELAY_MS = 180;
@@ -28,7 +28,7 @@ const TIP_WARM_MS = 250;
 
 const SECTION_LABELS: Record<RailSection, string> = {
   you: "Edits that need you",
-  low: "Confident edits",
+  low: "Safe edits",
   working: "With Scarlet",
   done: "Decided",
 };
@@ -36,6 +36,7 @@ const SECTION_LABELS: Record<RailSection, string> = {
 interface RowTooltip {
   row: HTMLButtonElement;
   text: string;
+  meta?: string;
   detail?: string;
   left: number;
   top?: number;
@@ -46,6 +47,7 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   const words = row.querySelector<HTMLElement>(".simple-edit-words, .simple-pass-words");
   const text = (row.dataset.rowTip ?? words?.textContent ?? "").trim();
   if (!text) return null;
+  const meta = row.dataset.rowMeta?.trim() || undefined;
   const detail = row.dataset.rowDetail?.trim() || undefined;
   const rowRect = row.getBoundingClientRect();
   const anchorRect = (words ?? row).getBoundingClientRect();
@@ -54,7 +56,8 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   return {
     row,
     text,
-    detail: detail && detail !== text ? detail : undefined,
+    meta: meta && meta !== text ? meta : undefined,
+    detail: detail && detail !== text && detail !== meta ? detail : undefined,
     left,
     ...(below ? { top: Math.round(rowRect.bottom + 6) } : { bottom: Math.round(window.innerHeight - rowRect.top + 6) }),
   };
@@ -232,18 +235,24 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     const listClass = pastHour ? "simple-pass-list simple-edits has-hours" : "simple-pass-list simple-edits";
     return <ol className={listClass} aria-label={SECTION_LABELS[key]}>
       {rows.map(row => {
+        const batchCount = row.batch && row.batch.length > 1 ? row.batch.length : 0;
+        const activeRow = row.batch?.find(r => r.on) ?? row;
         const canUnkeepRow = key === "done" && !row.rejected && !row.skipped && !row.isMarker
           && (!!row.unkeepCall || row.members.some(m => m.canUnkeep));
         const value = key === "done" ? (row.decision ?? row.value) : row.value;
         const rowTime = clockLabel(row.displayAt);
         const needTime = row.needs || row.asks;
         const lead = <span className={needTime ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
+        const activeLead = <span className={activeRow.needs || activeRow.asks ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{clockLabel(activeRow.displayAt)}</span>;
         const tipText = row.tipText ?? row.label;
-        const tipDetail = row.tipDetail && row.tipDetail !== tipText ? row.tipDetail : undefined;
+        const tipMeta = row.tipMeta && row.tipMeta !== tipText ? row.tipMeta : undefined;
+        const tipDetail = row.tipDetail && row.tipDetail !== tipText && row.tipDetail !== tipMeta ? row.tipDetail : undefined;
         const moment = row.moment;
         const unkeepTip = row.unkeepTip ?? "Move back to For you";
-        const statusWord = row.word ?? (row.revised ? REVISED_CHECK : undefined);
-        const ariaLabel = row.ariaLabel ?? (moment
+        const statusWord = row.word;
+        const ariaLabel = row.ariaLabel ?? (batchCount > 1
+          ? `${rowTime}: ${row.label}, plus ${batchCount - 1} more${row.decided ? ", kept" : ""}`
+          : moment
           ? `${rowTime} ${row.label}, ${moment.more.replace("+ ", "and ")}`
           : row.rejected ? `${rowTime} ${row.label}, rejected`
           : `${rowTime}: ${row.label}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : row.decided ? (row.isMarker ? ", done" : ", kept") : needTime ? ", needs you" : ""}`);
@@ -253,9 +262,10 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
             className={["simple-edit", row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", row.isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ")}
             aria-current={row.on || undefined}
             data-log-control={row.logControl}
-            data-log-label={row.logLabel}
+            data-log-label={batchCount > 1 ? "Edit group" : row.logLabel}
             disabled={!row.open}
             data-row-tip={tipText}
+            data-row-meta={tipMeta}
             data-row-detail={tipDetail}
             aria-label={ariaLabel}
             onClick={letGo(() => store.view().findByKey(row.key)?.open?.())}
@@ -266,6 +276,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
               {(row.rejected || row.skipped) && <RejectedMark />}
               {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
               <span className="simple-pass-words simple-edit-words">{row.label}</span>
+              {batchCount > 1 && <span className="edit-batch-plus" aria-hidden="true">+{batchCount - 1}</span>}
               {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
               {row.fresh && <small className="edit-version is-new">New</small>}
               {moment && <span className="simple-pass-more" aria-expanded={moment.unfolded} title={moment.unfolded ? "Hide its edits" : "Show its edits"}
@@ -277,16 +288,17 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
           {canUnkeepRow && <span className="simple-row-unkeep"
             onPointerEnter={() => onHover?.(row.mark, row.hover)} onPointerLeave={() => onHover?.()}>
             <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
-              aria-label={`Unkeep ${row.label}`} title={unkeepTip}
+              aria-label={batchCount > 1 ? `Unkeep all ${batchCount} edits` : `Unkeep ${row.label}`} title={unkeepTip}
               onClick={letGo(() => { const fresh = store.view().findByKey(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
           </span>}
-          <AimRow on={row.on}>{lead}<span className="composer-aim-words">{row.label}</span></AimRow>
+          <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span></AimRow>
           {row.nests.map(nest => nest.node)}
           {moment?.unfolded && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
             {moment.subRows.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}>
               <button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
                 data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open}
-                data-row-tip={m.label} data-row-detail={m.title && m.title !== m.label ? m.title : undefined}
+                data-row-tip={m.label} data-row-meta={m.tipMeta}
+                data-row-detail={m.tipDetail ?? (m.title && m.title !== m.label ? m.title : undefined)}
                 onClick={letGo(() => { const fresh = store.view().findByKey(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.open?.(); })}
                 onPointerEnter={() => onHover?.(m.mark, m.hover)} onPointerLeave={() => onHover?.()}>
                 <span className="simple-pass-label">
@@ -321,7 +333,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     </>;
   };
 
-  return <ChatRail compact={compact} hidden={nothing} railRef={host} id="simple-review-rail" className="review-rail" label="Edit lists"
+  return <ChatRail compact={compact} railRef={host} id="simple-review-rail" className="review-rail" label="Edit lists"
     side="left" resizes="edits" storageKey="scarlet.simpleReviewWidth" initialWidth={reviewRailWidth}
     minWidth={REVIEW_RAIL_MIN} beside="simple-chat" reserve={reserve}>
     <header className="review-rail-head">
@@ -334,7 +346,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
             : <span className="review-rail-total">{optional}</span>)}
       </h2>
       {onDoneLow && optional > 0 && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onDoneLow)}>Keep {optional} confident</button>}
+        onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
     </header>
     {need > 0 && optional > 0 && onFilter && <div className="review-filter-bar" role="group" aria-label="Filter edits">
       <button type="button" className="review-filter-chip" aria-pressed={effectiveFilter === "all"}
@@ -345,9 +357,9 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     <div className="review-rail-scroll">
       <div className="review-rail-list" role="group" aria-label="For you">
         {renderSectionList("you")}
-        {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Confident edits ({optional})</span></div>}
-        <div className="review-low-body" role="group" aria-label="Confident edits" hidden={!showConfident}>{renderSectionList("low")}</div>
-        {forYouRows === 0 && !showConfident && <p className="simple-review-empty">Nothing waits on you.</p>}
+        {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Safe edits ({optional})</span></div>}
+        <div className="review-low-body" role="group" aria-label="Safe edits" hidden={!showConfident}>{renderSectionList("low")}</div>
+        {forYouRows === 0 && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
       </div>
     </div>
     <div className="review-rail-foot">
@@ -356,7 +368,8 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     </div>
     {tip && !nothing && <div ref={tipEl} id={tipId} role="tooltip" className="review-rail-tip"
       style={{ left: tipLeft ?? tip.left, ...(tip.top !== undefined ? { top: tip.top } : { bottom: tip.bottom }) }}>
-      <span>{tip.text}</span>
+      <span className="review-rail-tip-title">{tip.text}</span>
+      {tip.meta && <span className="review-rail-tip-meta">{tip.meta}</span>}
       {tip.detail && <span className="review-rail-tip-detail">{tip.detail}</span>}
     </div>}
   </ChatRail>;

@@ -43,9 +43,14 @@ export function historyRoutes(ctx: Ctx) {
 
   r.get("/activity", (c) => {
     const q = page(c);
-    const activity = ctx.repos.activity
-      .select(q.before ? "project_id IS NULL AND created_at < ?" : "project_id IS NULL",
-        q.before ? [q.before, q.limit] : [q.limit], "created_at DESC LIMIT ?");
+    const where = ["project_id IS NULL"];
+    const params: unknown[] = [];
+    if (q.before) {
+      where.push(q.beforeId ? "(created_at, id) < (?, ?)" : "created_at < ?");
+      params.push(q.before);
+      if (q.beforeId) params.push(q.beforeId);
+    }
+    const activity = ctx.repos.activity.select(where.join(" AND "), [...params, q.limit], "created_at DESC, id DESC LIMIT ?");
     return c.json({ activity });
   });
 

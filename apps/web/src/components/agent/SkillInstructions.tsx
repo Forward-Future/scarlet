@@ -2,7 +2,6 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import type { Skill, StyleGuideRecord } from "@scarlet/shared";
 import { useSkillsStore } from "../../stores/skills";
 import { useStyleGuidesStore } from "../../stores/styleGuides";
-import { useUiStore } from "../../stores/ui";
 import { markSkillMatches, normalizeSkillLines, revealSkillMatch, type SkillFindState } from "./SkillFind";
 
 /** A `/skill` or `@style-guide` the library has, where it is in the text. Words the library doesn't know stay plain. */
@@ -26,9 +25,8 @@ function keywordSpans(
 /** The text with each keyword in a faint fill, so the editor can tell a skill or style guide from plain words. */
 export function MarkedKeywords({ text, skills, styleGuides }: { text: string; skills?: readonly Skill[]; styleGuides?: readonly StyleGuideRecord[] }) {
   const librarySkills = useSkillsStore(s => s.skills);
-  const styleGuidesBeta = useUiStore(s => s.styleGuidesBeta);
   const libraryStyles = useStyleGuidesStore(s => s.styleGuides);
-  const activeStyles = styleGuides ?? (styleGuidesBeta ? libraryStyles : []);
+  const activeStyles = styleGuides ?? libraryStyles;
   const parts: ReactNode[] = [];
   let at = 0;
   for (const k of keywordSpans(text, skills ?? librarySkills, activeStyles)) {
@@ -61,9 +59,7 @@ export function SkillInstructions({ value: body, onChange, readOnly, placeholder
   const skills = useSkillsStore(s => s.skills);
   const skillStatus = useSkillsStore(s => s.status);
   const loadSkills = useSkillsStore(s => s.load);
-  const styleGuidesBeta = useUiStore(s => s.styleGuidesBeta);
-  const libraryStyleGuides = useStyleGuidesStore(s => s.styleGuides);
-  const styleGuides = styleGuidesBeta ? libraryStyleGuides : [];
+  const styleGuides = useStyleGuidesStore(s => s.styleGuides);
   const styleStatus = useStyleGuidesStore(s => s.status);
   const loadStyleGuides = useStyleGuidesStore(s => s.load);
   // The keyword under the pointer: `at` tells two of the same name apart, so the note follows the one pointed at.
@@ -71,7 +67,7 @@ export function SkillInstructions({ value: body, onChange, readOnly, placeholder
 
   // Keywords are known by the library's skills and style guides, so they are read as the page opens.
   useEffect(() => { if (skillStatus === "idle") void loadSkills(); }, [skillStatus, loadSkills]);
-  useEffect(() => { if (styleGuidesBeta && styleStatus === "idle") void loadStyleGuides(); }, [styleGuidesBeta, styleStatus, loadStyleGuides]);
+  useEffect(() => { if (styleStatus === "idle") void loadStyleGuides(); }, [styleStatus, loadStyleGuides]);
 
   useLayoutEffect(() => {
     const pane = backdrop.current, field = box.current;

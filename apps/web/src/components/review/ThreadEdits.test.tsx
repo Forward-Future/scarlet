@@ -3,7 +3,7 @@ import { clock } from "../../lib/format";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildThreads, threadEditList, type VersionSummary } from "@scarlet/shared";
+import { buildThreads, REVISED_CHECK, threadEditList, type VersionSummary } from "@scarlet/shared";
 import { api } from "../../lib/client";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { useProjectStore, type ProjectData } from "../../stores/project";
@@ -134,6 +134,46 @@ it("reads a request's edits again for a new working cut only while they are need
   expect(read).toHaveBeenCalledTimes(4);
 });
 
+it("waits for the engine's first edit list instead of flashing raw saved edits, and falls back only if the read fails", async () => {
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const raw = threadEditList(thread) as ThreadEdit[];
+  expect(raw.length).toBeGreaterThan(1);
+  useProjectStore.setState({ current: data, status: "ready" });
+
+  let deliver!: (res: { version: string; edits: ThreadEdit[] }) => void;
+  let fail!: (err: Error) => void;
+  const read = vi.spyOn(api, "threadEdits")
+    .mockImplementationOnce(() => new Promise(resolve => { deliver = resolve; }))
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+
+  const seen: { count: number; settled: boolean }[] = [];
+  function Probe({ t }: { t: Thread }) {
+    const { listed, settled } = useThreadEdits(PRJ, t, true);
+    seen.push({ count: listed.length, settled });
+    return null;
+  }
+
+  // While the first engine read is in flight, no raw saved edits flash in the list.
+  await act(async () => root.render(<Probe t={thread} />));
+  expect(read).toHaveBeenCalledTimes(1);
+  expect(seen.every(s => s.count === 0 && !s.settled)).toBe(true);
+
+  // Once the engine returns only the single edit still in the working cut, the list jumps straight from 0 to 1.
+  await act(async () => deliver({ version: data.project.head!, edits: [raw[0]!] }));
+  expect(seen.at(-1)).toEqual({ count: 1, settled: true });
+  expect(seen.map(s => s.count)).not.toContain(raw.length);
+
+  // Fresh mount where the engine read fails: still stays empty while pending, then falls back to the saved list.
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  seen.length = 0;
+  await act(async () => root.render(<Probe t={thread} />));
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(seen.every(s => s.count === 0 && !s.settled)).toBe(true);
+  await act(async () => fail(new Error("Engine offline")));
+  expect(seen.at(-1)).toEqual({ count: raw.length, settled: true });
+});
+
 it("words the request to reject one edit by its time and name", () => {
   expect(rejectInstruction({ time: 62, label: "captions" })).toBe("The editor rejected the edit at 1:02, “captions”. Put back exactly what it changed and leave every other edit as it is.");
   expect(rejectInstruction({ label: "captions" })).toMatch(/^The editor rejected “captions”\. /);
@@ -251,4 +291,28 @@ it("offers Unkeep on kept edit rows and takes back Keep without opening the edit
   expect(onPlay).not.toHaveBeenCalled();
   expect(unkeep).toHaveBeenCalledWith(PRJ, { threadId: thread.id, edits: [{ changeId: edits[0]!.changeId, spot: edits[0]!.spot }] });
   expect(container.querySelector(".simple-unkeep")).toBeNull();
+});
+
+it("keeps a consistent type tag on every row, including cuts and v2 revisions", async () => {
+  const thread = buildThreads(data).find(t => t.changes.some(c => c.id === "chg_approved_2"))!;
+  const edits: ThreadEdit[] = [
+    { changeId: "chg_v2", spot: 0, label: "Open Opus with “absolute banger”", range: { start: 13, end: 13 }, at: 13, kind: "cut",
+      beforeCut: { version: "ver_2", removed: { start: 13, end: 14 } }, previous: [{ changeId: "chg_v1", spot: 0 }], check: REVISED_CHECK },
+    { changeId: "chg_v2", spot: 1, label: "Re-timed intro", range: { start: 0, end: 3 }, kind: "other",
+      previous: [{ changeId: "chg_v1", spot: 1 }] },
+    { changeId: "chg_v2", spot: 2, label: "Quiet music bed", range: { start: 5, end: 10 }, kind: "audio", previous: [] },
+  ];
+  useProjectStore.setState({ current: data, status: "ready" });
+  await act(async () => root.render(<ThreadEdits projectId={PRJ} thread={thread} edits={edits} inRail onPlay={() => {}} />));
+  const rows = [...container.querySelectorAll<HTMLElement>(".simple-edit")];
+  expect(rows.map(r => [
+    r.querySelector(".edit-version")?.textContent ?? null,
+    r.querySelector(".simple-edit-value")?.textContent ?? null,
+    r.querySelector(".simple-edit-check")?.textContent ?? null,
+    r.querySelector(".edit-row-time")?.classList.contains("is-need"),
+  ])).toEqual([
+    ["v2", "Cut", null, true],
+    ["v2", "Edit", null, false],
+    [null, "Audio", null, false],
+  ]);
 });

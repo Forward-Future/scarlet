@@ -9,7 +9,8 @@ import { Icon } from "../../../components/ui/primitives";
 import { useFloatingPosition } from "../../../lib/uiHooks";
 import { editKindWord, editRowWord } from "../../../lib/editKind";
 import { listMoments, type Moment } from "../../../lib/editMoments";
-import { clock as clockLabel, editRemovedLabel, lengthLabel, plural } from "../../../lib/format";
+import { callRowTooltip, changeForEdit, cutRemovedSeconds, decidedCallRowTooltip, editRowTooltip, momentRowTooltip, type RowTooltipInfo } from "../../../lib/editRowTooltip";
+import { clock as clockLabel, lengthLabel, plural } from "../../../lib/format";
 import { editKey, unkeepEdits } from "../../../lib/keptEdits";
 import { madeSentence, type SentencePart } from "../../../lib/madeSentence";
 import { decidedPassCalls, rejectedCallRef } from "../../../lib/passCalls";
@@ -17,6 +18,7 @@ import { inListOrder, ReviewLinger, rowPlace, tabShown, type ListOrder, type Row
 import { isRecheck, type Thread } from "../../../lib/threads";
 import { useKeepSelectedInView } from "../../../lib/uiHooks";
 import { recordUndo } from "../../../lib/undo";
+import { useProjectStore } from "../../../stores/project";
 import { useShownCut } from "../../../stores/shownCut";
 import { useReviewRail, type RailEditMember, type RailRow, type RailSubRow } from "../railStore";
 import { callRowKey, isWorking, letGo, listedBefore, noNests, noRejected, noSpent, type ChatActions, type HoveredReviewRow, type Nest, type PassList, type Spent } from "../types";
@@ -218,7 +220,7 @@ export function OptionalLine({ count, open, onToggle, inPass }: { count: number;
       aria-description={LOW_RISK_TIP} onClick={letGo(onToggle)}
       onFocus={e => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}>
       <span className="simple-review-rest-chev" aria-hidden="true"><Icon name="chevron" size={11} /></span>
-      <span className="simple-review-rest-label">{count} low risk {count === 1 ? "edit" : "edits"}<span ref={mark} className="simple-review-rest-checks" aria-hidden="true"
+      <span className="simple-review-rest-label">{count} safe {count === 1 ? "edit" : "edits"}<span ref={mark} className="simple-review-rest-checks" aria-hidden="true"
         onPointerEnter={e => { if (e.pointerType !== "touch") setTip(true); }} onPointerLeave={() => setTip(false)}><Icon name="checks" size={13} /></span></span>
     </button>
     {tip && createPortal(<span ref={note} className="button-tip is-wrapping" aria-hidden>{LOW_RISK_TIP}</span>, document.body)}
@@ -314,6 +316,10 @@ interface PassRow {
   unkeep?: () => void;
   unkeepTip?: string;
   fresh: boolean;
+  /** Structured hover tooltip content for the beta edits rail. */
+  tip?: RowTooltipInfo;
+  /** Seconds removed when this row is a cut (used to sum removed time on grouped `+N` rows). */
+  removedSeconds?: number;
 }
 
 /** A row as a list draws it: one edit or call, or a moment, with the tab it is under. */
@@ -364,6 +370,8 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   // With a column of edits beside the chat, the rows are drawn there, every list at once, and none in the chat.
   const rail = useReviewRail();
   const { timeline } = useShownCut();
+  const media = useProjectStore(s => rail ? s.current?.media : undefined);
+  const fps = useProjectStore(s => rail ? s.current?.project.settings.fps : undefined);
   const threadChanges = useMemo(() => [...thread.changes, ...thread.flagged ?? []], [thread.changes, thread.flagged]);
   const clipsBySpot = useMemo(() => rail ? editClipIdsBySpot(threadChanges, edits, timeline) : new Map<string, SpotClips>(), [rail, threadChanges, edits, timeline]);
   const editByKey = useMemo(() => new Map(edits.map(e => [editKey(e), e])), [edits]);
@@ -451,25 +459,25 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
       // with them (the editor's call, 2026-11-23).
       const decided = !needs && !sent && (seen || decidedCallEditKeys.has(key));
       const decision = decided ? (e.marker ? "Done" : "Kept") : undefined;
-      // Where it stands, when it isn't simply waiting: the word a row among the calls ends on. In a list that leads
-      // with times it takes the place of the row's amount.
-      const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : revised ? REVISED_CHECK : undefined;
+      // Where it stands while Scarlet is actively working on it (Revising…, Up next, Queued, Needs your answer).
+      // Once revised, v2 sits beside the title and the row keeps its type tag on the right.
+      const word = sent ? revisionWord(sent, { rejecting: rejecting(e), adding: adding(e), nextQueuedId: actions.nextQueuedId }) : undefined;
       const at = (e as ThreadEdit).at ?? e.range.start;
       const displayAt = (!seen && !sent ? e.reviewRange?.start : undefined) ?? at;
-      // Listed with the calls, by its time. One that came back revised with a reason of
-      // Scarlet's own ends on its version there, as a revised call does, until it is kept or sent back again.
-      const rawKind = editRowWord(e);
-      const kindWord = rail && rawKind === "Edit" ? undefined : rawKind;
       const unkeepable = decided && !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(key));
       const label = (e.reason && e.summary) || e.label;
+      const version = e.previous.length ? e.previous.length + 1 : 0;
+      const editChange = rail ? changeForEdit(thread, e.changeId) : undefined;
+      const removed = rail && (!!e.beforeCut || e.kind === "cut") ? cutRemovedSeconds(e, editChange) : undefined;
+      const tip = rail ? editRowTooltip(e, { change: editChange, timeline, media, fps, version, status: word ?? decision }) : undefined;
       return [{ key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey),
         at, displayAt, mark: displayAt, hover: { threadId: thread.id, editKey: key },
         label, n: 0, num: undefined,
-        state: word ?? decision ?? (e.previous.length ? `v${e.previous.length + 1}` : undefined), decision, value: editRemovedLabel(e) ?? kindWord, word, revised, rejected: false, skipped: false,
+        state: word ?? decision ?? (version ? `v${version}` : undefined), decision, value: editRowWord(e), word, revised, rejected: false, skipped: false,
         forYou, onlyForYou: false,
         // Scarlet is on that revision now, so its word moves; one still waiting its turn sits still.
         busy: !!sent && isWorking(sent.state), pending: !!sent, needs, asks, sentBack, decided,
-        version: e.previous.length ? e.previous.length + 1 : 0, title: revised || e.reason ? undefined : e.check,
+        version, title: revised || e.reason ? undefined : e.check,
         on: !!showing && matchesEdit(showing, e), open: () => actions.openEdit(thread, e),
         ...(unkeepable && {
           unkeep: () => {
@@ -479,11 +487,12 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
           },
           unkeepTip: e.check || tabbed ? "Move back to For you" : "Unkeep",
         }),
-        fresh: fresh.has(e.changeId) }];
+        fresh: fresh.has(e.changeId), tip, removedSeconds: removed }];
     }),
     // A call goes by its time, as on its card and in the box's tag.
     ...(pass?.calls ?? []).map((c): PassRow => {
       const callWord = c.state === "revising" ? (revisionWord(c.run, { recheck: !!c.run && isRecheck(c.run), nextQueuedId: actions.nextQueuedId }) ?? "Revising…") : undefined;
+      const tip = rail ? callRowTooltip({ summary: c.summary, reason: c.reason, tag: c.tag, length: c.length, state: c.state, version: c.version, earlier: c.earlier, word: callWord }) : undefined;
       return { key: callRowKey(c), id: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at,
         hover: { threadId: thread.id, call: c.index },
         label: c.summary, n: c.n, callIndex: c.index, num: undefined, needs: c.state === "open", asks: c.state === "revising" && asksEditor(c.run), sentBack: c.state === "revising",
@@ -494,7 +503,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
         busy: c.state === "revising" && isWorking(c.run?.state), pending: c.state === "revising",
         version: c.version > 1 ? c.version : 0, title: c.earlier && `v${c.version - 1}: ${c.earlier.reason ?? "Scarlet’s earlier version."}${c.earlier.note ? `\nYou: “${c.earlier.note}”` : ""}`,
         on: listening?.changeId === pass!.change.id && listening.index === c.index, word: undefined, revised: false, rejected: false,
-        forYou: true, onlyForYou: false, fresh: false,
+        forYou: true, onlyForYou: false, fresh: false, tip, removedSeconds: c.tag === "Cut" ? c.length : undefined,
         ...(c.state === "approved" && !pass!.deciding && pass!.unkeepCall && {
           unkeep: () => { actions.lightMark(); pass!.unkeepCall!(c.index); },
           unkeepTip: "Move back to For you",
@@ -509,18 +518,21 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
       const forYou = isForYouRejected(e);
       if (!tabbed && !listed) return [];
       const key = editKey(e);
+      const editChange = rail ? changeForEdit(thread, e.changeId) : undefined;
+      const tip = rail ? editRowTooltip(e, { change: editChange, timeline, media, fps }) : undefined;
       return [{ key, id: editKey(e.previous[0] ?? e), was: e.previous.map(editKey), at: e.range.start, displayAt: e.range.start, mark: undefined,
         hover: { threadId: thread.id, editKey: key },
         label: e.label, n: 0, num: undefined, state: "Rejected", decision: "Rejected",
         value: "Rejected", word: undefined, revised: false, rejected: true, skipped: false,
         forYou, onlyForYou: false, busy: false, pending: false, needs: false, asks: false, sentBack: false, decided: false, version: 0,
         title: undefined, on: !!showing && (matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing)),
-        open: () => actions.openEdit(thread, e), fresh: false }];
+        open: () => actions.openEdit(thread, e), fresh: false, tip }];
     }),
     // Calls decided before the pass applied that produced no applied edit (skipped cuts, or approved keep proposals).
     // A rejected one opens as a rejected edit's row does: lit, on the timeline where it was, with its note and Rejected.
     ...decidedCallRows.map((c): PassRow => {
       const ref = rejectedCallRef(c.changeId, c.index);
+      const tip = rail ? decidedCallRowTooltip(c) : undefined;
       return { key: c.key, id: c.key, at: c.at, displayAt: c.at, mark: undefined,
         hover: undefined,
         label: c.label, n: 0, num: undefined,
@@ -528,7 +540,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
         value: c.approved ? "Kept" : "Rejected", word: undefined,
         revised: false, rejected: !c.approved, skipped: false, forYou: true, onlyForYou: true, busy: false, pending: false, needs: false, asks: false, sentBack: false,
         decided: c.approved, version: 0, title: undefined, on: !c.approved && !!showing && matchesEdit(showing, ref),
-        open: c.approved ? undefined : () => actions.openEdit(thread, ref), fresh: false };
+        open: c.approved ? undefined : () => actions.openEdit(thread, ref), fresh: false, tip };
     }),
   ].sort((a, b) => a.at - b.at);
   // The pass's calls and the edits that ask for a look: while any of them is listed the pass has something to say.
@@ -561,6 +573,8 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     const more = others.length === 1 ? `+ ${(others[0]!.beforeCut ? "cut" : editKindWord(others[0] as ThreadEdit)?.toLowerCase()) ?? "1 edit"}` : `+ ${others.length} edits`;
     const allDecided = members.every(m => m.decided);
     const unkeepMembers = allDecided ? moment.edits.filter(e => !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(editKey(e)))) : [];
+    const momentRange = { start: Math.min(...moment.edits.map(e => e.range.start)), end: Math.max(...moment.edits.map(e => e.range.end)) };
+    const momentTip = rail ? momentRowTooltip(main.label, members.map(m => ({ label: m.label, value: m.value, kind: m.tip?.meta })), momentRange, sent?.word ?? (allDecided ? main.decision ?? "Kept" : undefined)) : undefined;
     entries.push({ key: main.key, row: { ...main, displayAt: Math.min(...members.map(m => m.displayAt)), on: main.on && !actions.showingSingle,
       decided: allDecided, decision: allDecided ? main.decision ?? "Kept" : undefined, word: sent?.word ?? main.word, asks: !!sent?.asks, busy: !sent?.asks && members.some(m => m.busy),
       revised: !sent && members.some(m => m.revised), pending: members.some(m => m.pending),
@@ -570,7 +584,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
         recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepMembers, name: main.label });
       } : undefined,
       unkeepTip: unkeepMembers.length > 0 ? (tabbed ? "Move back to For you" : "Unkeep") : undefined,
-      was: members.flatMap(m => m.was ?? []), title: members.map(m => m.label).join("\n") }, members, more, moment: moment.key,
+      was: members.flatMap(m => m.was ?? []), title: members.map(m => m.label).join("\n"), tip: momentTip }, members, more, moment: moment.key,
       unfolded: unfolded.has(moment.key) || members.some(m => m.on),
       place: members.some(m => asks.has(m.key)) ? "you" : rowPlace(members, { waits: m => m.needs || m.asks, sent: m => m.pending, kept: m => m.decided }),
       at: Math.min(...members.map(m => m.at)) });
@@ -589,13 +603,13 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const youLabel = pass && calls.length ? "Calls that need you" : "Edits that need you";
   const drawn: Drawn[] = rail ? [
       { id: "you", label: youLabel, rows: inListOrder(inPlace("you"), order) },
-      { id: "optional", label: "Low risk edits", rows: inListOrder(optional, order) },
+      { id: "optional", label: "Safe edits", rows: inListOrder(optional, order) },
       { id: "working", label: "With Scarlet", rows: inListOrder(inPlace("working"), order) },
       { id: "done", label: "Decided", rows: inListOrder(inPlace("done"), order) },
     ] : !tabbed ? (listed ? [{ id: "all", label: "Every edit", rows: entries }] : [])
     : tab === "you" ? [
       { id: "you", label: pass && calls.length ? "Calls that need you" : "Edits that need you", rows: inListOrder([...inPlace("you"), ...heldFrom("you")], order) },
-      ...(optionalOpen ? [{ id: "optional" as const, label: "Low risk edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
+      ...(optionalOpen ? [{ id: "optional" as const, label: "Safe edits", rows: inListOrder([...optional, ...heldFrom("optional")], order) }] : []),
     ] : [{ id: tab, label: tab === "working" ? "With Scarlet" : "Decided",
       rows: inListOrder(tab === "done" ? [...inPlace("done"), ...heldFrom("done")] : inPlace(tab), order) }];
   for (const list of drawn) if (list.id === "you") for (const { row } of list.rows) if (row.forYou) listedNeed.current.add(row.key);
@@ -669,10 +683,11 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     const rowNests = under(entry);
     const countsAsNeed = isCall ? (row.needs || row.asks) : (row.needs || (row.forYou && row.asks));
     const hasNeedNest = rowNests.some(n => !!n.needs);
-    const tipText = momentKey && row.title ? row.title : row.label;
-    const tipDetail = !momentKey && row.title && row.title !== row.label ? row.title : undefined;
+    const tipText = row.tip?.tip ?? (momentKey && row.title ? row.title : row.label);
+    const tipMeta = row.tip?.meta;
+    const tipDetail = row.tip ? row.tip.detail : (!momentKey && row.title && row.title !== row.label ? row.title : undefined);
     const subRows: RailSubRow[] | undefined = more && momentKey && entryMembers ? entryMembers.map(m => ({
-      key: m.key, label: m.label, title: m.title, value: m.value, word: m.word, decided: m.decided, needs: m.needs,
+      key: m.key, label: m.label, title: m.title, tipMeta: m.tip?.meta, tipDetail: m.tip?.detail, value: m.value, word: m.word, decided: m.decided, needs: m.needs,
       asks: m.asks, busy: m.busy, revised: m.revised, version: m.version, spent: spent.get(m.key), on: m.on,
       mark: m.mark, hover: m.hover, open: m.open, unkeep: m.unkeep, unkeepTip: m.unkeepTip,
       nests: nests.filter(nest => nest.key === m.key && m.key !== row.key),
@@ -714,7 +729,9 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
       fresh: row.fresh,
       spent: spent.get(row.key),
       tipText,
+      tipMeta,
       tipDetail,
+      removedSeconds: row.removedSeconds,
       logControl: "open-pass-item",
       logLabel: momentKey ? "Moment" : "Pass item",
       open: row.open,
@@ -886,6 +903,8 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const [host, reveal] = useReveal(open);
   const rail = useReviewRail();
   const { timeline } = useShownCut();
+  const media = useProjectStore(s => rail ? s.current?.media : undefined);
+  const fps = useProjectStore(s => rail ? s.current?.project.settings.fps : undefined);
   const threadChanges = useMemo(() => [...thread.changes, ...thread.flagged ?? []], [thread.changes, thread.flagged]);
   const clipsBySpot = useMemo(() => rail ? editClipIdsBySpot(threadChanges, edits, timeline) : new Map<string, SpotClips>(), [rail, threadChanges, edits, timeline]);
   const gone = rejected ?? noRejected;
@@ -1018,7 +1037,6 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
     <ThreadEdits key={listKey} projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
       leaving={only && leaveFrom ? isLeaving(leaveFrom) : undefined}
       nextQueuedId={actions.nextQueuedId}
-      hideGenericKind={!!rail}
       inRail={!!rail}
       askingKey={askingRowKey}
       onPlay={ref => actions.openEdit(thread, ref)}
@@ -1050,9 +1068,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       const countsAsNeed = rowEdits.some(e => asksEditor(revising(e)) || (!!e.check && !reviewed(e) && !revising(e)));
       const at = Math.min(...rowEdits.map(e => (e as ThreadEdit).at ?? e.range.start));
       const displayAt = (!reviewed(shown) && !isRevising ? shown.reviewRange?.start : undefined) ?? ((shown as ThreadEdit).at ?? shown.range.start);
-      const rawKind = editRowWord(shown);
-      const kindWord = rawKind === "Edit" ? undefined : rawKind;
-      const value = rowTabPlace === "done" ? decision : (editRemovedLabel(shown) ?? kindWord);
+      const value = rowTabPlace === "done" ? decision : editRowWord(shown);
       const label = (shown.reason && shown.summary) || shown.label;
       const checkTitle = revised || shown.reason ? undefined : shown.check;
       const version = rowEdits.length === 1 && shown.previous.length ? shown.previous.length + 1 : 0;
@@ -1076,6 +1092,17 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         edit: e,
         canUnkeep: !e.marker && canUnkeep(e),
       }));
+      const shownChange = changeForEdit(thread, shown.changeId);
+      const removed = !!shown.beforeCut || shown.kind === "cut" ? cutRemovedSeconds(shown, shownChange) : undefined;
+      const rowTip = editRowTooltip(shown, {
+        change: shownChange,
+        timeline,
+        media,
+        fps,
+        places: rowEdits.length,
+        version,
+        status: word ?? decision,
+      });
       return {
         key,
         threadId: thread.id,
@@ -1110,8 +1137,10 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         on,
         version,
         spent: spentText,
-        tipText: label,
-        tipDetail: checkTitle,
+        tipText: rowTip.tip,
+        tipMeta: rowTip.meta,
+        tipDetail: rowTip.detail ?? checkTitle,
+        removedSeconds: removed,
         logControl: "open-edit",
         logLabel: "Edit",
         open: () => actions.openEdit(thread, shown),
@@ -1125,6 +1154,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       const key = editKey(e);
       const rowNests = nests.filter(n => n.key === key);
       const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing));
+      const goneTip = editRowTooltip(e, { change: changeForEdit(thread, e.changeId), timeline, media, fps });
       return {
         key,
         threadId: thread.id,
@@ -1153,7 +1183,9 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         hasNeedNest: rowNests.some(n => !!n.needs),
         on,
         version: 0,
-        tipText: e.label,
+        tipText: goneTip.tip,
+        tipMeta: goneTip.meta,
+        tipDetail: goneTip.detail,
         logControl: "open-edit",
         logLabel: "Rejected edit",
         open: () => actions.openEdit(thread, e),
@@ -1196,7 +1228,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       {some(inYou) ? rows("Edits that need you", inYou, "you", "you") : optional === 0 && <p className="simple-review-empty">{EMPTY_TAB.you}</p>}
       {/* Under For you's rows, the edits Scarlet didn't flag are one line, closed until pressed. */}
       {optional > 0 && <OptionalLine count={optional} open={optionalOpen} onToggle={() => { if (!optionalOpen) reveal(); setOpen(optionalOpen ? undefined : "all"); }} />}
-      {optionalOpen && some(inOptional) && rows("Low risk edits", inOptional, "optional", "optional")}
+      {optionalOpen && some(inOptional) && rows("Safe edits", inOptional, "optional", "optional")}
     </>}
     {tabbed && tab === "working" && (countOf("working") > 0 ? rows("With Scarlet", e => place(e) === "working", undefined, "working")
       : <p className="simple-review-empty">{EMPTY_TAB.working}</p>)}

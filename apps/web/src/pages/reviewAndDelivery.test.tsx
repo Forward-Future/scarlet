@@ -1259,7 +1259,7 @@ it("labels a saved file from an earlier edit and still exports the current video
   vi.spyOn(desktop, "discardVideoExport").mockResolvedValue();
   vi.spyOn(desktop, "finishVideoExport").mockResolvedValue("/chosen/cut.mp4");
   const reveal = vi.spyOn(desktop, "revealPath").mockResolvedValue();
-  const earlierEdit = () => container.querySelector('[role="status"]')?.textContent?.includes("Earlier edit");
+  const earlierEdit = () => container.querySelector('[role="status"]')?.textContent?.includes("Earlier version");
   const request = vi.spyOn(api, "requestRender").mockImplementation(async (_id, body) => ({ render: {
     ...data.renders[0]!, id: "final", version: body.version!, kind: "full", quality: "delivery", range: null, state: "done" } }));
   await show(<ExportSheet hasCut onClose={() => {}} />);
@@ -1346,7 +1346,7 @@ it("offers a folder for another app under For Resolve, Final Cut or Premiere, sa
   // The video's own settings go; the folder's contents come instead.
   expect(container.querySelector("#export-range")).toBeNull();
   expect(container.querySelector("details")).toBeNull();
-  expect(container.textContent).toContain("A folder for finishing the edit in DaVinci Resolve, Final Cut Pro or Premiere Pro.");
+  expect(container.textContent).toContain("A folder for finishing the video in DaVinci Resolve, Final Cut Pro or Premiere Pro.");
   expect(container.textContent).toContain("A copy of the footage");
   expect(buttonByText("Back")).toBeTruthy();
   await click(exportButton()!);

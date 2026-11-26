@@ -228,7 +228,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
     ?? (pendingPass ? runs.find(run => !aboutOne(run) && run.attempts.some(t => t.id === waitingPass?.taskId)) ?? runs.find(run => !aboutOne(run)) : undefined)
     ?? runs[0];
   // A rejected edit keeps its row, also when it was the request's only edit: nothing else says it was rejected (2026-11-23).
-  const hasRows = listed.length > 0 || rejected.length > 0 || (summed && (actions.pass?.threadId === thread.id || hasDecidedCalls));
+  const hasRows = listed.length > 0 || rejected.length > 0 || (summed && (actions.pass?.threadId === thread.id || (listLoaded && hasDecidedCalls)));
   // With no line for the pass (it was thrown away), its list is closed: a pass staged again starts folded. A pass that
   // went in leaves the thread's edits, and the list of those still waiting on the editor stays open: their place in
   // the chat must not go with the calls (2026-11-16).
@@ -258,7 +258,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
         return <div key={i} className="simple-msg from-scarlet"><span className="simple-who">Scarlet</span><Said text={entry.fullText ?? entry.text} /></div>;
       case "change":
         // An applied change with no request behind it says what it did once: in the sentence over its edits.
-        if (entry.change.state === "approved" && hasRows) return null;
+        if (entry.change.state === "approved" && (hasRows || !listLoaded)) return null;
         return <ChangeReply key={i} thread={thread} entry={entry} actions={actions} />;
       case "system":
         return <div key={i} className={`simple-note${entry.tone === "bad" ? " is-bad" : ""}`}>{entry.text}</div>;
@@ -309,7 +309,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
     if (run === owner || !aboutOne(run) || pinned === run.root) return false;
     if (run.task.state === "cancelled" || run.task.state === "failed") return overtaken(run);
     // One paused for its transcripts ended as done, and stopped early all the same: it stays, with its way to finish.
-    if (run.task.state !== "done" || !!runEnded(run.task) || !targets.get(run.root)) return false;
+    if (run.task.state !== "done" || !!runEnded(run.task) || (listLoaded && !targets.get(run.root))) return false;
     const final = finalOf(run);
     // Done with no change and not a word from Scarlet: there is nothing for it to say by staying. That an attempt
     // stopped and was picked up again is no word of Scarlet's: of those lines only the last attempt's own reason reads.
@@ -601,7 +601,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
     if (closingReply(item) && runOf.has(item.replyTo!)) return [];
     // An applied edit no request made is said once, by the sentence that lists it below, with its link (2026-11-14:
     // "Put the camera in the bottom-right corner" read twice).
-    if (!owner && hasRows && item.kind === "change" && item.change.state === "approved") return [];
+    if (!owner && (hasRows || !listLoaded) && item.kind === "change" && item.change.state === "approved") return [];
     // What a queued request says is in the tray.
     return item.taskId || (under && actions.collapsed?.has(under.root)) ? [] : [loose(item, i)];
   });

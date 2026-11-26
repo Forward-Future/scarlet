@@ -360,7 +360,7 @@ It does in only these cases:
 
 Anything else is not a rule, so call nothing: a note about this video, this moment or this cut that hasn’t come up before, however general it could be made; a rule the skill or a rule listed below already says, in any wording; a rule the editor declined, in any wording; and a rule that only tells the agent to do its work well (check, play back, adjust as needed) without saying what the editor wants.
 
-When it is a rule, read the skill it belongs in, in full, with \`skills_list\`, then offer it with \`learning_suggest\`: once, or once for each separate rule. The editor reviews what you offer beside what the skill says that it would change, and nothing changes in a skill unless they approve it.
+When it is a rule, read the skill it belongs in, in full, with \`skills_list\`, then offer it with \`learning_suggest\`. Offer at most one rule for a request — or two only when it states two truly separate rules — and combine closely related preferences for the same skill into one concise sentence instead of splitting them into several offers. Never offer a rule from decisions that are already behind a rule listed below. The editor reviews what you offer beside what the skill says that it would change, and nothing changes in a skill unless they approve it.
 
 A rule is for every video the skill edits, so write the principle behind what they said or decided, not its instances: no words, names, times or moments from this video or the requests, and a number they gave or that their decisions show stays a guide, not a fixed amount. If it can't be put that way, it isn't a rule.
 

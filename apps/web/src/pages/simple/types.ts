@@ -1,6 +1,6 @@
 import type { Dispatch, MouseEvent, ReactNode, SetStateAction } from "react";
 import type { Change, CutAssessment, TimeRange, Timeline } from "@scarlet/timeline";
-import type { EditRef, Task, ThreadEdit } from "@scarlet/shared";
+import { cutText, type EditRef, type Task, type ThreadEdit } from "@scarlet/shared";
 import { clock as clockLabel, clockRange } from "../../lib/format";
 import { blurOnPointerClick } from "../../lib/hotkeys";
 import type { JoinClock } from "../../lib/joinClock";
@@ -50,6 +50,10 @@ interface PassCall {
   /** Where its cut is on the working cut. None while it isn't there as it was staged, so nothing on the timeline is its. */
   at?: number;
   summary: string;
+  /** Full reason from the cut assessment, shown as a quiet hover note when distinct from `summary`. */
+  reason?: string;
+  /** Duration of the staged cut/keep stretch in seconds, for the hover summary. */
+  length?: number;
   state: CallState;
   version: number;
   /** The word its row ends on while it waits: how much its cut takes out, or Check when Scarlet proposes keeping the footage. */
@@ -231,7 +235,7 @@ export function changeForEdit(changes: readonly Change[], edit: ThreadEdit | und
 /** A request's words, short enough to lead a hover note: its first line, up to 32 characters. */
 export const shortTitle = (title: string) => {
   const line = title.split("\n")[0]!.trim();
-  return line.length > 32 ? `${line.slice(0, 31).trimEnd()}…` : line;
+  return line.length > 32 ? `${cutText(line, 31).trimEnd()}…` : line;
 };
 
 /** Scarlet is on a request now, as against one waiting its turn or for an answer. */
