@@ -670,6 +670,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
     const { row, members: entryMembers, more, moment: momentKey, unfolded: momentOpen, place } = entry;
     const isCall = row.n > 0;
     const singleEdit = !isCall && !row.rejected && !row.onlyForYou && !momentKey ? editByKey.get(row.key) : undefined;
+    const singleChange = singleEdit ? changeForEdit(thread, singleEdit.changeId) : undefined;
     const momentEdits = momentKey ? moments.find(m => m.key === momentKey)?.edits : undefined;
     const rowEdits = momentEdits ?? (singleEdit ? [singleEdit] : []);
     const railMembers: RailEditMember[] = rowEdits.map(e => ({
@@ -723,6 +724,12 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
       countsAsNeed,
       hasNeedNest,
       isCall,
+      isDialoguePass: true,
+      batchTitle: singleChange?.batchTitle?.trim() || undefined,
+      batchContext: singleChange?.description?.trim() || undefined,
+      requestText: thread.title?.trim() || undefined,
+      reason: singleEdit?.reason?.trim() || undefined,
+      threadWorking: !!working,
       isMarker: !!singleEdit?.marker,
       on: row.on,
       version: row.version,
@@ -1114,6 +1121,11 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         place: rowTabPlace,
         label,
         rawLabel: shown.label,
+        batchTitle: shownChange?.batchTitle?.trim() || undefined,
+        batchContext: shownChange?.description?.trim() || undefined,
+        requestText: thread.title?.trim() || undefined,
+        reason: shown.reason?.trim() || undefined,
+        threadWorking: !!working,
         editKind: shown.kind,
         stretch,
         clipIds: allClipIds.size ? [...allClipIds] : undefined,

@@ -15,7 +15,7 @@ import type { AudioTrackSelection, Author, Change, CutAssessment, CutReview, Med
 import type { ActivityEntry, ExpandMediaPathsResponse, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
 import type { AgentHost, RunChoice } from "./agents.js";
 import type { CompleteTaskRequest, CreateTaskRequest, PictureMarks, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
-import type { KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
+import type { BatchSummariesRequest, BatchSummariesResponse, KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
 import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLearningRequest } from "./learnings.js";
 import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
 import type { GraphicRenderResponse, SaveStyleGuideRequest } from "./graphics.js";
@@ -119,6 +119,17 @@ export class ScarletClient extends ClientTransport {
   }
   recordEditReview(projectId: string, body: EditReviewRequest) {
     return this.post<void>(`/projects/${projectId}/edit-reviews`, body);
+  }
+  /** Ask the engine for AI-generated short titles for collapsed edit batches. Gracefully returns empty on older engines. */
+  async summarizeBatches(projectId: string, body: BatchSummariesRequest): Promise<BatchSummariesResponse> {
+    try {
+      return await this.post<BatchSummariesResponse>(`/projects/${apiPathId(projectId)}/batch-summaries`, body);
+    } catch (error) {
+      if (isMissingRouteError(error, message => message.startsWith("no route for POST ") && message.endsWith("/batch-summaries"))) {
+        return { summaries: {}, pending: [] };
+      }
+      throw error;
+    }
   }
   setThreadDone(projectId: string, threadId: string, done: boolean, revision: string) {
     return this.post<{ completedThreads: Record<string, string>; project?: Project }>(`/projects/${projectId}/threads/${encodeURIComponent(threadId)}/disposition`, { done, revision });

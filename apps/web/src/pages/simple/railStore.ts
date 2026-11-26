@@ -1,5 +1,5 @@
-import { matchesEdit, type EditKind, type EditRef, type ThreadEdit } from "@scarlet/shared";
-import type { TimeRange } from "@scarlet/timeline";
+import { matchesEdit, type BatchSummaryItem, type EditKind, type EditRef, type ThreadEdit } from "@scarlet/shared";
+import { cutKindOfRow, cutSummary, type TimeRange } from "@scarlet/timeline";
 import { createContext, useContext, useSyncExternalStore } from "react";
 import { editKey } from "../../lib/editMoments";
 import { removedSeconds as formatRemovedSeconds } from "../../lib/format";
@@ -90,6 +90,18 @@ export interface RailRow {
   /** Whether a nested request under this row waits on the editor (stopped early or asking). */
   hasNeedNest: boolean;
   isCall?: boolean;
+  /** True when this row belongs to a dialogue pass (used to name cut batches "N Dialogue Cuts"). */
+  isDialoguePass?: boolean;
+  /** AI-authored group title saved directly on the Change by the editing agent. */
+  batchTitle?: string;
+  /** Shared change description for expanding or AI-summarizing batched edit names. */
+  batchContext?: string;
+  /** What the editor asked in this row's request thread (used as context for AI batch summaries). */
+  requestText?: string;
+  /** Short editorial reason for this edit (used as context for AI batch summaries). */
+  reason?: string;
+  /** True while this row's request is still actively running (delays AI batch summarization until settled). */
+  threadWorking?: boolean;
   isMarker?: boolean;
   on: boolean;
   version: number;
@@ -137,6 +149,10 @@ export interface UnifiedRailRow extends RailRow {
   rows: readonly RailRow[];
   /** When several same-request safe or kept edits of the same kind collapse into one row, the individual unified rows in timeline order (length >= 2). */
   batch?: readonly UnifiedRailRow[];
+  /** Deterministic cache key for an AI-generated summary of this collapsed batch. */
+  batchSummaryKey?: string;
+  /** Structured input for requesting an AI summary of this collapsed batch when one isn't cached yet. */
+  batchSummaryInput?: BatchSummaryItem;
 }
 
 export interface RailView {
@@ -311,6 +327,12 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
     skipped: false,
     countsAsNeed: group.some(r => r.countsAsNeed),
     hasNeedNest: group.some(r => r.hasNeedNest),
+    isDialoguePass: lead.isDialoguePass || group.some(r => r.isDialoguePass),
+    batchTitle: lead.batchTitle ?? [...group].reverse().find(r => r.batchTitle)?.batchTitle,
+    batchContext: lead.batchContext ?? [...group].reverse().find(r => r.batchContext)?.batchContext,
+    requestText: lead.requestText ?? [...group].reverse().find(r => r.requestText)?.requestText,
+    reason: lead.reason ?? [...group].reverse().find(r => r.reason)?.reason,
+    threadWorking: group.some(r => r.threadWorking),
     on: group.some(r => r.on),
     version: Math.max(...group.map(r => r.version)),
     fresh: group.some(r => r.fresh),
@@ -338,27 +360,102 @@ const byNewestRequestThenTime = (a: UnifiedRailRow, b: UnifiedRailRow) =>
   || a.sourceOrder - b.sourceOrder
   || a.key.localeCompare(b.key);
 
-const KIND_PLURAL: Partial<Record<EditKind, string>> = {
-  cut: "cuts",
-  restore: "restores",
-  insert: "inserts",
-  audio: "audio edits",
-  dip: "music dips",
-  voice: "voice cleanups",
-  zoom: "zooms",
-  reframe: "reframes",
-  text: "text edits",
-  broll: "B-roll edits",
-  overlay: "overlays",
-  graphic: "graphics",
-  speed: "speed edits",
-  transition: "transitions",
-  split: "split edits",
+const BATCH_TITLE_PLURAL: Partial<Record<EditKind, string>> = {
+  cut: "Cuts",
+  restore: "Passages Put Back",
+  insert: "Inserts",
+  audio: "Audio Edits",
+  dip: "Music Dips",
+  voice: "Voice Cleanups",
+  zoom: "Zooms",
+  reframe: "Reframes",
+  text: "Text Edits",
+  broll: "B-roll Shots",
+  overlay: "Overlays",
+  graphic: "Graphics",
+  speed: "Speed Changes",
+  transition: "Transitions",
+  split: "Split Edits",
 };
+
+const DIALOGUE_KIND_PLURAL: Record<NonNullable<ReturnType<typeof cutKindOfRow>>, [title: string, words: string]> = {
+  pause: ["Pause Cuts", "pauses"],
+  filler: ["Filler Word Cuts", "filler words"],
+  retake: ["False Start Cuts", "false starts"],
+  coaching: ["Crew Note Cuts", "crew notes"],
+};
+
+const KIND_GENERIC_WORDS: Partial<Record<EditKind, readonly string[]>> = {
+  cut: ["cut", "cuts"],
+  restore: ["put back", "restore", "passage put back", "passages put back"],
+  insert: ["insert", "inserts"],
+  audio: ["audio", "audio edit", "audio edits", "sound", "sound fix", "sound fixes"],
+  dip: ["music dip", "music dips", "dip", "dips"],
+  voice: ["voice cleanup", "voice cleanups", "voice"],
+  zoom: ["zoom", "zooms"],
+  reframe: ["reframe", "reframes"],
+  text: ["text", "text edit", "text edits"],
+  broll: ["b-roll", "b-roll shot", "b-roll shots", "broll"],
+  overlay: ["overlay", "overlays"],
+  graphic: ["graphic", "graphics"],
+  speed: ["speed", "speed change", "speed changes"],
+  transition: ["transition", "transitions"],
+  split: ["split", "split edit", "split edits"],
+};
+
+const GENERIC_BATCH_ITEM_LABELS = new Set(["cut", "cuts", "edit", "edits"]);
+const GENERIC_TIMED_LABEL = /^(?:cut|edit)\s+at\s+[\d:.]+$/i;
+const QUOTE_START = /^[“"‘']/;
+const MAX_INLINE_BATCH_ITEMS = 3;
 
 function rowIsCut(row: UnifiedRailRow): boolean {
   return !!row.editRef?.beforeCut || row.editKind === "cut"
     || row.rows.some(r => !!r.editRef?.beforeCut || r.editKind === "cut");
+}
+
+function isGenericForKind(text: string, kind?: EditKind): boolean {
+  const cleaned = text.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.!?]+$/, "");
+  if (!cleaned || GENERIC_BATCH_ITEM_LABELS.has(cleaned) || GENERIC_TIMED_LABEL.test(cleaned)) return true;
+  const words = kind ? KIND_GENERIC_WORDS[kind] : undefined;
+  return !!words && words.includes(cleaned);
+}
+
+function cleanBatchItemName(row: UnifiedRailRow, isCutBatch: boolean, kind?: EditKind): string | undefined {
+  const raw = row.rawLabel?.trim();
+  const preferred = raw && !isGenericForKind(raw, kind) ? raw : row.label.trim();
+  let cleaned = preferred.replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
+  if (!cleaned || isGenericForKind(cleaned, kind)) return undefined;
+  if (isCutBatch) {
+    const stripped = cleaned.replace(/^cut(?:\s+out)?\s+(?:a\s+|an\s+)?/i, "").trim();
+    if (stripped) cleaned = stripped;
+  }
+  return isGenericForKind(cleaned, kind) ? undefined : cleaned;
+}
+
+function sharedRawBatchContext(ordered: readonly UnifiedRailRow[]): string | undefined {
+  const contexts = ordered.map(r => r.batchContext?.trim()).filter((v): v is string => !!v);
+  if (!contexts.length) return undefined;
+  return new Set(contexts).size === 1 ? contexts[0] : undefined;
+}
+
+function cleanBatchContext(raw: string, count: number, isCutBatch: boolean, kind?: EditKind): string | undefined {
+  const sentence = cutSummary(raw).split(/(?<=[.!?])\s/u, 1)[0]!.replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
+  if (!sentence) return undefined;
+  let text = sentence;
+  if (isCutBatch) text = text.replace(/^(?:cut(?:\s+out)?|remove(?:d)?)\s+/i, "").trim();
+  const leadingCount = new RegExp(`^${count}\\s+(?!(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|f|frame|frames|%)\\b)`, "i");
+  text = text.replace(leadingCount, "").trim();
+  if (!text || isGenericForKind(text, kind) || /^(?:made|added|applied)\s+\d+\s+/i.test(text)) return undefined;
+  return text;
+}
+
+function batchTotalRemoved(ordered: readonly UnifiedRailRow[], isCutBatch: boolean): number {
+  if (!isCutBatch) return 0;
+  return ordered.reduce((sum, item) => {
+    if (item.removedSeconds !== undefined && item.removedSeconds > 0) return sum + item.removedSeconds;
+    const bc = item.editRef?.beforeCut;
+    return sum + (bc ? Math.max(0, bc.removed.end - bc.removed.start) : 0);
+  }, 0);
 }
 
 function batchableRow(row: UnifiedRailRow, section: "low" | "done"): boolean {
@@ -377,16 +474,156 @@ function batchBucket(row: UnifiedRailRow): string {
   return changeId ? `${threadKey}:change:${changeId}` : `${threadKey}:key:${row.key}`;
 }
 
-function batchPluralWord(row: UnifiedRailRow): string {
-  if (rowIsCut(row)) return "cuts";
-  return (row.editKind && KIND_PLURAL[row.editKind]) ?? "edits";
+/** Short count + kind heading for a collapsed batch (e.g. "110 Dialogue Cuts", "3 Graphics", "2 Cuts"). */
+export function batchBaseName(items: readonly UnifiedRailRow[]): string {
+  const first = items[0]!;
+  const count = items.length;
+  if (rowIsCut(first)) {
+    if (items.some(r => r.isDialoguePass)) {
+      const kinds = items.map(r => cutKindOfRow(r.label));
+      if (kinds.every(Boolean) && new Set(kinds).size === 1) {
+        return `${count} ${DIALOGUE_KIND_PLURAL[kinds[0]!]![0]}`;
+      }
+      return `${count} Dialogue Cuts`;
+    }
+    return `${count} Cuts`;
+  }
+  const noun = (first.editKind && BATCH_TITLE_PLURAL[first.editKind]) ?? "Edits";
+  return `${count} ${noun}`;
 }
 
 /**
- * Collapse repeated safe or kept edits of the same kind within a request into one regular row with a `+N` count,
- * keeping flagged, revising, rejected, marker, and revised (`v2`) edits as individual rows.
+ * Expanded human-readable group name for a collapsed batch, combining its count and kind with what is inside
+ * (e.g. "110 Dialogue Cuts · −4:12", "2 Cuts: music bed, wrap", "3 Graphics: Opus title, Fable title, Haiku title").
  */
-function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" | "done"): UnifiedRailRow[] {
+export function batchLabel(items: readonly UnifiedRailRow[], totalRemoved?: number): string {
+  const first = items[0]!;
+  const isCutBatch = rowIsCut(first);
+  const kind: EditKind | undefined = isCutBatch ? "cut" : first.editKind;
+  const base = batchBaseName(items);
+  const removed = totalRemoved ?? batchTotalRemoved(items, isCutBatch);
+
+  // Dialogue passes avoid leaking one random speech quote into the batch name; show cut length or cut kinds instead.
+  if (isCutBatch && items.some(r => r.isDialoguePass)) {
+    if (removed > 0) return `${base} · ${formatRemovedSeconds(removed)}`;
+    const kinds = items.map(r => cutKindOfRow(r.label));
+    if (kinds.every(Boolean)) {
+      const distinctKinds = [...new Set(kinds as NonNullable<ReturnType<typeof cutKindOfRow>>[])];
+      if (distinctKinds.length > 1) return `${base}: ${distinctKinds.map(k => DIALOGUE_KIND_PLURAL[k][1]).join(", ")}`;
+    }
+    return base;
+  }
+
+  // Prefer concise names from the edits actually inside this batch.
+  const distinctItems: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const name = cleanBatchItemName(item, isCutBatch, kind);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    distinctItems.push(name);
+  }
+  const quoteFlood = isCutBatch && items.length >= 4 && distinctItems.length > 0 && distinctItems.every(s => QUOTE_START.test(s));
+  if (distinctItems.length > 0 && !quoteFlood) {
+    const preview = distinctItems.length <= MAX_INLINE_BATCH_ITEMS
+      ? distinctItems.join(", ")
+      : `${distinctItems.slice(0, MAX_INLINE_BATCH_ITEMS).join(", ")}…`;
+    return `${base}: ${preview}`;
+  }
+
+  // When individual items only have generic names ("Cut", "Edit") or are a large quote list, fall back to the shared change summary.
+  const rawContext = sharedRawBatchContext(items);
+  const context = rawContext ? cleanBatchContext(rawContext, items.length, isCutBatch, kind) : undefined;
+  if (context) return `${base}: ${context}`;
+
+  if (isCutBatch && removed > 0) return `${base} · ${formatRemovedSeconds(removed)}`;
+  return base;
+}
+
+/** Quiet preview lines under a batch's hover tooltip showing what edits are inside it. */
+function batchTooltipDetail(ordered: readonly UnifiedRailRow[]): string | undefined {
+  const labels = ordered.map(r => r.label.trim()).filter(Boolean);
+  if (!labels.length) return undefined;
+  const distinct = [...new Set(labels)];
+  if (distinct.length === 1) return GENERIC_BATCH_ITEM_LABELS.has(distinct[0]!.toLowerCase()) ? undefined : distinct[0];
+  if (labels.length <= 3) return labels.join("\n");
+  return `${labels[0]}\n${labels[1]}\nand ${labels.length - 2} more`;
+}
+
+const MAX_SUMMARY_SAMPLES = 15;
+
+function hashBatchKey(payload: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b1;
+  for (let i = 0; i < payload.length; i++) {
+    const ch = payload.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ ch, 0x85ebca6b) >>> 0;
+  }
+  return `bs_${h1.toString(16).padStart(8, "0")}${h2.toString(16).padStart(8, "0")}`;
+}
+
+function sampleEvenly<T>(items: readonly T[], max: number): T[] {
+  if (items.length <= max) return [...items];
+  const out: T[] = [];
+  for (let i = 0; i < max; i++) {
+    const idx = Math.min(items.length - 1, Math.round((i * (items.length - 1)) / (max - 1)));
+    out.push(items[idx]!);
+  }
+  return out;
+}
+
+function buildBatchSummaryInput(ordered: readonly UnifiedRailRow[], isCutBatch: boolean, totalRemoved: number): BatchSummaryItem {
+  const first = ordered[0]!;
+  const isDialoguePass = isCutBatch && ordered.some(r => r.isDialoguePass);
+  const kind = isCutBatch ? "cut" : (first.editKind && first.editKind !== "other" ? first.editKind : undefined);
+  const request = ordered.find(r => r.requestText?.trim())?.requestText?.trim().slice(0, 400);
+  const descriptions = [...new Set(
+    ordered.map(r => r.batchContext?.trim()).filter((v): v is string => !!v).map(d => cutSummary(d).trim().slice(0, 300)).filter(Boolean),
+  )].slice(0, 6);
+  const breakdown: Record<string, number> = {};
+  for (const item of ordered) {
+    const dk = cutKindOfRow(item.label);
+    if (!dk) continue;
+    const word = DIALOGUE_KIND_PLURAL[dk][1];
+    breakdown[word] = (breakdown[word] ?? 0) + 1;
+  }
+  const samples = sampleEvenly(ordered, MAX_SUMMARY_SAMPLES).map(item => ({
+    label: (item.label || item.rawLabel || "").trim().slice(0, 200),
+    ...(item.reason?.trim() ? { reason: item.reason.trim().slice(0, 240) } : {}),
+  }));
+  const roundedRemoved = totalRemoved > 0 ? Math.round(totalRemoved * 10) / 10 : undefined;
+  const payload = {
+    ...(kind && { kind }),
+    ...(isDialoguePass && { isDialoguePass: true }),
+    count: ordered.length,
+    ...(roundedRemoved !== undefined && { removedSeconds: roundedRemoved }),
+    ...(request && { request }),
+    ...(descriptions.length && { descriptions }),
+    ...(Object.keys(breakdown).length && { breakdown }),
+    samples,
+  };
+  return { key: hashBatchKey(JSON.stringify(payload)), ...payload };
+}
+
+function sharedBatchTitle(ordered: readonly UnifiedRailRow[]): string | undefined {
+  const titles = ordered.map(r => r.batchTitle?.trim());
+  if (!titles.length || titles.some(t => !t)) return undefined;
+  return new Set(titles).size === 1 ? titles[0] : undefined;
+}
+
+/**
+ * Collapse repeated safe or kept edits of the same kind within a request into one grouped row named by its AI summary
+ * (from cached server summaries or `Change.batchTitle`), falling back to a concise count, kind, and context label
+ * while waiting or offline. Flagged, revising, rejected, marker, and revised (`v2`) edits stay individual.
+ */
+function collapseSectionBatches(
+  rows: readonly UnifiedRailRow[],
+  section: "low" | "done",
+  batchSummaries: Readonly<Record<string, string>> = {},
+): UnifiedRailRow[] {
   const byBucket = new Map<string, UnifiedRailRow[]>();
   const passthrough: UnifiedRailRow[] = [];
   for (const row of rows) {
@@ -418,22 +655,26 @@ function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" 
         members.push(m);
       }
     }
-    const pluralWord = batchPluralWord(first);
     const isCutBatch = rowIsCut(first);
-    const totalRemoved = isCutBatch
-      ? ordered.reduce((sum, item) => {
-        if (item.removedSeconds !== undefined && item.removedSeconds > 0) return sum + item.removedSeconds;
-        const bc = item.editRef?.beforeCut;
-        return sum + (bc ? Math.max(0, bc.removed.end - bc.removed.start) : 0);
-      }, 0)
-      : 0;
-    const countPart = section === "done" ? `${ordered.length} kept ${pluralWord}` : `${ordered.length} ${pluralWord}`;
-    const tipMeta = isCutBatch && totalRemoved > 0
-      ? `${countPart} · ${formatRemovedSeconds(totalRemoved)} removed`
-      : countPart;
+    const totalRemoved = batchTotalRemoved(ordered, isCutBatch);
+    const base = batchBaseName(ordered);
+    const summaryInput = buildBatchSummaryInput(ordered, isCutBatch, totalRemoved);
+    const aiTitle = batchSummaries[summaryInput.key]?.trim() || undefined;
+    const authoredTitle = sharedBatchTitle(ordered);
+    const label = aiTitle ?? authoredTitle ?? batchLabel(ordered, totalRemoved);
+    const metaParts: string[] = [];
+    if (isCutBatch && totalRemoved > 0) metaParts.push(`Cut · ${formatRemovedSeconds(totalRemoved)}`);
+    else if (aiTitle || authoredTitle) metaParts.push(base);
+    if (section === "done") metaParts.push("Kept");
+    const tipMeta = metaParts.length > 0 ? metaParts.join(" · ") : undefined;
+    const rawContext = sharedRawBatchContext(ordered);
+    const contextDetail = rawContext ? cutSummary(rawContext).trim() : undefined;
+    const tipDetail = batchTooltipDetail(ordered) ?? (contextDetail && contextDetail !== base ? contextDetail : undefined);
+    const needsAi = !aiTitle && !authoredTitle && !ordered.some(r => r.threadWorking);
     result.push({
       ...first,
       key: `batch:${section}:${bucket}`,
+      label,
       threadIds: [...new Set(ordered.flatMap(r => r.threadIds))],
       rows: ordered.flatMap(r => r.rows),
       members,
@@ -441,11 +682,13 @@ function collapseSectionBatches(rows: readonly UnifiedRailRow[], section: "low" 
       fresh: ordered.some(r => r.fresh),
       hadCheck: ordered.some(r => r.hadCheck),
       open: (active ?? first).open,
-      tipText: first.tipText ?? first.label,
+      tipText: aiTitle ?? authoredTitle ?? base,
       tipMeta,
-      tipDetail: undefined,
+      tipDetail,
       unkeepTip: section === "done" ? `Unkeep all ${ordered.length}` : first.unkeepTip,
       batch: ordered,
+      batchSummaryKey: summaryInput.key,
+      ...(needsAi && { batchSummaryInput: summaryInput }),
     });
   }
   return result.sort(section === "low" ? byNewestRequestThenTime : byVideoTime);
@@ -457,7 +700,10 @@ const rowEditCount = (row: UnifiedRailRow) => row.batch ? row.batch.length : 1;
  * Combine cross-request edits that modify the same clip/stretch and sort every section of the beta edits column into
  * one unified timeline-ordered list (never stacked by chat request).
  */
-export function buildUnifiedRail(infos: ReadonlyMap<string, RailInfo>): RailView {
+export function buildUnifiedRail(
+  infos: ReadonlyMap<string, RailInfo>,
+  batchSummaries: Readonly<Record<string, string>> = {},
+): RailView {
   const hasStructured = [...infos.values()].some(info => info.rows !== undefined);
   const sections: Record<RailSection, UnifiedRailRow[]> = { you: [], low: [], working: [], done: [] };
   const byKey = new Map<string, UnifiedRailRow>();
@@ -518,9 +764,9 @@ export function buildUnifiedRail(infos: ReadonlyMap<string, RailInfo>): RailView
   }
 
   sections.you.sort(byVideoTime);
-  sections.low = collapseSectionBatches(sections.low, "low");
+  sections.low = collapseSectionBatches(sections.low, "low", batchSummaries);
   sections.working.sort(byVideoTime);
-  sections.done = collapseSectionBatches(sections.done, "done");
+  sections.done = collapseSectionBatches(sections.done, "done", batchSummaries);
 
   const orderedSections: readonly UnifiedRailRow[][] = [sections.you, sections.low, sections.working, sections.done];
   for (const list of orderedSections) for (const row of list) byKey.set(row.key, row);
@@ -582,7 +828,7 @@ function rowSignature(row: RailRow): string {
     row.value ?? null, row.word ?? null, row.decision ?? null,
     row.needs, row.asks, row.isAskingCurrent, row.pending, row.busy, row.revised,
     row.decided, row.rejected, row.skipped, row.countsAsNeed, row.hasNeedNest,
-    !!row.isCall, !!row.isMarker, row.on, row.version, !!row.fresh,
+    !!row.isCall, !!row.isDialoguePass, row.batchTitle ?? null, row.batchContext ?? null, row.requestText ?? null, row.reason ?? null, !!row.threadWorking, !!row.isMarker, row.on, row.version, !!row.fresh,
     row.spent ?? null, row.tipText ?? null, row.tipMeta ?? null, row.tipDetail ?? null, row.removedSeconds ?? null, row.ariaLabel ?? null,
     row.logControl, row.logLabel, !!row.open, !!row.unkeepCall, row.unkeepTip ?? null, !!row.hadCheck,
     row.callIndex ?? null,
@@ -615,6 +861,7 @@ export class RailStore {
   private refs = new Map<string, (el: HTMLElement | null) => void>();
   private infos = new Map<string, RailInfo>();
   private signatures = new Map<string, string>();
+  private batchSummaries: Readonly<Record<string, string>> = {};
   private cachedView?: RailView;
   private listeners = new Set<() => void>();
   private version = 0;
@@ -660,8 +907,19 @@ export class RailStore {
 
   info(threadId: string) { return this.infos.get(threadId); }
 
+  /** Apply AI-generated titles for collapsed edit batches, notifying subscribers only when titles change. */
+  setBatchSummaries(next?: Readonly<Record<string, string>>) {
+    const incoming = next ?? {};
+    const prev = this.batchSummaries;
+    const prevKeys = Object.keys(prev);
+    const nextKeys = Object.keys(incoming);
+    if (prevKeys.length === nextKeys.length && nextKeys.every(k => prev[k] === incoming[k])) return;
+    this.batchSummaries = incoming;
+    this.changed();
+  }
+
   view(): RailView {
-    return (this.cachedView ??= buildUnifiedRail(this.infos));
+    return (this.cachedView ??= buildUnifiedRail(this.infos, this.batchSummaries));
   }
 
   total(section: Exclude<RailSection, "low"> | "optional") {

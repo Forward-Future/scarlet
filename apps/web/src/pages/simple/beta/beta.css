@@ -179,15 +179,9 @@
 [data-new-layout] .review-rail .simple-pass-list > li > button { align-items: center; }
 [data-new-layout] .review-rail :is(.simple-pass-time, .edit-row-time) { white-space: nowrap; }
 [data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) { display: flex; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
-[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) > :is(.simple-pass-tick, .edit-version, .simple-pass-more, .edit-batch-plus) { flex: none; }
-[data-new-layout] .edit-batch-plus {
-  display: inline-flex; align-items: center; height: 16px; margin-left: 6px; padding: 0 5px;
-  border-radius: 999px; background: rgba(255, 255, 255, .1); color: var(--color-fg);
-  font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1;
-}
-[data-new-layout] .review-rail button.is-on .edit-batch-plus { background: rgba(255, 255, 255, .18); }
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) > :is(.simple-pass-tick, .edit-version, .simple-pass-more) { flex: none; }
 
-/* Compact stepper on the edit card when stepping through a collapsed +N batch. */
+/* Compact stepper on the edit card when stepping through a collapsed batch. */
 [data-new-layout] .edit-card-stepper {
   flex: none; display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 3px;
   border: 1px solid var(--color-line); border-radius: 999px; background: var(--color-raised);

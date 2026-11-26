@@ -309,6 +309,7 @@ export function persistProposal(ctx: Ctx, user: User, projectId: string, body: P
     cutReasons,
     joinFades,
     description: body.description,
+    ...(body.batchTitle && { batchTitle: body.batchTitle }),
     reason: body.reason,
     author,
     noteIds: body.noteIds ?? [],

@@ -21,6 +21,7 @@ export type ScarletApi = Pick<
   | "resumeEditing"
   | "threadEdits"
   | "recordEditReview"
+  | "summarizeBatches"
   | "keepEdits"
   | "unkeepEdits"
   | "setThreadDone"

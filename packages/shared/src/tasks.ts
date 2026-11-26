@@ -49,6 +49,7 @@ export const TaskKind = z.enum([
   "area_check", // look at one frame of a recording and say what of it viewers may see; started when a save needs it
   "listen_check", // hear one passage of a recording and say what it heard, for a request whose model can't hear; started by its `listen` call
   "hand_off", // do one kind of work for a request with the model the editor chose for it in Task models; started by its `hand_off` call, its edits join that request
+  "batch_summary", // write one short editor-facing title summarizing a grouped batch of edits; silent side check, no tools
   "broll_make", // retired 2026-11-21: a run beside a request that made one piece of B-roll. Every request has the shell and the web now. Kept so saved tasks still read.
   "transcribe", // server-side job, not dispatched to hosts
 ]);
@@ -140,6 +141,8 @@ export const Task = z.object({
        * and what the model running that request asked of it.
        */
       handOff: z.object({ typeId: z.string().max(40), name: z.string().max(40), description: z.string().max(300).optional(), brief: z.string().min(1).max(8000) }).optional(),
+      /** A grouped batch of edits to summarize into one short title for the edits rail. */
+      batchSummary: z.object({ key: z.string().min(1).max(120), prompt: z.string().min(1).max(6000) }).optional(),
       time: Seconds.optional(),
       end: Seconds.optional(),
       clipIds: z.array(Id).optional(),
@@ -370,27 +373,32 @@ export function isHandOff(task: Pick<Task, "kind">): boolean {
   return task.kind === "hand_off";
 }
 
+/** A silent background run that writes one short title summarizing a grouped batch of edits. */
+export function isBatchSummary(task: Pick<Task, "kind">): boolean {
+  return task.kind === "batch_summary";
+}
+
 /**
  * A run that stays out of the project's conversation and queue: one that edits no video (a skill edit, a learning
- * check, an area check or a listen check), or a hand-off, whose edits are the request's that handed it the work.
+ * check, an area check, a listen check, or a batch summary), or a hand-off, whose edits are the request's that handed it the work.
  */
 export function isAsideTask(task: Pick<Task, "kind">): boolean {
-  return isSkillEdit(task) || isStyleGuideEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBrollMake(task) || isHandOff(task);
+  return isSkillEdit(task) || isStyleGuideEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBatchSummary(task) || isBrollMake(task) || isHandOff(task);
 }
 
 /**
  * A run beside a request that the request waits on, and that saves nothing to the video of its own: a learning check,
- * an area check, a listen check, or a hand-off, whose edits join the request. A host runs these in slots of their own,
+ * an area check, a listen check, a batch summary, or a hand-off, whose edits join the request. A host runs these in slots of their own,
  * so they never wait behind the requests they serve. A running edit waits on its area checks and its hand-offs, and
  * sharing its slots left it holding one while its checks queued for the rest (20 checks on 2 slots took 12 minutes,
  * 2026-11-20). A skill edit rewrites a skill and isn't one.
  */
 export function isSideCheck(task: Pick<Task, "kind">): boolean {
-  return isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isHandOff(task);
+  return isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBatchSummary(task) || isHandOff(task);
 }
 
 /** The kinds `isSideCheck` names, for the engine's claim query. */
-export const SIDE_CHECK_KINDS = ["learning_check", "area_check", "listen_check", "hand_off"] as const satisfies readonly TaskKind[];
+export const SIDE_CHECK_KINDS = ["learning_check", "area_check", "listen_check", "batch_summary", "hand_off"] as const satisfies readonly TaskKind[];
 
 /**
  * Side checks a host runs at once per runtime, beside its `maxParallel` requests: twice as many, up to 12. Each looks at
