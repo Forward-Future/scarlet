@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emptyTimeline, makeMediaClip, type MediaAsset, type Timeline } from "@scarlet/timeline";
+import type { WaveformResponse } from "@scarlet/shared";
 import { api } from "../../lib/client";
 import { TimelineWaveform, sourcePeaks, waveformBars, waveformScale } from "./TimelineWaveform";
 
@@ -101,6 +102,25 @@ it("answers a window from one read already that holds it as finely, and reads ag
     await sourcePeaks("wave_take", 0, 600);
     expect(read).toHaveBeenCalledTimes(20);
     expect(read.mock.calls.some(([, from, to]) => from === 0 && to === 600)).toBe(false);
+  } finally {
+    read.mockRestore();
+  }
+});
+
+it("drops an in-flight read when a recording switches audio tracks", async () => {
+  let finishFirst!: (wave: WaveformResponse) => void;
+  const first = new Promise<WaveformResponse>(resolve => { finishFirst = resolve; });
+  const read = vi.spyOn(api, "waveform")
+    .mockImplementationOnce(() => first)
+    .mockImplementation(async (mediaId, from, to, points = 1000) => ({ mediaId, from, to, peaks: new Array(points).fill(.5) }));
+  try {
+    const pending = sourcePeaks("wave_track_inflight", 0, 20, 0);
+    await sourcePeaks("wave_track_inflight", 0, 20, 1);
+    finishFirst({ mediaId: "wave_track_inflight", from: 0, to: 20, peaks: [.1] });
+    await pending;
+    const reread = await sourcePeaks("wave_track_inflight", 0, 20, 0);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(reread.peaks[0]).toBe(.5);
   } finally {
     read.mockRestore();
   }

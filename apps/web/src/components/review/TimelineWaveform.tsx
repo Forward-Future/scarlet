@@ -81,12 +81,14 @@ function peaksWithin(wave: WaveformResponse, from: number, to: number): Waveform
  * the capped read already has; on 2026-11-21 each of those took 15 s under the pass's load and the sound never drew.
  */
 export function sourcePeaks(id: string, from: number, to: number, track: AudioTrackSelection = 0) {
-  const key = JSON.stringify([id, track, from, to]);
+  // The engine answers with whichever track the recording hears now, so switching tracks drops older reads, in-flight ones included.
+  for (const [heldKey, held] of peakCache) if (held.id === id && held.track !== track) peakCache.delete(heldKey);
+  const key = JSON.stringify([id, from, to]);
   const points = peakPoints(from, to);
   let entry = peakCache.get(key);
   let within = false;
   if (!entry) {
-    entry = [...peakCache.values()].findLast(held => held.id === id && held.track === track && held.from <= from && held.to >= to
+    entry = [...peakCache.values()].findLast(held => held.id === id && held.from <= from && held.to >= to
       && held.points / (held.to - held.from) >= COARSE_ENOUGH * points / (to - from));
     within = !!entry;
   }
@@ -98,7 +100,7 @@ export function sourcePeaks(id: string, from: number, to: number, track: AudioTr
     entry = { id, track, from, to, points, read };
   }
   // The one used last is the last to go.
-  const held = within ? JSON.stringify([entry.id, entry.track, entry.from, entry.to]) : key;
+  const held = JSON.stringify([entry.id, entry.from, entry.to]);
   peakCache.delete(held);
   peakCache.set(held, entry);
   while (peakCache.size > KEPT_PEAKS) peakCache.delete(peakCache.keys().next().value!);
@@ -209,12 +211,10 @@ const NO_SPANS: Span[] = [];
 /** Keep the same span list while its contents and window match, so unrelated media updates don't drop and redraw the bars. */
 function useStableSpans(next: Span[], start: number, duration: number) {
   const held = useRef<{ key: string; spans: Span[] }>(undefined);
-  return useMemo(() => {
-    const key = JSON.stringify([start, duration, next]);
-    if (held.current?.key === key) return held.current.spans;
-    held.current = { key, spans: next };
-    return next;
-  }, [next, start, duration]);
+  const key = useMemo(() => JSON.stringify([start, duration, next]), [next, start, duration]);
+  const spans = held.current?.key === key ? held.current.spans : next;
+  useLayoutEffect(() => { held.current = { key, spans }; }, [key, spans]);
+  return spans;
 }
 
 export const TimelineWaveform = memo(function TimelineWaveform({ timeline, source, media, mediaPaused, original, scaleWith, audioFrom, start, duration,
