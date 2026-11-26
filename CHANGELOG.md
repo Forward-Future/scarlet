@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 25, 2026
 
 - In the beta layout, the chat and the Needs review column now start at the same width (until you drag either one).
+- When you stop talking to Scarlet, your words now wait in the message box so you can read and fix them before pressing Enter. Turn off "Review dictation before sending" in Settings › General to send them right away, as before.
 - Opening a cut from the list now keeps its section lit on the timeline and plays from just before the cut, even when the video changes underneath it while you review.
 - In the beta layout, grouped edits of any kind (cuts, graphics, zooms, B-roll, audio fixes, transitions, and more) are now summarized by AI into a short plain-English title (such as "110 dialogue cuts: pauses & retakes" or "3 model title cards") instead of showing only the first edit's name with a "+N" badge.
 - Removed the "All" and "Needs you" filter buttons from Needs review so flagged edits and safe edits always appear together in one list.
