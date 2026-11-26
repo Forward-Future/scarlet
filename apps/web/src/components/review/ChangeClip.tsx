@@ -5,8 +5,9 @@ import { api, errorMessage, IS_MOCK } from "../../lib/client";
 import { openCutStream, playbackLoader } from "../../lib/cutStream";
 import { player } from "../../lib/player";
 import { logPlayRefusal, playbackLog } from "../../lib/playbackLog";
-import { ignorePageShortcut } from "../../lib/hotkeys";
+import { isComposing, useHotkeys } from "../../lib/hotkeys";
 import { pct } from "../../lib/format";
+import { matchesShortcut } from "../../stores/shortcuts";
 import { selectRender, useProjectStore } from "../../stores/project";
 import { usePlayerStore } from "../../stores/player";
 import { Progress, Spinner } from "../ui/primitives";
@@ -233,25 +234,26 @@ export function ChangeClip({ change, active = true, loading, clock: pageClock, p
     scrub: hold,
   }));
 
-  // Space plays as the play button does now, also after the picture changed which file it plays from.
-  const toggleNow = useRef(toggle);
-  toggleNow.current = toggle;
   useEffect(() => {
-    if (!active) {
-      video.current?.pause();
-      wantPlay.current = false;
-      return;
+    if (active) return;
+    video.current?.pause();
+    wantPlay.current = false;
+  }, [active]);
+
+  // Playback keys act on the Before clip while it is on screen, including J/K/L and custom play keys.
+  useHotkeys(e => {
+    if (!active || isComposing(e)) return;
+    if (matchesShortcut(e, "playPause")) {
+      e.preventDefault();
+      if (!e.repeat) toggle();
+    } else if (matchesShortcut(e, "shuttleStop")) {
+      e.preventDefault();
+      if (!e.repeat && video.current && !video.current.paused) toggle();
+    } else if (matchesShortcut(e, "shuttleForward")) {
+      e.preventDefault();
+      if (!e.repeat && video.current?.paused) toggle();
     }
-    const down = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e, video.current)) return;
-      if (e.key === " ") {
-        e.preventDefault();
-        if (!e.repeat) toggleNow.current();
-      }
-    };
-    window.addEventListener("keydown", down);
-    return () => window.removeEventListener("keydown", down);
-  }, [active, audition]);
+  }, undefined, video);
 
   return (
     <div className="absolute inset-0">

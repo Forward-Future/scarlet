@@ -239,10 +239,18 @@ export function isMacPlatform(): boolean {
   return typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
 }
 
+/** Split a canonical binding into its modifier names and main key, keeping "+" intact as a key. */
+function parseBinding(binding: string): { mods: string[]; main: string } {
+  if (binding.endsWith("+")) return { mods: binding.slice(0, -1).split("+").filter(Boolean), main: "+" };
+  const mods = binding.split("+");
+  return { mods, main: mods.pop()! };
+}
+
 /** Split a canonical binding ("Mod+Shift+L") into OS-friendly keycap labels (["⌘", "⇧", "L"] or ["Ctrl", "Shift", "L"]). */
 export function bindingTokens(binding: string | null | undefined, mac = isMacPlatform()): string[] {
   if (!binding) return [];
-  return binding.split("+").map(part => {
+  const { mods, main } = parseBinding(binding);
+  return [...mods, main].map(part => {
     if (part === "Mod") return mac ? "⌘" : "Ctrl";
     if (part === "Alt") return mac ? "⌥" : "Alt";
     if (part === "Shift") return mac ? "⇧" : "Shift";
@@ -324,11 +332,10 @@ export function matchesBinding(
   options?: MatchOptions,
 ): boolean {
   if (!binding) return false;
-  const parts = binding.split("+");
-  const main = parts[parts.length - 1]!;
-  const wantMod = parts.includes("Mod");
-  const wantAlt = parts.includes("Alt");
-  const wantShift = parts.includes("Shift");
+  const { mods, main } = parseBinding(binding);
+  const wantMod = mods.includes("Mod");
+  const wantAlt = mods.includes("Alt");
+  const wantShift = mods.includes("Shift");
 
   const hasMod = e.metaKey || e.ctrlKey;
   if (hasMod !== wantMod) return false;
@@ -356,7 +363,7 @@ export function matchesShortcutRelease(
 ): boolean {
   const binding = useShortcutsStore.getState().bindings[actionId];
   if (!binding) return false;
-  const main = binding.split("+").at(-1);
+  const { main } = parseBinding(binding);
   return eventMainKey(e) === main;
 }
 

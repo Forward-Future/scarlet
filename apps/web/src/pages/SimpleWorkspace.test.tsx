@@ -21,6 +21,7 @@ import { usePlayerStore } from "../stores/player";
 import { usePictureMarksStore } from "../stores/pictureMarks";
 import { useShownCutStore } from "../stores/shownCut";
 import { useProjectStore, type ProjectData } from "../stores/project";
+import { resetShortcutsStore, useShortcutsStore } from "../stores/shortcuts";
 import { useSkillsStore } from "../stores/skills";
 import { useUiStore, type AgentContext } from "../stores/ui";
 import { SimpleWorkspace } from "./SimpleWorkspace";
@@ -895,6 +896,30 @@ it("steps between a request's edits with the arrow keys, sideways or up and down
   expect(openTitle()).toBe("captions");
   await press("Escape");
   expect(editPanel()).toBeNull();
+});
+
+it("steps between a request's edits with a modified next/previous edit shortcut", async () => {
+  useShortcutsStore.getState().setBinding("nextEdit", "Alt+ArrowDown");
+  useShortcutsStore.getState().setBinding("prevEdit", "Alt+ArrowUp");
+  try {
+    appliedEdits();
+    await show();
+    const turn = turnFor("chg_approved_2");
+    await click([...editRowsIn(turn)][0]!);
+    await act(async () => {});
+    expect(openTitle()).toBe("wrap");
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", altKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(openTitle()).toBe("music bed");
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", code: "ArrowUp", altKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(openTitle()).toBe("wrap");
+  } finally {
+    localStorage.clear();
+    resetShortcutsStore();
+  }
 });
 
 it("keeps a reframe's card open, on the side it was on, when → or a press on the timeline leaves its passage", async () => {
