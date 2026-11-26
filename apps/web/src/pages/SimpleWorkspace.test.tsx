@@ -2974,9 +2974,8 @@ it("has Scarlet add what a to-do asks for with Add (A): one request about that t
   const add = () => editPanel()!.querySelector<HTMLButtonElement>('.edit-card-acts button[data-key="A"]')!;
   expect([add().textContent, add().title]).toEqual(["Add", "Have Scarlet add it (A)"]);
   await press("a");
-  // On its way: another press sends nothing more.
-  expect(add().disabled).toBe(true);
-  await press("a");
+  // The card goes on at the press, before the request is in: to the next edit in Needs review (music bed).
+  expect(openTitle()).toBe("music bed");
   expect(createTask).toHaveBeenCalledTimes(1);
   const [, request] = createTask.mock.calls[0]! as unknown as [string, { kind: string; instruction: string; context: Record<string, unknown> }];
   expect(request.kind).toBe("edit");
@@ -2984,8 +2983,48 @@ it("has Scarlet add what a to-do asks for with Add (A): one request about that t
   expect(request.context).toMatchObject({ changeId: "chg_approved_2", editIndex: 1, threadId: threadWith("chg_approved_2").id, message: "Add it" });
   expect(request.instruction).toContain("“Add the other boat renders”");
   await act(async () => { sent(); });
-  // Moves on to the next edit in Needs review (music bed).
   expect(openTitle()).toBe("music bed");
+});
+
+it("adds every to-do of a quick run of A presses: none waits on the request before it to arrive", async () => {
+  appliedEdits();
+  vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [1, 2, 3].map(spot => ({ changeId: "chg_approved_2", spot,
+      label: `To-do ${spot}`, at: spot * 3, range: { start: spot * 3, end: spot * 3 + 1 }, previous: [], kind: "other" as const,
+      marker: true as const, check: `Add footage ${spot}`, todo: `Add footage ${spot}` })) }));
+  // No request arrives while the editor presses: each stays on its way.
+  const arrive: (() => void)[] = [];
+  const createTask = vi.fn((..._request: unknown[]) => new Promise(resolve => { arrive.push(() => resolve({ id: `task_add_${arrive.length}` })); }));
+  useProjectStore.setState({ createTask: createTask as never });
+  await show();
+  await click(rowNamedIn(turnFor("chg_approved_2"), "To-do 1"));
+  await act(async () => {});
+  for (let i = 0; i < 5; i++) await press("a");
+  const asked = createTask.mock.calls.map(call => (call[1] as { context: { editIndex: number } }).context.editIndex);
+  expect(asked).toEqual([1, 2, 3]);
+  await act(async () => { arrive.forEach(go => go()); });
+});
+
+it("brings a to-do's card back with the reason when its Add couldn't be sent", async () => {
+  appliedEdits();
+  vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [] },
+      { changeId: "chg_approved_2", spot: 1, label: "Boat comparison footage", at: 9.2, range: { start: 7.7, end: 10.7 }, previous: [], kind: "other" as const,
+        marker: true as const, check: "Add the other boat renders", todo: "Add the other boat renders" },
+    ] }));
+  let fail!: () => void;
+  const createTask = vi.fn((..._request: unknown[]) => new Promise((_resolve, reject) => { fail = () => reject(new Error("Scarlet is offline")); }));
+  useProjectStore.setState({ createTask: createTask as never });
+  await show();
+  await click(rowNamedIn(turnFor("chg_approved_2"), "Boat comparison footage"));
+  await act(async () => {});
+  await press("a");
+  expect(openTitle()).toBe("music bed");
+  await act(async () => { fail(); });
+  await act(async () => {});
+  expect(openTitle()).toBe("Boat comparison footage");
+  expect(editPanel()!.querySelector('[role="alert"]')?.textContent).toContain("Scarlet is offline");
 });
 
 it("has no menu on a request for now: Undo these edits and File this thread aren't in the chat", async () => {

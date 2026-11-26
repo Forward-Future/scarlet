@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { create } from "zustand";
 import { isAddRequest, isRejectRequest, matchesEdit, threadEditList, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { reviewKey, useKeptEdits } from "../../lib/keptEdits";
@@ -71,6 +72,28 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
 
 export const noEdits: ListedEdit[] = [];
 
+type PressedAdd = { id: string; threadId: string; changeId: string; spot: number; state: "queued" };
+
+/**
+ * Adds the editor pressed whose request hasn't reached the project yet. Each counts as queued from the press, so the
+ * card can go on at once and a quick run of A presses adds every to-do: none waits on the one before, and the next
+ * edit in line is never one already pressed.
+ */
+const usePressedAdds = create<{ adds: PressedAdd[] }>(() => ({ adds: [] }));
+let pressedCount = 0;
+
+/** Counts an Add as on its way from the press. The returned function takes it off once its request is in, or failed. */
+export function pressAdd(threadId: string, changeId: string, spot: number) {
+  const id = `pressed-add-${++pressedCount}`;
+  usePressedAdds.setState(s => ({ adds: [...s.adds, { id, threadId, changeId, spot, state: "queued" }] }));
+  return () => usePressedAdds.setState(s => ({ adds: s.adds.filter(add => add.id !== id) }));
+}
+
+function usePressedAddsOf(thread: Thread | undefined) {
+  const adds = usePressedAdds(s => s.adds);
+  return useMemo(() => adds.filter(add => add.threadId === thread?.id), [adds, thread?.id]);
+}
+
 /** The requests about one edit each that are queued or running, `only` the ones it picks. */
 function editRequestsOnTheirWay(thread: Thread | undefined, only?: (task: Thread["tasks"][number]) => boolean) {
   return (thread?.tasks ?? []).flatMap(t => isActiveTask(t.state) && (!only || only(t)) && t.context.changeId && t.context.editIndex !== undefined
@@ -87,10 +110,11 @@ export function useRejecting(thread: Thread | undefined) {
 
 /** Whether the request on its way for a to-do is the editor's Add, so its row says Adding… and not Revising…. */
 export function useAdding(thread: Thread | undefined) {
+  const pressed = usePressedAddsOf(thread);
   return useMemo(() => {
-    const pending = editRequestsOnTheirWay(thread, isAddRequest);
+    const pending = [...editRequestsOnTheirWay(thread, isAddRequest), ...pressed];
     return (edit: ListedEdit) => pending.some(ref => matchesEdit(edit, ref));
-  }, [thread]);
+  }, [thread, pressed]);
 }
 
 /** Whether the editor has reviewed an edit: kept here, or decided cut by cut when the pass was applied. */
@@ -122,8 +146,9 @@ export function useCanUnkeep(projectId: string, thread: Thread | undefined) {
  * still waiting its turn: the one Scarlet is on, when there are several.
  */
 export function useRevising(thread: Thread | undefined) {
+  const pressed = usePressedAddsOf(thread);
   return useMemo(() => {
-    const pending = editRequestsOnTheirWay(thread);
+    const pending = [...editRequestsOnTheirWay(thread), ...pressed];
     return (edit: ListedEdit) => {
       let first: (typeof pending)[number] | undefined;
       for (const ref of pending) if (matchesEdit(edit, ref)) {
@@ -132,7 +157,7 @@ export function useRevising(thread: Thread | undefined) {
       }
       return first ? { id: first.id, state: first.state } : undefined;
     };
-  }, [thread]);
+  }, [thread, pressed]);
 }
 
 /** What a row ends on while Scarlet has stopped work on its cut or edit to ask the editor something: the words its card uses. */
