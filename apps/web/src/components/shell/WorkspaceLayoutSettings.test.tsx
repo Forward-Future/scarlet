@@ -129,7 +129,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect([...container.querySelectorAll(".review-filter-chip")].map(b => b.textContent)).toEqual(["All 3", "Needs you 2"]);
     expect(container.querySelector(".composer-ask-text")?.textContent).toBe("How tight should I cut the intro?");
     expect([...container.querySelectorAll(".composer-ask-choice")].map(b => b.textContent)).toEqual(["Keep the setup", "Jump straight in"]);
-    // Working and Done banners stay visible at the foot even when empty (Working above Done), separated by a divider line, chat doesn't repeat "For you N", and every row leads with its time, never a number.
+    // Working and Done banners stay visible at the foot even when empty (Working above Done), separated by a divider line, chat doesn't repeat "Needs review N", and every row leads with its time, never a number.
     const footSections = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];
     expect(footSections.map(b => b.textContent)).toEqual(["Working0", "Done0"]);
     expect(footSections.every(b => b.disabled && b.classList.contains("is-none") && b.getAttribute("aria-expanded") === "false")).toBe(true);
@@ -362,7 +362,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(sections[1]!.disabled).toBe(false);
     expect(sections[1]!.classList.contains("is-none")).toBe(false);
 
-    // Expanding Done shows the kept edit with Unkeep, which moves it back to For you without opening it.
+    // Expanding Done shows the kept edit with Unkeep, which moves it back to Needs review without opening it.
     const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined as never);
     await act(async () => sections[1]!.click());
     await act(async () => {});
@@ -969,7 +969,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     const rail = container.querySelector<HTMLElement>("#simple-review-rail")!;
     expect(rail).not.toBeNull();
     expect(rail.hidden).toBe(false);
-    expect(rail.querySelector(".review-rail-head h2")?.textContent).toBe("For you");
+    expect(rail.querySelector(".review-rail-head h2")?.textContent).toBe("Needs review");
     expect(rail.querySelector(".simple-review-empty")?.textContent).toBe("No edits yet.");
     expect(rail.querySelector(':scope > [role="separator"]')).not.toBeNull();
     const sections = [...rail.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")];

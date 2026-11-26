@@ -172,7 +172,7 @@ export function SimpleWorkspaceBeta() {
   const railVersion = useSyncExternalStore(rail.subscribe, rail.snapshot, rail.snapshot);
   const railView = rail.view();
   const [railOpen, setRailOpen] = useState({ working: true, done: false, low: true });
-  // Priority list filter for the combined For you rail: "all" shows flagged pinned at top + confident below; "need" shows flagged only.
+  // Priority list filter for the combined Needs review rail: "all" shows flagged pinned at top + confident below; "need" shows flagged only.
   const [railFilter, setRailFilter] = useState<"all" | "need">("all");
   const [flashedThread, setFlashedThread] = useState<string>();
   const flashTimer = useRef<number>(0);
@@ -207,7 +207,7 @@ export function SimpleWorkspaceBeta() {
   const [hoveredRow] = useState(() => createStore<HoveredReviewRow | undefined>(() => undefined));
   // Counts presses that ask to fit the whole timeline.
   const [fitTimeline, setFitTimeline] = useState(0);
-  // In the beta layout there is no hidden violet bubble filter mode: the timeline always shows every For you dot plus
+  // In the beta layout there is no hidden violet bubble filter mode: the timeline always shows every Needs review dot plus
   // whatever edit or call is currently open. `focusThread` is set only when an edit or full list is open.
   const focusThread = threads.find(t => t.id === focus?.threadId);
   const firstCuts = useMemo(() => focusThread && firstCutDeliveries(focusThread), [focusThread]);
@@ -542,7 +542,7 @@ export function SimpleWorkspaceBeta() {
   useEffect(() => { setDecideError(""); }, [pass?.id]);
   useEffect(() => { setStripError(""); }, [suggestion?.id]);
   /**
-   * Approve or skip the call that's playing, then move on to the next row still waiting in For you, a call or a
+   * Approve or skip the call that's playing, then move on to the next row still waiting in Needs review, a call or a
    * flagged edit. The last call applies the pass, with Scarlet's picks for the rest, or schedules it for when Scarlet
    * finishes checking.
    */
@@ -816,7 +816,7 @@ export function SimpleWorkspaceBeta() {
   const asks = allCalls.filter(a => !sentBack(a.index));
   const cutCount = passCuts?.length ?? pass?.cutReasons?.length ?? 0;
   const passChoices = pass ? choicesOf(pass) : {};
-  // The calls still waiting on the editor: the ones For you counts.
+  // The calls still waiting on the editor: the ones Needs review counts.
   const waiting = (a: Call) => !sentBack(a.index) && passChoices[a.index] === undefined;
   const waitingCalls = allCalls.filter(waiting);
   const remainingCalls = listening ? waitingCalls.filter(a => a.index !== listening.index) : [];
@@ -945,7 +945,7 @@ export function SimpleWorkspaceBeta() {
   // is on the version it proposes, where the pass's cuts sit elsewhere. The calls' dots are back when it closes.
   // The calls are on the timeline while the timeline is the pass's, while one of them is open, and while the editor
   // hasn't picked a request in the chat or gone to another's edit: they hold the next request. Another request picked,
-  // or the marked band let go, the timeline marks only that request's edits, or nothing, and For you leads to them.
+  // or the marked band let go, the timeline marks only that request's edits, or nothing, and Needs review leads to them.
   const callsShown = !!pass && !suggestion && !source;
   const marks: TimelineDot[] = pass && !suggestion
     ? !callsShown ? [] : allCalls.flatMap(a => {
@@ -1208,7 +1208,7 @@ export function SimpleWorkspaceBeta() {
     else next.delete(id);
     return next;
   }), []);
-  // In the beta layout the timeline always shows dots for what is in For you, plus the edit you currently have open.
+  // In the beta layout the timeline always shows dots for what is in Needs review, plus the edit you currently have open.
   const onLatest = false;
   const listShown = !!focusThread && openList === focusThread.id;
   const numberedDots: TimelineDot[] = playerView && focusThread ? playerView.edits.flatMap((e): TimelineDot[] => {
@@ -1238,7 +1238,7 @@ export function SimpleWorkspaceBeta() {
       const at = e.reviewRange?.start ?? (e as ThreadEdit).at ?? e.range.start;
       return [{ ...passEditDot(passThread, e, at), group: "pass", state: "check" as const, need: passEditNo.get(editKey(e))?.name ?? passEditName(e, at) }];
     });
-  // Every request's unresolved For you flags stay on the timeline.
+  // Every request's unresolved Needs review flags stay on the timeline.
   const showOtherFlags = !suggestion && !listening && !source;
   const drawnChecks = new Set([...numberedDots, ...passDots].filter(dot => dot.state === "check").map(dot => dot.edit));
   const otherFlags = showOtherFlags ? [...ordered].reverse().flatMap(thread => {
@@ -1296,7 +1296,7 @@ export function SimpleWorkspaceBeta() {
   }, [focus, threadTimeline.chosen, threadTimeline.error, openList, newest, settled]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownIndex = reviewingEdit ? threadEdits.indexOf(reviewingEdit) : -1;
   // An edit made in several places is one edit, as the request's list shows it: one row, counted once in "1 of 3" and
-  // in For you, and ↑ ↓ and Keep go from edit to edit. A pass lists each of its edits on a line of its own.
+  // in Needs review, and ↑ ↓ and Keep go from edit to edit. A pass lists each of its edits on a line of its own.
   // A pass's list goes by moments: edits that play as one change are one row, kept together, and ↑ ↓ step from moment
   // to moment. An edit of a moment opened on its own from under the moment's row is a row of its own, beside the
   // moment's other edits, and Keep keeps just that one.
@@ -1312,7 +1312,7 @@ export function SimpleWorkspaceBeta() {
   const passList = passThread ? lists[passThread.id] : undefined;
   const passIsFocus = !!pass && !!passThread && passThread.id === focusThread?.id;
   const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
-  // The waiting pass's calls and flagged edits together, in the order For you lists them: by time, as its rows lead
+  // The waiting pass's calls and flagged edits together, in the order Needs review lists them: by time, as its rows lead
   // with their times.
   const passForYouItems = pass && passThread ? passForYouOrder(
     allCalls.map(call => ({ call, at: listedAt.get(call.index) ?? call.start, num: callNo.get(call.index), waiting: waiting(call) })),
@@ -1334,7 +1334,7 @@ export function SimpleWorkspaceBeta() {
   const closeEdit = () => { player.pause(); threadTimeline.clear(); setFocus(undefined); };
   // Every row of a request's lists is under exactly one tab (`rowPlace`), and the stops below are those rows as ↑ ↓
   // and Keep go through them: the chat draws its tabs by the same rule, so both agree on a tab's rows. A request that
-  // asks the editor a question about a cut or an edit waits on them, so its row is For you's.
+  // asks the editor a question about a cut or an edit waits on them, so its row is Needs review's.
   const asksEditor = (run?: { state: Task["state"] }) => run?.state === "waiting_for_user";
   const passWaitingEdit = (e: ThreadEdit) => !!e.check && !passReviewed(e) && !passRevising(e);
   // A flagged edit whose revision has stopped to ask the editor something waits on them again, as a call that asks does.
@@ -1367,7 +1367,7 @@ export function SimpleWorkspaceBeta() {
   // request's keep the order its edits are listed in.
   const focusOrder: ListOrder = threadTimeline.moments ? { numbers: false } : undefined;
   const passOrder: ListOrder = { numbers: false };
-  // Every request's rows are in the unified column of edits, each under one of its parts (For you, Low risk, Working, Done).
+  // Every request's rows are in the unified column of edits, each under one of its parts (Needs review, Low risk, Working, Done).
   const focusStops = reviewingEdit ? focusStopsNow() : [];
   const hereStop = reviewingEdit ? focusStops.find(stop => stop.row?.includes(reviewingEdit)) : undefined;
   const here = reviewingEdit ? { at: reviewingEdit.at ?? reviewingEdit.range.start, num: passIsFocus ? passEditNum(reviewingEdit) : undefined } : undefined;
@@ -1445,7 +1445,7 @@ export function SimpleWorkspaceBeta() {
       : delta > 0 ? list[0] : list.at(-1);
     return stopTarget(next, row => row.find(passWaitsOrAsks) ?? row[0]!);
   }
-  // Keep goes to the next row that waits on the editor in For you, in its order, a call or a flagged edit, wrapping to
+  // Keep goes to the next row that waits on the editor in Needs review, in its order, a call or a flagged edit, wrapping to
   // the earlier ones; once nothing waits it goes on to the first low-risk row, and the card closes once nothing is left.
   // On a low-risk row (an edit Scarlet didn't flag) it goes to the next low-risk row, wrapping to the earlier ones,
   // then to another request's, then to what waits.
@@ -1462,7 +1462,7 @@ export function SimpleWorkspaceBeta() {
   const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitsOrAsks) ?? momentLead(row.find(unkeptEdit) ?? row[0]!));
   const nextEditAfterKeep = nextAfterKeep && "edit" in nextAfterKeep ? nextAfterKeep.edit : undefined;
   const nextCallAfterKeep = nextAfterKeep && "call" in nextAfterKeep ? nextAfterKeep.call : undefined;
-  // Keep or Reject edit on a call goes on the same way: to the next row that waits in For you, a call or a flagged edit.
+  // Keep or Reject edit on a call goes on the same way: to the next row that waits in Needs review, a call or a flagged edit.
   const openStops = listening && pass ? passStopsNow() : [];
   const nextAfterCallDecision = !listening || !pass ? undefined : stopTarget(
     rowAfter(rowsOfTab(openStops, "you", false, passOrder).filter(stillWaits(passWaitsOrAsks)), openStops.find(stop => stop.call?.index === listening.index),
@@ -1631,8 +1631,8 @@ export function SimpleWorkspaceBeta() {
     }
     moveOnFromShown();
   }
-  // Keep, Add and Reject edit go on to the next waiting row in unified For you (then first Low risk row), or from
-  // Low risk to the next unified Low risk row (then For you), else close the card.
+  // Keep, Add and Reject edit go on to the next waiting row in unified Needs review (then first Low risk row), or from
+  // Low risk to the next unified Low risk row (then Needs review), else close the card.
   function moveOnFromShown() {
     if (openMoment && reviewingEdit && nextEditAfterKeep && openMoment.edits.includes(nextEditAfterKeep)) {
       actions.playEdit(nextEditAfterKeep, true);
@@ -1661,7 +1661,7 @@ export function SimpleWorkspaceBeta() {
     }
     closeEdit();
   }
-  /** Opens the first row that still waits on the editor in unified For you. Says whether there was any. */
+  /** Opens the first row that still waits on the editor in unified Needs review. Says whether there was any. */
   function openWaiting(exclude?: UnifiedRailRow) {
     const first = rail.view().sections.you.find(r => isSteppableRailRow(r) && (r.needs || r.asks) && r.key !== exclude?.key);
     if (!first) return false;
@@ -1683,7 +1683,7 @@ export function SimpleWorkspaceBeta() {
     appLog("action", "keep-low-risk", { count: parts.reduce((n, part) => n + part.refs.length, 0), requests: parts.length });
     if (wasOpen && !openWaiting()) closeEdit();
   }
-  // A revision sent from a row of For you goes on as Keep does (the editor chose this on 2026-11-23): the row is
+  // A revision sent from a row of Needs review goes on as Keep does (the editor chose this on 2026-11-23): the row is
   // Working's now, and the card moves to the next one that waits. From Working or Done, the card stays on the edit it revised.
   function moveOnFromRevised() {
     if (reviewingEdit) { if ((openRailRow?.section ?? tabShown(focusList)) === "you") moveOnFromShown(); return; }

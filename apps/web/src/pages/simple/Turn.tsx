@@ -185,9 +185,9 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
   // Whether one of the request's edits was open when its line last drew, and which.
   const wasShowing = useRef(false);
   const lastOpen = useRef<string>(undefined);
-  // Whether the request's rows are under For you, Working and Done, as its block works it out.
+  // Whether the request's rows are under Needs review, Working and Done, as its block works it out.
   const [tabbed, setTabbed] = useState(false);
-  // The rows the editor has just decided or sent back, which stay in For you a moment before they leave.
+  // The rows the editor has just decided or sent back, which stay in Needs review a moment before they leave.
   const [linger] = useState(() => new ReviewLinger());
   useEffect(() => () => linger.dispose(), [linger]);
   // Edits saved along the way belong to their run. Only the run's last edit is a result to Play, Revise or Undo.
@@ -359,7 +359,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
   // bands could, as they are drawn below, and reads which one does.
   const pauseOffer: PauseOffer = { bands: [], under: [] };
   const pauseOn = usePauseOn(thread.id, section, pauseOffer);
-  // How many of the request's calls and flagged edits still wait on the editor: the number its For you tab shows,
+  // How many of the request's calls and flagged edits still wait on the editor: the number its Needs review tab shows,
   // counted as the tab counts it (`waitingPassRows`, `waitingRows`). Only a folded request's band says it, so it is
   // counted only then.
   const forYou = () => {
@@ -391,7 +391,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
     const closed = entries.some(e => e.kind === "agent" && !e.onNote && ids.has((e.taskId ?? e.replyTo)!));
     // While every edit is listed, the list takes the place of Scarlet's reply; putting it away brings the reply back. The
     // short list of what needs the editor, shown without a click, leaves the reply where it is.
-    // Under For you, Working and Done, and with the fixed bottom lists dock, the reply stays in chat.
+    // Under Needs review, Working and Done, and with the fixed bottom lists dock, the reply stays in chat.
     const listing = !dock && run === owner && hasRows && passList[0] === "all" && !tabbed;
     // Scarlet's recheck of a cut the editor approved, under that cut's row: its reason is its heading, not a line under its work.
     const autoHeading = inside && isRecheck(task);
@@ -464,7 +464,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
     const tag = request?.revisionLabel ? tagOf(tagFor(request) ?? request.revisionLabel) : undefined;
     const about = aboutOne(run) ? actions.cutName?.(aimOf(run).context) ?? tag : undefined;
     // Where the request stands, at the right of its heading: a dot while Scarlet asks, a word once it stopped early or
-    // left a suggestion, and Paused while editing waits for Resume. The review count appears on For you.
+    // left a suggestion, and Paused while editing waits for Resume. The review count appears on Needs review.
     const ended = runEnded(task);
     const editsProject = isProjectEditTask(task);
     const paused = editingPaused && editsProject && task.state === "queued";
@@ -553,7 +553,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
     const markable = !!actions.mark;
     const marked = markable && actions.marked === thread.id;
     const pressable = markable || !!actions.fitTimeline;
-    // Folded, everything under the band is out of sight, so the band says what waits on the editor there: For you and
+    // Folded, everything under the band is out of sight, so the band says what waits on the editor there: Needs review and
     // how many calls or flagged edits still wait, and the dot for a question, its own or one under a row. Both when both.
     const ownerNeed = run === owner ? forYou() : 0;
     const need = shut ? ownerNeed : 0;
@@ -571,7 +571,7 @@ export function Turn({ projectId, thread, actions, pinned, pinHost = null, list:
         <Said fixed lead={<>{(about ?? tag) && <span className="simple-revising">{about ?? tag}</span>}<MarkedFrameOnRequest projectId={projectId} task={task} /></>} text={request.text} />
         <span className="unit-state">{standing}</span>
         {asksUnder && <span className="unit-state"><span className="unit-dot" aria-hidden /></span>}
-        {need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>For you<span className="unit-need-count">{need}</span></span>}
+        {need > 0 && <span className="unit-need" title={`${need} ${need === 1 ? "needs" : "need"} you`}>Needs review<span className="unit-need-count">{need}</span></span>}
         {headingEnd}</div>}
       {bundle}
       {learnedIn(run).map(l => <LearnedLine key={l.id} learning={l} onReview={actions.reviewLearning} />)}

@@ -12,7 +12,7 @@ import { letGo, type HoveredReviewRow } from "./types";
 
 /**
  * The column of edits between the chat and the video, for the whole video (the editor chose it on 2026-11-24, as
- * T3 Code lists its threads). Every section (For you, Low risk, Working, Done) is one unified list sorted by video
+ * T3 Code lists its threads). Every section (Needs review, Low risk, Working, Done) is one unified list sorted by video
  * time — never stacked by chat request — and follow-up requests that modify the same edit combine into one row.
  */
 /** The narrowest the edits column can be dragged to while keeping times, words, and amounts legible. */
@@ -248,7 +248,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
         const tipMeta = row.tipMeta && row.tipMeta !== tipText ? row.tipMeta : undefined;
         const tipDetail = row.tipDetail && row.tipDetail !== tipText && row.tipDetail !== tipMeta ? row.tipDetail : undefined;
         const moment = row.moment;
-        const unkeepTip = row.unkeepTip ?? "Move back to For you";
+        const unkeepTip = row.unkeepTip ?? "Move back to Needs review";
         const statusWord = row.word;
         const ariaLabel = row.ariaLabel ?? (batchCount > 1
           ? `${rowTime}: ${row.label}, plus ${batchCount - 1} more${row.decided ? ", kept" : ""}`
@@ -338,7 +338,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     minWidth={REVIEW_RAIL_MIN} beside="simple-chat" reserve={reserve}>
     <header className="review-rail-head">
       <h2>
-        <span>For you</span>
+        <span>Needs review</span>
         {total > 0 && (need > 0 && optional > 0
           ? <><span className="review-rail-total">{total}</span><span className="review-rail-sep" aria-hidden="true">·</span><span className="review-rail-count" title={`${need} ${need === 1 ? "needs" : "need"} you`}>{need}</span></>
           : need > 0
@@ -355,7 +355,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
         onClick={letGo(() => onFilter("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
     </div>}
     <div className="review-rail-scroll">
-      <div className="review-rail-list" role="group" aria-label="For you">
+      <div className="review-rail-list" role="group" aria-label="Needs review">
         {renderSectionList("you")}
         {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Safe edits ({optional})</span></div>}
         <div className="review-low-body" role="group" aria-label="Safe edits" hidden={!showConfident}>{renderSectionList("low")}</div>

@@ -1,7 +1,6 @@
 import { useRef } from "react";
 import type { Task } from "@scarlet/shared";
 import { blurOnPointerClick } from "../../lib/hotkeys";
-import { useWorkingLines } from "../../lib/workingLines";
 import { StepMark } from "./RunBundle";
 
 const FLASH_MS = 1200;
@@ -30,18 +29,16 @@ function chatRowOf(taskId: string): { scroll: HTMLElement; flash: HTMLElement } 
 }
 
 /**
- * Under the timeline, beside the clock, while Scarlet is at work on the video: the chat's turning ring and what Scarlet
- * is doing, in the chat's own words. A press brings that request into the middle of the chat and lights it for a
- * moment; with several at work, each press goes on to the next.
+ * Under the timeline, beside the clock, while Scarlet is at work on the video: the chat's turning ring and
+ * "Scarlet is editing". A press brings that request into the middle of the chat and lights it for a moment;
+ * with several at work, each press goes on to the next.
  */
 export function TimelineWorking({ tasks, rootOf = task => task.resumeRootId ?? task.id }: { tasks: readonly Task[];
   /** The request an attempt belongs to, by its first attempt (`requestRoots`): the chat names a request's block for it. */
   rootOf?(task: Task): string;
 }) {
-  const lines = useWorkingLines();
   const next = useRef(0);
   if (!tasks.length) return null;
-  const words = tasks.length > 1 ? `Working on ${tasks.length} at once` : lines[tasks[0]!.id];
   const show = () => {
     const task = tasks[next.current % tasks.length]!;
     next.current += 1;
@@ -61,8 +58,8 @@ export function TimelineWorking({ tasks, rootOf = task => task.resumeRootId ?? t
     }, FLASH_MS));
   };
   return <button type="button" className="timeline-working" title="Show in the chat"
-    aria-label={`Scarlet is editing${words ? `: ${words}` : ""}. Show in the chat`} onClick={e => { blurOnPointerClick(e); show(); }}>
+    aria-label="Scarlet is editing. Show in the chat" onClick={e => { blurOnPointerClick(e); show(); }}>
     <StepMark state="working" />
-    <span className="timeline-working-text">Scarlet is editing{words && <span> · {words}</span>}</span>
+    <span className="timeline-working-text">Scarlet is editing</span>
   </button>;
 }

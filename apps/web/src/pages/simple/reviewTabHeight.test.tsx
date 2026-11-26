@@ -129,7 +129,7 @@ describe("useReviewTabHeight", () => {
     );
   });
 
-  it("collapses when everything in For you and Working finishes", async () => {
+  it("collapses when everything in Needs review and Working finishes", async () => {
     stubLayout();
     await act(async () => {
       root.render(
@@ -145,7 +145,7 @@ describe("useReviewTabHeight", () => {
     expect(host.dataset.reviewPad).toBe("");
     expect(host.style.getPropertyValue("--review-body-height")).toBe("324px");
 
-    // Last item moves to Done (For you = 0, Working = 0): collapses automatically.
+    // Last item moves to Done (Needs review = 0, Working = 0): collapses automatically.
     await act(async () => {
       root.render(
         <Harness enabled tab="working" counts={{ you: 0, working: 0, done: 12 }} youBase={0} hasLowRisk={false} lowOpen={false} rows={0} />,

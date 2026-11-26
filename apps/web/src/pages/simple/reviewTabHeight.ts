@@ -9,16 +9,16 @@ const canMove = () => typeof window !== "undefined" && typeof Element !== "undef
   && !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 export interface ReviewTabHeightOptions {
-  /** Only active while the request renders the three tabs (For you, Working, Done). */
+  /** Only active while the request renders the three tabs (Needs review, Working, Done). */
   enabled: boolean;
   tab: ReviewTab;
-  /** Row counts for each tab: `you` is the rows currently drawn in For you (excluding low-risk rows when closed). */
+  /** Row counts for each tab: `you` is the rows currently drawn in Needs review (excluding low-risk rows when closed). */
   counts: { you: number; working: number; done: number };
-  /** Underlying non-optional count in For you, used to detect when everything in For you and Working is finished. */
+  /** Underlying non-optional count in Needs review, used to detect when everything in Needs review and Working is finished. */
   youBase: number;
-  /** Whether For you shows the "N low risk edits" switch line. */
+  /** Whether Needs review shows the "N low risk edits" switch line. */
   hasLowRisk: boolean;
-  /** Whether low-risk rows are currently open in For you. */
+  /** Whether low-risk rows are currently open in Needs review. */
   lowOpen: boolean;
   /** True while low-risk rows are animating shut; avoids locking height mid-collapse. */
   lowClosing?: boolean;
@@ -42,10 +42,10 @@ function outerVertical(el: HTMLElement) {
 }
 
 /**
- * Holds the height below For you / Working / Done while the editor switches between tabs so the request heading
+ * Holds the height below Needs review / Working / Done while the editor switches between tabs so the request heading
  * and tab bar stay still under the pointer, then smoothly collapses back to the active tab's real height when:
  *  - the editor clicks or moves focus outside this request,
- *  - the last waiting/working item finishes (For you and Working both reach 0), or
+ *  - the last waiting/working item finishes (Needs review and Working both reach 0), or
  *  - a new request starts below this one in the chat.
  */
 export function useReviewTabHeight(host: RefObject<HTMLElement | null>, opts: ReviewTabHeightOptions) {

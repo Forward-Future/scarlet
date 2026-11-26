@@ -482,8 +482,8 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-dock .simple-pass-list > li[data-low-risk] > button:not(.is-on) { color: var(--color-muted); }
 .simple-review-dock .simple-pass-list > li[data-low-risk] > button:not(.is-on) :is(.simple-pass-time, .simple-pass-value) { color: var(--color-dim); }
 .simple-review-dock .simple-pass-list > li[data-flash] > button { background: rgba(255, 255, 255, .07); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2); }
-/* Over For you's rows, one quiet line for the edits Scarlet didn't flag: a small switch and their count, which
-   includes them in For you's list. */
+/* Over Needs review's rows, one quiet line for the edits Scarlet didn't flag: a small switch and their count, which
+   includes them in Needs review's list. */
 .simple-low-risk { display: flex; flex: none; align-items: center; gap: 8px; min-height: 28px; margin: 0 0 4px; color: var(--color-muted); font-size: 12.5px; }
 .simple-low-risk-toggle { display: inline-flex; align-items: center; gap: 9px; min-width: 0; padding: 4px 0; border: 0; background: none;
   color: inherit; font: inherit; text-align: left; cursor: pointer; transition: color .18s ease; }
@@ -504,9 +504,9 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
   .simple-low-risk-toggle, .simple-low-risk-switch, .simple-low-risk-switch::after { transition: none; }
 }
 .simple-review-empty { box-sizing: border-box; margin: 0; padding: 8px 0; color: var(--color-muted); font-size: 12.5px; }
-/* Match the tallest tab's height below For you / Working / Done so switching tabs keeps the heading and tabs still. */
+/* Match the tallest tab's height below Needs review / Working / Done so switching tabs keeps the heading and tabs still. */
 .simple-pass[data-review-pad] > :is(.simple-pass-list, .simple-edits, .simple-review-empty) { min-height: var(--review-body-height); }
-/* A row the editor has just decided or sent back fades before it leaves For you or Done. */
+/* A row the editor has just decided or sent back fades before it leaves Needs review or Done. */
 .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { opacity: 0; transition: opacity .3s ease; }
 @media (prefers-reduced-motion: reduce) {
   .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { transition: none; }
@@ -699,7 +699,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
    action under them ("Resume") would otherwise have nothing that says the run stopped. Folded, that list is out of
    sight (it is still there, so this would match it): the band keeps the dot for a question, beside its own count. */
 .unit:not(.is-collapsed):is(:has(.simple-review-tab-count), [data-has-need]) > .unit-msg > .unit-state:has(> .unit-dot) { display: none; }
-/* A folded request says on its band what waits on the editor under it: For you, as its tab reads, and how many. */
+/* A folded request says on its band what waits on the editor under it: Needs review, as its tab reads, and how many. */
 .unit-need { flex: none; align-self: baseline; font-size: 12.5px; line-height: 19px; color: var(--color-muted); white-space: nowrap; }
 .unit-need-count { margin-left: 6px; color: var(--color-warn); font-variant-numeric: tabular-nums; }
 /* The active request's action follows its metrics. */
@@ -822,7 +822,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 /* Fixed here, a long message keeps to two lines so the spot holds its place. Its title carries the rest. */
 .simple-pin .unit-msg p { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 
-/* The fixed bottom edit lists dock (For you, Working, Done, See all): stays pinned above the message box while
+/* The fixed bottom edit lists dock (Needs review, Working, Done, See all): stays pinned above the message box while
    new messages flow above it in .simple-chat. Fits compactly to short lists and scrolls internally when long. */
 .simple-review-dock {
   --chat-gutter: 18px;

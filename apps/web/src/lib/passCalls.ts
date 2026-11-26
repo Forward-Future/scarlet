@@ -98,7 +98,7 @@ export type PassForYouItem<C, E extends Omit<ThreadEdit, "at"> = ThreadEdit> =
 
 /**
  * The waiting pass's calls and flagged edits, decided or not, in the order they reached the editor: by stable
- * publication number (`num`) when any call carries `askOrder`, else by timeline position (`at`). For you lists the
+ * publication number (`num`) when any call carries `askOrder`, else by timeline position (`at`). Needs review lists the
  * ones that still wait in this order.
  */
 export function passForYouOrder<C, E extends Omit<ThreadEdit, "at">>(

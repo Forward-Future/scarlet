@@ -68,7 +68,7 @@ afterEach(async () => {
 });
 
 describe("useLowRiskFold", () => {
-  it("animates when toggling low risk edits on while For you is already visible", async () => {
+  it("animates when toggling low risk edits on while Needs review is already visible", async () => {
     const { animate } = stubAnimate();
     await act(async () => { root.render(<Harness on={false} visible />); });
     expect(animate).not.toHaveBeenCalled();
@@ -78,7 +78,7 @@ describe("useLowRiskFold", () => {
     expect(animate).toHaveBeenCalledTimes(6);
   });
 
-  it("reloads low risk edits instantly with no fade-in when switching away from For you and back", async () => {
+  it("reloads low risk edits instantly with no fade-in when switching away from Needs review and back", async () => {
     const { animate } = stubAnimate();
     await act(async () => { root.render(<Harness on visible />); });
     expect(animate).not.toHaveBeenCalled();
@@ -87,13 +87,13 @@ describe("useLowRiskFold", () => {
     await act(async () => { root.render(<Harness on={false} visible={false} />); });
     expect(animate).not.toHaveBeenCalled();
 
-    // Switch back to For you with low risk edits remembered ON (visible = true, on = true).
+    // Switch back to Needs review with low risk edits remembered ON (visible = true, on = true).
     await act(async () => { root.render(<Harness on visible />); });
     expect(animate).not.toHaveBeenCalled();
     expect(container.querySelectorAll("li[data-low-risk]")).toHaveLength(2);
   });
 
-  it("opens instantly without fading in when jumping to For you from another tab", async () => {
+  it("opens instantly without fading in when jumping to Needs review from another tab", async () => {
     const { animate } = stubAnimate();
     await act(async () => { root.render(<Harness on={false} visible={false} />); });
     expect(animate).not.toHaveBeenCalled();
@@ -103,7 +103,7 @@ describe("useLowRiskFold", () => {
     expect(container.querySelectorAll("li[data-low-risk]")).toHaveLength(2);
   });
 
-  it("cancels a close animation immediately when switching away from For you", async () => {
+  it("cancels a close animation immediately when switching away from Needs review", async () => {
     const { animate, cancels } = stubAnimate();
     function ToggleHarness({ visible }: { visible: boolean }) {
       const [on, setOn] = useState(true);
@@ -111,7 +111,7 @@ describe("useLowRiskFold", () => {
     }
     await act(async () => { root.render(<ToggleHarness visible />); });
 
-    // Toggle low risk off while staying on For you: starts closing animation.
+    // Toggle low risk off while staying on Needs review: starts closing animation.
     const toggle = container.querySelector<HTMLButtonElement>(".simple-low-risk-toggle")!;
     await act(async () => { toggle.click(); });
     const host = container.querySelector<HTMLElement>(".simple-pass")!;
