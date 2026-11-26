@@ -183,8 +183,13 @@ export function withoutUnheardSegments(segments: TranscriptSegment[], levels: Ga
     const verdicts = seg.words.map(heard).filter((v): v is boolean => v !== undefined);
     return verdicts.length > 0 && verdicts.filter(Boolean).length * 2 < verdicts.length;
   };
-  const unheard = segments.map((seg, i) => peaks[i] !== undefined &&
-    (peaks[i]! < UNHEARD_DBFS || (typical !== undefined && peaks[i]! <= typical - UNHEARD_BELOW_LINES_DB && notHeard(seg))));
+  // A recording none of whose lines the aligner heard holds no speech, however loud it is: a music bed came back as
+  // "Thank you." twice, each word stretched over 18 s, the aligner placed none of its words, and the one stray word
+  // split the first sentence of the video in the transcript (2026-11-26). A line it couldn't spell has no say.
+  const judged = segments.filter(seg => seg.words.some(w => heard(w) !== undefined));
+  const noSpeech = judged.length > 0 && judged.every(notHeard);
+  const unheard = segments.map((seg, i) => (noSpeech && judged.includes(seg)) || (peaks[i] !== undefined &&
+    (peaks[i]! < UNHEARD_DBFS || (typical !== undefined && peaks[i]! <= typical - UNHEARD_BELOW_LINES_DB && notHeard(seg)))));
   const dropped = segments.filter((_, i) => unheard[i]);
   return dropped.length ? { segments: segments.filter((_, i) => !unheard[i]), dropped } : { segments, dropped };
 }
@@ -313,7 +318,7 @@ export async function fillTranscriptHoles(input: { wav: string; segments: Transc
   const heardOnly = withoutUnheardSegments(input.segments, levels, word => alignerHeard.get(word));
   if (heardOnly.dropped.length) {
     const lines = heardOnly.dropped.map(s => `“${s.text.trim()}” at ${(s.words[0]?.start ?? s.start).toFixed(1)} s`);
-    input.log(`[transcribe] took out ${lines.length} ${lines.length === 1 ? "line" : "lines"} Whisper wrote over quiet: ${lines.slice(0, 6).join(", ")}${lines.length > 6 ? ", …" : ""}`);
+    input.log(`[transcribe] took out ${lines.length} ${lines.length === 1 ? "line" : "lines"} Whisper wrote where nobody spoke: ${lines.slice(0, 6).join(", ")}${lines.length > 6 ? ", …" : ""}`);
   }
   // Placed on the sound first: a word stretched over a wait would hide the stretch the holes are looked for in.
   const { segments, moved } = wordsOnSound(heardOnly.segments, levels);

@@ -7799,6 +7799,11 @@ it("turns the header's Export white, with no mark, once the video has edits and 
   expect(ready()).toBe(false);
   await exports({ phase: "done", path: "/Users/me/Movies/Interview.mp4", context });
   expect(says()).toEqual([false, "Exported · Interview.mp4", null]);
+  // Captions saved since leave the video exported; captions alone don't make it so.
+  await exports({ phase: "done", path: "/Users/me/Movies/Interview.srt", context, sidecar: true, video: { path: "/Users/me/Movies/Interview.mp4", context } });
+  expect(says()).toEqual([false, "Exported · Interview.mp4", null]);
+  await exports({ phase: "done", path: "/Users/me/Movies/Interview.srt", context, sidecar: true });
+  expect(says()).toEqual([true, "Not exported since your last edit", null]);
   // A file exported from an earlier version of the video isn't this one's.
   await exports({ phase: "done", path: "/Users/me/Movies/Interview.mp4", context: "an earlier video" });
   expect(says()).toEqual([true, "Not exported since your last edit", null]);

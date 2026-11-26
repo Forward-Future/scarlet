@@ -136,7 +136,9 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     void exportFile(current, { format, name, video, ...(captions && exportTrackId ? { trackId: exportTrackId } : {}) });
   };
   const isYouTube = destination === "youtube" && !advanced;
-  const switchTo = !busy && !exportedCurrentEdit && <button type="button" className="btn-quiet mr-auto" onClick={() => setAdvanced(!advanced)}>
+  // Offered whenever no export is under way: once this version was exported it was gone, and so was Back, until the
+  // video changed (2026-11-26).
+  const switchTo = !busy && <button type="button" className="btn-quiet mr-auto" onClick={() => setAdvanced(!advanced)}>
     {advanced ? "Back" : "For Resolve, Final Cut or Premiere…"}
   </button>;
   const modalTitle = advanced

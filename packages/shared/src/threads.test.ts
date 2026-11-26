@@ -125,6 +125,17 @@ describe("buildThreads", () => {
     expect(threads.map(t => [t.id, t.tasks.map(x => x.id), t.changes.map(x => x.id)])).toEqual([["one", ["one"], ["a"]], ["two", ["two"], []]]);
   });
 
+  it("leaves a ⌘Z that took a put-back out again in no request of its own", () => {
+    const human = { type: "human", name: "Editor" };
+    const rejected = change("rejected", { threadId: "one", rejects: true, state: "approved", author: human, description: "Rejected · Shortened a pause",
+      fromVersion: "v1", toVersion: "v2", createdAt: at(2) });
+    const undo = change("undo", { state: "approved", author: human, description: "Undo · Rejected · Shortened a pause",
+      fromVersion: "v2", toVersion: "v3", revertsVersion: "v2", createdAt: at(3) });
+    const threads = buildThreads({ notes: [], tasks: [task("one", { changeIds: ["made"], context: { threadId: "one" } })],
+      changes: [change("made", { state: "approved", createdAt: at(1) }), rejected, undo] });
+    expect(threads.map(t => [t.id, t.changes.map(x => x.id)])).toEqual([["one", ["made", "rejected"]]]);
+  });
+
   it("names a thread by what was asked, a first cut as the first edit, and an older proposal by its description", () => {
     expect(only({ tasks: [task("t", { context: { message: "Make first cut" } })] }).title).toBe("First edit");
     expect(only({ tasks: [task("t", { instruction: "Expanded", context: { message: "tighter" } })] }).title).toBe("tighter");
