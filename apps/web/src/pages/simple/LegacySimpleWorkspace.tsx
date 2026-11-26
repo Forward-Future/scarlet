@@ -147,7 +147,7 @@ export function LegacySimpleWorkspace() {
   const threadIds = useMemo(() => ordered.map(t => t.id), [ordered]);
   const { justLanded, landedAt } = useLandingTracker(changes, current.reviewStatus);
 
-  // The fixed bottom review lists dock: merges For you / Working / Done (and untabbed See all) across requests so
+  // The fixed bottom review lists dock: merges Needs review / Working / Done (and untabbed See all) across requests so
   // edit lists stay fixed at the bottom above the message box while new messages flow above them.
   const [dock] = useState(() => new ReviewDockStore());
   const dockHasTabs = useSyncExternalStore(dock.subscribeHasTabs, dock.hasTabsSnapshot, dock.hasTabsSnapshot);
@@ -561,7 +561,7 @@ export function LegacySimpleWorkspace() {
   useEffect(() => { setDecideError(""); }, [pass?.id]);
   useEffect(() => { setStripError(""); }, [suggestion?.id]);
   /**
-   * Approve or skip the call that's playing, then move on to the next row still waiting in For you, a call or a
+   * Approve or skip the call that's playing, then move on to the next row still waiting in Needs review, a call or a
    * flagged edit. The last call applies the pass, with Scarlet's picks for the rest, or schedules it for when Scarlet
    * finishes checking.
    */
@@ -878,7 +878,7 @@ export function LegacySimpleWorkspace() {
   const asks = allCalls.filter(a => !sentBack(a.index));
   const cutCount = passCuts?.length ?? pass?.cutReasons?.length ?? 0;
   const passChoices = pass ? choicesOf(pass) : {};
-  // The calls still waiting on the editor: the ones For you counts.
+  // The calls still waiting on the editor: the ones Needs review counts.
   const waiting = (a: Call) => !sentBack(a.index) && passChoices[a.index] === undefined;
   const waitingCalls = allCalls.filter(waiting);
   const remainingCalls = listening ? waitingCalls.filter(a => a.index !== listening.index) : [];
@@ -1012,7 +1012,7 @@ export function LegacySimpleWorkspace() {
   // is on the version it proposes, where the pass's cuts sit elsewhere. The calls' dots are back when it closes.
   // The calls are on the timeline while the timeline is the pass's, while one of them is open, and while the editor
   // hasn't picked a request in the chat or gone to another's edit: they hold the next request. Another request picked,
-  // or the marked band let go, the timeline marks only that request's edits, or nothing, and For you leads to them.
+  // or the marked band let go, the timeline marks only that request's edits, or nothing, and Needs review leads to them.
   const callsShown = !!pass && (passThread?.id === focusThread?.id || listening?.changeId === pass.id || (typeof picked !== "string" && !focus));
   const marks: TimelineDot[] = pass && !suggestion
     ? !callsShown ? [] : allCalls.flatMap(a => {
@@ -1322,7 +1322,7 @@ export function LegacySimpleWorkspace() {
   }, [focus, threadTimeline.chosen, threadTimeline.error, openList, newest, settled]); // eslint-disable-line react-hooks/exhaustive-deps
   const shownIndex = reviewingEdit ? threadEdits.indexOf(reviewingEdit) : -1;
   // An edit made in several places is one edit, as the request's list shows it: one row, counted once in "1 of 3" and
-  // in For you, and ↑ ↓ and Keep go from edit to edit. A pass lists each of its edits on a line of its own.
+  // in Needs review, and ↑ ↓ and Keep go from edit to edit. A pass lists each of its edits on a line of its own.
   // A pass's list goes by moments: edits that play as one change are one row, kept together, and ↑ ↓ step from moment
   // to moment. An edit of a moment opened on its own from under the moment's row is a row of its own, beside the
   // moment's other edits, and Keep keeps just that one.
@@ -1341,7 +1341,7 @@ export function LegacySimpleWorkspace() {
   const passEditList = passThread?.id === focusThread?.id && threadTimeline.edits.length > 0 ? threadTimeline.edits : passEdits;
   const passEditNum = (e: Omit<ThreadEdit, "at">) => passEditNo.get(editKey(e))?.n
     ?? e.previous.map(p => passEditNo.get(editKey(p))?.n).find(n => n !== undefined);
-  // The waiting pass's calls and flagged edits together, in the order For you lists them: by time, as its rows lead
+  // The waiting pass's calls and flagged edits together, in the order Needs review lists them: by time, as its rows lead
   // with their times (the editor's call, 2026-11-24).
   const passForYouItems = pass && passThread ? passForYouOrder(
     allCalls.map(call => ({ call, at: listedAt.get(call.index) ?? call.start, num: callNo.get(call.index), waiting: waiting(call) })),
@@ -1354,7 +1354,7 @@ export function LegacySimpleWorkspace() {
     () => decidedPassCalls(pass && passThread?.id === focusThread?.id ? undefined : focusThread, threadEdits, threadTimeline.rejected),
     [pass, passThread?.id, focusThread, threadEdits, threadTimeline.rejected],
   );
-  // Whether the request has something for the editor to review, now or decided: its rows are then under For you,
+  // Whether the request has something for the editor to review, now or decided: its rows are then under Needs review,
   // Working and Done in the chat, as its block there works it out. With nothing to review it has one list of every edit.
   const asksEditor = (run?: { state: Task["state"] }) => run?.state === "waiting_for_user";
   const focusTabbed = (passIsFocus && allCalls.length > 0) || decidedCallRows.length > 0
@@ -1370,7 +1370,7 @@ export function LegacySimpleWorkspace() {
   const closeEdit = () => { player.pause(); threadTimeline.clear(); };
   // Every row of a request's lists is under exactly one tab (`rowPlace`), and the stops below are those rows as ↑ ↓
   // and Keep go through them: the chat draws its tabs by the same rule, so both agree on a tab's rows. A request that
-  // asks the editor a question about a cut or an edit waits on them, so its row is For you's.
+  // asks the editor a question about a cut or an edit waits on them, so its row is Needs review's.
   const passWaitingEdit = (e: ThreadEdit) => !!e.check && !passReviewed(e) && !passRevising(e);
   // A flagged edit whose revision has stopped to ask the editor something waits on them again, as a call that asks does.
   const waitsOrAsks = (e: ThreadEdit) => waitingEdit(e) || (!!e.check && asksEditor(revisingEdit(e)));
@@ -1410,7 +1410,7 @@ export function LegacySimpleWorkspace() {
     !stop ? undefined : stop.call ? { call: stop.call } : stop.row ? { edit: lead(stop.row) } : undefined;
   function editBeside(delta: number): { edit: ThreadEdit } | { call: Call } | undefined {
     if (!reviewingEdit) return undefined;
-    // Under the tabs, ↑ and ↓ step through the rows of the tab shown, in its order: For you's waiting rows, then the
+    // Under the tabs, ↑ and ↓ step through the rows of the tab shown, in its order: Needs review's waiting rows, then the
     // optional ones while that line is open; Working's; Done's. From an edit that isn't a row there (one just rejected,
     // or one of another tab) they step to the row after or before where it is.
     if (focusTabbed) return stopTarget(rowBeside(stopsShown(focusStops, activeFocusList, focusOrder), hereStop, here!, delta, focusOrder),
@@ -1483,7 +1483,7 @@ export function LegacySimpleWorkspace() {
       : delta > 0 ? list[0] : list.at(-1);
     return stopTarget(next, row => row.find(passWaitsOrAsks) ?? row[0]!);
   }
-  // Keep goes to the next row in For you's list: with low risk edits included, the very next row down that one list
+  // Keep goes to the next row in Needs review's list: with low risk edits included, the very next row down that one list
   // (flagged edit, call or low risk edit alike), wrapping to what still waits at the end, and closing once none is
   // left; with low risk edits off, the next row that waits, wrapping to earlier ones. A request with one list of
   // every edit goes down that list to the next row that hasn't been kept.
@@ -1503,7 +1503,7 @@ export function LegacySimpleWorkspace() {
   const nextAfterKeep = stopTarget(afterKeep, row => row.find(waitsOrAsks) ?? momentLead(row.find(unkeptEdit) ?? row[0]!)) ?? afterListKeep;
   const nextEditAfterKeep = nextAfterKeep && "edit" in nextAfterKeep ? afterKeep ? nextAfterKeep.edit : momentLead(nextAfterKeep.edit) : undefined;
   const nextCallAfterKeep = nextAfterKeep && "call" in nextAfterKeep ? nextAfterKeep.call : undefined;
-  // Keep or Reject edit on a call goes on the same way: to the next row in For you's list (including low risk edits when shown).
+  // Keep or Reject edit on a call goes on the same way: to the next row in Needs review's list (including low risk edits when shown).
   const openStops = listening && pass ? passStopsNow() : [];
   const callHereStop = listening ? openStops.find(stop => stop.call?.index === listening.index) : undefined;
   const callHere = listening ? { at: listedAt.get(listening.index) ?? listening.cut.start, num: callNo.get(listening.index) } : undefined;
@@ -1634,7 +1634,7 @@ export function LegacySimpleWorkspace() {
     }
     moveOnFromShown();
   }
-  /** Next row in the unified fixed bottom dock's For you Priority list. */
+  /** Next row in the unified fixed bottom dock's Needs review Priority list. */
   function nextDockAfterKeep(hereAt: number): DockEntry | undefined {
     const waitingList = dock.waitingEntries(threadIds);
     const includeConfident = dockList !== "need" || waitingList.length === 0;
@@ -1680,7 +1680,7 @@ export function LegacySimpleWorkspace() {
     else if (nextCallAfterKeep) actions.listen(pass!, nextCallAfterKeep);
     else closeEdit();
   }
-  // A revision sent from a row of For you goes on as Keep does (the editor chose this on 2026-11-23): the row is
+  // A revision sent from a row of Needs review goes on as Keep does (the editor chose this on 2026-11-23): the row is
   // Working's now, and the card moves to the next one that waits. From Working or Done, and in a request with one
   // list of every edit, the card stays on the edit it revised.
   function moveOnFromRevised() {
@@ -1759,7 +1759,7 @@ export function LegacySimpleWorkspace() {
   useWatchedMomentAutoKeep(watching, watchedMoments, current.id, focusThread?.id, head);
   useEditCardShortcuts(workspaceActive && !!reviewingEdit, stepEdit, closeEdit);
 
-  // ↑ and ↓ step through the pass's For you items (calls and flagged edits), one at a time.
+  // ↑ and ↓ step through the pass's Needs review items (calls and flagged edits), one at a time.
   const stopListening = () => { player.pause(); setListening(undefined); };
   function stepCut(delta: number) {
     if (dockHasTabs && !dock.explicitAllReport(threadIds)) {

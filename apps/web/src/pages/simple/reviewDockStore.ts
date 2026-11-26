@@ -298,7 +298,7 @@ export class ReviewDockStore {
   }
 
   /**
-   * Priority-ordered For you entries: flagged/waiting rows first (timeline order), followed by
+   * Priority-ordered Needs review entries: flagged/waiting rows first (timeline order), followed by
    * confident/unflagged rows when `showAll` is true (newest request first, timeline order within each request).
    */
   priorityForYou(threadIds: readonly string[], showAll: boolean): DockEntry[] {
@@ -349,7 +349,7 @@ export class ReviewDockStore {
       .filter(e => !e.row.rejected && !!(e.row.stepOpen ?? e.row.open));
   }
 
-  /** Waiting ("For you") entries that still need a decision or an answer, ordered by timeline time. */
+  /** Waiting ("Needs review") entries that still need a decision or an answer, ordered by timeline time. */
   waitingEntries(threadIds: readonly string[]): DockEntry[] {
     return this.priorityForYou(threadIds, false)
       .filter(e => (e.row.needs || e.row.asks) && !e.row.rejected && !!e.row.open);
@@ -365,7 +365,7 @@ export class ReviewDockStore {
 }
 
 /**
- * Step ↑ (-1) or ↓ (+1) through `nav` (Priority-ordered on For you: flagged rows in timeline order,
+ * Step ↑ (-1) or ↓ (+1) through `nav` (Priority-ordered on Needs review: flagged rows in timeline order,
  * followed by confident rows newest-request-first). When `current` is in `nav`, steps strictly by index;
  * when `current` left `nav` (e.g. just rejected or from another tab), stays aligned with its tier.
  */
@@ -406,7 +406,7 @@ export function useReviewDockStore(): ReviewDockStore | undefined {
   return useContext(ReviewDockContext);
 }
 
-/** Subscribe only to whether ANY thread in the project has review tabs (For you / Working / Done). */
+/** Subscribe only to whether ANY thread in the project has review tabs (Needs review / Working / Done). */
 export function useDockHasTabs(): boolean {
   const store = useContext(ReviewDockContext);
   return useSyncExternalStore(

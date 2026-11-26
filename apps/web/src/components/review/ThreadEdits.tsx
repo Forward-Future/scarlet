@@ -177,7 +177,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   /** The queued request Scarlet will take up next, so its edit's row says "Up next" instead of "Queued". */
   nextQueuedId?: string;
   label?: string; leaving?(edit: ListedEdit): boolean;
-  /** The rows that are in For you's list only while low risk edits are included: they open into it and close out of it. */
+  /** The rows that are in Needs review's list only while low risk edits are included: they open into it and close out of it. */
   low?(edit: ListedEdit): boolean;
   /** Drawn inside the beta edits column: use Scarlet's hover tooltip instead of the system title tooltip. */
   inRail?: boolean;
@@ -263,7 +263,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const asks = asksEditor(revisingNow);
       const version = edit.previous.length ? edit.previous.length + 1 : 0;
       const decided = isKept && !isRevising;
-      // In For you, a handled edit says how it was decided (Kept, or Done for a marker).
+      // In Needs review, a handled edit says how it was decided (Kept, or Done for a marker).
       // Otherwise every edit ends on a consistent word for what it did (Cut, Audio, B-roll, Edit…).
       const value = only && decided ? (edit.marker ? "Done" : "Kept") : editRowWord(edit);
       const check = asks || (places > 1 ? needs > 0 : !!edit.check && !isRevising);
@@ -277,7 +277,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const checkTitle = revised || edit.reason ? undefined : edit.check;
       const isLeaving = !!leaving?.(edit);
       const showUnkeep = decided && !edit.marker && !isLeaving && unkeepRefs.length > 0;
-      const unkeepTip = edit.check ? "Move back to For you" : only ? "Move back to safe edits" : "Unkeep";
+      const unkeepTip = edit.check ? "Move back to Needs review" : only ? "Move back to safe edits" : "Unkeep";
       return <Fragment key={editKey(edit)}><li className={[isLeaving && "is-leaving", showUnkeep && "has-unkeep"].filter(Boolean).join(" ") || undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
