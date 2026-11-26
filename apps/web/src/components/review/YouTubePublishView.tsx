@@ -6,6 +6,7 @@ import {
   type YouTubeUploadJob,
   type YouTubeVisibility,
 } from "@scarlet/shared";
+import { appLog, errorName } from "../../lib/appLog";
 import { api, errorMessage } from "../../lib/client";
 import { desktop, isDesktop } from "../../lib/desktop";
 import { fmtBytes, pct } from "../../lib/format";
@@ -154,8 +155,9 @@ export function useYouTubePublish(current: ProjectData, active: boolean, hasCut:
       await navigator.clipboard.writeText(chaptersText);
       setCopiedChapters(true);
       window.setTimeout(() => setCopiedChapters(false), 1800);
-    } catch {
+    } catch (error) {
       // Clipboard may be unavailable in restricted contexts.
+      appLog("error", "clipboard", { what: "chapters", name: errorName(error) }, { level: "warn" });
     }
   };
 

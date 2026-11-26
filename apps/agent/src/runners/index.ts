@@ -4,6 +4,7 @@ import { providerRunEnv, resolveProviders } from "../providers.js";
 import { runClaude } from "./claude.js";
 import { runCodex } from "./codex.js";
 import { runGemini } from "./gemini.js";
+import { runnerLog } from "./spawn.js";
 import type { RunAgentFn, RunAgentOptions, RunAgentResult } from "./types.js";
 
 /**
@@ -13,8 +14,17 @@ import type { RunAgentFn, RunAgentOptions, RunAgentResult } from "./types.js";
 export function providerRunner(agent: ExtraProvider): RunAgentFn {
   return async (opts) => {
     const base = opts.env ?? process.env;
-    const built = providerRunEnv(agent, opts.model, base, resolveProviders(opts.providers, base));
-    if ("error" in built) return { ok: false, summary: "", error: built.error };
+    const providers = resolveProviders(opts.providers, base);
+    const built = providerRunEnv(agent, opts.model, base, providers);
+    const runLog = runnerLog(opts, agent);
+    if ("error" in built) {
+      runLog(`could not start: ${built.error}`);
+      return { ok: false, summary: "", error: built.error };
+    }
+    // The address's host only: a URL typed into agent.json could carry a password.
+    let at = "";
+    try { at = ` at ${new URL(providers[agent].url).host}`; } catch { /* not an address: said without one */ }
+    runLog(`runs through Claude Code${at}`);
     return runClaude({ ...opts, effort: undefined, fast: undefined, serviceTier: undefined, env: built.env, settingsEnv: built.settingsEnv });
   };
 }

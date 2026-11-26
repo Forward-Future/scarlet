@@ -9,7 +9,7 @@ import { errorMessage } from "../../lib/client";
 import type { Call, CutChoice } from "../../lib/passCalls";
 import type { Thread } from "../../lib/threads";
 import { recordUndo, useUndoStore } from "../../lib/undo";
-import { appLog } from "../../lib/appLog";
+import { appLog, errorName } from "../../lib/appLog";
 import { player } from "../../lib/player";
 import { useProjectStore } from "../../stores/project";
 import type { AppliedCutSide } from "./useAppliedCut";
@@ -307,6 +307,7 @@ export function useCutAdjust({
       }
       appLog("action", "adjust-cut", { change: reviewingEdit.changeId, spot: reviewingEdit.spot, rejected: res.rejected });
     } catch (e) {
+      appLog("action", "adjust-cut-failed", { change: reviewingEdit.changeId, spot: reviewingEdit.spot, name: errorName(e) }, { level: "warn" });
       if (pullsToZero) onEngineLeave?.(false);
       useUndoStore.setState({ error: { projectId, text: errorMessage(e) } });
     } finally {
@@ -360,6 +361,7 @@ export function useCutAdjust({
       }
       appLog("action", "adjust-edit", { change: reviewingEdit.changeId, spot: reviewingEdit.spot, kind: reviewingEdit.kind, rejected: res.rejected });
     } catch (e) {
+      appLog("action", "adjust-edit-failed", { change: reviewingEdit.changeId, spot: reviewingEdit.spot, kind: reviewingEdit.kind, name: errorName(e) }, { level: "warn" });
       if (pullsToZero) onEngineLeave?.(false);
       useUndoStore.setState({ error: { projectId, text: errorMessage(e) } });
     } finally {
@@ -406,6 +408,7 @@ export function useCutAdjust({
       }));
       appLog("action", "adjust-call", { change: revised.id, cut: newIndex, start: nextWorking.start, end: nextWorking.end });
     } catch (e) {
+      appLog("action", "adjust-call-failed", { change: pass.id, cut: openCall.index, name: errorName(e) }, { level: "warn" });
       useUndoStore.setState({ error: { projectId, text: errorMessage(e) } });
     } finally {
       busy.current = false;

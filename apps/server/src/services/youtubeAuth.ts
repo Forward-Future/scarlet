@@ -18,7 +18,10 @@ import type { AddressInfo } from "node:net";
 import type { YouTubeChannel, YouTubeConfigRequest, YouTubeConnectionStatus } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest, HttpError } from "../errors.js";
+import { clip, throttledPerCtx } from "../logText.js";
 import { restrictWindowsAccess } from "../privateStorage.js";
+
+const storeFailures = throttledPerCtx();
 
 export const YOUTUBE_SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
@@ -167,13 +170,18 @@ function readStore(ctx: Ctx): StoredYouTubeAuth {
   try {
     parsed = JSON.parse(raw);
   } catch {
+    // Read on every status check, so this is logged once a minute. Nothing of the file itself is logged.
+    storeFailures(ctx)("parse", "[youtube] the saved YouTube sign-in can’t be read: it reads as disconnected");
     return {};
   }
   if (!parsed || typeof parsed !== "object") return {};
   const obj = parsed as Record<string, unknown>;
   if (obj.v === 2 && typeof obj.iv === "string" && typeof obj.tag === "string" && typeof obj.data === "string") {
     const keyText = readPrivateFile(ctx.paths.youtubeKey)?.trim();
-    if (!keyText || !/^[a-f0-9]{64}$/i.test(keyText)) return {};
+    if (!keyText || !/^[a-f0-9]{64}$/i.test(keyText)) {
+      storeFailures(ctx)("key", "[youtube] the key for the saved YouTube sign-in is missing or unreadable: it reads as disconnected");
+      return {};
+    }
     try {
       const decipher = createDecipheriv("aes-256-gcm", Buffer.from(keyText, "hex"), Buffer.from(obj.iv, "base64"));
       decipher.setAuthTag(Buffer.from(obj.tag, "base64"));
@@ -181,6 +189,7 @@ function readStore(ctx: Ctx): StoredYouTubeAuth {
       const data = JSON.parse(decrypted);
       return data && typeof data === "object" ? (data as StoredYouTubeAuth) : {};
     } catch {
+      storeFailures(ctx)("decrypt", "[youtube] the saved YouTube sign-in couldn’t be decrypted with its key: it reads as disconnected");
       return {};
     }
   }
@@ -700,7 +709,8 @@ export async function getValidYouTubeAccessToken(ctx: Ctx, opts: { forceRefresh?
         body: body.toString(),
         signal: AbortSignal.any([AbortSignal.timeout(15_000), ctx.shutdown]),
       });
-    } catch {
+    } catch (error) {
+      if (!ctx.shutdown.aborted) ctx.log(`[youtube] token refresh couldn’t reach Google: ${clip((error as Error)?.message ?? String(error))}`);
       throw new HttpError(503, "youtube_offline", "Couldn’t reach YouTube. Check your internet connection and try again.");
     }
 
@@ -711,9 +721,10 @@ export async function getValidYouTubeAccessToken(ctx: Ctx, opts: { forceRefresh?
         cur.needsReconnect = true;
         writeStore(ctx, latest);
         publishStatus(ctx);
-        ctx.log("[youtube] token refresh rejected: reconnect required");
+        ctx.log(`[youtube] token refresh rejected: reconnect required (HTTP ${res.status}${errCode ? ` ${clip(errCode, 40)}` : ""})`);
         throw new HttpError(401, "youtube_reconnect_required", "Your YouTube sign-in expired or was revoked. Reconnect your account in Settings.");
       }
+      ctx.log(`[youtube] token refresh failed: HTTP ${res.status}${errCode ? ` ${clip(errCode, 40)}` : ""}`);
       throw new HttpError(502, "youtube_refresh_failed", "Couldn’t refresh your YouTube sign-in. Try again.");
     }
 

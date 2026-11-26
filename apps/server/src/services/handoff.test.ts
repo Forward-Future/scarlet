@@ -12,7 +12,7 @@ it("gives each source, generated solid and subtitle file a distinct name in the 
   const root = await mkdtemp(join(tmpdir(), "scarlet-handoff-"));
   try {
     await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=blue:s=64x64", "-frames:v", "1", join(root, "upload.png")]);
-    const ctx = { paths: { media: () => root, tmp: root } } as unknown as Ctx;
+    const ctx = { paths: { media: () => root, tmp: root }, log: () => {} } as unknown as Ctx;
     const project = createProject("Handoff", { width: 64, height: 64 });
     project.media = [{ id: "upload", kind: "image", name: "Solid ff0000.png", path: "upload.png", width: 64, height: 64 }];
     const timeline = emptyTimeline(project.id);

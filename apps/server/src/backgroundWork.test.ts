@@ -106,7 +106,8 @@ it("logs an import whose preparation broke off without being marked failed", asy
   expect(res.status).toBe(201);
   const { media } = await res.json() as { media: { id: string } };
   await settle();
-  expect(lines.filter(line => line.startsWith("[ingest]"))).toEqual([
+  // The fingerprint's own line comes first; what matters here is how the preparation ended.
+  expect(lines.filter(line => line.startsWith("[ingest]") && !line.includes(" fingerprinted "))).toEqual([
     `[ingest] ${media.id} failed: database is locked`,
     `[ingest] ${media.id} stopped part-way and stays unfinished until Scarlet restarts: database is locked`,
   ]);

@@ -58,3 +58,13 @@ export function requestLogId(request: Request): string {
 export function logId(id: string): string {
   return /^(?:(?:tsk|med|prj|rnd|chg|host)_[a-z0-9]{12}|chg_[a-f0-9]{64}_(?:applied|review))$/.test(id) ? id : "unknown";
 }
+
+/** A `throttledLog` for each engine context, made on first use: `const failures = throttledPerCtx(); failures(ctx)(key, line)`. */
+export function throttledPerCtx() {
+  const logs = new WeakMap<object, ReturnType<typeof throttledLog>>();
+  return (ctx: { log(line: string): void }) => {
+    let log = logs.get(ctx);
+    if (!log) logs.set(ctx, log = throttledLog(line => ctx.log(line)));
+    return log;
+  };
+}

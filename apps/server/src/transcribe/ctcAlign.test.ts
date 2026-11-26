@@ -376,7 +376,9 @@ describe("transcript alignment", () => {
     expect(out[3]!.words).toEqual([{ text: "hello", start: 91.25, end: 91.5 }, { text: "2024", start: 92, end: 93 }]);
     expect((await readdir(dir)).filter(f => f.endsWith(".json"))).toEqual([]);
     // One line for the whole transcript, once its last turn is done: each "hello" was placed and no "2024".
-    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[align\] source\.mov: placed 24 of 48 words in \d+(ms|s)$/)]]);
+    // The decoded audio isn't there, so the gaps round the words it couldn't place go unmeasured, and the log says so once.
+    expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[align\] source\.mov: placed 24 of 48 words in \d+(ms|s)$/)],
+      [expect.stringMatching(/^\[align\] source\.mov: couldn't open the audio to measure the gaps between words, so words the aligner couldn't place keep its older fallback: ENOENT/)]]);
   });
 
   it("reports how far into the speech it has reached, and hands over each turn's words but the last", async () => {

@@ -72,7 +72,7 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
     headTimelineOrNull, transcriptWords, joinPages, measureTimeline,
     edgesInSound, edgeInSoundText,
   } = session;
-  const { without, withoutUnlessPreparing } = errors;
+  const { without, withoutUnlessPreparing, withoutOnce } = errors;
   const { ripplesOnFrames, propose, presetInsetOver, presetInsetText } = proposePipeline;
   const intentInput = makeIntentInput(Boolean(taskId));
 
@@ -143,7 +143,7 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
     const transcripts = new Map<string, TranscriptWord[]>();
     for (const id of new Set(on.tracks.flatMap(t => t.clips.flatMap(c => c.kind === "media" && !except.has(c.mediaId) ? [c.mediaId] : [])))) {
       if (!project.media.some(m => m.id === id && carriesAudio(m))) continue;
-      const words = await transcriptWords(id, false).catch(() => null);
+      const words = await transcriptWords(id, false).catch(withoutOnce(`failed to read the words of ${id} on the timeline`, null));
       if (words?.length) transcripts.set(id, words);
     }
     return timelineWords(on, transcripts).filter(w => w.end > w.start).map(w => ({ start: w.start, end: w.end }));
@@ -304,7 +304,7 @@ ${OPS_DOC}`,
       if (splitJoins.length && !result.isError) {
         const said = new Map<string, TranscriptWord[] | null>();
         for (const mediaId of new Set(splitJoins.flatMap(j => [j.left.mediaId, j.right.mediaId])))
-          said.set(mediaId, await transcriptWords(mediaId, false).catch(() => null));
+          said.set(mediaId, await transcriptWords(mediaId, false).catch(withoutOnce(`failed to read the words of ${mediaId} beside a split join`, null)));
         notes.push(`Split joins: ${JSON.stringify(splitJoinEvidence(applyOps(before!, body.ops!), splitJoins, id => said.get(id)))}`);
       }
       return notes.length ? { ...result, content: [...result.content, ...notes.map(text => ({ type: "text" as const, text }))] } : result;

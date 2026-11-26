@@ -10,9 +10,12 @@ import { join } from "node:path";
 import { fileInDirectory, probeMedia, screenFrameSize, screenFrames } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
-import { atomicWriteFile, rememberLast, round3 } from "../util.js";
+import { atomicWriteFile, errorMessage, rememberLast, round3 } from "../util.js";
+import { clip, throttledPerCtx } from "../logText.js";
 import { machineBusy, pictureDecoder, pictureLane } from "./pictureWork.js";
 import { previewCopyByTime } from "./previewPictures.js";
+
+const copyFailures = throttledPerCtx();
 
 export type VideoMedia = MediaAsset & { projectId: string };
 
@@ -226,7 +229,11 @@ export async function withFrames<T>(ctx: Ctx, media: VideoMedia, file: string, n
   frames: { start: number; end: number; fps: number; width: number; height: number; signal: AbortSignal; batch?: number; fromCopy?: boolean; background?: boolean },
   keep: (at: number, rgb: Buffer) => boolean, use: (path: string, times: number[]) => Promise<T>): Promise<T[]> {
   const { start, end, fps, width, height, signal, batch = Infinity } = frames;
-  const copy = frames.fromCopy ? await previewCopyByTime(ctx.paths.media(media.projectId), media, height, signal).catch(() => undefined) : undefined;
+  const copy = frames.fromCopy ? await previewCopyByTime(ctx.paths.media(media.projectId), media, height, signal).catch((error: unknown) => {
+    // Asked for with each reading of the recording, so a copy that can't be looked up is logged once a minute.
+    if (!signal.aborted) copyFailures(ctx)(`${name}\0${media.id}`, `[${name}] ${media.id}: its preview copy couldn’t be looked up, the original is read: ${clip(errorMessage(error))}`);
+    return undefined;
+  }) : undefined;
   // CUDA shrinks each frame on the GPU before it comes back to memory. VideoToolbox hands back every 4K frame whole:
   // ten seconds of a 4K recording took 2.6 s that way and 0.5 s on the CPU (M-series, 2026-11-13), so it decodes an
   // original only while the machine is too busy to give the CPU's decoder its cores.

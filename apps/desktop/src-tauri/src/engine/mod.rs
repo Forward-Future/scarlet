@@ -74,8 +74,10 @@ async fn kill_group(pid: u32) {
     if pid == 0 {
         return;
     }
-    // Usually nothing is left in the group, and `kill` only has that to say.
-    let _ = tokio::process::Command::new("/bin/kill").args(["-KILL", "--", &format!("-{pid}")]).stderr(Stdio::null()).status().await;
+    // Usually nothing is left in the group, and `kill` only has that to say. Not starting it would leave the group running.
+    if let Err(e) = tokio::process::Command::new("/bin/kill").args(["-KILL", "--", &format!("-{pid}")]).stderr(Stdio::null()).status().await {
+        log::warn!("[desktop] engine-group-kill-failed pid={pid} code={}", e.raw_os_error().unwrap_or(0));
+    }
 }
 
 impl Running {
@@ -245,7 +247,7 @@ impl EngineManager {
             f(&mut s);
             s.clone()
         };
-        let _ = self.app.emit("engine://status", &snapshot);
+        crate::util::note_emit("engine://status", self.app.emit("engine://status", &snapshot));
     }
 
     /// Spawn the engine and supervise it until `stop()`.
@@ -257,6 +259,7 @@ impl EngineManager {
         let launch = match resolve_engine_launch(&self.paths.home, self.paths.resource_dir.as_deref()) {
             Ok(l) => l,
             Err(e) => {
+                log::error!("engine: cannot start, no engine to run: {e:#}");
                 self.update(|s| {
                     s.state = "error".into();
                     s.error = Some(e.to_string());
@@ -432,6 +435,7 @@ impl EngineManager {
             return Ok(());
         }
         log::info!("engine: spawning {} serve --solo --data {} --port {port}", launch.describe(), self.paths.data_dir.display());
+        let spawned = Instant::now();
         let mut child = cmd.spawn().map_err(|e| anyhow!("spawn engine ({}): {e}", launch.program))?;
         let pid = child.id().ok_or_else(|| anyhow!("engine has no process id"))?;
         let stdin = child.stdin.take();
@@ -456,7 +460,7 @@ impl EngineManager {
                     // stop() owns the child. A late ready line must not restart the host.
                     return Ok(());
                 }
-                log::info!("[desktop] engine-ready pid={pid} stage=startup kind={}", launch.kind);
+                log::info!("[desktop] engine-ready pid={pid} stage=startup kind={} elapsedMs={}", launch.kind, spawned.elapsed().as_millis());
                 self.port.store(info.port, Ordering::SeqCst);
                 self.update(|s| {
                     s.state = "ready".into();
