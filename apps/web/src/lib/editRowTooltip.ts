@@ -20,6 +20,8 @@ export interface RowTooltipContext {
   media?: readonly Pick<MediaAsset, "id" | "name">[];
   fps?: number;
   status?: string;
+  /** The model at work on it now, while Scarlet adds or revises it ("B-roll · Gemini 3 Pro" when handed off). */
+  by?: string;
   version?: number;
   places?: number;
 }
@@ -522,6 +524,7 @@ export function editRowTooltip(edit: EditLike, ctx: RowTooltipContext = {}): Row
 
   if (ctx.places && ctx.places > 1) parts.push(`in ${ctx.places} places`);
   if (ctx.status && ctx.status !== "Rejected") parts.push(ctx.status);
+  if (ctx.by) parts.push(ctx.by);
 
   // Quiet detail line underneath: review cue when waiting, to-do ask, or Scarlet's reason when distinct from the row title.
   const waitingCheck = !edit.rejected && ctx.status !== "Kept" && ctx.status !== "Done" && edit.check && edit.check !== REVISED_CHECK
