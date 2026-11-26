@@ -47,10 +47,9 @@ export function ignorePageShortcut(e: KeyboardEvent, owner?: Element | null): bo
   if (e.key === "Escape" && document.querySelector("[data-escape-owner]")) return true;
   // A stretch marked on the timeline goes on Esc before an edit's card or anything else the page closes.
   if (e.key === "Escape" && markedRangeOf(useUiStore.getState().agentContext)) return true;
-  // A focused handle of the marked range takes its own Esc, and leaves Space to the player: it has no click of its own.
-  const handle = e.target instanceof Element && !!e.target.closest("[data-range-handle]");
-  if (e.key === "Escape" && handle) return true;
-  if (e.key === " " && !handle && e.target instanceof Element && e.target.closest('button, a, [role="button"]') && !mediaPlaying()) return true;
+  // A focused handle of the marked range takes its own Esc, and leaves Space to the player: neither it nor a cut's edge handle has a click of its own.
+  if (e.key === "Escape" && e.target instanceof Element && e.target.closest("[data-range-handle]")) return true;
+  if (e.key === " " && e.target instanceof Element && !e.target.closest("[data-range-handle], [data-cut-handle]") && e.target.closest('button, a, [role="button"]') && !mediaPlaying()) return true;
   // A clip inside version history can handle its own keys while the drawer has focus.
   const dialog = owner?.closest("dialog[open]");
   if (dialog && e.target instanceof Element && e.target.closest("dialog[open]") === dialog) {
