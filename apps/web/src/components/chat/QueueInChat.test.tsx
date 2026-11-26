@@ -3,7 +3,7 @@ import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ScarletApiError } from "@scarlet/shared";
-import { QueueInChat, useRewordingHold, type QueuedRequest } from "./QueueInChat";
+import { QueueInChat, queueRuns, runTag, useRewordingHold, type QueuedRequest } from "./QueueInChat";
 
 let root: Root;
 let container: HTMLDivElement;
@@ -219,4 +219,46 @@ it("uses the latest hold and onLost passed in without asking again", async () =>
   expect(second).not.toHaveBeenCalled();
   await act(async () => root.render(<></>));
   expect(second).toHaveBeenCalledWith("q1", false);
+});
+
+const add = (id: string, time: string): QueuedRequest => ({ id, text: "Add it", target: `Edit at ${time}` });
+const adds = ["8:53", "9:26", "11:12", "13:56", "14:06"].map((time, i) => add(`a${i}`, time));
+
+it("gathers the same request asked in a row about different spots into one run", () => {
+  const queue = [{ id: "m", text: "Add music" }, ...adds, { id: "z", text: "Tighten the end" }];
+  expect(queueRuns(queue).map(r => r.run.map(i => i.id))).toEqual([["m"], adds.map(a => a.id), ["z"]]);
+  expect(queueRuns(queue)[1]!.index).toBe(1);
+});
+
+it("keeps apart requests without a spot, with other words, the first when asked, and the one being reworded", () => {
+  expect(queueRuns([{ id: "x", text: "Add it" }, { id: "y", text: "Add it" }]).length).toBe(2);
+  expect(queueRuns([add("a", "0:01"), { ...add("b", "0:02"), text: "Cut it" }]).length).toBe(2);
+  expect(queueRuns(adds, { keepFirst: true }).map(r => r.run.length)).toEqual([1, 4]);
+  expect(queueRuns(adds, { apart: "a2" }).map(r => r.run.length)).toEqual([2, 1, 2]);
+});
+
+it("tags a run by its first spots' times and counts the rest", () => {
+  expect(runTag(["Edit at 8:53", "Edit at 9:26"])).toBe("Edit at 8:53, 9:26");
+  expect(runTag(adds.map(a => a.target!))).toBe("Edit at 8:53, 9:26 +3");
+  expect(runTag(["Edit at 8:53", "Cut at 9:26", "Edit at 9:30"])).toBe("Edit at 8:53 +2");
+});
+
+it("shows a run as one bubble that opens to each request, and its × takes them all out", async () => {
+  const onRemove = vi.fn();
+  await show({ items: [{ id: "m", text: "Add music" }, ...adds], onRemove });
+  expect(container.querySelectorAll(".queue-bubble").length).toBe(2);
+  const open = container.querySelector<HTMLButtonElement>(".queue-batch-open")!;
+  expect(open.textContent).toBe("Edit at 8:53, 9:26 +3");
+  await act(async () => open.click());
+  expect(container.querySelectorAll(".queue-bubble").length).toBe(6);
+  await act(async () => container.querySelector<HTMLButtonElement>(".queue-batch-close")!.click());
+  expect(container.querySelectorAll(".queue-bubble").length).toBe(2);
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label^="Remove all 5"]')!.click());
+  expect(onRemove.mock.calls.map(c => c[0])).toEqual(adds.map(a => a.id));
+});
+
+it("says a run is up next when it comes first", async () => {
+  await show({ items: adds });
+  expect(container.querySelectorAll(".queue-bubble").length).toBe(1);
+  expect(markers()).toEqual(["Up next"]);
 });
