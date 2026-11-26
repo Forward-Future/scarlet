@@ -84,12 +84,14 @@ export function projectRoutes(ctx: Ctx) {
   /** Read the project's history once for every requested thread, then project each list on its own turn so
    * playback and frame requests run between long histories. A list that fails to project fails alone. */
   async function editLists(projectId: string, ids: string[]) {
-    const { project, threads, head, links, media } = ctx.db.transaction(() => {
+    const { project, threads, projectChanges, head, links, media } = ctx.db.transaction(() => {
       const project = requireProjectHeader(ctx, projectId);
       const wanted = new Set(ids);
-      const threads = ctx.repos.projects.threads(projectId).filter(thread => wanted.has(thread.id));
+      const allThreads = ctx.repos.projects.threads(projectId);
+      const threads = allThreads.filter(thread => wanted.has(thread.id));
+      const projectChanges = allThreads.flatMap(thread => thread.changes);
       const head = project.head ? ctx.repos.versions.get(projectId, project.head)?.timeline : undefined;
-      return { project, threads, head, links: head ? ctx.repos.versions.links(projectId) : [], media: head ? ctx.repos.projects.listMedia(projectId) : [] };
+      return { project, threads, projectChanges, head, links: head ? ctx.repos.versions.links(projectId) : [], media: head ? ctx.repos.projects.listMedia(projectId) : [] };
     })();
     // Saved versions are never rewritten or removed, so reading them after the snapshot sees the same history.
     const read = (version: string) => ctx.repos.versions.get(projectId, version)?.timeline;
@@ -98,7 +100,7 @@ export function projectRoutes(ctx: Ctx) {
     for (const [i, thread] of threads.entries()) {
       if (i) await new Promise(resolve => setImmediate(resolve));
       try {
-        lists.push([thread.id, head ? nameCutRowsByWords(ctx, projectId, threadTimeline(thread, head, links, read, project.settings.fps, media), read) : []]);
+        lists.push([thread.id, head ? nameCutRowsByWords(ctx, projectId, threadTimeline(thread, head, links, read, project.settings.fps, media, projectChanges), read) : []]);
       } catch (error) {
         failed.push([thread.id, error instanceof Error ? error : new Error(String(error))]);
       }

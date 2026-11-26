@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Updating existing B-roll To-dos or other edits from a follow-up request now replaces the earlier rows in Needs review instead of listing old and new versions side by side.
 - In the beta layout, your message bubbles in the chat now always show your full text instead of cutting off after two lines.
 - Hovering an added sound in the edits list now reads "Added Warm bed (−6 dB)" instead of "Added Warm bed, quieter (−6 dB)".
 - Dragging the edge of a voice edit on its own audio track now gives the time to or takes it from the sound beside it, instead of refusing or leaving a silent gap.

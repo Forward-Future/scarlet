@@ -25,6 +25,7 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   // Located on the working cut on screen, which holds while the video plays: the engine's list for a newer one waits.
   const head = useShownCutStore(s => s.head);
   const media = useProjectStore(s => s.current?.media);
+  const projectChanges = useProjectStore(s => s.current?.changes);
   // An edit another request made counts here once this request flagged it.
   const applied = !!thread?.changes.some(c => c.state === "approved") || !!thread?.flagged?.length;
   const key = useThreadEditKey(projectId, head, thread);
@@ -60,7 +61,7 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   // initial engine read is still in flight, stay empty so stale/undone/no-op edits never flash and disappear.
   const failed = !!thread && loaded?.threadId === thread.id && loaded.edits === undefined;
   const fallback = !head || failed;
-  const saved = useMemo(() => thread && !resolved && fallback ? threadEditList(thread, media) : noEdits, [thread, media, resolved, fallback]);
+  const saved = useMemo(() => thread && !resolved && fallback ? threadEditList(thread, media, projectChanges) : noEdits, [thread, media, projectChanges, resolved, fallback]);
   const edits = resolved ?? (fallback ? saved : noEdits);
   useEffect(() => { if (current && loaded.edits) shown.current = { key, edits }; }, [current, loaded, key, edits]);
   // An edit the editor rejected is out of the video: it is no edit to open, count or mark, only a row that says so.
