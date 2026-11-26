@@ -171,7 +171,7 @@ export function SimpleWorkspaceBeta() {
   const [rail] = useState(() => new RailStore());
   const railVersion = useSyncExternalStore(rail.subscribe, rail.snapshot, rail.snapshot);
   const railView = rail.view();
-  const [railOpen, setRailOpen] = useState({ working: true, done: false, low: true });
+  const [railOpen, setRailOpen] = useState({ working: true, done: false, low: false });
   const [flashedThread, setFlashedThread] = useState<string>();
   const flashTimer = useRef<number>(0);
   useEffect(() => () => clearTimeout(flashTimer.current), []);
@@ -904,6 +904,7 @@ export function SimpleWorkspaceBeta() {
       if (waitingRow) {
         waitingRow.open?.();
       } else if (confidentRow) {
+        setRailOpen(was => was.low ? was : { ...was, low: true });
         confidentRow.open?.();
       } else if (workingRow) {
         setRailOpen(was => was.working ? was : { ...was, working: true });
@@ -1812,14 +1813,14 @@ export function SimpleWorkspaceBeta() {
   }, [appliedTarget?.version, threadTimeline.located, reviewingEdit]);
   const editOpen = !!reviewingEdit;
   const openEditKey = reviewingEdit && editKey(reviewingEdit);
-  // Opening a Working/Done edit unfolds its section.
+  // Opening a Safe/Working/Done edit unfolds its section.
   // Manually refolding that section while the same edit stays open keeps it folded.
   const lastUnfoldedSection = useRef<string>(undefined);
   useEffect(() => {
     const sec = openRailRow?.section;
     const openKey = reviewingEdit && focusThread ? `${focusThread.id}:${openEditKey}` : openCall && pass ? `call:${pass.id}:${openCall.index}` : undefined;
-    const key = openKey && (sec === "working" || sec === "done") ? `${sec}:${openKey}` : undefined;
-    if (!key || (sec !== "working" && sec !== "done")) { lastUnfoldedSection.current = undefined; return; }
+    const key = openKey && (sec === "working" || sec === "done" || sec === "low") ? `${sec}:${openKey}` : undefined;
+    if (!key || (sec !== "working" && sec !== "done" && sec !== "low")) { lastUnfoldedSection.current = undefined; return; }
     if (lastUnfoldedSection.current === key) return;
     lastUnfoldedSection.current = key;
     setRailOpen(was => was[sec] ? was : { ...was, [sec]: true });
