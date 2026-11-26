@@ -1634,7 +1634,8 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     if (!pass || !passThread) return undefined;
     // The rows of the tab the pass's block shows, a call or an edit. From nothing, ↓ starts on its first row and ↑ on its last.
     const stops = passStopsNow();
-    const list = stopsShown(stops, passList, passOrder);
+    // The new layout lists Needs review's waiting rows before its low-risk ones.
+    const list = stopsShown(stops, passList, passOrder, beta);
     const next = openCall
       ? rowBeside(list, stops.find(stop => stop.call?.index === openCall.index), { at: listedAt.get(openCall.index) ?? openCall.start, num: callNo.get(openCall.index) }, delta, passOrder)
       : delta > 0 ? list[0] : list.at(-1);
@@ -1917,9 +1918,6 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     else if (nextCallAfterKeep) actions.listen(pass!, nextCallAfterKeep);
     else closeEdit();
   }
-  // A revision sent from a row of Needs review goes on as Keep does (the editor chose this on 2026-11-23): the row is
-  // Working's now, and the card moves to the next one that waits. From Working or Done, and in a request with one
-  // list of every edit, the card stays on the edit it revised.
   /** Keep, Add and Reject edit in the new layout go on down the column: the next row that waits in Needs review (then
    * the first low-risk row), or from a low-risk row to the next one (then what waits), else the card closes. */
   function moveOnInColumn() {
@@ -1955,6 +1953,9 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     first.open?.();
     return true;
   }
+  // A revision sent from a row of Needs review goes on as Keep does (the editor chose this on 2026-11-23): the row is
+  // Working's now, and the card moves to the next one that waits. From Working or Done, and in a request with one
+  // list of every edit, the card stays on the edit it revised.
   function moveOnFromRevised() {
     if (beta) {
       if (reviewingEdit) { if ((openRailRow?.section ?? tabShown(focusList)) === "you") moveOnFromShown(); return; }
