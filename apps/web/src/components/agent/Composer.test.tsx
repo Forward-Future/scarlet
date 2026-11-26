@@ -40,7 +40,9 @@ beforeEach(() => {
   useProjectStore.setState({ current, createTask: vi.fn().mockResolvedValue(db.tasks[0]), createNote: vi.fn().mockResolvedValue({ note: db.notes[0] }), revise: vi.fn(), answerTask: vi.fn() });
   usePlayerStore.setState({ time: 3.5, playing: true });
   useHostsStore.setState({ hosts: db.hosts });
-  useUiStore.setState({ agentDraft: "", agentContext: null });
+  // Most spoken-message tests here are about where a message goes once it is sent at once, so they run with review off.
+  // The review tests turn it back on.
+  useUiStore.setState({ agentDraft: "", agentContext: null, reviewDictation: false });
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -710,6 +712,7 @@ it("sends a spoken edit to the explicitly attached moment and spoken revisions t
   await act(async () => { micProps.onStart?.(); });
   await act(async () => usePlayerStore.getState().setTime(8));
   await act(async () => { finishRecording(recording); });
+  expect(micProps.review).toBe(false);
   expect(createVoiceNote).toHaveBeenCalledWith(PRJ, recording.blob, expect.objectContaining({ time: 3.5 }));
   expect(useUiStore.getState().agentContext).toBeNull();
 
@@ -724,6 +727,46 @@ it("sends a spoken edit to the explicitly attached moment and spoken revisions t
   expect(useProjectStore.getState().revise).toHaveBeenCalledWith(ready.latest!.id,
     expect.objectContaining({ assignTo: "claude:fable", text: "Keep the last word", voiceTranscript: "Keep the last word" }));
   expect(createVoiceNote).toHaveBeenCalledTimes(1);
+});
+
+it("with review on, leaves what was said in the box after the draft, aimed where it was, and sends nothing until Enter", async () => {
+  useUiStore.setState({ reviewDictation: true });
+  let micProps!: ComponentProps<typeof mic.MicButton>;
+  vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
+  const createVoiceNote = vi.fn();
+  useProjectStore.setState({ createVoiceNote });
+  const { createTask, createNote, revise, answerTask } = useProjectStore.getState();
+  vi.spyOn(api, "speechToText").mockResolvedValue({ text: "Keep the last word" });
+  const recording = { blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" };
+  const input = () => container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  await show();
+  // The red button says what a press does now.
+  expect(micProps.review).toBe(true);
+  const point = { time: 3.5, clipIds: [] };
+  await selectPoint(point);
+  await type("Tighten this,");
+  await act(async () => { micProps.onStart?.(); });
+  await act(async () => { micProps.onResult(recording); });
+  expect(input().value).toBe("Tighten this, Keep the last word");
+  expect(document.activeElement).toBe(input());
+  expect(input().selectionStart).toBe(input().value.length);
+  expect(useUiStore.getState().agentContext).toBe(point);
+  for (const sent of [createVoiceNote, createTask, createNote, revise, answerTask]) expect(sent).not.toHaveBeenCalled();
+  // Enter sends it as typed words, to the moment it was said about.
+  await act(async () => input().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  expect(createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({ time: 3.5, text: "Tighten this, Keep the last word" }));
+  expect(createVoiceNote).not.toHaveBeenCalled();
+
+  // A reply said into an open edit waits in its box too, and goes to that edit once sent.
+  const ready = buildThreads(current).find(t => t.needs === "decision")!;
+  await show({ thread: ready });
+  expect(input().value).toBe("");
+  await act(async () => { micProps.onStart?.(); });
+  await act(async () => { micProps.onResult(recording); });
+  expect(input().value).toBe("Keep the last word");
+  expect(revise).not.toHaveBeenCalled();
+  await submit();
+  expect(revise).toHaveBeenCalledWith(ready.latest!.id, expect.objectContaining({ text: "Keep the last word" }));
 });
 
 it("sends a late voice transcript to the project that owned the recording", async () => {

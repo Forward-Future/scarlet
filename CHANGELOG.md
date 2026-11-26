@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 25, 2026
 
+- When you stop talking to Scarlet, your words now wait in the message box so you can read and fix them before pressing Enter. Turn off "Review dictation before sending" in Settings › General to send them right away, as before.
 - The working indicator under the timeline now shows only "Scarlet is editing", without trailing activity text.
 - The "For you" list of edits waiting on you is now called "Needs review".
 - In the beta layout, hovering an edit in the edits column now shows a plain summary underneath its title, such as how much a cut removes or the caption words, file, zoom, audio change, speed, or transition for other edits.
