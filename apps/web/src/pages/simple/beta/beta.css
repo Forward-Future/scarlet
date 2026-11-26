@@ -182,7 +182,27 @@
 [data-new-layout] .review-rail .simple-pass-list > li > button { align-items: center; }
 [data-new-layout] .review-rail :is(.simple-pass-time, .edit-row-time) { white-space: nowrap; }
 [data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) { display: flex; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
-[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) > :is(.simple-pass-tick, .edit-version, .simple-pass-more) { flex: none; }
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) > :is(.simple-pass-tick, .edit-version, .simple-pass-more, .edit-batch-plus) { flex: none; }
+[data-new-layout] .edit-batch-plus {
+  display: inline-flex; align-items: center; height: 16px; margin-left: 6px; padding: 0 5px;
+  border-radius: 999px; background: rgba(255, 255, 255, .1); color: var(--color-fg);
+  font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1;
+}
+[data-new-layout] .review-rail button.is-on .edit-batch-plus { background: rgba(255, 255, 255, .18); }
+
+/* Compact stepper on the edit card when stepping through a collapsed +N batch. */
+[data-new-layout] .edit-card-stepper {
+  flex: none; display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 3px;
+  border: 1px solid var(--color-line); border-radius: 999px; background: var(--color-raised);
+  font-size: 11.5px; color: var(--color-muted); font-variant-numeric: tabular-nums;
+}
+[data-new-layout] .edit-card-step {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--color-fg); font: inherit; font-size: 13px; line-height: 1; cursor: pointer;
+}
+[data-new-layout] .edit-card-step:hover:not(:disabled) { background: rgba(255, 255, 255, .1); }
+[data-new-layout] .edit-card-step:disabled { opacity: .35; cursor: default; }
+[data-new-layout] .edit-card-step-count { padding: 0 4px; color: var(--color-fg); font-weight: 500; white-space: nowrap; }
 [data-new-layout] .review-rail :is(.simple-edit, .simple-edit.is-on, .simple-pass-list > li > button, .simple-pass-list > li > button.is-on) :is(.simple-edit-words, .simple-pass-words) {
   display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

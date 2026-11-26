@@ -232,18 +232,23 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     const listClass = pastHour ? "simple-pass-list simple-edits has-hours" : "simple-pass-list simple-edits";
     return <ol className={listClass} aria-label={SECTION_LABELS[key]}>
       {rows.map(row => {
+        const batchCount = row.batch && row.batch.length > 1 ? row.batch.length : 0;
+        const activeRow = row.batch?.find(r => r.on) ?? row;
         const canUnkeepRow = key === "done" && !row.rejected && !row.skipped && !row.isMarker
           && (!!row.unkeepCall || row.members.some(m => m.canUnkeep));
         const value = key === "done" ? (row.decision ?? row.value) : row.value;
         const rowTime = clockLabel(row.displayAt);
         const needTime = row.needs || row.asks;
         const lead = <span className={needTime ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
+        const activeLead = <span className={activeRow.needs || activeRow.asks ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{clockLabel(activeRow.displayAt)}</span>;
         const tipText = row.tipText ?? row.label;
         const tipDetail = row.tipDetail && row.tipDetail !== tipText ? row.tipDetail : undefined;
         const moment = row.moment;
         const unkeepTip = row.unkeepTip ?? "Move back to For you";
         const statusWord = row.word;
-        const ariaLabel = row.ariaLabel ?? (moment
+        const ariaLabel = row.ariaLabel ?? (batchCount > 1
+          ? `${rowTime}: ${row.label}, plus ${batchCount - 1} more${row.decided ? ", kept" : ""}`
+          : moment
           ? `${rowTime} ${row.label}, ${moment.more.replace("+ ", "and ")}`
           : row.rejected ? `${rowTime} ${row.label}, rejected`
           : `${rowTime}: ${row.label}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : row.decided ? (row.isMarker ? ", done" : ", kept") : needTime ? ", needs you" : ""}`);
@@ -253,7 +258,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
             className={["simple-edit", row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", row.isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ")}
             aria-current={row.on || undefined}
             data-log-control={row.logControl}
-            data-log-label={row.logLabel}
+            data-log-label={batchCount > 1 ? "Edit group" : row.logLabel}
             disabled={!row.open}
             data-row-tip={tipText}
             data-row-detail={tipDetail}
@@ -266,6 +271,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
               {(row.rejected || row.skipped) && <RejectedMark />}
               {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
               <span className="simple-pass-words simple-edit-words">{row.label}</span>
+              {batchCount > 1 && <span className="edit-batch-plus" aria-hidden="true">+{batchCount - 1}</span>}
               {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
               {row.fresh && <small className="edit-version is-new">New</small>}
               {moment && <span className="simple-pass-more" aria-expanded={moment.unfolded} title={moment.unfolded ? "Hide its edits" : "Show its edits"}
@@ -277,10 +283,10 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
           {canUnkeepRow && <span className="simple-row-unkeep"
             onPointerEnter={() => onHover?.(row.mark, row.hover)} onPointerLeave={() => onHover?.()}>
             <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
-              aria-label={`Unkeep ${row.label}`} title={unkeepTip}
+              aria-label={batchCount > 1 ? `Unkeep all ${batchCount} edits` : `Unkeep ${row.label}`} title={unkeepTip}
               onClick={letGo(() => { const fresh = store.view().findByKey(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
           </span>}
-          <AimRow on={row.on}>{lead}<span className="composer-aim-words">{row.label}</span></AimRow>
+          <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span></AimRow>
           {row.nests.map(nest => nest.node)}
           {moment?.unfolded && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
             {moment.subRows.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}>

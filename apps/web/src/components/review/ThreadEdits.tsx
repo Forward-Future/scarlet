@@ -37,8 +37,10 @@ export type RejectedEdit = Parameters<ReturnType<typeof useProjectStore.getState
  * named for, never the whole moment. The editor pressed the × and wrote nothing, so that request reads "Reject edit" under its edit's
  * tag, in the chat and in the queue; what Scarlet is asked to do is the instruction, which is for the agent.
  */
-export function RejectEdit({ projectId, thread, target, edits, editsOn, onEngine, onSent }: { projectId: string; thread: Thread; target: AgentContext;
+export function RejectEdit({ projectId, thread, target, edits, editsOn, titleOverride, onEngine, onSent }: { projectId: string; thread: Thread; target: AgentContext;
   edits?: RejectedEdit[]; editsOn?: string;
+  /** Optional label override (e.g. "Reject just this edit" when inspecting one edit in a grouped batch). */
+  titleOverride?: string;
   /** The engine is asked to put the edit back (`true`), or didn't after all (`false`): the video may change under the card meanwhile. */
   onEngine?(asked: boolean): void;
   onSent(sent: { task?: Task; version?: string }): void }) {
@@ -86,10 +88,11 @@ export function RejectEdit({ projectId, thread, target, edits, editsOn, onEngine
     event.preventDefault();
     void reject();
   });
+  const baseTitle = titleOverride ?? "Reject edit";
   return <>
     {error && <span className="simple-error" role="alert">{error}</span>}
-    <button type="button" className="edit-card-icon edit-card-reject" data-log-control="reject-edit" aria-label="Reject edit" aria-busy={busy || undefined}
-      aria-keyshortcuts={ariaKeyShortcut(rejectBinding)} title={busy ? "Rejecting…" : rejectLabel ? `Reject edit (${rejectLabel})` : "Reject edit"} disabled={busy} onClick={e => { blurOnPointerClick(e); void reject(); }}><Icon name="x" size={12} /></button>
+    <button type="button" className="edit-card-icon edit-card-reject" data-log-control="reject-edit" aria-label={baseTitle} aria-busy={busy || undefined}
+      aria-keyshortcuts={ariaKeyShortcut(rejectBinding)} title={busy ? "Rejecting…" : rejectLabel ? `${baseTitle} (${rejectLabel})` : baseTitle} disabled={busy} onClick={e => { blurOnPointerClick(e); void reject(); }}><Icon name="x" size={12} /></button>
   </>;
 }
 

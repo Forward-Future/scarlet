@@ -12,7 +12,8 @@ export function ReviewActions({ lead, approve, revise, disabled, approvalDisable
 }) {
   const keepBinding = useShortcutsStore(s => s.bindings.keep);
   const reviseBinding = useShortcutsStore(s => s.bindings.revise);
-  const effectiveApprove = approveLabel === "Keep" ? keepBinding : approveKey;
+  const isKeep = approveLabel === "Keep" || approveLabel.startsWith("Keep ");
+  const effectiveApprove = isKeep ? keepBinding : approveKey;
   const effectiveRevise = reviseLabel === "Revise" ? reviseBinding : reviseKey;
   const shownApprove = shortKeyLabel(effectiveApprove);
   const shownRevise = shortKeyLabel(effectiveRevise);
@@ -28,7 +29,7 @@ export function ReviewActions({ lead, approve, revise, disabled, approvalDisable
       if (reviseLabel !== "Revise") blurOnPointerClick(e);
       revise();
     }}>{reviseLabel}</button>}
-    {approve && <button type="button" className="btn-primary" data-key={shownApprove || undefined} data-log-control={approveLabel === "Keep" ? "keep-edit" : approveLabel === "Done" ? "mark-done" : "apply-edit"} aria-keyshortcuts={ariaKeyShortcut(effectiveApprove)} title={shownApprove ? `${approveLabel} (${shownApprove})` : approveLabel}
+    {approve && <button type="button" className="btn-primary" data-key={shownApprove || undefined} data-log-control={isKeep ? "keep-edit" : approveLabel === "Done" ? "mark-done" : "apply-edit"} aria-keyshortcuts={ariaKeyShortcut(effectiveApprove)} title={shownApprove ? `${approveLabel} (${shownApprove})` : approveLabel}
       disabled={disabled || approvalDisabled} onClick={e => {
         // The button stays for the next edit. Clicked, it lets go of the focus (WebView2 leaves it there), or Space
         // would press it again while the video is paused. Pressed by keyboard, it keeps it.
