@@ -5,21 +5,25 @@
 //
 //   node apps/server/scripts/prepare-playback-fixture.mjs --library <data> --project <id> --cache none --out <fixture>
 //   SCARLET_BIN_DIR=<ffmpeg and ffprobe> node apps/server/scripts/bench-playback-seek.mjs <fixture> [--seeks 12] \
-//     [--mode both|still|play] [--keep <dir>]
+//     [--mode both|still|play] [--keep <dir>] [--load <n>]
 //
 // Each run works in a fresh APFS clone of the fixture's library, which it deletes afterwards. --keep writes each
-// still and fragment there so two builds' outputs can be compared (decoded frame and sample hashes).
+// still and fragment there so two builds' outputs can be compared (decoded frame and sample hashes). --load keeps that
+// many preview copies of the recordings encoding meanwhile, as source caching does; each seek records the load average.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { loadavg } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { createApp } from "../dist/app.js";
 import { accessToken } from "../dist/auth.js";
+import { makeProxy } from "@scarlet/render";
 
 const { values: v, positionals } = parseArgs({ allowPositionals: true, options: {
   seeks: { type: "string", default: "12" }, mode: { type: "string", default: "both" }, keep: { type: "string" },
+  load: { type: "string", default: "0" },
 } });
 const fixture = resolve(positionals[0] ?? "");
 assert(positionals[0] && ["both", "still", "play"].includes(v.mode), "Name a fixture made by prepare-playback-fixture.mjs.");
@@ -56,6 +60,7 @@ async function timed(path, init) {
   return { ms: Math.round(performance.now() - started), body };
 }
 const samples = [];
+const load = [], stopLoad = new AbortController();
 const jump = async pick => {
   const still = v.mode !== "play" && timed(`${project}/versions/${encodeURIComponent(manifest.version)}/frame?view=monitor&frame=${pick.frame}`);
   const play = v.mode !== "still" && timed(`${project}/renders?wait=1`, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -64,12 +69,20 @@ const jump = async pick => {
 };
 try {
   if (v.keep) await mkdir(v.keep, { recursive: true });
+  // --load N: N preview copies of the fixture's recordings encode throughout, as the engine's source caching does.
+  for (let i = 0; i < Number(v.load); i++) {
+    const asset = manifest.assets.filter(a => a.kind === "video")[i % manifest.assets.filter(a => a.kind === "video").length];
+    const media = ctx.repos.projects.get(manifest.projectId).media.find(m => m.id === asset.id);
+    load.push(makeProxy(join(ctx.paths.media(manifest.projectId), media.path), join(root, `load-${i}.mp4`),
+      { height: manifest.render.previewHeight ?? 720, hwaccel: "auto", signal: stopLoad.signal }).catch(() => undefined));
+  }
+  if (load.length) await new Promise(resolve => setTimeout(resolve, 3000));
   const last = ranges[warm.index];
   await jump({ range: last, frame: Math.floor((last.start + (last.end - last.start) * 0.4) * fps) });
   for (const [k, pick] of picks.entries()) {
     const [s, p] = await jump(pick);
     const hash = buffer => buffer && createHash("sha256").update(buffer).digest("hex").slice(0, 16);
-    samples.push({ frame: pick.frame, section: pick.index, stillMs: s?.ms, playMs: p?.ms, still: hash(s?.body), fragmentBytes: p?.body.length });
+    samples.push({ frame: pick.frame, section: pick.index, load1: Math.round(loadavg()[0] * 10) / 10, stillMs: s?.ms, playMs: p?.ms, still: hash(s?.body), fragmentBytes: p?.body.length });
     if (v.keep) {
       if (s) await writeFile(join(v.keep, `${k}-still.jpg`), s.body);
       if (p) await writeFile(join(v.keep, `${k}-fragment.mp4`), p.body);
@@ -85,6 +98,8 @@ try {
   console.error(error);
   process.exitCode = 1;
 } finally {
+  stopLoad.abort();
+  await Promise.all(load);
   await ctx.close?.().catch(() => {});
   await rm(root, { recursive: true, force: true });
   process.exit();
