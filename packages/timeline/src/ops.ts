@@ -151,8 +151,8 @@ export type SplitJoinOp = z.infer<typeof SplitJoinOp>;
 
 /**
  * Dip a clip, such as music, under speech. It reads the transcript, so it is a step of a proposal only: Scarlet turns it
- * into the clip's `volumeKeyframes` (an updateClip) before the edit is checked and saved. Unset fields are the stock
- * skill music-under-speech's.
+ * into the clip's `volumeKeyframes` (an updateClip) before the edit is checked and saved. Unset fields are what the shipped
+ * music skill says (`DIP_DEFAULTS`).
  */
 export const DuckUnderSpeechOp = z.object({
   op: z.literal("duckUnderSpeech"),

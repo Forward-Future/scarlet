@@ -41,7 +41,7 @@ function wordsOf(task: Task): string {
 
 const enabledSkills = (ctx: Ctx) => ctx.repos.skills.select("1=1", [], "name ASC").filter(s => s.enabled);
 
-/** A message that only names a skill to run ("/dialogue-pass") says nothing about how the editor wants it done. */
+/** A message that only names a skill to run ("/name") says nothing about how the editor wants it done. */
 const ONLY_A_SKILL = /^\/[\w-]+$/;
 
 /** Persistent assistant/account failure categories that make a background learning check doomed to repeat the error. */

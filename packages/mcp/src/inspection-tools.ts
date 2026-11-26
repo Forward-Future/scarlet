@@ -19,6 +19,7 @@ import {
   type ScarletClient,
   type Task,
   type TaskEvent,
+  modelDisplayName,
 } from "@scarlet/shared";
 import { timelineDuration, type MediaClip, type TimeRange } from "@scarlet/timeline";
 import { addedAfterRequest, colorEvidence, pct1 } from "./analysis.js";
@@ -270,14 +271,14 @@ export function registerInspectionTools(deps: InspectionToolsDeps) {
     });
 
   // A request whose model can't hear has another model listen for it, when one that can is signed in.
-  const listenerName = listener && (listener.agent === "gemini" ? "Gemini" : listener.model ?? listener.agent);
+  const listenerName = listener && modelDisplayName(listener);
   if (!listen && listener && taskId && task && (isProjectEditTask(task) || isHandOff(task))) tool("listen",
     `Have ${listenerName}, a model that can hear, listen to up to ${SOURCE_AUDIO_MOST} seconds of an original microphone or video for you, in source seconds, and answer your question about it in words. You can't hear, and a transcript misses what an editor hears: a false start that reads as a finished line, a word cut off or slurred, a repeated word the transcript tidied away, a hum or a click. Ask what you need to decide, such as where a restart's abandoned attempt ends and the kept line begins, or whether a word sounds whole; for a restart, give it the stretch from before the first try to the line said through, since the join alone sounds fine. It answers from the sound, with times in source seconds, and says what it is unsure of. A listen takes a minute or so, and several can run at once; asked again with the same passage and question, it returns the answer already given.`,
     { ...SourceAudioOptions, question: z.string().trim().min(1).max(2000).describe("What to listen for, in plain words") },
     async ({ mediaId, from, to, voice, question }) => {
       if (to - from > SOURCE_AUDIO_MOST + 1e-6) return text(`Choose a passage of up to ${SOURCE_AUDIO_MOST} s: ${mediaId} ${from}–${to} is ${(to - from).toFixed(2)} s.`);
       const heard = await client.listen(projectId, { taskId, mediaId, from, to, ...(voice && { voice }), question }, waitLeft(10));
-      const by = heard.state === "unavailable" ? undefined : heard.by.agent === "gemini" ? "Gemini" : heard.by.model ?? heard.by.agent;
+      const by = heard.state === "unavailable" ? undefined : modelDisplayName(heard.by);
       if (heard.state === "heard") return json({ mediaId, from, to, heardBy: by, heard: heard.answer });
       if (heard.state === "listening") return text(`${by} is still listening to ${mediaId} ${from}–${to} s. Call listen again with the same passage and question for its answer.`);
       if (heard.state === "failed") return text(`${by} couldn't listen to ${mediaId} ${from}–${to} s: ${heard.error}`);

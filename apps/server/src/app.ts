@@ -40,7 +40,7 @@ import { perceptionRoutes } from "./routes/perception.js";
 import { foldStrandedPasses, recordLeftOutFootage, retireLeftoverPasses, wireChangeRenderCompletion } from "./services/changes.js";
 import { RenderQueue } from "./services/renderQueue.js";
 import { migrateQuickActions } from "./services/migrateQuickActions.js";
-import { retireMergedSkills, migrateGlobalSkills, seedSkillList, seedSkills } from "./services/skills.js";
+import { addCommandHeaders, retireMergedSkills, migrateGlobalSkills, seedSkillList, seedSkills } from "./services/skills.js";
 import { migrateDialogueSettings } from "./services/migrateDialogueSettings.js";
 import { BUNDLED_SKILLS } from "./bundledSkills.js";
 import { featureForRequest } from "@scarlet/shared";
@@ -188,6 +188,7 @@ export function createApp(options: ServerOptions): ScarletApp {
   };
   migrateQuickActions(ctx);
   const seeded = options.skillsSeedDir ? seedSkills(ctx, options.skillsSeedDir) : seedSkillList(ctx, BUNDLED_SKILLS);
+  addCommandHeaders(ctx);
   migrateDialogueSettings(ctx);
   retireMergedSkills(ctx);
   migrateDialogueOperations(ctx);

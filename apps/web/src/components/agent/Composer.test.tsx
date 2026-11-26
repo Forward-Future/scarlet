@@ -3,7 +3,10 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { isDialogueGuide } from "@scarlet/shared";
+import { builtInCommand, commandGuides } from "@scarlet/shared";
+
+/** The skill that guides the dialogue pass, by what its header says. */
+const dialogueGuide = (skills: Parameters<typeof commandGuides>[1]) => commandGuides(builtInCommand("first-cut").name, skills)[0];
 import { api } from "../../lib/client";
 import { flushAppLog, startAppLog, stopAppLog } from "../../lib/appLog";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
@@ -91,7 +94,7 @@ it.each(["typing", "voice"])("dismisses the first-project glow for good on first
 
 // "There's no notice above the message box. The editor chose this design." (AGENTS.md)
 it("puts nothing above the message box on the first import, even with the dialogue pass ready", async () => {
-  const guide = db.skills.find(isDialogueGuide)!;
+  const guide = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ status: "ready", skills: [guide] });
   useUiStore.getState().offerFirstEditHint(PRJ);
   await show();
@@ -222,7 +225,7 @@ it("opens the skill library with / and sends the chosen skill for the whole vide
 });
 
 it.each(["missing", "disabled"])("sends and rewords explicit dialogue shortcuts with the shipped guide %s", async state => {
-  const guide = db.skills.find(isDialogueGuide)!;
+  const guide = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ status: "ready", skills: state === "missing" ? [] : [{ ...guide, enabled: false }] });
   await show();
   const request = "Start here /tighten-pauses-here please.";
@@ -307,7 +310,7 @@ it.each(["click", "keyboard"])("creates a skill from the picker by %s and return
 });
 
 it.each(["/dialogue-pass", "/tighten-pauses-here"])("submits %s with the canonical dialogue skill", async command => {
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   await show();
   const field = container.querySelector("textarea")!;
@@ -1542,7 +1545,7 @@ it("changes a queued request's words in the box, across its whole width, saving 
 });
 
 it("saves a queued request's new words with the skills their /commands name, as a send does", async () => {
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   let text = "/dialogue-pass Keep the aside.";
   const rewording = { id: "task_queued", get text() { return text; }, onChange: vi.fn((t: string) => { text = t; }),
@@ -1795,7 +1798,7 @@ it("puts what was said for a queued request in the box, where the tick saves it 
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   vi.spyOn(api, "speechToText").mockResolvedValue({ text: "/dialogue-pass Keep the aside, but trim the breath before it." });
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   let text = "Keep the aside.";
   const rewording = { id: "task_queued", get text() { return text; }, onChange: vi.fn((t: string) => { text = t; }),

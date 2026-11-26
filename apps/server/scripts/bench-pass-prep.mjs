@@ -16,6 +16,7 @@ import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { builtInCommand } from "@scarlet/shared";
 import { createProject } from "@scarlet/timeline";
 import { createApp } from "../dist/app.js";
 import { accessToken } from "../dist/auth.js";
@@ -50,7 +51,7 @@ try {
   const label = Object.fromEntries(media.map((m, i) => [m.id, `recording ${i + 1}`]));
   mark("imported");
   // The request, the way the app sends it: at once. An edit with no live worker is taken for interrupted after 30 s.
-  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "api", instruction: "/dialogue-pass", state: "running",
+  const task = createTask(ctx, { projectId: project.id, kind: "edit", agent: "api", instruction: `/${builtInCommand("first-cut").name}`, state: "running",
     createdBy: { type: "scarlet", name: "Scarlet" } });
   const alive = () => ctx.db.prepare("UPDATE tasks SET worker_pid = ?, worker_seen_at = ? WHERE id = ?").run(process.pid, new Date().toISOString(), task.id);
   alive();

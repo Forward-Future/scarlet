@@ -7309,14 +7309,16 @@ it("records the editor's dialogue shortcut across rewords, answers, retries, not
   const revision = await (await api("POST", `/changes/${review.id}/revise`, { assignTo: "codex", text: "Try /tighten-pauses-here on this cut", position: { version: base, cutIndex: 0, time: 7, end: 8 } })).json();
   expect(revision.task.context).toMatchObject({ dialogueOperation: "local-pauses", cutIndex: 0 });
 
+  // Scarlet's own command names are reserved: a skill by the same name guides the command, on or off, and never takes it over.
   await api("POST", "/skills", { name: "tighten-pauses-here", content: "# An editor's custom guide", scope: "team" });
   const custom = await task("/tighten-pauses-here");
-  expect(custom.context.dialogueOperation).toBe("none");
+  expect(custom.context.dialogueOperation).toBe("local-pauses");
   const shadow = ctx.repos.skills.select("name = ?", ["tighten-pauses-here"])[0]!;
   await api("PUT", `/skills/${shadow.id}`, { enabled: false });
-  expect((await task("/tighten-pauses-here")).context.dialogueOperation).toBe("none");
+  expect((await task("/tighten-pauses-here")).context.dialogueOperation).toBe("local-pauses");
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
-  await api("PUT", `/skills/${guide.id}`, { content: "# My first cut" });
+  // Rewritten from scratch, a guide still runs the pass whatever it is called, by saying so in its header.
+  await api("PUT", `/skills/${guide.id}`, { content: "---\nname: dialogue-pass\nruns: dialogue-pass\n---\n# My first cut" });
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
   expect((await api("PUT", `/skills/${guide.id}`, { name: "my-first-pass" })).status).toBe(200);
   expect((await task("/my-first-pass")).context.dialogueOperation).toBe("first-cut");
@@ -7325,7 +7327,7 @@ it("records the editor's dialogue shortcut across rewords, answers, retries, not
   await api("DELETE", `/skills/${guide.id}`);
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
   await api("POST", "/skills", { name: "dialogue-pass", content: "# My different guide", scope: "team" });
-  expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("none");
+  expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
   expect(ctx.repos.tasks.get(reworded.id)!.context.dialogueOperation).toBe("local-pauses");
 });
 

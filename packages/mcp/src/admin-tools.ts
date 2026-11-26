@@ -15,6 +15,7 @@ import {
   type Skill,
   type Task,
   type TaskEvent,
+  modelDisplayName,
 } from "@scarlet/shared";
 import { clipById, describeDiff, type Author, type Change } from "@scarlet/timeline";
 import { errorText, json, text, type ToolRegistrar } from "./tool-result.js";
@@ -267,7 +268,7 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
   // The kinds of work the editor gave other models in Settings (Task models). A request hands each such piece to its model.
   const offers = taskModels ?? [];
   if (offers.length && task && taskId && isProjectEditTask(task)) {
-    const nameOf = (by: { agent: string; model?: string; label?: string }) => by.label ?? (by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent);
+    const nameOf = modelDisplayName;
     const told = new Set<string>();
     tool(
       "hand_off",
@@ -301,7 +302,7 @@ export function registerExportAndTaskTools(deps: ExportAndTaskToolsDeps) {
 
   tool(
     "skills_list",
-    "List the workflows available for this editing request, or read one by passing its id or exact name as skillId (for example, dialogue-pass). Reading a workflow changes no tool behavior.",
+    "List the workflows available for this editing request, or read one by passing its id or exact name as skillId (the name after its slash). Reading a workflow changes no tool behavior.",
     { skillId: z.string().min(1).optional() },
     async ({ skillId }) => {
       const { skills } = await client.skills({ projectId, view: "assistant",

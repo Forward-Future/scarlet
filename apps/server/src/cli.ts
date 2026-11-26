@@ -12,7 +12,7 @@
  *
  *   SCARLET_READY {"port":N,"url":"http://127.0.0.1:N","token":"sct_...","userId":"usr_...","dataDir":"..."}
  */
-import { existsSync, fstatSync } from "node:fs";
+import { existsSync, fstatSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
@@ -92,7 +92,7 @@ async function runServe(argv: string[]) {
     defaultSeed = undefined;
   }
   const skillsSeedDir =
-    process.env.SCARLET_SKILLS_SEED ?? (defaultSeed && existsSync(resolve(defaultSeed, "dialogue-pass", "SKILL.md")) ? defaultSeed : undefined);
+    process.env.SCARLET_SKILLS_SEED ?? (defaultSeed && hasSkills(defaultSeed) ? defaultSeed : undefined);
 
   // Nothing else catches these, and either one stops the engine. Say so in the log's own form as it goes.
   const fatal = (what: string) => (err: unknown) => {
@@ -249,4 +249,13 @@ if (command === "review-spots") {
 } else {
   console.error(`unknown command: ${command}\n\n${HELP}`);
   process.exit(2);
+}
+
+/** Whether a folder holds skills: any `<name>/SKILL.md`, whatever the skills are called. */
+function hasSkills(dir: string): boolean {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).some(entry => entry.isDirectory() && existsSync(resolve(dir, entry.name, "SKILL.md")));
+  } catch {
+    return false;
+  }
 }

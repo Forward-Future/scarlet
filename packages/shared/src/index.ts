@@ -29,12 +29,15 @@ export * from "./showArea.js";
 export * from "./editingTools.js";
 export * from "./threads.js";
 export {
+  BUILT_IN_COMMANDS,
+  builtInCommand,
+  commandGuides,
   dialogueCommand,
   dialogueShortcut,
-  extendsDialoguePass,
-  isDialogueGuide,
   skillCommands,
   skillExtends,
+  skillOperation,
+  skillRuns,
   taskDialogueOperation,
   taskRunKind,
   type RunKind,
