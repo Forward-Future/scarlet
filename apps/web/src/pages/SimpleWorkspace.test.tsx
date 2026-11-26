@@ -2522,12 +2522,11 @@ const landVersion = (version: string) => {
   data = { ...cur, project: { ...cur.project, head: version }, timeline: cur.timeline && { ...cur.timeline, version } };
   useProjectStore.setState({ current: data });
 };
-/** The card of an edit just rejected, or opened again from its row: its note and Rejected, with nothing to decide. */
+/** The card of a rejected edit opened again from its row: its note and Rejected, with nothing to decide. */
 const rejectedCard = () => container.querySelector<HTMLElement>('.cut-transport > .edit-card[aria-label="Rejected edit"]');
 const rejectedSays = () => rejectedCard() && [rejectedCard()!.querySelector(".edit-card-length")!.textContent, rejectedCard()!.querySelectorAll("button").length];
-const leavingBand = () => container.querySelector(".simple-timeline-band.is-leaving, .simple-timeline-cut.is-leaving");
 
-it("puts a rejected cut back on the engine at once, with no request to Scarlet, and ⌘Z takes that version out", async () => {
+it("puts a rejected cut back on the engine at once, moves straight to the next edit in line, and ⌘Z takes that version out", async () => {
   appliedEdits();
   const listed = withCut();
   const head = data.project.head;
@@ -2544,74 +2543,90 @@ it("puts a rejected cut back on the engine at once, with no request to Scarlet, 
   await show();
   await click(rowNamedIn(turnFor("chg_approved_2"), "captions"));
   await act(async () => {});
-  expect(leavingBand()).toBeNull();
   await click(rejectIcon());
   await act(async () => {});
   expect(rejectEdits.mock.calls).toEqual([[threadWith("chg_approved_2").id, head, [{ changeId: "chg_approved_2", spot: 1, label: "captions", range: { start: 0.5, end: 3.5 }, at: 2,
     before: { version: head, removed: { start: 2, end: 2.4 } } }]]]);
   expect(createTask).not.toHaveBeenCalled();
   expect(vi.mocked(api.recordEditReview).mock.calls).toEqual([[PRJ, { changeId: "chg_approved_2", spot: 1, decision: "undo" }]]);
-  // It leaves the timeline and nothing else moves: its band fades in place and its card stays, saying Rejected, with
-  // no decisions. The video without it has landed, and the card is still where it was.
-  expect([rejectedSays(), !!leavingBand(), editPanel(), rejectedCard()!.textContent]).toEqual([["Rejected", 0], true, null, expect.stringContaining("captions")]);
-  // It doesn't go on by itself, however long the editor looks.
-  vi.useFakeTimers();
-  try {
-    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-  } finally {
-    vi.useRealTimers();
-  }
-  expect([rejectedSays(), !!leavingBand()]).toEqual([["Rejected", 0], true]);
+  // Rejecting moves straight to the next edit in line ("wrap", the flagged edit still waiting), with no Rejected card.
+  expect([openTitle(), rejectedCard(), !!buttonIn(editPanel()!, "Keep")]).toEqual(["wrap", null, true]);
   expect(container.querySelector(".timeline-foot .timeline-undo")).toBeNull();
-  // ↑ steps cleanly to the confident edit right above where it was ("music bed").
-  await press("ArrowUp");
-  expect([openTitle(), leavingBand(), rejectedCard()]).toEqual(["music bed", null, null]);
-  expect(buttonIn(editPanel()!, "Keep")).not.toBeUndefined();
   await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
   await act(async () => {});
   expect(historyEdit.mock.calls).toEqual([["ver_back", "revert"]]);
 });
 
-it("opens a rejected edit as the video plays it now when the editor presses play on it, and closes it on Esc", async () => {
+it("advances straight to the next safe edit even when the new timeline lands first, and closes the card on the last edit", async () => {
   appliedEdits();
-  const listed = withCut();
-  const rejectEdits = vi.fn(async () => {
+  const head = data.project.head!;
+  const editsAt = (rejectedSpots: number[]) => vi.spyOn(api, "threadEdits").mockImplementation(async (_project, threadId) => ({
+    version: data.project.head!,
+    edits: threadId !== threadWith("chg_approved_2").id ? [] : [
+      { changeId: "chg_approved_2", spot: 0, label: "music bed", range: { start: 0, end: 16 }, previous: [],
+        ...(rejectedSpots.includes(0) ? { rejected: true as const } : {}) },
+      { changeId: "chg_approved_2", spot: 1, label: "captions", previous: [],
+        ...(rejectedSpots.includes(1)
+          ? { rejected: true as const, kind: "restore" as const, range: { start: 2, end: 2.4 } }
+          : { range: { start: 0.5, end: 3.5 }, at: 2, kind: "cut" as const, beforeCut: { version: head, removed: { start: 2, end: 2.4 } } }) },
+      { changeId: "chg_approved_2", spot: 2, label: "wrap", range: { start: 11.5, end: 16 }, previous: [], check: CHECK, summary: SUMMARY,
+        ...(rejectedSpots.includes(2) ? { rejected: true as const } : {}) },
+    ],
+  }));
+  let listed = editsAt([]);
+  const rejectedSpots: number[] = [];
+  let n = 0;
+  const rejectEdits = vi.fn(async (_t: string, _h: string, edits: { spot: number }[]) => {
+    rejectedSpots.push(...edits.map(e => e.spot));
     listed.mockRestore();
-    withCut({ rejected: true, beforeCut: undefined, at: undefined, kind: "restore" as const, range: { start: 2, end: 2.4 } });
-    landVersion("ver_back");
-    return "ver_back";
+    listed = editsAt([...rejectedSpots]);
+    const ver = `ver_back_${++n}`;
+    landVersion(ver);
+    return ver;
   });
   useProjectStore.setState({ createTask: vi.fn(), rejectEdits: rejectEdits as never });
   await show();
-  await click(rowNamedIn(turnFor("chg_approved_2"), "captions"));
+  // Rejecting the first safe edit ("music bed") moves straight to the next safe edit ("captions"), not jumping to "wrap".
+  await click(rowNamedIn(turnFor("chg_approved_2"), "music bed"));
   await act(async () => {});
   await click(rejectIcon());
   await act(async () => {});
-  expect([rejectedSays(), !!leavingBand()]).toEqual([["Rejected", 0], true]);
-  // Play is the video as it runs now: the edit opens as its row opens it, on the footage that was put back.
-  await act(async () => { usePlayerStore.setState({ playing: true }); });
+  expect([openTitle(), rejectedCard()]).toEqual(["captions", null]);
+  // Rejecting the last safe edit ("captions") wraps to the flagged edit still waiting ("wrap").
+  await click(rejectIcon());
   await act(async () => {});
-  expect([rejectedSays(), leavingBand(), container.querySelector(".simple-timeline-band, .simple-timeline-cut")?.textContent]).toEqual([["Rejected", 0], null, "Rejected"]);
+  expect([openTitle(), rejectedCard()]).toEqual(["wrap", null]);
+  // Rejecting the final remaining edit closes the card.
+  await click(rejectIcon());
+  await act(async () => {});
+  expect([openTitle(), editPanel(), rejectedCard()]).toEqual([undefined, null, null]);
+  // Opening a rejected row from Done still shows its Rejected card and closes on Esc.
+  await click(tabNamed(turnFor("chg_approved_2"), "Done"));
+  await click(rowNamedIn(turnFor("chg_approved_2"), "captions"));
+  await act(async () => {});
+  expect([rejectedSays(), container.querySelector(".simple-timeline-band, .simple-timeline-cut")?.textContent]).toEqual([["Rejected", 0], "Rejected"]);
   await press("Escape");
   expect(rejectedCard()).toBeNull();
 });
 
-it("leaves the edit the editor went to open when they step on from one just rejected", async () => {
+it("leaves the edit the editor stepped to open if they move on before an engine rejection finishes", async () => {
   appliedEdits();
   withCut();
-  const rejectEdits = vi.fn(async () => { landVersion("ver_back"); return "ver_back"; });
+  let finish!: (version: string) => void;
+  const rejectEdits = vi.fn(() => new Promise<string>(resolve => { finish = resolve; }));
   useProjectStore.setState({ createTask: vi.fn(), rejectEdits: rejectEdits as never });
   await show();
   await click(rowNamedIn(turnFor("chg_approved_2"), "captions"));
   await act(async () => {});
   await click(rejectIcon());
-  await act(async () => {});
-  expect(rejectedSays()).toEqual(["Rejected", 0]);
   await press("ArrowUp");
-  expect([openTitle(), leavingBand(), rejectedCard()]).toEqual(["music bed", null, null]);
+  expect(openTitle()).toBe("music bed");
+  await act(async () => { landVersion("ver_back"); finish("ver_back"); });
+  await act(async () => {});
+  expect([openTitle(), rejectedCard()]).toEqual(["music bed", null]);
 });
 
-it("rejects just the edit a moment's card is named for, and stays on what is left of the moment", async () => {
+it("rejects just the edit a moment's card is named for, and moves straight to what is left of the moment", async () => {
   const later = passWithMoment(false);
   const before = later.lists[later.earlier] as { changeId: string; spot: number; label: string }[];
   const rejectEdits = vi.fn(async () => {
@@ -2631,13 +2646,10 @@ it("rejects just the edit a moment's card is named for, and stays on what is lef
   await act(async () => {});
   // One × is one edit: the one the card was named for, not the three of its moment.
   expect(rejectEdits.mock.calls.map(call => (call as unknown as [string, string, { spot: number; label: string }[]])[2].map(e => [e.spot, e.label]))).toEqual([[[4, "Cube inset"]]]);
-  // Its card stays and says Rejected. The two that are left are still one moment, on a row of its own.
-  expect([rejectedSays(), openPassRow()]).toEqual([["Rejected", 0], "Cube inset"]);
+  // The card moves straight to what is left of the moment, whole, named for what leads it now.
+  expect([openPassRow(), editPanel()?.querySelector(".edit-card-length")?.textContent, rejectedCard()]).toEqual(["Cube reveal", "2 edits", null]);
   expect(listRows().map(row => [rowText(row), row.querySelector(".simple-pass-more")?.textContent ?? "", row.matches(".is-rejected")]))
     .toEqual([["captions", "", false], ["Cube reveal", "+ zoom", false], ["Cube inset", "", true], ["wrap", "", false]]);
-  // ↓ goes to what is left of the moment, whole, named for what leads it now.
-  await press("ArrowDown");
-  expect([openPassRow(), editPanel()?.querySelector(".edit-card-length")?.textContent]).toEqual(["Cube reveal", "2 edits"]);
 });
 
 it("asks Scarlet to put a rejected cut back when the engine can't", async () => {
@@ -2922,7 +2934,7 @@ it("opens a marker Scarlet left for the editor as a to-do: what to add first, no
   expect(createTask).not.toHaveBeenCalled();
 });
 
-it("rejects a to-do with its ×: the engine takes its marker off with no request to Scarlet, and the card says Rejected", async () => {
+it("rejects a to-do with its ×: the engine takes its marker off with no request to Scarlet, and moves straight to the next edit", async () => {
   appliedEdits();
   vi.mocked(api.threadEdits).mockImplementation(async (_project, threadId) => ({ version: data.project.head!,
     edits: threadId !== threadWith("chg_approved_2").id ? [] : [
@@ -2942,6 +2954,7 @@ it("rejects a to-do with its ×: the engine takes its marker off with no request
   expect(rejectEdits.mock.calls).toEqual([[threadWith("chg_approved_2").id, head,
     [{ changeId: "chg_approved_2", spot: 1, label: "Boat comparison footage", range: { start: 7.7, end: 10.7 }, marker: true }]]]);
   expect(createTask).not.toHaveBeenCalled();
+  expect([openTitle(), rejectedCard()]).toEqual(["music bed", null]);
 });
 
 it("has Scarlet add what a to-do asks for with Add (A): one request about that to-do, which reads Add it, and the card goes on", async () => {
@@ -15559,13 +15572,14 @@ it("reopens a cut's card with Keep and Revise when ⌘Z immediately takes back R
     expect(buttonIn(editPanel()!, "Keep")).not.toBeUndefined();
     await click(openHead()!.querySelector<HTMLButtonElement>('.edit-card-acts > .edit-card-reject[aria-label="Reject edit"]')!);
     await act(async () => {});
-    expect(container.querySelector('.cut-transport > .edit-card[aria-label="Rejected edit"]')).not.toBeNull();
+    // Rejecting moves straight to the next edit in line ("wrap"), with no Rejected card.
+    expect([openTitle(), container.querySelector('.cut-transport > .edit-card[aria-label="Rejected edit"]')]).toEqual(["wrap", null]);
     await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
     await act(async () => {});
     await act(async () => {});
     expect(historyEdit.mock.calls).toEqual([["ver_back", "revert"]]);
-    expect([container.querySelector('.cut-transport > .edit-card[aria-label="Rejected edit"]'), !!editPanel() && !!buttonIn(editPanel()!, "Keep")])
-      .toEqual([null, true]);
+    expect([openTitle(), container.querySelector('.cut-transport > .edit-card[aria-label="Rejected edit"]'), !!editPanel() && !!buttonIn(editPanel()!, "Keep")])
+      .toEqual(["captions", null, true]);
   };
   await verify(false);
   await act(async () => root.render(null));

@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Rejecting an edit now moves straight to the next edit in line instead of staying on the rejected card.
 - Connect your YouTube channel in Settings › General, then open Export › Publish to YouTube to upload finished cuts with final-cut chapter timestamps straight to YouTube Studio (starting as a Private draft by default).
 - Style guides now cover captions alongside lower thirds, callout boxes, and graphics — including custom fonts, weights, and built-in starter presets in Settings › Style guides — and are easier to reach from the `/` and `@` pickers and Project settings.
 - Fixed timeline edge dragging on crossfaded cuts, cleaned audio joins, synced multi-camera opening and closing cuts, and multi-clip B-roll or overlay edits so their handles always appear and save cleanly.

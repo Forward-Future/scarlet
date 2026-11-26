@@ -996,6 +996,122 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
   });
 
+  it("advances straight to the next edit in line when clicking Reject in the beta layout, including inside grouped batches, and closes on the last", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const baseTimeline = structuredClone(db.timelines[project.head!]!);
+    const leadClip = baseTimeline.tracks[0]!.clips[0]!;
+    if (leadClip.kind === "media") leadClip.sourceOut = leadClip.sourceIn + 180;
+    const baseApproved = db.changes.find(c => c.state === "approved") ?? db.changes[0]!;
+    const batchChange = {
+      ...baseApproved,
+      id: "chg_batch_reject",
+      state: "approved" as const,
+      taskId: "task_batch_reject",
+      appliedVersion: project.head!,
+      appliedReview: undefined,
+      approvedSpots: undefined,
+      cutChoices: undefined,
+      noteIds: [],
+      createdAt: "2026-11-24T10:00:00.000Z",
+      description: "Added model titles.",
+      ops: [],
+    };
+    const batchTask = Task.parse({
+      id: "task_batch_reject", projectId: PRJ, kind: "edit", agent: "claude",
+      instruction: "Add titles for every model", state: "done", createdBy: { type: "human", name: "Editor" },
+      changeIds: [batchChange.id], createdAt: "2026-11-24T10:00:00.000Z",
+    });
+    const threads = buildThreads({ changes: [batchChange], tasks: [batchTask], notes: [] });
+    const batchThread = threads[0]!;
+    let data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: baseTimeline,
+      media: project.media,
+      changes: [batchChange],
+      notes: [],
+      renders: db.renders,
+      tasks: [batchTask],
+      taskEvents: {},
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    const rejectedSpots = new Set<number>();
+    let ver = 0;
+    const rejectEdits = vi.fn(async (_threadId: string, _head: string, edits: { spot: number }[]) => {
+      for (const e of edits) rejectedSpots.add(e.spot);
+      const nextVer = `ver_beta_reject_${++ver}`;
+      data = { ...data, project: { ...data.project, head: nextVer }, timeline: data.timeline && { ...data.timeline, version: nextVer } };
+      useProjectStore.setState({ current: data });
+      return nextVer;
+    });
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({
+      current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined),
+      rejectEdits: rejectEdits as never, createTask: vi.fn(),
+    });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "summarizeBatches").mockResolvedValue({ summaries: {}, pending: [] });
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "timeline").mockImplementation(async (_id, version = "head") => ({ timeline: { ...baseTimeline, version } }));
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: data.project.head!,
+      edits: threadId !== batchThread.id ? [] : [
+        { changeId: batchChange.id, spot: 0, label: "Flagged Opus title", range: { start: 5, end: 8 }, kind: "graphic" as const, previous: [], check: "Check framing.", ...(rejectedSpots.has(0) && { rejected: true as const }) },
+        { changeId: batchChange.id, spot: 1, label: "Flagged Fable title", range: { start: 12, end: 15 }, kind: "graphic" as const, previous: [], check: "Check overlap.", ...(rejectedSpots.has(1) && { rejected: true as const }) },
+        { changeId: batchChange.id, spot: 2, label: "Haiku 5.5 title", range: { start: 25, end: 28 }, kind: "graphic" as const, previous: [], ...(rejectedSpots.has(2) && { rejected: true as const }) },
+        { changeId: batchChange.id, spot: 3, label: "Sonnet 5.5 title", range: { start: 60, end: 63 }, kind: "graphic" as const, previous: [], ...(rejectedSpots.has(3) && { rejected: true as const }) },
+        { changeId: batchChange.id, spot: 4, label: "Hydrogen title", range: { start: 100, end: 103 }, kind: "graphic" as const, previous: [], ...(rejectedSpots.has(4) && { rejected: true as const }) },
+      ],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    const aimText = () => container.querySelector(".composer-aim-row")?.textContent ?? "";
+    const rejectBtn = () => container.querySelector<HTMLButtonElement>(".edit-card-reject")!;
+    const rejectedCardEl = () => container.querySelector('.edit-card[aria-label="Rejected edit"]');
+
+    // Open the first flagged edit and reject it -> moves straight to the second flagged edit.
+    const firstNeed = container.querySelector<HTMLButtonElement>('.review-rail-list ol[aria-label="Edits that need you"] > li > button')!;
+    await act(async () => firstNeed.click());
+    await act(async () => {});
+    expect(aimText()).toContain("Flagged Opus title");
+
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([aimText().includes("Flagged Fable title"), rejectedCardEl()]).toEqual([true, null]);
+
+    // Reject the second flagged edit -> flows straight into the safe-edit batch (1 of 3: Haiku 5.5 title).
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([aimText().includes("Haiku 5.5 title"), container.querySelector(".edit-card-step-count")?.textContent, rejectedCardEl()]).toEqual([true, "1 of 3", null]);
+
+    // Reject edit 1 of 3 in the batch -> advances to edit 2 ("Sonnet 5.5 title", now 1 of 2).
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([aimText().includes("Sonnet 5.5 title"), container.querySelector(".edit-card-step-count")?.textContent, rejectedCardEl()]).toEqual([true, "1 of 2", null]);
+
+    // Reject edit 1 of 2 -> advances to the remaining individual safe edit ("Hydrogen title").
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([aimText().includes("Hydrogen title"), container.querySelector(".edit-card-step-count"), rejectedCardEl()]).toEqual([true, null, null]);
+
+    // Reject the last remaining edit -> card closes cleanly.
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([container.querySelector(".edit-card"), rejectedCardEl()]).toEqual([null, null]);
+  });
+
   it("upgrades grouped edit rows live with AI-generated batch summaries from HTTP responses and WebSocket events", async () => {
     const db = buildDb();
     const project = db.projects.find(p => p.id === PRJ)!;

@@ -712,7 +712,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.rejectEdits(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edits });
       replaceChange(change);
       showRewritten(cur.id, project);
-      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return change.appliedVersion ?? change.toVersion;
     },
     async adjustCut(threadId, head, cut, removed) {
@@ -721,7 +721,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.adjustCut(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, cut, removed });
       replaceChange(change);
       showRewritten(cur.id, project);
-      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      if (change.rejects) await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      else void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return { version: change.appliedVersion ?? change.toVersion, rejected: !!change.rejects };
     },
     async adjustEdit(threadId, head, edit, nextRange) {
@@ -730,7 +731,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.adjustEdit(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edit, nextRange });
       replaceChange(change);
       showRewritten(cur.id, project);
-      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      if (change.rejects) await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      else void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return { version: change.appliedVersion ?? change.toVersion, rejected: !!change.rejects };
     },
     async reviseStagedCut(changeId, index, body) {
