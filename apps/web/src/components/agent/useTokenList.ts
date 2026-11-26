@@ -44,13 +44,14 @@ export function useTokenList(field: RefObject<HTMLTextAreaElement | null>, value
     return false;
   };
 
-  /** Put `words` in the place of `token`, with a space after them, and the caret after that. */
-  const replaceToken = (token: TypedToken | undefined, words: string) => {
+  /** Put `words` in the place of `token`, with a space after them (unless `trailingSpace` is false), and the caret after that. */
+  const replaceToken = (token: TypedToken | undefined, words: string, trailingSpace = true) => {
     const el = field.current;
     if (!el || !token) return;
     const suffix = value.slice(token.end), prefix = value.slice(0, token.start) + words;
-    const next = prefix + (suffix || words.endsWith(" ") ? "" : " ") + suffix;
-    const position = words.endsWith(" ") ? prefix.length : prefix.length + 1;
+    const addSpace = trailingSpace && !suffix && !words.endsWith(" ");
+    const next = prefix + (addSpace ? " " : "") + suffix;
+    const position = !trailingSpace || words.endsWith(" ") ? prefix.length : prefix.length + 1;
     flushSync(() => onChange(next));
     el.focus();
     el.setSelectionRange(position, position);

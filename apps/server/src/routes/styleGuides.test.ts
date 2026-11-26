@@ -410,6 +410,79 @@ describe("prompt resolution priority (chat @mention > skill @mention > default)"
     expect(p3).not.toContain("DEFAULT_CREAM_RULE");
     expect(defGuide.id).not.toBe(altGuide.id);
   });
+
+  it("persists captionStyle through CRUD and style_guide_edit, injects it into prompts, and resolves active style guides by priority", async () => {
+    const defCaption = { fontFamily: "Inter", fontWeight: "bold" as const, color: "#FFFFFF", backgroundColor: "#000000CC", y: 0.85 };
+    const altCaption = { fontFamily: "JetBrains Mono", fontWeight: "semibold" as const, color: "#E2E8F0", highlightColor: "#38BDF8", y: 0.82 };
+
+    const defRes = await api("POST", "/style-guides", {
+      name: "cap-default",
+      description: "Default caption look",
+      instructions: "Clean white Inter bold captions.",
+      captionStyle: defCaption,
+      isDefault: true,
+    });
+    expect(defRes.status).toBe(201);
+    const defGuide = (await defRes.json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    expect(defGuide.captionStyle).toEqual(defCaption);
+
+    const altGuide = (await (await api("POST", "/style-guides", {
+      name: "cap-alt",
+      description: "Mono caption look",
+      instructions: "Monospace captions with cyan highlight.",
+      captionStyle: altCaption,
+    })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    // 1. Plain task -> active style guide is default, and system prompt includes ### Caption style.
+    const tDefault = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "/add-captions",
+    })).json() as { task: Task }).task;
+    const pDefault = await prompt(tDefault);
+    expect(pDefault).toContain("### Caption style");
+    expect(pDefault).toContain(`"fontWeight": "bold"`);
+
+    const activeDefaultRes = await api("GET", `/style-guides/active?projectId=${project.id}&taskId=${tDefault.id}`);
+    expect(activeDefaultRes.status).toBe(200);
+    const activeDefault = await activeDefaultRes.json() as { styleGuides: Array<{ name: string; reason: string; captionStyle?: Record<string, unknown> }> };
+    expect(activeDefault.styleGuides).toEqual([expect.objectContaining({ name: "cap-default", reason: "default", captionStyle: defCaption })]);
+
+    // 2. Chat @mention -> active style guide is mentioned guide instead of default.
+    const tMentioned = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "/add-captions in @cap-alt",
+      context: { styleGuideIds: [altGuide.id] },
+    })).json() as { task: Task }).task;
+    const activeMentionRes = await api("GET", `/style-guides/active?projectId=${project.id}&taskId=${tMentioned.id}`);
+    expect(activeMentionRes.status).toBe(200);
+    const activeMention = await activeMentionRes.json() as { styleGuides: Array<{ name: string; reason: string; captionStyle?: Record<string, unknown> }> };
+    expect(activeMention.styleGuides).toEqual([expect.objectContaining({ name: "cap-alt", reason: "mentioned", captionStyle: altCaption })]);
+
+    // 3. style_guide_edit saves updated captionStyle and PATCH with captionStyle: null clears it.
+    const editRes = await api("POST", `/style-guides/${altGuide.id}/edit`, { prompt: "Use uppercase captions.", agent: "claude" });
+    expect(editRes.status).toBe(201);
+    const { task: editTask } = await editRes.json() as { task: Task };
+    const startedAt = "2026-11-26T12:00:00.000Z";
+    saveTask(workspace.ctx, { ...editTask, state: "running", hostId: "host_1", startedAt });
+    const saveRes = await api(
+      "POST",
+      `/projects/${project.id}/tasks/${editTask.id}/style-guide-edit`,
+      {
+        styleGuideId: altGuide.id,
+        hostId: "host_1",
+        instructions: "Uppercase mono captions.",
+        captionStyle: { ...altCaption, uppercase: true },
+      },
+      { [TASK_HEADER]: editTask.id, [ATTEMPT_HEADER]: startedAt },
+    );
+    expect(saveRes.status).toBe(200);
+    const saved = (await saveRes.json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    expect(saved.captionStyle).toEqual({ ...altCaption, uppercase: true });
+
+    const clearRes = await api("PUT", `/style-guides/${altGuide.id}`, { captionStyle: null });
+    expect(clearRes.status).toBe(200);
+    expect((await clearRes.json() as { styleGuide: StyleGuideRecord }).styleGuide.captionStyle).toBeUndefined();
+  });
 });
 
 describe("live preview rendering", () => {

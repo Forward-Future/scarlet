@@ -87,11 +87,15 @@ export const useStyleGuidesStore = create<StyleGuidesState>((set, get) => ({
     const prev = get().styleGuides;
     const existing = prev.find(g => g.id === id);
     if (existing) {
-      get().apply({
+      const { captionStyle, ...rest } = body;
+      const next: StyleGuideRecord = {
         ...existing,
-        ...body,
+        ...rest,
         isDefault: body.isDefault ?? existing.isDefault,
-      });
+      };
+      if (captionStyle === null) delete next.captionStyle;
+      else if (captionStyle !== undefined) next.captionStyle = captionStyle;
+      get().apply(next);
     }
     try {
       const { styleGuide } = await api.updateStyleGuide(id, body);

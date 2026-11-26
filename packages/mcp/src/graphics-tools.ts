@@ -234,16 +234,22 @@ export function registerGraphics(deps: GraphicsDeps) {
     const taskId = deps.task.id;
     tool(
       "style_guide_update",
-      "Save the updated one-line description and visual style rules (instructions) for this style guide. Include the complete rules that should stay as well as what changed.",
+      "Save the updated one-line description, visual style rules (instructions), and optional structured captionStyle for this style guide. Include the complete rules that should stay as well as what changed.",
       TaskStyleGuideDraft.shape,
-      async ({ description, instructions }) => {
+      async ({ description, instructions, captionStyle }) => {
         const { styleGuide } = await client.saveTaskStyleGuideEdit(deps.projectId, taskId, {
           styleGuideId: editingGuide.styleGuideId,
           hostId: editingGuide.hostId,
           ...(description !== undefined && { description }),
           instructions,
+          ...(captionStyle !== undefined && { captionStyle }),
         });
-        return json({ styleGuideId: styleGuide.id, name: styleGuide.name, description: styleGuide.description });
+        return json({
+          styleGuideId: styleGuide.id,
+          name: styleGuide.name,
+          description: styleGuide.description,
+          ...(styleGuide.captionStyle && { captionStyle: styleGuide.captionStyle }),
+        });
       },
     );
 

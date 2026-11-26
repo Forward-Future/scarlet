@@ -62,6 +62,8 @@ export interface RenderOptions {
   best?: boolean;
   /** Output height in px (width follows the project aspect). Defaults to project height. */
   height?: number;
+  /** Extra font directories searched before OS defaults (e.g. style guide and attachment fonts). */
+  fontDirs?: string[];
   hwaccel?: "none" | "auto" | "nvenc" | "qsv" | "videotoolbox";
   onProgress?: (p: number) => void;
   /** Called once for each thing the renderer couldn't do as asked and worked around: a missing source, an unsupported effect. */
