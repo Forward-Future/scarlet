@@ -224,8 +224,16 @@ fn child_env_with(home: &Path, wait_for_login_path: bool) -> HashMap<String, Str
     env.insert(key, path);
     env.remove("CLAUDECODE");
     env.remove("CLAUDE_CODE_ENTRYPOINT");
+    // The agent CLIs' own usage metrics and error reports to their makers stay off, whatever Scarlet's own setting
+    // (Claude Code reads these two; Gemini gets --disable-telemetry and Codex analytics.enabled=false).
+    for (name, value) in CLI_TELEMETRY_OFF {
+        env.insert(name.into(), value.into());
+    }
     env
 }
+
+/// Environment that turns off the agent CLIs' own usage metrics and error reports. See docs/telemetry.md.
+pub const CLI_TELEMETRY_OFF: [(&str, &str); 2] = [("DISABLE_TELEMETRY", "1"), ("DISABLE_ERROR_REPORTING", "1")];
 
 #[cfg(target_os = "macos")]
 static LOGIN_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
@@ -637,6 +645,10 @@ mod tests {
         let env = child_env(home.path());
         // This test may itself run inside Claude Code, which sets both.
         assert!(!env.contains_key("CLAUDECODE") && !env.contains_key("CLAUDE_CODE_ENTRYPOINT"));
+        // The agent CLIs never report usage or errors to their makers from inside Scarlet.
+        for (name, value) in CLI_TELEMETRY_OFF {
+            assert_eq!(env.get(name).map(String::as_str), Some(value), "{name}");
+        }
         // One PATH, under the name the system used, holding what was inherited and the install folders.
         let names: Vec<&String> = env.keys().filter(|k| k.eq_ignore_ascii_case("PATH")).collect();
         assert_eq!(names.len(), 1);

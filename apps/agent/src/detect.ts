@@ -8,7 +8,7 @@ import type { ProvidersConfig } from "./config.js";
 import { discoverModels, ModelCatalogError, type CliAgent } from "./modelCatalog.js";
 import { detectProviders, resolveProviders, type FetchFn } from "./providers.js";
 import { stopCliTree } from "./processTree.js";
-import { errMsg } from "./runners/spawn.js";
+import { CLI_TELEMETRY_OFF, errMsg } from "./runners/spawn.js";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, readFile, stat } from "node:fs/promises";
@@ -69,7 +69,7 @@ export const defaultExec: ExecFn = (file, args, opts = {}) =>
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       detached: process.platform !== "win32",
-      ...(opts.env ? { env: opts.env } : {}),
+      env: { ...(opts.env ?? process.env), ...CLI_TELEMETRY_OFF },
       windowsVerbatimArguments: useShell,
     });
     let stdout = "";

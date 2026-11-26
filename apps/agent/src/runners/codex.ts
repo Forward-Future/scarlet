@@ -82,6 +82,9 @@ function codexConfig(opts: Pick<RunAgentOptions, "mcp" | "plan" | "workspace">, 
     ...(process.platform === "win32" ? ["-c", 'windows.sandbox="mxc"'] : []),
     ...(ws ? CODEX_OFF : ["shell_tool", "view_image", ...CODEX_OFF]).flatMap((feature) => ["--disable", feature]),
     "-c", 'approval_policy="never"',
+    // Codex's own usage metrics to OpenAI stay off. Its private home drops the editor's own config.toml, so an opt-out
+    // there wouldn't reach it otherwise.
+    "-c", "analytics.enabled=false",
     // A request's agent searches the live web; a side check has none.
     "-c", `web_search=${ws ? '"live"' : '"disabled"'}`,
     // Codex otherwise reads only the first 32 KiB of AGENTS.md. The prompt lists every clip ahead of the task, the
