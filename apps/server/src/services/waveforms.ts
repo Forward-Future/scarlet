@@ -14,6 +14,9 @@ import type { Ctx } from "../context.js";
 import type { WaveformCache } from "../render/adapter.js";
 import type { MediaWithStatus } from "../repo/projects.js";
 import { atomicWriteFile, errorMessage } from "../util.js";
+import { clip, humanDuration, throttledPerCtx } from "../logText.js";
+
+const waveformFailures = throttledPerCtx();
 
 /**
  * 10 ms a point. The dip between two words said in one breath is often 20-40 ms wide: at 20 ms it averaged into the
@@ -56,12 +59,17 @@ async function loadOrBuildWaveform(ctx: Ctx, media: MediaWithStatus & { projectI
   const paused = () => { if (!ctx.waveformsAsked.has(key)) stop.abort(pause.reason); };
   if (always.aborted) stopped(); else always.addEventListener("abort", stopped, { once: true });
   if (pause.aborted) paused(); else pause.addEventListener("abort", paused, { once: true });
+  const started = Date.now();
   try {
     if (stop.signal.aborted) return null;
-    return await buildWaveform(ctx, media, stop.signal);
+    const built = await buildWaveform(ctx, media, stop.signal);
+    ctx.log(`[media] ${media.id}: waveform${media.audioTrack ? ` of track ${media.audioTrack}` : ""} built in ${humanDuration(Date.now() - started)}`);
+    return built;
   } catch (err) {
     // The ask came as the pause was stopping the build: it is read again for whoever asked.
     if (stop.signal.aborted && !always.aborted && ctx.waveformsAsked.has(key)) return loadOrBuildWaveform(ctx, media, key);
+    // The timeline asks again each time it draws, so a recording that can't be read is logged once a minute.
+    if (!stop.signal.aborted) waveformFailures(ctx)(key, `[media] ${media.id}: waveform couldn’t be built after ${humanDuration(Date.now() - started)}: ${clip(errorMessage(err))}`);
     throw err;
   } finally {
     always.removeEventListener("abort", stopped);

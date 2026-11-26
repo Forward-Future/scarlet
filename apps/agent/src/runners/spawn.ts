@@ -10,8 +10,9 @@ import { basename, delimiter, dirname, extname, isAbsolute, join } from "node:pa
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
 import { findOnPath, needsCmdShell } from "../detect.js";
+import { clip, flagNames, humanDuration, stderrTail } from "../logText.js";
 import { forgetCli, KILL_AFTER_MS, killCliTree, noteCli, repeatStop, stopCliTree } from "../processTree.js";
-import type { RunAgentResult } from "./types.js";
+import type { RunAgentOptions, RunAgentResult } from "./types.js";
 
 export interface SpawnLinesOptions {
   cwd: string;
@@ -33,6 +34,13 @@ export interface SpawnLinesOptions {
   drainAfterMs?: number;
   onLine: (line: string) => void;
   onStderr?: (chunk: string) => void;
+  /**
+   * The host's log: one line as the CLI starts (its flags by name, never their values or its prompt) and one as it
+   * ends, as the desktop host logs each run. Omitted: nothing is logged.
+   */
+  log?: (msg: string) => void;
+  /** The task the CLI runs for, which names it in the log. */
+  task?: string;
 }
 
 export interface SpawnOutcome {
@@ -129,6 +137,26 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
     detached: process.platform !== "win32", // own process group, including tool subprocesses
     windowsVerbatimArguments: spec.verbatim,
   });
+  const runStarted = performance.now();
+  // Named as the desktop host names it: its task, then the program and its process id.
+  const name = basename(file, extname(file)) || file;
+  const who = `${opts.task ? `task ${opts.task}: ` : ""}${name} (pid ${child.pid ?? "none"})`;
+  const log = (msg: string) => {
+    if (!opts.log) return;
+    try {
+      opts.log(msg);
+    } catch {
+      /* a log line never stops a run */
+    }
+  };
+  if (child.pid && opts.log) {
+    const folder = basename(opts.cwd);
+    const flags = flagNames(args);
+    log(`${who} started from ${file}${spec.file !== file ? ` through ${basename(spec.file)}` : ""} with ${args.length} args${flags ? ` (${flags})` : ""} in ${/^[0-9a-f]{64}$/.test(folder) ? folder.slice(0, 12) : folder}`);
+  }
+  let spawnError: string | undefined;
+  let handlerFailures = 0;
+  let firstHandlerError = "";
   let timedOut = false;
   let aborted = false;
   let killed = false;
@@ -171,6 +199,7 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
     looked = now;
     if (gap >= ASLEEP_AFTER_MS) {
       lastOutput = now;
+      log(`${who}: the computer was asleep for about ${humanDuration(gap)}; its stall and time limits don't count that`);
     } else {
       awake += gap;
       if (opts.timeoutMs !== undefined && awake >= opts.timeoutMs) {
@@ -204,6 +233,7 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
     try {
       opts.onLine(line);
     } catch (err) {
+      if (!handlerFailures++) firstHandlerError = errMsg(err);
       addStderr(`line handler failed: ${errMsg(err)}\n`);
     }
   };
@@ -224,7 +254,27 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
 
   // Noted for the next launch, which stops a CLI this one left running when it crashed. In the background: `ps` is slow
   // beside a CLI that reads its prompt at once.
-  const noting = child.pid ? noteCli(child.pid, spec.file).catch((err) => addStderr(`could not note the CLI for the next launch: ${errMsg(err)}\n`)) : undefined;
+  const noting = child.pid ? noteCli(child.pid, spec.file).catch((err) => {
+    // Without its note, the next launch can't stop this CLI if this one crashes.
+    log(`could not note agent CLI ${child.pid} for the next launch: ${clip(errMsg(err))}`);
+    addStderr(`could not note the CLI for the next launch: ${errMsg(err)}\n`);
+  }) : undefined;
+  /** One line per CLI run, so the log says how each agent process ended and what it last said on stderr. */
+  const logOutcome = (o: SpawnOutcome) => {
+    if (!opts.log) return;
+    const ran = humanDuration(performance.now() - runStarted);
+    const tail = stderrTail(o.stderr);
+    const said = tail ? `; stderr: ${tail}` : "";
+    const how = o.signal ? ` (signal ${o.signal})` : "";
+    if (spawnError !== undefined) log(`could not start ${name}: ${clip(spawnError)}`);
+    else if (o.stalled) log(`${who} wrote nothing for ${humanDuration(opts.stallMs ?? 0)} and was stopped after ${ran}${said}`);
+    else if (o.timedOut) log(`${who} hit its ${humanDuration(opts.timeoutMs ?? 0)} run limit and was stopped after ${ran}${said}`);
+    else if (o.aborted) log(`${who} was cancelled after ${ran}`);
+    // `killed` here means Scarlet stopped it on purpose after a final line, such as a question.
+    else if (o.code === 0 || o.killed) log(`${who} exited with code ${o.code}${how} after ${ran}`);
+    else log(`${who} exited with code ${o.code}${how} after ${ran}${said}`);
+    if (handlerFailures) log(`${who}: ${handlerFailures} of its output lines could not be handled (first: ${clip(firstHandlerError)})`);
+  };
   const done = new Promise<SpawnOutcome>((resolve) => {
     const finish = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
@@ -234,13 +284,16 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
       opts.signal?.removeEventListener("abort", onAbort);
       if (buf.trim()) emitLine(buf.replace(/\r$/, ""));
       const outcome = { code, signal, timedOut, stalled, aborted, killed, stderr };
+      logOutcome(outcome);
       const pid = child.pid;
       if (!noting || !pid) return resolve(outcome);
-      // After the note is written, so one written late isn't left behind.
+      // After the note is written, so one written late isn't left behind. A note left behind is harmless: the next
+      // launch checks its start time before stopping anything.
       void noting.then(() => forgetCli(pid)).catch(() => undefined).finally(() => resolve(outcome));
     };
     child.on("error", (err) => {
       stderr += `\nspawn error: ${err.message}`;
+      spawnError ??= err.message;
       finish(null, null);
     });
     child.on("close", finish);
@@ -249,6 +302,7 @@ export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions
     child.on("exit", (code, signal) => {
       setTimeout(() => {
         if (settled) return;
+        log(`${who} ended, but a process it started kept its output open; settling without it`);
         child.stdout?.destroy();
         child.stderr?.destroy();
         finish(code, signal);
@@ -314,6 +368,18 @@ export function asString(value: unknown): string | undefined {
 
 export function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** A runner's lines in the host's log, named by its task and CLI as the CLI's own lines are. Never throws. */
+export function runnerLog(opts: Pick<RunAgentOptions, "log" | "task">, cli: string): (msg: string) => void {
+  return (msg) => {
+    if (!opts.log) return;
+    try {
+      opts.log(`${opts.task ? `task ${opts.task}: ` : ""}${cli} ${msg}`);
+    } catch {
+      /* a log line never stops a run */
+    }
+  };
 }
 
 /** The one JSON object a CLI wrote on a line of its stream. Undefined for anything else: a warning, null, a number, a list. */

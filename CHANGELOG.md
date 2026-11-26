@@ -7,6 +7,13 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 26, 2026
 
 - Updating existing B-roll To-dos or other edits from a follow-up request now replaces the earlier rows in Needs review instead of listing old and new versions side by side.
+- In the beta layout, your message bubbles in the chat now always show your full text instead of cutting off after two lines.
+- Hovering an added sound in the edits list now reads "Added Warm bed (−6 dB)" instead of "Added Warm bed, quieter (−6 dB)".
+- Dragging the edge of a voice edit on its own audio track now gives the time to or takes it from the sound beside it, instead of refusing or leaving a silent gap.
+- A style guide saved from a graphic now lists fonts whose names are in quotes, such as "Brand Serif", instead of an empty line.
+- Built-in style guide sounds now play correctly when only their ending is asked for.
+- Accented names in Settings › Models › Task models keep their letters together, so "Étalonnage" no longer becomes "e-talonnage".
+- Pressing A quickly on several to-dos now adds every one: the card moves to the next to-do at the press, and one that couldn't be sent comes back with the reason.
 - In the beta layout, the Working and Done headings in the edits column now stay pinned in view while their lists scroll.
 - Style guides now also keep transitions, sound effects and a camera color look, each on its own tab beside Graphics: replay a transition between two sample shots, play sound effects or add them from a built-in starter library with a mix level and a note on when to use them, and describe a color look in chat or drop a .cube or .3dl look file. Scarlet follows them when it edits.
 - Drop a .json style file on Settings › Style guides or on a style guide, or use Import file, to load all its settings at once. Export on a style guide saves them all as a .style.json file. Other files, such as a .md, .yaml, .pdf or .cube, open in the style guide's chat for Scarlet to read.

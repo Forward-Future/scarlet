@@ -57,7 +57,7 @@ impl HostManager {
         self.stop().await;
         let Some(mcp) = self.mcp.lock().unwrap().clone() else {
             log::error!("host not started: no MCP launcher (engine binary missing)");
-            let _ = self.app.emit("host://status", &HostStatus { error: Some("engine binary missing; model host disabled".into()), ..Default::default() });
+            crate::util::note_emit("host://status", self.app.emit("host://status", &HostStatus { error: Some("engine binary missing; model host disabled".into()), ..Default::default() }));
             return;
         };
         let (models, (timeout, stall), max_parallel) = {
@@ -76,7 +76,7 @@ impl HostManager {
         });
         let app = self.app.clone();
         let emit: Emit = Arc::new(move |event, payload| {
-            let _ = app.emit(event, payload);
+            crate::util::note_emit(event, app.emit(event, payload));
         });
         let rt = Arc::new(HostRuntime {
             emit,
@@ -130,7 +130,7 @@ impl HostManager {
             rt.stop().await;
             // A host started for the next engine while this one wound down has already said how it stands.
             if self.runtime.lock().await.is_none() {
-                let _ = self.app.emit("host://status", &HostStatus { mcp_command: Some(rt.mcp.describe()), ..Default::default() });
+                crate::util::note_emit("host://status", self.app.emit("host://status", &HostStatus { mcp_command: Some(rt.mcp.describe()), ..Default::default() }));
             }
         }
     }

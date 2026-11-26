@@ -6,9 +6,13 @@
  */
 import { fileInDirectory, mouthMotion, type CropBox } from "@scarlet/render";
 import type { Ctx } from "../context.js";
+import { clip, logId, throttledPerCtx } from "../logText.js";
 import { faces, type FaceTrack } from "./faces.js";
 import { r3, type VideoMedia } from "./pictureReading.js";
 import { pictureDecoder, pictureLane } from "./pictureWork.js";
+
+/** A GPU decoder that fails does so for every stretch and face: its fallback is logged once a minute for each recording. */
+const fellBack = throttledPerCtx();
 
 /** Compact output rate (samples per second) for mouth movement series. */
 export const MOUTH_ACTIVITY_RATE = 5;
@@ -130,6 +134,7 @@ export async function mouthActivity(
         } catch (err) {
           signal?.throwIfAborted();
           if (!decoder) throw err;
+          fellBack(ctx)(`mouth:${media.id}`, `[media] mouth-activity id=${logId(media.id)} measured on the CPU after the ${decoder} decoder failed: ${clip(err instanceof Error ? err.message : String(err))}`);
           return await mouthMotion(file, { start: s.from, end: s.to }, { box: mouth satisfies CropBox, width, height, fps, signal });
         }
       }, { signal });

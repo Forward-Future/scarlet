@@ -13,7 +13,7 @@ import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttem
 import { badRequest, conflict, notFound } from "../errors.js";
 import { requestCutPlaybackFile, waitForPlayback } from "../services/playback.js";
 import { serveFile } from "../files.js";
-import { logId, throttledLog } from "../logText.js";
+import { clip, logId, throttledLog } from "../logText.js";
 import { ensureProjectHead } from "../services/timeline.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { framePriority, pictureDecoder, pictureLane, type PicturePriority } from "../services/pictureWork.js";
@@ -165,9 +165,9 @@ export function renderRoutes(ctx: Ctx) {
           return await extractFrame(file, Math.max(0, local + 0.5 / fps), {
             width: Math.round(width * Math.min(1, size / Math.max(width, height))), signal, fps,
           });
-        } catch {
+        } catch (error) {
           signal.throwIfAborted();
-          retried(`cached-frame/${preview.id}`, `[render] frame_fallback render=${logId(preview.id)} project=${logId(project.id)} version=${version} reason=cached_preview frame=${frame}`);
+          retried(`cached-frame/${preview.id}`, `[render] frame_fallback render=${logId(preview.id)} project=${logId(project.id)} version=${version} reason=cached_preview frame=${frame}: ${clip((error as Error)?.message ?? String(error))}`);
         }
       }
       const root = ctx.paths.media(project.id);

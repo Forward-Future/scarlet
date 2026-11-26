@@ -10,7 +10,7 @@
 import { endianness } from "node:os";
 import type { AudioTrackSelection } from "@scarlet/timeline";
 import { audioMapArgs, type HeardAudio } from "./audioTrack.js";
-import { FFMPEG_BASE_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffSeconds, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_BASE_ARGS, LOCAL_MEDIA_INPUT, SOURCE_AUDIO_CLOCK, ffSeconds, logElapsed, logRender, resolveFfmpeg, runCapture } from "./exec.js";
 
 const DECODE_RATE = 16000;
 const nativeS16le = endianness() === "LE";
@@ -119,6 +119,7 @@ export async function extractWaveformFull(
   }
   const maxPoints = Math.min(opts.maxPoints ?? MAX_WAVEFORM_POINTS, MAX_WAVEFORM_POINTS);
   if (!Number.isSafeInteger(maxPoints) || maxPoints < 1) throw new Error("Invalid waveform cache budget.");
+  const started = Date.now();
   // Grow in pages as samples arrive. A container's duration is a progress estimate only.
   const pageSize = Math.min(maxPoints, 4096);
   const pages: Array<{ peaks: Float32Array; rms: Float32Array }> = [];
@@ -170,6 +171,12 @@ export async function extractWaveformFull(
     rms.set(page.rms.subarray(0, size - at), at);
   }
   opts.onProgress?.(1);
+  // The engine logs each waveform it builds; this says only what it can't, a file whose sound runs longer or shorter
+  // than it states.
+  if (duration > 0 && Math.abs(decoded - duration) > 1) {
+    logRender(() => `[media] waveform decoded in ${logElapsed(Date.now() - started)}: ${measured.toFixed(1)} s of sound at ${pointsPerSecond} points/s` +
+      ` (the file states ${duration.toFixed(1)} s)`);
+  }
   return { pointsPerSecond, duration: measured, peaks, rms };
 }
 

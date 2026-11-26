@@ -192,7 +192,7 @@ function createSession(options: TelemetryOptions, key: string, refreshPreference
   /** This session already reported an export, or wrote the marker. */
   let exported = false;
 
-  async function send(batch: readonly BufferedEvent[]): Promise<{ sent: boolean; status?: number }> {
+  async function send(batch: readonly BufferedEvent[]): Promise<{ sent: boolean; status?: number; reason?: string }> {
     try {
       const response = await (options.fetch ?? fetch)(`${config.posthogHost}/batch/`, {
         method: "POST",
@@ -221,8 +221,10 @@ function createSession(options: TelemetryOptions, key: string, refreshPreference
       });
       void response.body?.cancel().catch(() => {});
       return { sent: response.ok, status: response.status };
-    } catch {
-      return { sent: false };
+    } catch (error) {
+      // Only the kind of failure (a timeout, no network): the dropped batch's line says why it went.
+      const name = error instanceof Error ? error.name : "";
+      return { sent: false, reason: /^[A-Za-z]{1,40}$/.test(name) ? name : "error" };
     }
   }
 
@@ -252,7 +254,7 @@ function createSession(options: TelemetryOptions, key: string, refreshPreference
       delivery = { failedBatch: [], batchAttempts: 0, firstFailedAt: 0, failures, retryAt };
       log(rejected
         ? `[telemetry] the ingest host rejected a batch (${result.status}); dropped ${batch.length} event(s)`
-        : `[telemetry] dropped ${batch.length} event(s) after ${batchAttempts} failed sends`);
+        : `[telemetry] dropped ${batch.length} event(s) after ${batchAttempts} failed sends (last: ${result.status !== undefined ? `HTTP ${result.status}` : result.reason ?? "error"})`);
       return;
     }
   }

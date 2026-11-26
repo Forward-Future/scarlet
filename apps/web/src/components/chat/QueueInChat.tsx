@@ -36,7 +36,7 @@ export function QueueInChat({ items, hint, waits, rewording, onRemove, onReword,
       : first && waits ? <span className="queue-next is-waiting">{waits}</span>
       : <span className="queue-next">{first ? "Up next" : "Queued"}</span>;
     return <div key={item.id} className={editing ? "queue-row is-rewording" : "queue-row"}>
-      <p className="queue-bubble" title={item.text}>
+      <p className="queue-bubble">
         {item.target && <span className="queue-target">{item.target}</span>}
         <span className={reword && !editing ? "queue-text is-rewordable" : "queue-text"} onClick={editing ? undefined : reword}>{item.text}</span></p>
       <div className="queue-foot">

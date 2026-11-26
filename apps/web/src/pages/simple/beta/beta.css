@@ -80,24 +80,23 @@
 [data-new-layout] .simple-turn > .simple-msg.from-you,
 [data-new-layout] .req-say.is-yours { --bubble: #2a2a2a; }
 [data-new-layout] .unit-bubble { position: relative; display: flex; max-width: 86%; min-width: 0; padding: 7px 12px; border-radius: 12px; background: var(--bubble); }
-[data-new-layout] .unit-msg .unit-bubble > p { color: var(--color-fg); }
+[data-new-layout] .unit > .unit-msg .unit-bubble > p,
+[data-new-layout] .simple-pin .unit > .unit-msg .unit-bubble > p { display: block; -webkit-line-clamp: unset; overflow: visible; color: var(--color-fg); }
 [data-new-layout] .unit-meta { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; max-width: 100%; }
 [data-new-layout] .unit-meta:not(:has(> :not(.unit-state:empty, .run-tokens.is-quiet))) { display: none; }
 [data-new-layout] .unit > .unit-msg.is-markable:hover { background: none; }
 [data-new-layout] .unit > .unit-msg.is-markable:hover .unit-bubble { background: #313131; }
-[data-new-layout] .unit > .unit-msg:not(.is-live, .is-marked) p,
-[data-new-layout] .simple-pin .unit > .unit-msg:not(.is-live, .is-marked) p { -webkit-line-clamp: 2; }
 [data-new-layout] .unit:has(.simple-review-tab-count) > .unit-msg > .unit-meta > .unit-state:has(> .unit-dot) { display: none; }
 [data-new-layout] .unit-answer { flex: none; align-self: center; line-height: 19px; white-space: nowrap; }
 [data-new-layout] .unit-bubble > .run-tokens.is-quiet { top: 0; bottom: 0; right: 0; }
 [data-new-layout] .unit-bubble > .run-tokens.is-quiet:focus-visible { top: calc(100% + 2px); bottom: auto; }
 [data-new-layout] .unit-meta > .unit-state:has(> .unit-dot) { height: 19px; }
 [data-new-layout] .simple-turn > .simple-msg.from-you { align-self: flex-end; max-width: 86%; padding: 7px 12px; border: 0; border-radius: 12px; background: var(--bubble); }
-[data-new-layout] .simple-turn > .simple-msg.from-you p { color: var(--color-fg); }
+[data-new-layout] .simple-turn > .simple-msg.from-you p { display: block; -webkit-line-clamp: unset; overflow: visible; color: var(--color-fg); }
 [data-new-layout] .simple-pin { border-top: 0; }
 [data-new-layout] .simple-pin > .unit > .unit-msg { padding-top: 8px; }
 [data-new-layout] .simple-pin:has(> .unit:not([hidden])) + .composer-dock { border-top: 0; padding-top: 9px; }
-[data-new-layout] .req-say.is-yours { width: fit-content; max-width: 86%; margin-left: auto; padding: 7px 12px; border-left: 0; border-radius: 12px; background: var(--bubble); color: var(--color-fg); }
+[data-new-layout] .req-say.is-yours { display: block; -webkit-line-clamp: unset; overflow: visible; width: fit-content; max-width: 86%; margin-left: auto; padding: 7px 12px; border-left: 0; border-radius: 12px; background: var(--bubble); color: var(--color-fg); }
 [data-new-layout] .req-say.said:not(.is-yours),
 [data-new-layout] .simple-msg.from-scarlet .said { -webkit-line-clamp: 3; }
 
@@ -119,10 +118,10 @@
 [data-new-layout] .queue-row:hover,
 [data-new-layout] .queue-row:focus-within { background: none; color: inherit; }
 [data-new-layout] .queue-row.is-rewording { background: none; color: inherit; }
-[data-new-layout] .queue-bubble { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0; padding: 7px 12px; border-radius: 12px;
-  background: #2a2a2a; font-size: 13px; line-height: 1.45; color: var(--color-fg); overflow-wrap: anywhere; }
+[data-new-layout] .queue-bubble { display: block; -webkit-line-clamp: unset; overflow: visible; margin: 0; padding: 7px 12px; border-radius: 12px;
+  background: #2a2a2a; font-size: 13px; line-height: 1.45; color: var(--color-fg); white-space: pre-wrap; overflow-wrap: anywhere; }
 [data-new-layout] .queue-target { flex: none; margin-right: 7px; padding: 0 6px; border: 1px solid var(--color-line); border-radius: 4px; font-size: 12px; line-height: inherit; color: var(--color-muted); }
-[data-new-layout] .queue-text { flex: none; overflow: visible; text-overflow: clip; white-space: normal; }
+[data-new-layout] .queue-text { flex: none; overflow: visible; text-overflow: clip; white-space: inherit; }
 [data-new-layout] .queue-foot { display: flex; align-items: center; gap: 2px; min-height: 20px; }
 [data-new-layout] .queue-row:not(:hover, :focus-within, .is-rewording) .queue-foot:not(:has(.queue-next)) { min-height: 0; height: 0; overflow: hidden; }
 [data-new-layout] .queue-next { width: auto; margin-left: 4px; color: var(--color-dim); white-space: nowrap; }

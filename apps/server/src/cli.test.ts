@@ -110,7 +110,7 @@ it("serves for the desktop app: hands over its address and token, and stops when
   expect(out.filter(line => !line.startsWith("[") && !line.startsWith("SCARLET_READY"))).toEqual([]);
   // One line in the log says what started: never the token.
   await vi.waitFor(() => expect(out.filter(line => line.startsWith("[lifecycle] ready "))).toEqual([
-    expect.stringMatching(new RegExp(`^\\[lifecycle\\] ready port=${info.port} version=\\S+ node=v\\S+ solo=true transcription=\\S+ telemetry=(on|off|unavailable) data=`)),
+    expect.stringMatching(new RegExp(`^\\[lifecycle\\] ready port=${info.port} version=\\S+ node=v\\S+ solo=true transcription=\\S+ telemetry=(on|off|unavailable) startup=\\d+(ms|s|m \\d+s) data=`)),
   ]));
   expect(out.filter(line => !line.startsWith("SCARLET_READY")).join("\n")).not.toContain(info.token);
   expect(fs.existsSync(join(data, "access-token"))).toBe(true);

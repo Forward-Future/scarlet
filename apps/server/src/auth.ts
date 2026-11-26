@@ -63,6 +63,8 @@ export function accessToken(ctx: Ctx): string {
     }
     // The new hard link is the same file we already protected. A racing engine reads the winner below.
     if (published) {
+      // Never the token: only that this library has a new one, so agent hosts holding an old one will be refused.
+      ctx.log("[engine] created this library's access token");
       workspaceTokens.set(ctx, published);
       return published;
     }

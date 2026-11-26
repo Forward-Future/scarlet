@@ -12,6 +12,7 @@ import { inListOrder, tabShown, type ListOrder, type ReviewLinger, type RowPlace
 import { type Thread } from "../../../lib/threads";
 import { useKeepSelectedInView } from "../../../lib/uiHooks";
 import { useProjectStore } from "../../../stores/project";
+import { useWorkingModel } from "../../../lib/workingModel";
 import { useShownCut } from "../../../stores/shownCut";
 import { EditResultLink, entryKeys, Made, namedEdit, nestsUnder, passEntries, passMade, selectedRowKey, useListOpen, usePassFacts, useReveal, useThreadFacts, threadRowPlaces, type Entry } from "../passRows";
 import { useReviewRail, type RailEditMember, type RailRow, type RailSubRow } from "../railStore";
@@ -341,6 +342,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   /** The row key whose question is currently displayed over the message box, so it lights up. */
   askingRowKey?: string }) {
   const facts = useThreadFacts({ projectId, thread, edits, rejected, actions });
+  const modelAt = useWorkingModel();
   const { reviewed, canUnkeep, revising, rejecting, adding, gone, showing, shownEdit, groups, need, openEdit, openId } = facts;
   const [open, setOpen] = list;
   const [host, reveal] = useReveal(open);
@@ -451,6 +453,7 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         places: rowEdits.length,
         version,
         status: word ?? decision,
+        by: modelAt(revisingNow),
       });
       return {
         key,

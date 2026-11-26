@@ -19,6 +19,8 @@ function provider(answer: unknown, status = 200) {
   });
   return sent;
 }
+/** A failure's line without its provider, model and time, which vary. */
+const reason = (lines: string[]) => lines.map(line => line.replace(/^\[cleanup\] \S+ \S+ failed after \S+( \(timed out\))?: /, "[cleanup] failed: "));
 const spoken = "um so like at the start, cut the, uh, the bit where I cough";
 
 it("leaves the note as spoken when cleanup is off, or when there is no key for a provider", async () => {
@@ -114,8 +116,17 @@ it("leaves the note as spoken when the model refuses or answers with nothing", a
   expect(await cleanupNote(gem.ctx, spoken, { time: 0 })).toBeNull();
   provider({ candidates: [{ finishReason: "STOP", content: { parts: [{ text: "   " }] } }] });
   expect(await cleanupNote(gem.ctx, spoken, { time: 0 })).toBeNull();
-  // None of these is a failure: nothing is logged.
-  expect([...lines, ...open.lines, ...gem.lines]).toEqual([]);
+  // None of these is a failure: each is one line saying why the note kept the editor's words, never what the model said.
+  const all = [...lines, ...open.lines, ...gem.lines];
+  expect(all.map(line => line.replace(/ in \d+ms$/, ""))).toEqual([
+    "[cleanup] anthropic claude-opus-5-5 kept the spoken note (stopped: refusal)",
+    "[cleanup] anthropic claude-opus-5-5 kept the spoken note (empty reply)",
+    "[cleanup] openai gpt-4o-mini kept the spoken note (empty reply)",
+    "[cleanup] openai gpt-4o-mini kept the spoken note (empty reply)",
+    "[cleanup] gemini gemini-2.5-flash kept the spoken note (stopped: SAFETY)",
+    "[cleanup] gemini gemini-2.5-flash kept the spoken note (empty reply)",
+  ]);
+  for (const line of all) expect(line).not.toMatch(/failed|help with|blocked/);
 });
 
 it("leaves the note as spoken when the rewrite was cut off at its length limit", async () => {
@@ -136,21 +147,22 @@ it("leaves the note as spoken and logs the provider's reason when the request fa
   provider(`{"error":{"type":"overloaded_error","message":"Overloaded"}}${"x".repeat(400)}`, 529);
   expect(await cleanupNote(anthropic.ctx, spoken, { time: 0 })).toBeNull();
   expect(anthropic.lines).toHaveLength(1);
-  expect(anthropic.lines[0]).toMatch(/^\[cleanup\] failed: anthropic 529: \{"error":\{"type":"overloaded_error","message":"Overloaded"\}\}x+$/);
+  expect(anthropic.lines[0]).toMatch(/^\[cleanup\] anthropic claude-opus-5-5 failed after \d+ms: /);
+  expect(reason(anthropic.lines)[0]).toMatch(/^\[cleanup\] failed: anthropic 529: \{"error":\{"type":"overloaded_error","message":"Overloaded"\}\}x+$/);
   // The provider's answer is cut to 300 characters.
-  expect(anthropic.lines[0]!.length).toBe("[cleanup] failed: anthropic 529: ".length + 300);
+  expect(reason(anthropic.lines)[0]!.length).toBe("[cleanup] failed: anthropic 529: ".length + 300);
 
   const open = engine({ enabled: true, provider: "openai" }, { openaiKey: "sk-fixture" });
   provider("Incorrect API key provided", 401);
   expect(await cleanupNote(open.ctx, spoken, { time: 0 })).toBeNull();
   vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
   expect(await cleanupNote(open.ctx, spoken, { time: 0 })).toBeNull();
-  expect(open.lines).toEqual(["[cleanup] failed: openai 401: Incorrect API key provided", "[cleanup] failed: fetch failed"]);
+  expect(reason(open.lines)).toEqual(["[cleanup] failed: openai 401: Incorrect API key provided", "[cleanup] failed: fetch failed"]);
 
   const gem = engine({ enabled: true, provider: "gemini" }, { geminiKey: "AIza-fixture" });
   provider("API key not valid", 400);
   expect(await cleanupNote(gem.ctx, spoken, { time: 0 })).toBeNull();
-  expect(gem.lines).toEqual(["[cleanup] failed: gemini 400: API key not valid"]);
+  expect(reason(gem.lines)).toEqual(["[cleanup] failed: gemini 400: API key not valid"]);
 
   for (const line of [...anthropic.lines, ...open.lines, ...gem.lines]) {
     expect(line).not.toContain("cough");
@@ -186,7 +198,8 @@ it.each(["anthropic", "openai", "gemini"] as const)("leaves the note as spoken w
   expect(await settled(pending)).toBeNull();
   expect(timeout).toHaveBeenCalledWith(30_000);
   expect(signals).toHaveLength(1);
-  expect(lines).toEqual(["[cleanup] failed: The operation was aborted due to timeout"]);
+  expect(reason(lines)).toEqual(["[cleanup] failed: The operation was aborted due to timeout"]);
+  expect(lines[0]).toContain("(timed out)");
 });
 
 it.each(["anthropic", "openai", "gemini"] as const)("stops asking %s once the request for the note is cancelled", async name => {
@@ -197,5 +210,16 @@ it.each(["anthropic", "openai", "gemini"] as const)("stops asking %s once the re
   request.abort("Client connection prematurely closed.");
   expect(await settled(pending)).toBeNull();
   expect(signals[0]?.aborted).toBe(true);
-  expect(lines).toEqual(["[cleanup] failed: Client connection prematurely closed."]);
+  expect(reason(lines)).toEqual(["[cleanup] failed: Client connection prematurely closed."]);
+});
+
+it("logs each cleanup's outcome with its provider and model, never the note or the rewrite", async () => {
+  const kept = engine({ enabled: true, provider: "anthropic" }, {});
+  await cleanupNote(kept.ctx, spoken, { time: 0 });
+  provider({ choices: [{ message: { content: "Cut the cough at the start." } }] });
+  const rewrote = engine({ enabled: true, provider: "openai", model: "gpt-fixture" }, { openaiKey: "sk-fixture" });
+  await cleanupNote(rewrote.ctx, spoken, { time: 0 });
+  expect(kept.lines).toEqual([expect.stringMatching(/^\[cleanup\] anthropic claude-opus-5-5 kept the spoken note \(no Anthropic key\) in \d+ms$/)]);
+  expect(rewrote.lines).toEqual([expect.stringMatching(/^\[cleanup\] openai gpt-fixture rewrote the note in \d+ms$/)]);
+  for (const line of [...kept.lines, ...rewrote.lines]) expect(line).not.toMatch(/cough|sk-fixture/);
 });
