@@ -23,7 +23,7 @@ import { transcriptReader } from "../services/transcriptReader.js";
 import { otherInputReader } from "../services/otherInput.js";
 import { afterAudioTrackChange } from "../services/audioTrackChange.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
-import { framePriority, pictureDecoder, pictureLane } from "../services/pictureWork.js";
+import { frameDecoder, framePriority, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { ingestMedia, removeUnreadableMedia, writeHashedFile } from "../services/ingest.js";
 import { settleAlignment, startTranscription, transcriptionHeld } from "../services/transcription.js";
@@ -545,13 +545,13 @@ export function mediaRoutes(ctx: Ctx) {
       }
       // The agent's frames read the movie's index too: the same picture, a third sooner on a long recording.
       const indexedMp4 = !!media.previewClock && hasIndexedAvc(media);
-      // The original decodes on an NVIDIA GPU when there is one.
-      const decoder = await pictureDecoder(ctx.settings().render.hwaccel) === "cuda" ? "cuda" as const : undefined;
+      // The original decodes on an NVIDIA GPU when there is one, and an agent's frame on a Mac's while the editor looks.
+      const decoder = await frameDecoder(ctx.settings().render.hwaccel, priority, pictureLane(ctx), hdr);
       return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps, hdr });
     };
+    // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.
+    const priority = framePriority(c.req.query("priority"));
     try {
-      // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.
-      const priority = framePriority(c.req.query("priority"));
       const jpeg = await frames.get(key, signal => ctx.track(pictureLane(ctx).run(() => frame(signal), { priority, signal }), media.projectId), {
         priority, signal: c.req.raw.signal,
       });

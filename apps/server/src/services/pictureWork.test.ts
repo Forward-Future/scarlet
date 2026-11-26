@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { framePriority, machineBusy, pictureDecoder, PictureLane, pictureLane } from "./pictureWork.js";
+import { frameDecoder, framePriority, machineBusy, pictureDecoder, PictureLane, pictureLane } from "./pictureWork.js";
 
 function gate() {
   let open!: () => void;
@@ -103,5 +103,35 @@ describe("picture lane", () => {
     expect(await pictureDecoder("nvenc")).toBe("cuda");
     expect(await pictureDecoder("videotoolbox")).toBe("videotoolbox");
     if (process.platform === "darwin") expect(await pictureDecoder("auto")).toBe("videotoolbox");
+  });
+
+  it("sends the agent's frames to a Mac's media engine only while the editor looks at pictures", async () => {
+    let now = 0;
+    const lane = new PictureLane(2, 1, () => now);
+    expect(lane.editorLooking()).toBe(false);
+    expect(await frameDecoder("videotoolbox", false, lane)).toBeUndefined();
+    const g = gate();
+    const scrub = lane.run(() => g.opened, { priority: true });
+    await tick();
+    expect(lane.editorLooking()).toBe(true);
+    // The agent's goes to VideoToolbox; the editor's own and the timeline's stay on the CPU, quickest for one frame.
+    expect(await frameDecoder("videotoolbox", false, lane)).toBe("videotoolbox");
+    expect(await frameDecoder("videotoolbox", true, lane)).toBeUndefined();
+    expect(await frameDecoder("videotoolbox", "timeline", lane)).toBeUndefined();
+    // Hardware decoding off, or an HDR file the CPU tone-maps, stays on the CPU.
+    expect(await frameDecoder("none", false, lane)).toBeUndefined();
+    expect(await frameDecoder("videotoolbox", false, lane, "pq")).toBeUndefined();
+    // An NVIDIA GPU decodes every frame, as before.
+    expect(await frameDecoder("nvenc", true, lane)).toBe("cuda");
+    now = 10_000;
+    g.open(); await scrub;
+    now = 14_000;
+    expect(lane.editorLooking()).toBe(true);
+    now = 15_001;
+    expect(lane.editorLooking()).toBe(false);
+    expect(await frameDecoder("videotoolbox", false, lane)).toBeUndefined();
+    // A failed or cancelled frame of the editor's still counts as looking.
+    await expect(lane.run(async () => { throw new Error("decode failed"); }, { priority: true })).rejects.toThrow("decode failed");
+    expect(lane.editorLooking()).toBe(true);
   });
 });
