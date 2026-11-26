@@ -130,6 +130,23 @@ function sameReport(a: DockThreadReport | undefined, b: DockThreadReport): boole
   return true;
 }
 
+/**
+ * A row Keep all settles: a safe edit, or a call or flagged edit that waits on the editor's Keep. One that asks the
+ * editor a question, is with Scarlet, or was rejected stays as it is.
+ */
+export function keepableByKeepAll(entry: DockEntry): boolean {
+  const { row } = entry;
+  if (row.rejected || row.asks || row.pending || row.decided) return false;
+  return entry.place === "optional" || (entry.place === "you" && row.needs);
+}
+
+/** Every edit a row stands for: a grouped edit's places, a moment's edits, or its one edit. */
+function entryEdits(entry: DockEntry): Omit<ThreadEdit, "at">[] {
+  if (entry.row.edits?.length) return [...entry.row.edits];
+  if (entry.members?.length) return entry.members.flatMap(m => m.edit ? [m.edit] : []);
+  return entry.row.edit ? [entry.row.edit] : [];
+}
+
 const PLACE_RANK: Record<RowPlace, number> = { you: 4, working: 3, done: 2, optional: 1 };
 
 function entryEditId(entry: DockEntry): string | undefined {
@@ -333,6 +350,26 @@ export class ReviewDockStore {
       if (refs.length) out.push({ threadId: rep.threadId, refs });
     }
     return out;
+  }
+
+  /**
+   * What Keep all keeps: every row of For you's list that a Keep would settle, the cuts and edits that need the editor
+   * as well as the safe ones (only the ones that need the editor while the list is filtered to them). Calls go by their
+   * index on the pass, edits by their thread. A row that asks the editor something, or is with Scarlet, isn't kept.
+   */
+  keepAllTargets(threadIds: readonly string[], includeConfident: boolean): { count: number; calls: number[]; parts: Array<{ threadId: string; refs: Omit<ThreadEdit, "at">[] }> } {
+    const calls: number[] = [];
+    const byThread = new Map<string, Omit<ThreadEdit, "at">[]>();
+    let count = 0;
+    for (const entry of this.priorityForYou(threadIds, includeConfident)) {
+      if (!keepableByKeepAll(entry)) continue;
+      if (entry.row.callIndex !== undefined) { calls.push(entry.row.callIndex); count++; continue; }
+      const refs = entryEdits(entry);
+      if (!refs.length) continue;
+      byThread.set(entry.threadId, [...byThread.get(entry.threadId) ?? [], ...refs]);
+      count++;
+    }
+    return { count, calls, parts: [...byThread].map(([threadId, refs]) => ({ threadId, refs })) };
   }
 
   /** Navigable entries currently shown in the active tab of the docked tabbed view, top to bottom. */

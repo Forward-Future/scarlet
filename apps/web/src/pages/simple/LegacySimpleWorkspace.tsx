@@ -8,7 +8,7 @@ import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOr
 import { useReviewed, useRevising } from "../../components/review/threadEditState";
 import { QueueTray, useRewordingHold, type QueuedRequest } from "../../components/chat/QueueTray";
 import { recordEditReview, recordEditReviews } from "../../lib/editReviews";
-import { forgetCalls, recordUndo, undoLast, type CallStep } from "../../lib/undo";
+import { forgetCalls, recordUndo, undoLast, type CallStep, type KeptCalls } from "../../lib/undo";
 import { editKey, keepEdits, notYetKept } from "../../lib/keptEdits";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import type { PausedAt } from "../../components/agent/Composer";
@@ -1668,6 +1668,33 @@ export function LegacySimpleWorkspace() {
       else closeEdit();
     }
   }
+  /**
+   * Keep all: every row of For you's list at once, as it is shown, with one ⌘Z to take it all back. Flagged and safe
+   * edits are kept, and the pass's calls that wait are made as Scarlet picked them, so the editor can step through the
+   * cuts with ↑ ↓ and settle the rest in one press. With every call made the pass goes in, as after its last call.
+   */
+  async function keepEverything() {
+    const includeConfident = dockList !== "need" || dock.waitingEntries(threadIds).length === 0;
+    const { parts: listed, calls } = dock.keepAllTargets(threadIds, includeConfident);
+    const parts = listed.flatMap(({ threadId, refs }) => {
+      const fresh = notYetKept(current.id, threadId, refs);
+      return fresh.length ? [{ threadId, refs: fresh }] : [];
+    });
+    const keptCalls = pass && deciding !== pass.id ? waitingCalls.filter(a => calls.includes(a.index)) : [];
+    if (!parts.length && !keptCalls.length) return;
+    player.pause();
+    if (listening) setListening(undefined);
+    if (reviewingEdit) closeEdit();
+    for (const part of parts) if (keepEdits(current.id, part.threadId, part.refs, head ?? undefined)) recordEditReviews(current.id, part.refs, "keep");
+    const was = pass ? choicesOf(pass) : {};
+    recordUndo({ kind: "keepAll", word: "Keep all", projectId: current.id, parts, ...(pass && keptCalls.length && { calls: { changeId: pass.id, was } }) });
+    appLog("action", "keep-all", { count: parts.reduce((n, part) => n + part.refs.length, 0), calls: keptCalls.length, requests: parts.length });
+    if (!pass || !keptCalls.length) return;
+    const decidedNow = { ...was, ...Object.fromEntries(keptCalls.map(a => [a.index, approves(a)] as const)) };
+    if (waitingCalls.length > keptCalls.length || revision || queuedCuts.size) return void saveChoices(pass, decidedNow);
+    if (passRunning) return void saveChoices(pass, decidedNow, true);
+    await approveReview(pass, decidedNow);
+  }
   // Keep, Add and Reject edit go on to the same place: the next edit or call that still waits, else the card closes.
   function moveOnFromShown() {
     if (dockHasTabs && !dock.explicitAllReport(threadIds) && reviewingEdit) {
@@ -1722,11 +1749,26 @@ export function LegacySimpleWorkspace() {
     void saveChoices(pass, step.was ? { ...rest, [call.index]: step.was } : rest, step.was ? undefined : false);
     listenCall(pass, call);
   };
+  // Keep all's calls are taken back together: a pass that went in with them comes out again first, then its calls
+  // are as they were before the press, and wait on the editor again.
+  const takeBackKeptCalls = async ({ changeId, was }: KeptCalls) => {
+    if (deciding === changeId) throw new Error("its pass is still going in.");
+    const held = useProjectStore.getState().current?.changes.find(c => c.id === changeId);
+    if (!held) throw new Error("its pass isn’t in this project any more.");
+    let change = held;
+    if (change.state === "approved") {
+      const { change: reopened } = await api.unapproveChange(change.id);
+      useProjectStore.getState().applyEvent({ type: "change.updated", projectId: reopened.projectId, change: reopened });
+      change = reopened;
+    }
+    if (change.state !== "ready") throw new Error("its pass has moved on since.");
+    await saveChoices(change, was, false);
+  };
   const undoKeys = useRef({ undo: async () => {} });
   undoKeys.current.undo = async () => {
     const project = useProjectStore.getState().current;
     if (!project || project.id !== current.id) return;
-    const step = await undoLast(current.id, project, version => useProjectStore.getState().historyEdit(version, "revert"), takeBackCall);
+    const step = await undoLast(current.id, project, version => useProjectStore.getState().historyEdit(version, "revert"), takeBackCall, takeBackKeptCalls);
     // A call taken back is open on its card already.
     if (step?.kind === "call") return;
     if (step?.kind === "callAdjust") {
@@ -2528,7 +2570,7 @@ export function LegacySimpleWorkspace() {
                 <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>}
             </div>
             <ReviewDock key={current.id} store={dock} threadIds={threadIds} list={[dockList, setDockList]} laterRequests={ordered.length}
-              onListOpen={listOpen} onKeepConfident={keepConfident} flashedThreadId={flashedThread} />
+              onListOpen={listOpen} onKeepConfident={keepConfident} onKeepAll={() => void keepEverything()} flashedThreadId={flashedThread} />
             {/* The tag in the box shows where a message goes. This line says it for screen readers only. */}
             {!rewordingItem && (replyThread || !aimMatches) && <div className="simple-target" role="status">
               <span>{aimLabel}</span>

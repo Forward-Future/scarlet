@@ -42,6 +42,8 @@ export type UndoStep = {
   kind: "keepAll";
   word: "Mark all done" | "Keep all";
   parts: { threadId: string; refs: KeptRef[] }[];
+  /** The calls of a waiting pass Keep all made with Scarlet's picks, and what the pass's calls were before: ⌘Z puts them back. */
+  calls?: KeptCalls;
 } | {
   /** Taking back a Keep from a kept row's hover control: ⌘Z keeps it again. */
   kind: "unkeep";
@@ -71,6 +73,9 @@ export type UndoStep = {
 
 /** A call's step, as the page that holds the pass takes it back. */
 export type CallStep = Extract<UndoStep, { kind: "call" }>;
+
+/** The calls Keep all made on a pass: `was` is every call of the pass as it was decided before, by cut index. */
+export interface KeptCalls { changeId: string; was: Record<number, "keep" | "cut"> }
 
 /** A step as it is recorded, before it has its place in the list. */
 type NewStep = UndoStep extends infer S ? S extends UndoStep ? Omit<S, "id"> : never : never;
@@ -122,7 +127,9 @@ const stepWord = (step: UndoStep) => step.kind === "keep" || step.kind === "keep
  * take back.
  */
 export async function undoLast(projectId: string, project: { changes: readonly Change[]; tasks: readonly Task[] },
-  revert: (version: string) => Promise<void>, uncall?: (step: CallStep) => void): Promise<UndoStep | undefined> {
+  revert: (version: string) => Promise<void>, uncall?: (step: CallStep) => void,
+  /** Takes back the calls a Keep all made on a pass, which may have gone in since. */
+  unkeepCalls?: (calls: KeptCalls) => Promise<void>): Promise<UndoStep | undefined> {
   const state = useUndoStore.getState();
   if (state.undoing !== undefined) { appLog("action", "undo-skipped", { project: projectId, reason: "busy" }); return; }
   const step = lastStep(state.steps, projectId);
@@ -137,7 +144,14 @@ export async function undoLast(projectId: string, project: { changes: readonly C
       if (step.refs.length) keepEdits(projectId, step.threadId, step.refs);
       for (const part of step.extraParts ?? []) if (part.refs.length) keepEdits(projectId, part.threadId, part.refs);
     }
-    else if (step.kind === "keepAll") for (const part of step.parts) unkeepEdits(projectId, part.threadId, part.refs);
+    else if (step.kind === "keepAll") {
+      // The pass's calls first: if they can't be taken back, the edits stay kept too, and ⌘Z says why.
+      if (step.calls) {
+        if (!unkeepCalls) throw new Error("its pass isn’t open here.");
+        await unkeepCalls(step.calls);
+      }
+      for (const part of step.parts) unkeepEdits(projectId, part.threadId, part.refs);
+    }
     else if (step.kind === "call") {
       if (!uncall) throw new Error("its pass isn’t open here.");
       uncall(step);
@@ -155,7 +169,7 @@ export async function undoLast(projectId: string, project: { changes: readonly C
     else if (step.taskId) await undoRevision(step.taskId, project, revert);
     appLog("action", "undo", { project: projectId, kind: step.kind, ...(step.kind === "keep" && { change: step.edit.changeId }),
       ...(step.kind === "unkeep" && { count: step.refs.length + (step.extraParts?.reduce((n, part) => n + part.refs.length, 0) ?? 0) }),
-      ...(step.kind === "keepAll" && { count: step.parts.reduce((n, part) => n + part.refs.length, 0) }) });
+      ...(step.kind === "keepAll" && { count: step.parts.reduce((n, part) => n + part.refs.length, 0), ...(step.calls && { calls: true }) }) });
     useUndoStore.setState(s => ({ steps: s.steps.filter(other => other.id !== step.id) }));
     return step;
   } catch (error) {

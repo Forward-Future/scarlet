@@ -5,7 +5,7 @@ import { clock as clockLabel } from "../../lib/format";
 import { inListOrder, ReviewLinger, tabShown, type ListOrder, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { useLeavingRows } from "./lowRiskFold";
-import { dedupeDockEntries, type DockEntry, type DockRow, type ReviewDockStore } from "./reviewDockStore";
+import { dedupeDockEntries, keepableByKeepAll, type DockEntry, type DockRow, type ReviewDockStore } from "./reviewDockStore";
 import { useReviewTabHeight } from "./reviewTabHeight";
 import { letGo, type PassList } from "./types";
 
@@ -62,7 +62,7 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
  * Priority list (flagged edits pinned on top, confident edits right below), Working, Done,
  * and See all lists stay fixed at the bottom while new messages flow above them.
  */
-export function ReviewDock({ store, threadIds, list: listState, laterRequests = 0, onListOpen, onKeepConfident, flashedThreadId }: {
+export function ReviewDock({ store, threadIds, list: listState, laterRequests = 0, onListOpen, onKeepConfident, onKeepAll, flashedThreadId }: {
   store: ReviewDockStore;
   /** Thread ids in conversation order (oldest first) for deterministic tie-breaking. */
   threadIds: readonly string[];
@@ -74,6 +74,8 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   onListOpen?(threadId: string, open: boolean, moved?: boolean): void;
   /** Keep all confident edits at once (with ⌘Z undo). */
   onKeepConfident?(): void;
+  /** Keep every row of For you's list, the cuts and edits that need the editor too, with Scarlet's picks (one ⌘Z undo). */
+  onKeepAll?(): void;
   /** Thread whose rows briefly flash after clicking Show → in chat. */
   flashedThreadId?: string;
 }) {
@@ -254,6 +256,11 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
 
   const passApplying = reports.some(r => r.passApplying);
   const passErrorReport = reports.find(r => !!r.passError);
+  // Keep all, at the head of For you's list: every row a Keep would settle, the cuts that need the editor too, as
+  // Scarlet picked them. Shown only while one of them needs the editor: with safe edits alone, Keep N safe edits says it.
+  const showChips = need > 0 && optional.length > 0;
+  const keepAllRows = hasTabs && tab === "you" ? [...inPlace("you"), ...(optionalShown ? optional : [])].filter(keepableByKeepAll) : [];
+  const keepAllShown = !!onKeepAll && !passApplying && keepAllRows.some(e => e.place === "you");
 
   if (!hasTabs && !untabbedReport && !passApplying && !passErrorReport) return null;
 
@@ -374,12 +381,19 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
       {hasTabs && <DockReviewTabs need={need} optional={optional.length} working={workingCount} done={doneCount}
         list={listState} reveal={reveal} showNeeded={showNeeded} onKeepConfident={onKeepConfident} />}
       {seeTab}
-      {hasTabs && tab === "you" && need > 0 && optional.length > 0 && (
-        <div className="review-filter-bar" role="group" aria-label="Filter edits">
-          <button type="button" className="review-filter-chip" aria-pressed={!needsOnly}
-            onClick={letGo(() => setOpen(undefined))}>All {need + optional.length}</button>
-          <button type="button" className="review-filter-chip is-warn" aria-pressed={needsOnly}
-            onClick={letGo(() => setOpen("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
+      {hasTabs && tab === "you" && (showChips || keepAllShown) && (
+        <div className="review-filter-bar" role="group" aria-label={showChips ? "Filter edits" : "Keep the list"}>
+          {showChips && <>
+            <button type="button" className="review-filter-chip" aria-pressed={!needsOnly}
+              onClick={letGo(() => setOpen(undefined))}>All {need + optional.length}</button>
+            <button type="button" className="review-filter-chip is-warn" aria-pressed={needsOnly}
+              onClick={letGo(() => setOpen("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
+          </>}
+          {keepAllShown && (
+            <button type="button" className="review-keep-all" data-log-control="keep-all"
+              title={`Keep all ${keepAllRows.length} in this list as Scarlet picked them (⌘Z undoes it)`}
+              aria-label={`Keep all ${keepAllRows.length}`} onClick={letGo(onKeepAll!)}>Keep all {keepAllRows.length}</button>
+          )}
         </div>
       )}
       {drawn.map(list => <Fragment key={list.id}>

@@ -16045,3 +16045,50 @@ it("automatically resets the Needs you filter back to All once the last flagged 
   expect(editRowsIn(turn).map(r => [r.querySelector(".simple-pass-words")?.textContent, r.classList.contains("is-decided")]))
     .toEqual([["wrap", true], ["music bed", false], ["captions", false]]);
 });
+
+it("keeps every cut in For you's list with Keep all, the calls as Scarlet picked them, and takes it all back on one ⌘Z", async () => {
+  const { save } = finishedPass();
+  // The pass goes in once every call is made, and comes out again when the editor undoes it.
+  const approve = vi.fn(async (id: string) => {
+    data = { ...useProjectStore.getState().current!, changes: useProjectStore.getState().current!.changes.map(c => c.id === id ? { ...c, state: "approved" as const } : c) };
+    useProjectStore.setState({ current: data });
+    return { outcome: "applied" as const };
+  });
+  const unapprove = vi.spyOn(api, "unapproveChange").mockImplementation(async id => {
+    const current = useProjectStore.getState().current!;
+    return { change: { ...current.changes.find(c => c.id === id)!, state: "ready" as const }, project: current.project };
+  });
+  useProjectStore.setState({ approve: approve as unknown as ReturnType<typeof useProjectStore.getState>["approve"] });
+  await show();
+  await act(async () => {});
+  const keepAll = () => reviewDock()?.querySelector<HTMLButtonElement>(".review-filter-bar > .review-keep-all") ?? null;
+  const unreviewed = forYouTab()!.getAttribute("title");
+  expect(unreviewed).toMatch(/\(3 need you\)$/);
+  const total = Number(unreviewed!.split(" ")[0]);
+  // One quiet Keep all at the head of the list, beside the filter chips; Keep N safe edits stays where it was.
+  expect([keepAll()?.textContent, keepAll()?.getAttribute("title")])
+    .toEqual([`Keep all ${total}`, `Keep all ${total} in this list as Scarlet picked them (⌘Z undoes it)`]);
+  expect(keepConfidentBtn()?.textContent).toBe(`Keep ${total - 3} safe ${total - 3 === 1 ? "edit" : "edits"}`);
+  // Filtered to the cuts that need the editor, it keeps just those.
+  await click(filterChip("need")!);
+  expect(keepAll()?.textContent).toBe("Keep all 3");
+  await click(filterChip("all")!);
+
+  await click(keepAll()!);
+  await act(async () => {});
+  // Every call is made as Scarlet picked it, the pass goes in with all of its cuts, and nothing waits on the editor.
+  expect(save.mock.lastCall![1].choices).toEqual([0, 1, 2].map(index => ({ index, choice: "cut" })));
+  expect(approve.mock.calls).toEqual([["chg_ready", undefined, []]]);
+  expect(keepAll()).toBeNull();
+  expect(dockRows().filter(r => r.textContent?.includes("needs you"))).toEqual([]);
+  expect(dockRows().filter(r => r.textContent?.endsWith("Kept"))).toHaveLength(total - 3);
+
+  // One ⌘Z takes it all back: the pass comes out, its calls wait again, and the safe edits are unkept.
+  await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+  await act(async () => {});
+  expect(unapprove).toHaveBeenCalledWith("chg_ready");
+  expect(save.mock.lastCall![1]).toMatchObject({ choices: [], applyWhenDone: false });
+  expect(forYouTab()?.getAttribute("title")).toBe(unreviewed);
+  expect(keepAll()?.textContent).toBe(`Keep all ${total}`);
+  expect(useUndoStore.getState().steps).toEqual([]);
+});

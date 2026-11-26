@@ -50,6 +50,7 @@ export type ScarletApi = Pick<
   | "changes"
   | "change"
   | "approveChange"
+  | "unapproveChange"
   | "rejectChange"
   | "reopenChange"
   | "cutReview"
