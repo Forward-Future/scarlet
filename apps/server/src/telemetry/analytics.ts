@@ -1,6 +1,6 @@
 import type { EditReviewRequest, ExportRoute, TelemetryUnavailable } from "@scarlet/shared";
 import { createHmac, randomUUID } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { SCARLET_VERSION, type TelemetryConfig } from "./config.js";
 import { anonymousId, installId } from "./identity.js";
@@ -105,9 +105,11 @@ const IDLE: Session = {
  * telemetry turned off or no project key it does nothing at all: no id file, no timer, no request.
  */
 export function createTelemetry(options: TelemetryOptions): Telemetry {
-  if (!options.config.enabled || !options.config.posthogKey) {
-    return { ...IDLE, unavailable: options.config.enabled ? "unconfigured" : "environment", refreshPreference() {} };
+  if (!options.config.enabled) {
+    forgetInstall(options.idFile);
+    return { ...IDLE, unavailable: "environment", refreshPreference() {} };
   }
+  if (!options.config.posthogKey) return { ...IDLE, unavailable: "unconfigured", refreshPreference() {} };
 
   const key = options.config.posthogKey;
   let session = IDLE;
@@ -131,6 +133,7 @@ export function createTelemetry(options: TelemetryOptions): Telemetry {
     if (revision !== preference.revision) {
       revision = preference.revision;
       session.discard();
+      if (!preference.enabled) forgetInstall(options.idFile);
       session = preference.enabled && phase === "open" ? createSession(options, key, current) : IDLE;
       if (started) session.start();
     }
@@ -156,6 +159,18 @@ export function createTelemetry(options: TelemetryOptions): Telemetry {
       }
     },
   };
+}
+
+/**
+ * Turned off, the install's id goes too: a problem report sent meanwhile can't be tied to what the install did before,
+ * and turning reports back on starts a new install.
+ */
+function forgetInstall(idFile: string): void {
+  try {
+    rmSync(idFile, { force: true });
+  } catch {
+    // Kept only if it can't be removed. Nothing is sent under it while reports are off.
+  }
 }
 
 function createSession(options: TelemetryOptions, key: string, refreshPreference: () => void): Session {

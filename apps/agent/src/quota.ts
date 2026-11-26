@@ -411,7 +411,7 @@ export async function probeSubscriptionQuota(
       proc.child.stdin?.end();
       proc.kill();
     };
-    const proc = spawnLines(file, ["app-server"], {
+    const proc = spawnLines(file, ["app-server", "-c", "analytics.enabled=false"], {
       cwd,
       env,
       timeoutMs: PROBE_TIMEOUT_MS,

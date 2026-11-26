@@ -120,11 +120,18 @@ export function runnerSpec(file: string, args: string[], env: NodeJS.ProcessEnv)
 /** How long a CLI that has ended may keep its output open before the run is settled without it. */
 const DRAIN_AFTER_MS = 5000;
 
+/**
+ * Switches that turn off the usage metrics and error reports the agent CLIs send to their own makers (Claude Code reads
+ * these two). Scarlet starts every CLI with them, whatever its own usage report setting: Gemini gets
+ * `--disable-telemetry` and Codex `analytics.enabled=false` for the same reason.
+ */
+export const CLI_TELEMETRY_OFF: Readonly<Record<string, string>> = { DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1" };
+
 export function spawnLines(file: string, args: string[], opts: SpawnLinesOptions): SpawnHandle {
   const spec = runnerSpec(file, args, opts.env);
   const child = spawn(spec.file, spec.args, {
     cwd: opts.cwd,
-    env: opts.env,
+    env: { ...opts.env, ...CLI_TELEMETRY_OFF },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     detached: process.platform !== "win32", // own process group, including tool subprocesses
