@@ -11,10 +11,10 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx watch src/cli.ts",
-    "watch": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "dev": "node scripts/gen-skills.mjs && tsx watch src/cli.ts",
+    "watch": "node scripts/gen-skills.mjs && tsc -p tsconfig.json --watch --preserveWatchOutput",
     "start": "node dist/cli.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "node scripts/gen-skills.mjs && tsc -p tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "prebuild": "node scripts/gen-skills.mjs",
     "build:sea": "node scripts/build-sea.mjs",

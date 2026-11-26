@@ -5,7 +5,7 @@
  * ship is kept with the skills (skills/retired.json). This test fails when a skill's name shows up in code.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUILT_IN_COMMANDS } from "@scarlet/shared";
 import { expect, it } from "vitest";
@@ -64,7 +64,8 @@ it("names no skill in code", () => {
     .filter(dir => existsSync(dir));
   const found: string[] = [];
   for (const file of [...new Set(dirs.flatMap(dir => sourceFiles(dir)))]) {
-    const path = relative(root, file);
+    // The same on every platform: Windows separates folders with a backslash.
+    const path = relative(root, file).split(sep).join("/");
     readFileSync(file, "utf8").split("\n").forEach((line, i) => {
       for (const match of line.matchAll(pattern)) {
         const name = match[2] ?? match[3]!;
