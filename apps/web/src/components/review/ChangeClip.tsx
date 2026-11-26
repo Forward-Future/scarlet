@@ -240,7 +240,7 @@ export function ChangeClip({ change, active = true, loading, clock: pageClock, p
     wantPlay.current = false;
   }, [active]);
 
-  // Playback keys act on the Before clip while it is on screen, including J/K/L and custom play keys.
+  // Playback keys act on the Before clip while it is on screen: a changed play key, and K and L from the J/K/L preset.
   useHotkeys(e => {
     if (!active || isComposing(e)) return;
     if (matchesShortcut(e, "playPause")) {
