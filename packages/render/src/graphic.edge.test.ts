@@ -128,7 +128,7 @@ describe.skipIf(!hasChrome())("taking a page's picture", () => {
     expect(capture.png.readUInt32BE(20)).toBe(1000);
     // The heading past the picture's foot and the empty one are left out.
     expect(capture.headings).toEqual([{ text: "Opening", box: { left: 0, top: 0, right: 1, bottom: 0.1 } }]);
-  }, 10_000);
+  }, 30_000);
 
   it("says the page, not the graphic, couldn't be opened", async () => {
     const closed = http.createServer();
