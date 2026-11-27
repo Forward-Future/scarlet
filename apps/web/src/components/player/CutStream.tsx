@@ -24,6 +24,10 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
   // Keep the native buffer and its prepared frame when its version and frame grid still match.
   }, [project.id, project.settings.fps, timeline.version, version]); // eslint-disable-line react-hooks/exhaustive-deps
   const { ranges } = plan;
+  // A cut that can't be planned never opens a stream, so the stream's own lines say nothing about it.
+  useEffect(() => {
+    if (plan.error) playbackLog("stream plan-failed", { version, error: plan.error.slice(0, 200) });
+  }, [plan, version]);
   const [status, setStatus] = useState<"idle" | "waiting" | "ready">("idle");
   const [preroll, setPreroll] = useState<AbortSignal>();
   const [prerollProgress, setPrerollProgress] = useState<{ done: number; total: number }>();
@@ -117,7 +121,7 @@ export function CutStream({ project, timeline, version, onStart, draft = false, 
   const waitProgress = waiting && preroll && prerollProgress && prerollProgress.total > 0
     ? `${prerollProgress.done}/${prerollProgress.total}` : undefined;
   return <>
-    <FramedVideo ref={video} aria-label={draft || proposed ? "Proposed draft" : "The video"}
+    <FramedVideo ref={video} aria-label={draft || proposed ? "Suggested video" : "The video"}
       poster={poster} playsInline preload="auto" data-waiting={waiting || undefined}
       data-wait-stage={waiting ? "rendering" : undefined} data-wait-progress={waitProgress}
       onClick={() => player.toggle()} onPlaying={() => setStatus("ready")}

@@ -12,6 +12,7 @@ export function createTask(store: MockStore, projectId: string, body: CreateTask
   if (body.kind === "skill_from_change") throw new ScarletApiError(400, "use_skill_from_change", "Create skill tasks from an approved change");
   if (body.kind === "skill_edit") throw new ScarletApiError(400, "use_skill_edit", "Ask for a change to a skill from its page");
   if (body.kind === "learning_check") throw new ScarletApiError(400, "not_a_request", "Scarlet starts this check itself, with each request.");
+  if (body.kind === "batch_summary") throw new ScarletApiError(400, "not_a_request", "Scarlet starts this itself, to summarize grouped edits.");
   const followUp = body.context?.threadId;
   store.log(projectId, "request.created", `${store.currentUser().name} asked ${AGENT_LABEL[body.agent]}: “${body.context?.message ?? body.instruction}”${followUp ? " (follow-up)" : ""}`);
   // As the engine does: what the person said is the request itself, unless the app sent their words apart from what

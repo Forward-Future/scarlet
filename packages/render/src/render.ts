@@ -32,6 +32,8 @@ export interface RenderOptions extends FontOptions {
   pictureOnly?: boolean;
   /** Absolute directory that relative media paths resolve against. */
   mediaRoot: string;
+  /** Optional extra trusted directories (such as library-wide style guides) for `.cube`/`.3dl` LUTs. */
+  lutRoots?: readonly string[];
   /** preview: fast, scaled to `height`; delivery: slow, full resolution. Default preview. */
   quality?: RenderQuality;
   /** Preview height in pixels (default 540, never upscaled). Ignored for delivery. */
@@ -78,7 +80,7 @@ function splitLines(splits: NonNullable<RenderOptions["splits"]>, range: TimeRan
   splits.forEach((s, k) => lines.push(`[sv_in${k}]trim=start_frame=${frame(s.range.start)}:end_frame=${frame(s.range.end)},setpts=PTS-STARTPTS[sv${k}]`));
   if (audio) {
     lines.push(`[aout]asplit=${n}${splits.map((_, k) => `[sa_in${k}]`).join("")}`);
-    splits.forEach((s, k) => lines.push(`[sa_in${k}]atrim=start_sample=${sample(s.range.start)}:end_sample=${sample(s.range.end)},asetpts=PTS-STARTPTS[sa${k}]`));
+    splits.forEach((s, k) => lines.push(`[sa_in${k}]atrim=start_sample=${sample(s.range.start)}:end_sample=${sample(s.range.end)},asetpts=NB_CONSUMED_SAMPLES/SR/TB[sa${k}]`));
   }
   return ";\n" + lines.join(";\n") + "\n";
 }
@@ -147,6 +149,10 @@ export async function renderRange(
   // full-size shot can pass the GPU surfaces straight through, including on NVIDIA.
   if (encoder === "h264_nvenc" && !exporting) decoder = "cuda";
   if (appleDecoder) decoder = appleDecoder;
+  // Trim [aout] by exact sample count rather than duration: when an adelay clip is input 0 of amix,
+  // its leading silence carries AV_NOPTS_VALUE PTS, which makes atrim=duration stop at the delay boundary.
+  const splitEnd = opts.splits?.length ? Math.max(...opts.splits.map(s => sampleCount(snapped.start, s.range.end, settings.sampleRate))) : 0;
+  const audioSamples = opts.pictureOnly ? undefined : Math.max(1, sampleCount(snapped.start, snapped.end, settings.sampleRate), splitEnd);
   const graph = await buildFilterGraph(project, timeline, snapped, {
     directPicture: !!device,
     transitions: opts.transitions,
@@ -154,6 +160,7 @@ export async function renderRange(
     rowThreads: opts.editorWaiting,
     signal: opts.signal,
     pictureOnly: opts.pictureOnly,
+    audioSamples,
     pictureSource: resolver && (async (...args) => {
       const source = await resolver(...args);
       if (source) proxyUsed = true;
@@ -161,6 +168,7 @@ export async function renderRange(
     }),
     decoder: opts.softwareDecode ? undefined : decoder,
     mediaRoot: opts.mediaRoot,
+    lutRoots: opts.lutRoots,
     width: size.width,
     height: size.height,
     tempDir: opts.tempDir,

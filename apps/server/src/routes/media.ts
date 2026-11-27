@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { MultipartParseError, parseMultipartRequest } from "@remix-run/multipart-parser/future";
-import { fileInDirectoryAsync, hasIndexedAvc, heardAudio, heardAudioKey } from "@scarlet/render";
+import { fileInDirectoryAsync, hasIndexedAvc, heardAudio, heardAudioKey, isStillAsset } from "@scarlet/render";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import { AudioTrackSelection, DialogueVoiceRoles, isPlayableMedia, MediaKind, Provenance, WebSource } from "@scarlet/timeline";
@@ -15,7 +15,7 @@ import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { requestAttempt, requireProjectEditAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
-import { logId, throttledLog } from "../logText.js";
+import { clip, logId, throttledLog } from "../logText.js";
 import { serveFile, serveOriginal } from "../files.js";
 import { getTranscriptionProvider, importTranscriptionPolicy } from "../transcribe/index.js";
 import { AnalysisCache } from "../services/analysisCache.js";
@@ -25,6 +25,7 @@ import { afterAudioTrackChange } from "../services/audioTrackChange.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
 import { frameDecoder, frameGoesToGpu, framePriority, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
+import { expandMediaPaths } from "../services/folderMedia.js";
 import { ingestMedia, removeUnreadableMedia, writeHashedFile } from "../services/ingest.js";
 import { settleAlignment, startTranscription, transcriptionHeld } from "../services/transcription.js";
 import { getWaveform, readWaveformCache } from "../services/waveforms.js";
@@ -131,7 +132,11 @@ export function mediaRoutes(ctx: Ctx) {
       const file = await fileInDirectoryAsync(ctx.paths.media(source.projectId), source.path);
       if (file) {
         const signal = AbortSignal.any([ctx.projectSignal(source.projectId), c.req.raw.signal]);
-        const probed = await ctx.track(ctx.render.probeMedia(file, signal), source.projectId).catch(() => undefined);
+        const probed = await ctx.track(ctx.render.probeMedia(file, signal), source.projectId).catch(error => {
+          // The choice is then checked against one track, and a valid second track is refused.
+          if (!signal.aborted) ctx.log(`[media] ${logId(source.id)}: couldn't read its audio tracks: ${clip((error as Error)?.message ?? String(error))}`);
+          return undefined;
+        });
         if (probed?.audioStreams && probed.audioStreams.length > 1) streams = probed.audioStreams;
       }
     }
@@ -242,12 +247,21 @@ export function mediaRoutes(ctx: Ctx) {
     }
   });
 
+  // Expand dropped folders into the video files inside them; individual files and URLs pass through unchanged.
+  r.post("/media/expand-paths", async (c) => {
+    const { paths } = await jsonBody(c, z.object({ paths: z.array(z.string().min(1).max(4096)).max(1000) }));
+    return c.json(await expandMediaPaths(paths, { signal: c.req.raw.signal, log: line => ctx.log(line) }));
+  });
+
   // Show the first frame while a large original is still being copied into the project.
   r.post("/projects/:id/media/import-frame", async c => {
-    requireProjectHeader(ctx, c.req.param("id"));
+    const project = requireProjectHeader(ctx, c.req.param("id"));
     const { path } = await jsonBody(c, z.object({ path: z.string() }));
     if (!isAbsolute(path) || !(await stat(path).catch(() => null))?.isFile()) throw notFound("source file");
-    const probed = await ctx.render.probeMedia(path, c.req.raw.signal).catch(() => undefined);
+    const probed = await ctx.render.probeMedia(path, c.req.raw.signal).catch(error => {
+      if (!c.req.raw.signal.aborted) ctx.log(`[media] import_frame project=${logId(project.id)}: couldn't read the original's colour, showing it without HDR tone mapping: ${clip((error as Error)?.message ?? String(error))}`);
+      return undefined;
+    });
     // An MP4 camera original's index is read as the frame route reads it: the same picture, without scanning the file first.
     const indexedMp4 = !!probed?.previewClock && hasIndexedAvc({ kind: probed.kind, hasAlpha: probed.hasAlpha, originalPlaybackType: probed.originalPlaybackType });
     const jpeg = await ctx.render.extractFrame(path, 0, { width: 960, signal: c.req.raw.signal, hdr: probed?.color?.hdr, indexedMp4, fps: probed?.fps });
@@ -356,6 +370,7 @@ export function mediaRoutes(ctx: Ctx) {
     if (task.state === "done") return c.json({ state: "ready" });
     if (task.state === "failed" && task.interrupted) throw conflict("transcription_unavailable",
       "The interrupted transcription cannot resume with the current provider. Retry it from Media.");
+    // The transcription logs its own outcome ([transcribe]) and fails its task.
     ctx.track(done.catch(() => null), project.id);
     return c.json({ state: "processing", taskId: task.id }, 202);
   });
@@ -433,16 +448,22 @@ export function mediaRoutes(ctx: Ctx) {
     const points = Math.min(20000, Math.max(1, Math.floor(numberParam(c.req.query("points"), "points", 1000))));
     const wf = ctx.render.waveformFromCache(cache, from, to, points);
     if (c.req.query("speechActivity") === "1") {
-      if (from < 0 || to > duration + 0.000001 || to <= from || to > from + 60) {
+      // A video container can run slightly past its audio stream; accept ranges up to either duration and read speech up to the audio end.
+      const maxDuration = Math.max(duration, media.duration ?? duration);
+      if (from < 0 || to > maxDuration + 0.000001 || to <= from || to > from + 60) {
         throw badRequest("bad_speech_range", "Choose up to 60 seconds within the source audio.");
+      }
+      const speechTo = Math.min(to, cache.duration);
+      if (from >= speechTo) {
+        return c.json({ mediaId: media.id, from, to, ...wf, speechActivity: [] });
       }
       const file = await fileInDirectoryAsync(ctx.paths.media(media.projectId), media.path);
       if (!file) throw notFound("source file");
       const info = await stat(file);
       const audio = heardAudio(media);
-      const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, to, heardAudioKey(audio)]);
+      const key = JSON.stringify(["vad", file, media.hash, info.size, info.ctimeMs, info.mtimeMs, from, speechTo, heardAudioKey(audio)]);
       // Up to a minute, read because someone asked: a running edit checks its joins with it while caching is paused too.
-      const spans = await speech.get(key, () => ctx.track(recordingSpeechActivity(ctx, file, from, to, ctx.projectSignal(media.projectId), audio), media.projectId));
+      const spans = await speech.get(key, () => ctx.track(recordingSpeechActivity(ctx, file, from, speechTo, ctx.projectSignal(media.projectId), audio), media.projectId));
       return c.json({ mediaId: media.id, from, to, ...wf, speechActivity: spans });
     }
     if (c.req.query("format") === "peaks-f64le") {
@@ -505,7 +526,7 @@ export function mediaRoutes(ctx: Ctx) {
     const body = await jsonBody(c, z.object({ provider: z.enum(["openai", "whispercpp"]).optional() }));
     requireAudio(media);
     const { status: _s, error: _e, projectId, ...asset } = media;
-    // Runs in the background; the task is returned immediately and updated over WS.
+    // Runs in the background; the task is returned immediately and updated over WS. It logs its own outcome ([transcribe]).
     const { task, done } = startTranscription(ctx, projectId, asset, body.provider, "refuse");
     ctx.track(done.catch(() => null), projectId);
     return c.json({ task }, 202);
@@ -516,7 +537,11 @@ export function mediaRoutes(ctx: Ctx) {
     if (media.kind === "audio") throw badRequest("no_video", "audio media has no frames");
     // A time past the end shows the last frame, as one before the start shows the first, rather than finding none.
     const requested = numberParam(c.req.query("t"), "t", 0);
-    const t = media.duration && media.duration > 0 ? Math.min(requested, media.duration) : requested;
+    // A still has one picture, shown for as long as its clip is: any time in the clip is that picture. The asset says
+    // it is a still, as the render reads it; the frame reader goes by the file's name alone, and found nothing later
+    // than 2 s into a still it didn't know the spelling of (.jfif, .heif).
+    const still = isStillAsset(media);
+    const t = still ? 0 : media.duration && media.duration > 0 ? Math.min(requested, media.duration) : requested;
     const w = Math.min(3840, Math.max(16, numberParam(c.req.query("w"), "w", 640)));
     const file = join(ctx.paths.media(media.projectId), media.path);
     // A recording moved or deleted outside Scarlet is asked for with every scrub.
@@ -530,7 +555,11 @@ export function mediaRoutes(ctx: Ctx) {
     const area = asked?.map(n => n / 100) as [number, number, number, number] | undefined;
     const grid = c.req.query("grid") === "1" && media.width && media.height ? { width: media.width, height: media.height } : undefined;
     // A file imported before Scarlet read colour has it read here: an HDR original's frame is tone-mapped to SDR.
-    const hdr = media.color ? media.color.hdr : (await ctx.render.probeMedia(file).catch(() => undefined))?.color?.hdr;
+    const hdr = media.color ? media.color.hdr : (await ctx.render.probeMedia(file).catch(error => {
+      // Asked again with every scrub of an older import, so once a minute per file.
+      frameFallback(`color/${media.id}`, `[media] color_probe_failed media=${logId(media.id)} project=${logId(media.projectId)}, frames shown without HDR tone mapping: ${clip((error as Error)?.message ?? String(error))}`);
+      return undefined;
+    }))?.color?.hdr;
     const key = JSON.stringify([file, media.hash, source.size, source.mtimeMs, source.ctimeMs, t, w, preview, area, !!grid, hdr]);
     const frame = async (demand: AbortSignal) => {
       const signal = AbortSignal.any([demand, ctx.projectSignal(media.projectId)]);
@@ -539,24 +568,26 @@ export function mediaRoutes(ctx: Ctx) {
         const picture = await previewPictures(ctx.paths.media(media.projectId), { signal })(media, t, t + 1 / media.fps, minimumHeight);
         if (picture) {
           try { return await ctx.render.extractFrame(picture.file, Math.max(0, t - picture.start), { width: w, signal, indexedMp4: true, fps: media.fps }); }
-          catch {
+          catch (error) {
             signal.throwIfAborted();
-            frameFallback(media.id, `[media] frame_fallback media=${logId(media.id)} project=${logId(media.projectId)} reason=cached_preview`);
+            frameFallback(media.id, `[media] frame_fallback media=${logId(media.id)} project=${logId(media.projectId)} reason=cached_preview: ${clip((error as Error)?.message ?? String(error))}`);
           }
         }
       }
       // The agent's frames read the movie's index too: the same picture, a third sooner on a long recording.
       const indexedMp4 = !!media.previewClock && hasIndexedAvc(media);
-      // The original decodes on an NVIDIA GPU when there is one, and an agent's frame on a Mac's while the editor looks.
-      const decoder = await frameDecoder(ctx.settings().render.hwaccel, priority, pictureLane(ctx), hdr);
-      return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps, hdr });
+      // The original decodes on an NVIDIA GPU when there is one, and an agent's video frame on a Mac's while the editor looks.
+      const decoder = await frameDecoder(ctx.settings().render.hwaccel, priority, pictureLane(ctx), cpuOnly);
+      return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps, hdr, still });
     };
     // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.
     const priority = framePriority(c.req.query("priority"));
     // The editor is looking at a source's pictures: background work yields meanwhile (editorFirst.ts), as for a cut's.
     if (priority === true) editorFirst.touch();
+    // An HDR frame is tone-mapped on the CPU, and a still has no video to hand to a Mac's media engine.
+    const cpuOnly = !!hdr || still;
     // An agent's frame that goes to the GPU while the editor looks may run past the lane's slots then.
-    const gpu = await frameGoesToGpu(ctx.settings().render.hwaccel, priority, hdr);
+    const gpu = await frameGoesToGpu(ctx.settings().render.hwaccel, priority, cpuOnly);
     try {
       const jpeg = await frames.get(key, signal => ctx.track(pictureLane(ctx).run(() => frame(signal), { priority, signal, gpu }), media.projectId), {
         priority, signal: c.req.raw.signal,

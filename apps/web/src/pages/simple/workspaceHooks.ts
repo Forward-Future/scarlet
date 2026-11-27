@@ -5,8 +5,9 @@ import { appLog } from "../../lib/appLog";
 import { api, errorMessage, UNEXPLAINED } from "../../lib/client";
 import { editKindWord } from "../../lib/editKind";
 import type { Moment } from "../../lib/editMoments";
-import { parseTimestamp } from "../../lib/format";
-import { ignorePageShortcut, isAltClearRangeKey, isComposing, isEditableTarget } from "../../lib/hotkeys";
+import { distinctClock, parseTimestamp } from "../../lib/format";
+import { ignorePageShortcut, isComposing, isEditableTarget, matchesClearRangeKey } from "../../lib/hotkeys";
+import { matchesShortcut } from "../../stores/shortcuts";
 import { editKey, keepEdits } from "../../lib/keptEdits";
 import { needNumbers } from "../../lib/needNumbers";
 import { savedChoices, type Call, type CutChoice } from "../../lib/passCalls";
@@ -18,7 +19,7 @@ import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
 import type { Thread } from "../../lib/threads";
 import { marksTakeEscape } from "../../components/player/PictureMarks";
-import { inFullScreen, KEPT_TIMELINES, LANDING_SETTLES, LANDING_SHOWS, stepOf, type Panel } from "./types";
+import { inFullScreen, KEPT_TIMELINES, LANDING_SETTLES, LANDING_SHOWS, type Panel } from "./types";
 
 /**
  * The timelines a pass's cuts are carried across. Each working cut the window shows is kept as it goes by, so the
@@ -211,9 +212,11 @@ export function usePassCallNumbers(
     const editKeyOf = (e: (typeof edits)[number]) => `edit/${editKey(e.previous[0] ?? e)}`;
     const numbers = needNumbers(projectId, passThread.id, passRoot?.resumeRootId ?? passRoot?.id ?? pass.id, [...callKeys, ...edits.map(editKeyOf)]);
     allCalls.forEach((call, i) => callNo.set(call.index, numbers.get(callKeys[i]!.key)!));
+    const times = [...allCalls.map(a => a.start), ...edits.map(at)];
     for (const e of edits) {
       const n = numbers.get(editKeyOf(e))!;
-      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} ${n}`;
+      // It goes by its time, as its row does: "Cut at 0:11", or "Edit at 0:11" for one that took no footage out.
+      const name = `${e.beforeCut || editKindWord(e) === "Cut" ? "Cut" : "Edit"} at ${distinctClock(at(e), times)}`;
       for (const ref of [e, ...e.previous]) passEditNo.set(editKey(ref), { n, name });
     }
     return { callNo, passEditNo };
@@ -297,7 +300,11 @@ export function useUndoShortcut(workspaceActive: boolean, projectId: string, und
       const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value && !emptiedByHand.has(e.target);
       if (isEditableTarget(e.target) && !box) return;
       if (document.querySelector('dialog[open], [role="dialog"], [role="menu"]')) return;
-      if (!lastStep(useUndoStore.getState().steps, projectId)) return;
+      if (!lastStep(useUndoStore.getState().steps, projectId)) {
+        // The key is left to the page, and nothing is taken back: said so the log shows the press did nothing.
+        appLog("action", "undo-skipped", { project: projectId, reason: "empty" });
+        return;
+      }
       e.preventDefault();
       if (!e.repeat) void undoRef.current.undo();
     };
@@ -316,10 +323,10 @@ export function useEditCardShortcuts(active: boolean, stepEdit: (delta: number) 
   editKeys.current = { stepEdit, closeEdit };
   useEffect(() => {
     if (!active) return;
-    // Capture phase, so ↑ and ↓ step between edits before anything else takes them. ← and → pass through to the player.
+    // Capture phase, so previous/next edit keys (↑ and ↓ by default) step between edits before anything else takes them. ← and → pass through to the player.
     const onKey = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e) || e.shiftKey) return;
-      const step = stepOf(e.key);
+      if (ignorePageShortcut(e)) return;
+      const step = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
       if (step) {
         e.preventDefault();
         if (!e.repeat) editKeys.current.stepEdit(step);
@@ -346,9 +353,9 @@ export function useCallCardShortcuts(reviewKeysOn: boolean, hasPass: boolean, st
   useEffect(() => {
     if (!reviewKeysOn) return;
     const onKey = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e) || e.shiftKey) return;
+      if (ignorePageShortcut(e)) return;
       const keys = reviewKeys.current;
-      const step = stepOf(e.key);
+      const step = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
       // With no call to step to, the arrows stay the player's: a pass still running, or one with nothing to ask. They
       // stay the player's while a suggestion is on its card too: no key acts on a call that isn't on screen.
       if (hasPass && !keys.suggestion && step && keys.calls) {
@@ -395,7 +402,10 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
     const release = (e: PointerEvent) => {
       const was = down;
       down = undefined;
-      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) clearRef.current();
+      if (was?.away && was.id === e.pointerId && Math.hypot(e.clientX - was.x, e.clientY - was.y) <= 4) {
+        appLog("timeline", "range-cleared", { via: "click-away" });
+        clearRef.current();
+      }
     };
     const key = (e: KeyboardEvent) => {
       if (e.defaultPrevented || isEditableTarget(e.target) || isComposing(e)) return;
@@ -404,10 +414,11 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
       const plain = !e.metaKey && !e.ctrlKey && !e.altKey;
       const escape = plain && e.key === "Escape";
       const erase = plain && !e.shiftKey && (e.key === "Delete" || e.key === "Backspace");
-      const clearInOut = isAltClearRangeKey(e);
+      const clearInOut = matchesClearRangeKey(e);
       if (!escape && !erase && !clearInOut) return;
       if ((escape && inFullScreen()) || marksTakeEscape(e)) return;
       e.preventDefault();
+      appLog("timeline", "range-cleared", { via: "key", key: clearInOut ? "alt+x" : e.key });
       clearRef.current();
     };
     document.addEventListener("pointerdown", press, true);
@@ -442,20 +453,46 @@ export function useChatAutoFollow(
     if (!grew && pane.querySelector(SELECTED_REVISION_ROW)) return;
     pane.scrollTop = pane.scrollHeight;
   }, [chat, follow, threadCount, lastActivity, taskCount]);
-  // The spot above the message box grows and shrinks with what it holds, and the chat's room with it. While a
-  // revision row in the chat is selected, keep that row in view; otherwise keep the latest message in view.
+  // The fixed bottom lists dock and message box grow and shrink with what they hold, resizing the chat above them,
+  // and turns inside the chat grow as replies and edit summaries land. While a revision row in the chat is selected,
+  // keep that row in view; otherwise keep the latest message pinned to the bottom above the lists.
   useEffect(() => {
     const pane = chat.current;
-    if (!pane || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
+    if (!pane) return;
+    let lastClient = pane.clientHeight;
+    let lastScroll = pane.scrollHeight;
+    const sync = () => {
       const selected = pane.querySelector(SELECTED_REVISION_ROW);
       if (selected) {
         if (isClippedInScrollAncestors(selected)) selected.scrollIntoView?.({ block: "nearest" });
+      } else if (follow.current) {
+        pane.scrollTop = pane.scrollHeight;
+      }
+      lastClient = pane.clientHeight;
+      lastScroll = pane.scrollHeight;
+    };
+    // A layout shrink from the bottom dock mounting or content growing can fire a scroll event before ResizeObserver
+    // runs; restore follow if the viewport or content size changed rather than the user scrolling up.
+    const onScroll = () => {
+      const resized = pane.clientHeight !== lastClient || pane.scrollHeight !== lastScroll;
+      lastClient = pane.clientHeight;
+      lastScroll = pane.scrollHeight;
+      if (resized && follow.current) {
+        pane.scrollTop = pane.scrollHeight;
         return;
       }
-      if (follow.current) pane.scrollTop = pane.scrollHeight;
-    });
-    observer.observe(pane);
-    return () => observer.disconnect();
+      follow.current = pane.scrollHeight - pane.clientHeight - pane.scrollTop < 48;
+    };
+    pane.addEventListener("scroll", onScroll, { passive: true });
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(sync) : undefined;
+    resizeObserver?.observe(pane);
+    const mutationObserver = typeof MutationObserver !== "undefined" ? new MutationObserver(sync) : undefined;
+    mutationObserver?.observe(pane, { childList: true, subtree: true, characterData: true });
+    sync();
+    return () => {
+      pane.removeEventListener("scroll", onScroll);
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
   }, [chat, follow]);
 }

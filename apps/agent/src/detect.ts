@@ -8,7 +8,7 @@ import type { ProvidersConfig } from "./config.js";
 import { discoverModels, ModelCatalogError, type CliAgent } from "./modelCatalog.js";
 import { detectProviders, resolveProviders, type FetchFn } from "./providers.js";
 import { stopCliTree } from "./processTree.js";
-import { errMsg } from "./runners/spawn.js";
+import { CLI_TELEMETRY_OFF, errMsg } from "./runners/spawn.js";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, readFile, stat } from "node:fs/promises";
@@ -69,7 +69,7 @@ export const defaultExec: ExecFn = (file, args, opts = {}) =>
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       detached: process.platform !== "win32",
-      ...(opts.env ? { env: opts.env } : {}),
+      env: { ...(opts.env ?? process.env), ...CLI_TELEMETRY_OFF },
       windowsVerbatimArguments: useShell,
     });
     let stdout = "";
@@ -301,7 +301,7 @@ export async function detect(opts: DetectOptions = {}): Promise<AgentAvailabilit
   const clis = await Promise.all(results.map(async (r) => {
     const path = r.installed && r.loggedIn !== false ? await o.find(cliBinary(r.id)) : null;
     const catalog = path ? await (opts.catalog ?? discoverModels)(r.id as CliAgent, path, runnerEnv(r.id, results, env)).catch((err) => {
-      if (err instanceof ModelCatalogError) log(`[host] model-catalog provider=${r.id} reason=${err.reason}`);
+      if (err instanceof ModelCatalogError) log(`[host] model-catalog provider=${r.id} reason=${err.reason}${err.detail ? ` detail=${JSON.stringify(err.detail)}` : ""}`);
       else log(`could not read the ${r.id} model list: ${errMsg(err)}`);
       return undefined;
     }) : undefined;

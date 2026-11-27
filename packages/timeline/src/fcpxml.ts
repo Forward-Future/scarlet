@@ -48,6 +48,33 @@ const num = (v: number) => String(Number(v.toFixed(4)));
 const decibels = (gain: number) => (gain <= 0.0000158 ? "-96dB" : `${num(20 * Math.log10(gain))}dB`);
 const AUDIO_RATES: Record<number, string> = { 32000: "32k", 44100: "44.1k", 48000: "48k", 88200: "88.2k", 96000: "96k", 176400: "176.4k", 192000: "192k" };
 
+/** Progressive frame-rate tokens Final Cut Pro uses in predefined `FFVideoFormat…` names. */
+const FCP_RATE_SUFFIX: Record<string, string> = {
+  "24000/1001": "2398", "24/1": "24", "25/1": "25",
+  "30000/1001": "2997", "30/1": "30", "50/1": "50",
+  "60000/1001": "5994", "60/1": "60",
+};
+
+/** Standard raster prefixes for predefined progressive Final Cut Pro video formats. */
+const FCP_RESOLUTION_PREFIX: Record<string, string> = {
+  "1280x720": "720p", "1920x1080": "1080p",
+  "2048x1080": "2048x1080p", "3840x2160": "3840x2160p", "4096x2160": "4096x2160p",
+  "5120x2880": "5120x2880p", "7680x4320": "7680x4320p", "8192x4320": "8192x4320p",
+};
+
+/**
+ * Final Cut Pro's format `name` attribute. Standard progressive resolutions and rates carry their predefined
+ * `FFVideoFormat…` name (omitting `name` lets FCP's DTD default it to `FFVideoFormatRateUndefined`, which FCP
+ * rejects on a standard sequence). Stills and custom dimensions/rates use `FFVideoFormatRateUndefined` alongside
+ * explicit `width`, `height`, and (for video) `frameDuration`.
+ */
+function formatName(r: ExactRate | undefined, width?: number, height?: number): string {
+  if (!r) return "FFVideoFormatRateUndefined";
+  const rateSuffix = FCP_RATE_SUFFIX[`${r.num}/${r.den}`];
+  const resPrefix = width && height ? FCP_RESOLUTION_PREFIX[`${width}x${height}`] : undefined;
+  return rateSuffix && resPrefix ? `FFVideoFormat${resPrefix}${rateSuffix}` : "FFVideoFormatRateUndefined";
+}
+
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
@@ -76,8 +103,7 @@ export function toFcpxml(project: Project, timeline: Timeline, sources: Map<stri
     if (!id) {
       id = `r${nextId++}`;
       formats.set(key, id);
-      // A still has no frame rate; Final Cut names that format so.
-      resources.add(el("format", { id, name: r ? undefined : "FFVideoFormatRateUndefined", frameDuration: r ? fmt(q(r.den, r.num)) : undefined, width, height }));
+      resources.add(el("format", { id, name: formatName(r, width, height), frameDuration: r ? fmt(q(r.den, r.num)) : undefined, width, height }));
     }
     return id;
   };

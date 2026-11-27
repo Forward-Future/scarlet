@@ -64,43 +64,47 @@ export function createDialogueRepeatCheck(deps: DialogueRepeatCheckDeps) {
     return job.catch(without("the sync check", undefined));
   }
 
-  // The silence and piece lengths the model last asked the check for: the checks Scarlet runs after a save count by them too.
-  let silencesAsked: number | undefined, piecesAsked: number | undefined;
+  // The silence, piece and text-size bars the model last asked the check for: the checks Scarlet runs after a save count by them too.
+  let silencesAsked: number | undefined, piecesAsked: number | undefined, smallTextAsked: number | undefined;
   /**
-   * What the picture does on a version, for the closing check: the brief pictures on it, and where a recording laid
-   * over the main picture is off it while it still shows what it showed. Read for the whole video, since the check is.
+   * What the picture does on a version, for the closing check: brief pictures, off-picture stretches, glides across
+   * screen changes, clipped text, content under an inset, small unreadable text, and blank/loading screens.
    */
-  const pictureChecks = new Map<string, Promise<{ version: string; findings: ReturnType<typeof pictureFindings> } | undefined>>();
-  function checkPictures(version: string) {
-    let job = pictureChecks.get(version);
+  const pictureChecks = new Map<string, Promise<{ version: string; findings: ReturnType<typeof pictureFindings>; unread?: string[] } | undefined>>();
+  function checkPictures(version: string, smallTextUnder?: number) {
+    const key = `${version}@${smallTextUnder ?? ""}`;
+    let job = pictureChecks.get(key);
     if (!job) {
       job = (async () => {
         const [{ project }, tl] = await Promise.all([getProject(), peekTimeline(version)]);
-        const [framed, cuts] = await Promise.all([framedOn(null, tl),
+        const [framed, cuts] = await Promise.all([framedOn(null, tl, smallTextUnder),
           getPerception().cutsOn(tl, project, { wait: 0 }).catch(without("where the recordings cut", undefined))]);
         const brief = briefPictures(tl, project.media, project.settings, BRIEF_PICTURE_SECONDS, cuts?.cuts);
-        return { version: tl.version, findings: pictureFindings(tl, brief, framed.framed, framed.words) };
+        const unread = [...new Set([...framed.unread, ...cuts?.unread ?? []])];
+        return { version: tl.version, findings: pictureFindings(tl, brief, framed.framed, framed.words), ...(unread.length && { unread }) };
       })();
       // "head" names a different version after each save: only a named one is kept, and only an answer, so a read
-      // that failed is made again at the next check.
+      // that failed or had unread screen perception is made again at the next check.
       const made = job;
-      made.catch(() => { if (pictureChecks.get(version) === made) pictureChecks.delete(version); });
-      if (version !== "head") pictureChecks.set(version, job);
+      made.then(res => { if (res?.unread?.length && pictureChecks.get(key) === made) pictureChecks.delete(key); })
+        .catch(() => { if (pictureChecks.get(key) === made) pictureChecks.delete(key); });
+      if (version !== "head") pictureChecks.set(key, job);
     }
     return job.catch(without("what the picture does", undefined));
   }
 
-  async function checkRepeats(version: string, keep?: Array<{ id: string; reason: string }>, offset?: number, asked?: number, piecesUnderAsked?: number) {
+  async function checkRepeats(version: string, keep?: Array<{ id: string; reason: string }>, offset?: number, asked?: number, piecesUnderAsked?: number, smallTextUnderAsked?: number) {
     if (asked !== undefined) silencesAsked = asked;
     if (piecesUnderAsked !== undefined) piecesAsked = piecesUnderAsked;
-    const silencesFrom = silencesAsked, piecesUnder = piecesAsked;
+    if (smallTextUnderAsked !== undefined) smallTextAsked = smallTextUnderAsked;
+    const silencesFrom = silencesAsked, piecesUnder = piecesAsked, smallTextUnder = smallTextAsked;
     if (!taskId) throw new Error("Check repeated dialogue from an editing task.");
     // The check reads the edit as it is now unless it keeps something heard on the version named: the picture too.
-    const pictures = await checkPictures(keep?.length ? version : "head");
+    const pictures = await checkPictures(keep?.length ? version : "head", smallTextUnder);
     const found = await client.checkDialogueRepeats(projectId, taskId, { version: !keep?.length && pictures ? pictures.version : version,
-      keep, offset, silencesFrom, piecesUnder, startedAt: task?.startedAt, ...(pictures && { pictures }) });
+      keep, offset, silencesFrom, piecesUnder, startedAt: task?.startedAt, ...(pictures && { pictures: { version: pictures.version, findings: pictures.findings } }) });
     const sync = offset ? undefined : await checkSync(found.version);
-    const result = { ...found, ...(sync && { sync }) };
+    const result = { ...found, ...(sync && { sync }), ...(pictures?.unread?.length && { pictureUnread: pictures.unread }) };
     if (checkedVersion !== result.version) checkedRepeats.clear();
     checkedVersion = result.version;
     for (const k of keep ?? []) checkedRepeats.delete(k.id);

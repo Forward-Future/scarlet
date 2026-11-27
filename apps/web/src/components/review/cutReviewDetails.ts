@@ -27,13 +27,13 @@ export function appliedEditSummary(change: Change): string {
     const { joins } = change.appliedReview;
     if (!joins.length) return "Kept all the reviewed footage.";
     const seconds = joins.reduce((sum, { removed }) => sum + removed.end - removed.start, 0);
-    return `Took out ${lengthLabel(seconds)} of footage in ${plural(joins.length, "cut")}.`;
+    return `Cut ${lengthLabel(seconds)} in ${plural(joins.length, "cut")}.`;
   }
   const summary = cutSummary(change.description);
   if (change.approvedSpots) {
     const scope = `Applied ${change.approvedSpots.length} of ${change.ranges.length} proposed spots`;
     return summary.trim() ? `${scope} from “${summary.trim().replace(/\.$/, "")}”.` : scope + ".";
   }
-  if (summary !== change.description) return "Trimmed dialogue from the timeline.";
+  if (summary !== change.description) return "Cut dialogue from the video.";
   return (editConfirmation(summary) ?? summary.trim()) || "No description was saved for this edit.";
 }

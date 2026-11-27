@@ -7,9 +7,151 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 26, 2026
 
 - While Scarlet looks through frames of a long video, or prepares one after import, the frames you scrub to on a Mac come up sooner.
+- Version numbers (`v2`, `v3`, etc.) in the edits list now appear in a subtler gray so edit titles and tags stand out more clearly.
+- Version numbers (`v2`, `v3`, etc.) in the edits list now line up cleanly in one vertical column across rows instead of shifting with each edit's title or tag width.
+- Zooms and pans on still images and other keyframed clips now glide smoothly instead of shaking or stepping between pixels.
+- In the beta layout, pressing Add on several to-dos in a row now shows one queued bubble in the chat, such as "Edit at 8:53, 9:26 +11 · Add it", instead of a bubble for each. Press its times to see each one, or its × to take them all out of the queue.
+- Keeping or sending an edit to Scarlet from Needs review or Safe edits now shows a green check mark or turning spinner right on its row before it moves to Working or Done.
+- Updating existing B-roll To-dos or other edits from a follow-up request now replaces the earlier rows in Needs review instead of listing old and new versions side by side.
+- In the beta layout, your message bubbles in the chat now always show your full text instead of cutting off after two lines.
+- Hovering an added sound in the edits list now reads "Added Warm bed (−6 dB)" instead of "Added Warm bed, quieter (−6 dB)".
+- Dragging the edge of a voice edit on its own audio track now gives the time to or takes it from the sound beside it, instead of refusing or leaving a silent gap.
+- A style guide saved from a graphic now lists fonts whose names are in quotes, such as "Brand Serif", instead of an empty line.
+- Built-in style guide sounds now play correctly when only their ending is asked for.
+- Accented names in Settings › Models › Task models keep their letters together, so "Étalonnage" no longer becomes "e-talonnage".
+- Pressing A quickly on several to-dos now adds every one: the card moves to the next to-do at the press, and one that couldn't be sent comes back with the reason.
+- In the beta layout, the Working and Done headings in the edits column now stay pinned in view while their lists scroll.
+- Style guides now also keep transitions, sound effects and a camera color look, each on its own tab beside Graphics: replay a transition between two sample shots, play sound effects or add them from a built-in starter library with a mix level and a note on when to use them, and describe a color look in chat or drop a .cube or .3dl look file. Scarlet follows them when it edits.
+- Drop a .json style file on Settings › Style guides or on a style guide, or use Import file, to load all its settings at once. Export on a style guide saves them all as a .style.json file. Other files, such as a .md, .yaml, .pdf or .cube, open in the style guide's chat for Scarlet to read.
+- A new Color matching skill evens out exposure, white balance and contrast across cameras, or applies your style guide's color look across the edit.
+- A new Multi-camera editing skill lets Scarlet line up several cameras and separate microphones, work out which camera shows each speaker, and switch between angles at a natural pace for podcasts and interviews.
+- Turning off Send usage reports now also forgets this computer's anonymous ID, and Claude Code and Codex no longer send their own usage data while Scarlet runs them.
+- Rejecting an edit now moves straight to the next edit in line instead of staying on the rejected card.
+- Taking back a rejected edit with ⌘Z now simply brings the edit back, without an extra "Undo · Rejected" line in the chat or a second row for it.
+- After an export, the Export window still offers the folder for Resolve, Final Cut or Premiere, and Back from it.
+- Saving only captions or a timeline file no longer marks the video as exported.
+- Music and other files with no speech no longer get made-up words like "Thank you." in their transcript.
+- Connect your YouTube channel in Settings › General, then open Export › Publish to YouTube to upload finished cuts with final-cut chapter timestamps straight to YouTube Studio (starting as a Private draft by default).
+- Style guides now cover captions alongside lower thirds, callout boxes, and graphics — including custom fonts, weights, and built-in starter presets in Settings › Style guides — and are easier to reach from the `/` and `@` pickers and Project settings.
+- Fixed timeline edge dragging on crossfaded cuts, cleaned audio joins, synced multi-camera opening and closing cuts, and multi-clip B-roll or overlay edits so their handles always appear and save cleanly.
+- When something goes wrong, you can now report it in one click right where you see it: press Report beside the error, or on the screen Scarlet shows when a page breaks, and Scarlet sends it to the Scarlet team with its logs (no videos, projects, transcripts or sign-ins). Add details afterwards if you like. Help › Report a Problem… and Settings › About let you write a report yourself.
+- A page that breaks now says so with Reload and Report this problem, instead of an empty or technical error screen.
+- In the beta layout, taking a marked stretch off the timeline no longer deletes its times from the message you're writing.
+
+## November 25, 2026
+
+- The Show → link after a request's summary in the chat is gone; its edits are in Needs review.
+- In the beta layout, Safe edits now start folded under their heading. Press it to open them; opening one of them from the timeline, the chat or the arrows opens it too.
+- Keep N safe edits now sits on the Safe edits divider in Needs review, right above the edits it keeps, instead of in the heading.
+- In the beta layout, "Scarlet is editing" under the timeline no longer has a Pause button beside it.
+- Opening a project no longer briefly shows edits that were undone or replaced before its list of edits settles.
+- Pausing the video now puts playback back to normal speed, so it doesn't start fast again when you play on.
+- L now switches between normal speed and a fast speed you choose in the player's playback speed menu (1.5× unless you pick 1.25×, 1.75× or 2×), instead of stepping up a little each press.
+- Requests no longer fail on an older Claude Code that doesn't know some of the options Scarlet starts it with: Scarlet tries again without them.
+- Downloading the Whisper model for local transcription now tries again after a dropped or stalled connection, and on Windows waits out antivirus briefly locking the file, instead of failing.
+- In the beta layout, an edit you send back to Scarlet to revise no longer shows a "Scarlet is revising this" card above the timeline; as in the default layout, its card comes back once the new version is ready.
+- In the beta layout, keeping, rejecting, or revising an edit now keeps its row briefly in place with its new status before smoothly fading and moving it to Working or Done.
+- In the beta layout, the chat and the Needs review column now start at the same width (until you drag either one).
+- When you stop talking to Scarlet, your words now wait in the message box so you can read and fix them before pressing Enter. Turn off "Review dictation before sending" in Settings › General to send them right away, as before.
+- Opening a cut from the list now keeps its section lit on the timeline and plays from just before the cut, even when the video changes underneath it while you review.
+- In the beta layout, grouped edits of any kind (cuts, graphics, zooms, B-roll, audio fixes, transitions, and more) are now summarized by AI into a short plain-English title (such as "110 dialogue cuts: pauses & retakes" or "3 model title cards") instead of showing only the first edit's name with a "+N" badge.
+- Removed the "All" and "Needs you" filter buttons from Needs review so flagged edits and safe edits always appear together in one list.
+- Long edits use fewer tokens and finish a little sooner: Scarlet reads the timeline in smaller pieces, no longer has frame requests turned away, and starts each edit already knowing whether there are open review notes (about a fifth fewer tokens on a 27-minute talking-head edit).
+- Dragging the playhead past the left end of the timeline now lands it on 0:00, and past the right end on the last frame, even when the timeline is zoomed in; the timeline scrolls to show it there.
+- The working indicator under the timeline now shows only "Scarlet is editing", without trailing activity text.
+- The "For you" list of edits waiting on you is now called "Needs review".
+- In the beta layout, hovering an edit in the edits column now shows a plain summary underneath its title, such as how much a cut removes or the caption words, file, zoom, audio change, speed, or transition for other edits.
+- In the beta layout, the edits column now stays visible right away when you open a project with no edits yet, instead of hiding until Scarlet makes an edit.
+- Standardized wording across Scarlet so cuts always say "Cut" (instead of "Took out", "Takes out", "Removed", or "Trimmed") on timeline bands, edit cards, chat summaries, and drag readouts, and aligned remaining labels like "Safe edits", "Model selector", "Model host", "Suggestion", and "the video".
+- Style guides are out of beta and always on: find them in Settings › Style guides and use @name in chat or skills without turning on a beta switch.
+- Keeping safe edits no longer floods a message with repeated learnings; Scarlet now checks one at a time and caps each message at two waiting rules.
+- Pulling a suggested cut down to nothing to put it back now always keeps the footage, even on a cut Scarlet had suggested keeping.
+- Dragging the edge of a suggested cut now stops short of the next suggested cut, even after the video changed while the cuts waited.
+- "Ask about this" in the Transcript now goes to the words you chose, even while newer edits are waiting to show.
+- Marking a frame on a message that already has 20 files now says to remove one, instead of failing with an unclear error.
+- Naming a style guide with @ right away no longer sends the message without it while the list is still loading.
+- Pressing ↑ in a ⋯ menu now goes to the last item.
+- Settings › Usage shows the right icon for models run through Ollama, LM Studio or OpenRouter.
+- Exported videos and captions can now be opened by others on a shared folder or network drive.
+- A downloaded SVG or HTML file from a style guide keeps its own name.
+- Saving a graphic as a style keeps every picture link working when one file's name is part of another's.
+- Cutting from a selected passage that spans two clips is no longer refused as outside the selection.
+- A recording being imported is no longer deleted when a second Scarlet starts on the same library.
+- If Scarlet quits while reading your decisions for a lasting rule, it reads them again when it reopens.
+- Gemini's file tools can no longer reach files outside their work folder through links, or change the folders FFmpeg lives in.
+- A message with an emoji in it no longer stops later requests or rule checks from starting.
+- Exported captions in Chinese, Japanese, Korean or Thai now wrap inside the frame and use a font that has their characters.
+- Transcript search in Hindi, Thai and similar languages no longer matches words that differ only by a vowel or tone mark.
+- Scarlet running on another computer keeps its edits going through a brief network drop, and shows as back online as soon as it returns.
+- Combined For you and low-risk edits into one unified Priority list in both the default and beta layouts: edits that need your call stay pinned at the top, confident edits sit right below under a thin Confident edits divider (newest request first), with an inline All / Needs you filter, a Keep N confident button (with ⌘Z undo), and Show → links in chat to jump straight to a request's edits.
+- In the default layout, For you, Working, Done, and edit lists now stay fixed at the bottom above the message box while new messages appear above them.
+- Exported Final Cut Pro XML files now include standard format names (such as 4K 30p and 1080p 29.97p) so Final Cut Pro imports them cleanly.
+- Voice dictation now ignores silence and quiet room tone so silent recordings no longer turn into phantom phrases like "thank you".
+- Added a Cancel button beside active and queued file transcriptions in Media so you can stop a transcription in progress.
+- Added a visible Cancel button beside the recording timer while dictating, alongside Esc, to discard a recording cleanly.
+- Settings › Models now enables only the recommended frontier models by default (Opus 5.5 and Fable 5.2 for Claude Code, GPT-6.2-Sol and GPT-6.2-Astra for Codex, and Gemini 4 Neon for Gemini), while keeping all other models one toggle away.
+- In the beta layout, removed the stray collapse arrow beside chat bubbles and fixed token usage stats popping up in the top-left corner so they appear right over the message you hover.
+- In the beta layout, Scarlet’s chat replies now show up to three lines without expanding, and Scarlet keeps its written replies to three lines at most.
+- In the beta layout, Working and Done at the bottom of the edits column are now separated by a divider line.
+- Fixed playback gradually becoming poppy and laggy on longer edited videos by using one continuous audio track for cached previews and sweeping old streamed buffer edges cleanly behind the playhead.
+- Sending a kept or done edit back to Scarlet now keeps its row in place while it starts working, then fades it out and moves it to Working after a few seconds.
+- Hovering the left or right edge of an open cut or timed edit (captions, B-roll, graphics, overlays, zooms, reframes, music dips, and J/L split edits) on the timeline now reveals quiet handles you can drag to adjust timing right away, with a live frame and word readout, frame-by-frame close-up on hold, and ⌘Z undo.
+- Hovering over a kept edit now offers Unkeep in place of Kept, so you can move it back out of Done without opening it.
+- Settings › Shortcuts lets you customize keyboard shortcuts, switch in one click to classic video-editor J/K/L shuttle playback (moving Keep to A and speed to [ / ]), and move or pause the playhead while typing in chat with ⌘J, ⌘K, and ⌘L (Ctrl on Windows and Linux).
+- With low risk edits turned on in For you, Keep, Reject, and Revise now move straight to the next edit in the list instead of skipping ahead.
+- A revised edit's card now describes what its latest version actually changed instead of the earlier version it replaced, and added clips show their readable label instead of raw camera or screen-recording file names.
+- Dropping a folder into Scarlet now detects the video files inside, imports them, and starts caching them automatically.
+- Dropping a file into a style guide chat now lets you send it right away without typing a message, and the style guide page shows Scarlet's working status once in the chat instead of repeating it under the preview.
 
 ## November 24, 2026
 
+- Pressing ⌘Z right after rejecting a cut now brings back its Keep and Revise card instead of leaving it saying Rejected.
+- Keep on the last flagged edit now goes on to an edit of the same request that needs your answer instead of closing the card.
+- Dots and pills from calls and applied edits near the start of the timeline or on a crowded pass no longer overlap or block clicks.
+- Moving a mark on a paused frame and pressing ⌘Z now puts the mark back even after you leave marking mode.
+- ⌘Z now puts back a chosen range that Esc took off an empty message box, as it does after Backspace.
+- Sending again after an error on a new style guide no longer creates a duplicate style guide or uploads attached files twice, and Esc moves to Send instead of discarding what you wrote.
+- Screen framing now cuts straight when the screen switches to a new page or demo, keeps video player controls out when playing a video, and checks for sliding zooms across screen changes, edge-clipped text, content under the camera inset, tiny text, visible player controls, and blank or loading screens before a pass finishes.
+- A request's token count in the chat now includes the tokens of work it handed to another model.
+- Work handed to a model that can't hear can now have a model that hears listen for it, when one is signed in.
+- Finishing an export now closes the Export window automatically and shows a quiet confirmation strip at the bottom with Show in folder.
+- A row you just kept or sent back no longer vanishes from Done or Working if you switch tabs while it fades, and ⌘Z during the fade brings it back in view.
+- Looking at Working or Done and coming back to For you leaves the low risk switch as it was.
+- A stretch marked on the ruler now stays when you open an edit from the timeline or step to one with ↑ ↓.
+- Switching apps in the middle of marking a stretch no longer leaves a stale one to land on your next click.
+- In the new layout, an edit whose revision stopped early stays in the edits column with its Resume or Retry, without "Nothing waits on you." beside it.
+- In the new layout, ↑ and ↓ on the last Working or Done row stay there instead of jumping to another request's row.
+- In the new layout, the row lit for Scarlet's question is the cut the question is about.
+- In the new layout, Keep on the last waiting edit goes on to an edit that needs your answer instead of leaving the card stuck.
+- In the new layout, a stretch marked while answering Scarlet or replying stays on the message.
+- Typing Japanese, Chinese or Korean in the transcript search, a task's name, a style guide's name or a model search no longer saves, jumps or closes on the Enter or Esc that belongs to the keyboard.
+- Settings › Usage counts Today by your own clock, so an evening's work no longer lands on tomorrow.
+- Token totals past a billion read as 1.2B instead of 1235M.
+- Plan limits in Settings › Usage are checked once when you open it, and Refresh no longer keeps flipping to Refreshing….
+- A note written on a file while it is still being added is kept.
+- A still saved as .jfif or .heif shows its picture all the way through its clip.
+- Pause now also stops work handed to another model.
+- A look at a frame left waiting by work handed to another model no longer holds up later framing edits.
+- The chat no longer repeats that work was handed to another model after a restart.
+- A style guide can be updated again after the project its update was waiting in goes to the trash.
+- With Ollama, LM Studio or OpenRouter, the chat now says what Scarlet is doing as it works.
+- Scarlet no longer updates Claude Code while an edit with Ollama, LM Studio or OpenRouter is using it.
+- Gemini no longer stops an edit when a file it writes begins with a comment.
+- On Windows, updating or installing Claude Code, Codex or Gemini now works when another copy sits ahead of it on your PATH.
+- A timeline exported for Resolve from another app is no longer deleted when that app disconnects.
+- On Windows, installing Gemini, Codex, or Claude Code from Scarlet now keeps the Windows system info their installers need and finds Codex where its installer puts it, instead of failing with a connection error.
+- Switching between For you, Working and Done now keeps the request's heading and tabs steady instead of jumping up and down, and smoothly folds back to the active tab's height once you click elsewhere, finish the request, or start a new one.
+- In the beta three-column layout, the Working banner now stays visible above the Done banner at the bottom of the edits column even when no edits are working.
+- An empty library now has a "Try a sample project" button that opens a short sample clip with a finished edit pass ready to play, review, and compare Before and After.
+- Dialogue cuts now place cleanly in rooms with steady background noise, like a fan, air conditioning or traffic hum, without cutting into soft word endings.
+- Settings › About (and the startup error screen) now have a Report a problem button that saves a log zip and opens a pre-filled bug report you can drag it into. It reminds you that reports are public and the logs show file and folder names.
+- In the beta three-column layout, the middle edits column can now be resized from its right edge, every row stays on a single line, and hovering a row shows the full line in a Scarlet tooltip.
+- Settings › Usage is now organized into cleaner Tokens and Storage cards with a token breakdown bar, 14-day activity chart, tabbed breakdowns by project, provider and model, live plan limits for signed-in subscriptions, and one-click Clear all for cached renders.
+- Cuts and edits now go by their time everywhere instead of a number: rows start with their time, the timeline shows plain dots (filled once kept, amber while they wait), and cards, the message box's tag and Scarlet's replies say "Cut 2:47" or "Edit 0:11", in both the current and the beta layout.
+- Diagnostics in Settings › Advanced is now cleaner, with separate rows for each set-up provider, clearer Open and Logs buttons, and internal paths tucked under Technical details.
+- Times you type in the message box are now plain gray text instead of sitting in gray boxes. They still jump the video there when clicked, and light up with an underline on hover.
+- Settings › Advanced is simplified to Transcription language, Preview quality and an on/off Hardware acceleration switch, saved immediately without a Save button; Scarlet handles the rest automatically.
+- On Windows, Install Gemini in Settings › Models now finishes, instead of saying the installation did not finish and Gemini isn't installed.
 - Scarlet can now edit with models running on your own computer through Ollama or LM Studio, or with hosted models through OpenRouter. Set them up under Other providers in Settings › Models: each shows up in the model selector only once it has models ready, and OpenRouter's models stay out of the selector until you turn on the ones you want.
 - After you click the timeline's zoom slider, its − or +, "Scarlet is editing", or Check or Show source on a card, Space plays and pauses and ← → skip again, instead of going to the control you clicked.
 - Pressing "Scarlet is editing" under the timeline now shows and lights the request also when it is folded to its heading, or sitting in the beta edits column.
@@ -55,6 +197,11 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Changing a project's settings while its video is being edited no longer leaves the old cut on screen when the new timeline takes a moment to load: Scarlet loads it again by itself.
 - An edit set to carry on once its transcripts are ready that can't start again now stops waiting after a few tries, so you can carry on yourself, instead of waiting forever.
 - A Scarlet agent whose agent.json was edited by hand to a time limit or task count that isn't a positive number now uses the usual limits, instead of taking no requests or stopping each run as soon as it starts.
+- When the chat's model hands work to the model you chose for it in Task models, that model now hears what you asked in your own words, not only the chat model's brief.
+- When the model you chose for a kind of work, such as Cutting, isn't sure about an edit, the edit now waits for you to check it, as when the chat's model flags one.
+- With Cutting given to another model in Task models, that model can now read the dialogue and check its cuts for repeats, instead of being refused.
+- With a model that can't see pictures, such as one from Ollama or LM Studio, Scarlet no longer has it look at a frame to find what viewers may see of a screen recording.
+- Report a problem's log zip now includes which copies of Scarlet started and stopped and what became of each message sent, instead of an empty file.
 
 ## November 23, 2026
 

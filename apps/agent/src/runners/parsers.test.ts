@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeCommand, claudeCanRunBare, claudeRunUsage, newClaudeState, parseClaudeLine } from "./claude.js";
 import { buildCodexCommand, tomlInlineTable, tomlString } from "./codex.js";
 import { newCodexState, parseCodexLine } from "./codexParse.js";
-import { acpMcpServer, buildGeminiCommand, geminiDir, isScarletMcpPermission, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
+import { acpMcpServer, buildGeminiCommand, geminiDir, isScarletMcpPermission, namesPath, newGeminiState, parseGeminiLine, permissionOutcome, workspacePermission } from "./geminiAcp.js";
 import { quoteForCmd, spawnLines, spawnSpec } from "./spawn.js";
 import { briefInput, isQuestionTool, prettyToolName, workspaceEnv, type RunnerEvent } from "./types.js";
 import { holdQuestion, settleQuestion, type QuestionCallState } from "./questionCalls.js";
@@ -88,6 +88,20 @@ describe("claude stream-json parser", () => {
     expect(st.question).toBe("Keep the cold open?");
     expect(st.questionPosted).toBe(true);
     expect(st.shouldStop).toBe(true);
+  });
+  it("names the tool a call through tool_call makes, with that tool's arguments, and leaves a question asked that way unasked", () => {
+    // Ollama, LM Studio and OpenRouter run through Claude Code with brief tools, so most of Scarlet's tools are reached through tool_call.
+    const use = (id: string, input: object) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "mcp__scarlet__tool_call", input }] } });
+    const st = newClaudeState();
+    expect(feed([use("t1", { name: "transcript_get", arguments: { mediaId: "m1" } }), use("t2", { name: " MCP__Scarlet__Timeline_Get " })], st, parseClaudeLine)).toEqual([
+      { type: "tool", text: 'scarlet.transcript_get {"mediaId":"m1"}', data: { tool: "mcp__scarlet__transcript_get", input: { mediaId: "m1" }, toolUseId: "t1" } },
+      { type: "tool", text: "scarlet.timeline_get", data: { tool: "mcp__scarlet__timeline_get", input: {}, toolUseId: "t2" } },
+    ]);
+    // The server refuses a question asked through tool_call, and a call that names no tool is shown as it was made.
+    const asked = { name: "task_question", arguments: { text: "Which take?" } };
+    expect(feed([use("t3", asked), use("t4", { name: "../x" })], st, parseClaudeLine).map((e) => e.data)).toEqual([
+      { tool: "mcp__scarlet__tool_call", input: asked, toolUseId: "t3" }, { tool: "mcp__scarlet__tool_call", input: { name: "../x" }, toolUseId: "t4" }]);
+    expect(st.question).toBeUndefined();
   });
   it("reports error results and a failed MCP server", () => {
     const st = newClaudeState();
@@ -434,9 +448,26 @@ describe("gemini ACP parser", () => {
     expect(evs[2]!.text).toContain("Invalid ops");
   });
 
+  it("reads what a file holds as text, not as a path, and still checks every path", () => {
+    const roots = ["/w"];
+    const write = (rawInput: object) => workspacePermission({ toolCall: { name: "write_file", rawInput } }, roots);
+    // A file's content that opens with a comment starts with a slash, and one that imports from a folder above has `../`: neither is where the file is.
+    expect(write({ file_path: "/w/artifacts/title.js", content: "// The title card\nconst title = 'Ana';\n" })).toBe(true);
+    expect(write({ file_path: "artifacts/title.css", content: "/* The look */\r\n@import '../base.css';\n" })).toBe(true);
+    // The path itself is checked as before, with or without a break at its ends, and so is content of one line that reads as a path.
+    expect(write({ file_path: "/etc/hosts", content: "// The title card\nconst title = 'Ana';\n" })).toBe(false);
+    expect(write({ file_path: "/etc/hosts\n", content: "x" })).toBe(false);
+    expect(write({ file_path: "\n../outside.txt", content: "x" })).toBe(false);
+    expect(write({ file_path: "artifacts/a.txt", content: "/etc/hosts" })).toBe(false);
+    // On Windows a path that starts with a backslash is from the drive's root, or a share: it is checked, not waved through.
+    expect([namesPath("\\Users\\me\\secret.txt", true), namesPath("\\\\server\\share\\x", true)]).toEqual([true, true]);
+    expect([namesPath("\\d+\\.jpg", false), namesPath("artifacts\\a.txt", true), namesPath("C:\\Users\\me", false)]).toEqual([false, false, true]);
+    expect([namesPath("// a comment\ncode", true), namesPath("/w/a.txt", false), namesPath("~/x", false), namesPath("a/../b", false)]).toEqual([false, true, true, true]);
+  });
+
   it("enforces Scarlet MCP-only permissions and builds the agy acp command", () => {
     // A request's agent may use agy's own tools inside its folders; a path outside them, or one in the home, is refused.
-    const roots = ["/w", "/Applications/Google Chrome.app"];
+    const roots = ["/w"];
     expect(workspacePermission({ toolCall: { name: "mcp__scarlet__timeline_get" } }, roots)).toBe(true);
     expect(workspacePermission({ toolCall: { name: "run_shell_command", rawInput: { command: "ffmpeg -version" } } }, roots)).toBe(true);
     expect(workspacePermission({ toolCall: { name: "write_file", locations: [{ path: "/w/artifacts/page.html" }] } }, roots)).toBe(true);
@@ -484,8 +515,8 @@ describe("gemini ACP parser", () => {
   });
 
   it("reads a relative path from the task folder, so one that climbs out of it is refused", () => {
-    const roots = ["/w", "/Applications/Google Chrome.app"];
-    const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, roots);
+    const roots = ["/w"];
+    const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, roots, ["/Applications/Google Chrome.app"]);
     // Three folders up from a task folder is Scarlet's own, where its token is kept.
     expect(allow({ name: "read_file", rawInput: { path: "../../../agent.json" } })).toBe(false);
     expect(allow({ name: "read_file", rawInput: { file_path: "artifacts/../../secret" } })).toBe(false);
@@ -505,6 +536,67 @@ describe("gemini ACP parser", () => {
     expect(workspacePermission({ toolCall: { name: "list_dir", rawInput: { paths: ["/w/artifacts", "/w2"] } } }, ["/w/sub/.."])).toBe(false);
     expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: process.cwd() }] } }, [""])).toBe(false);
     expect(workspacePermission({ toolCall: { name: "read_file", locations: [{ path: "/etc/passwd" }] } }, ["", "   "])).toBe(false);
+  });
+
+  it("follows links and hard links out of the task folder, so a link the shell made there leads nowhere else", () => {
+    const base = mkdtempSync(join(tmpdir(), "scarlet-perm-"));
+    try {
+      const task = join(base, "work", "tsk_1");
+      mkdirSync(task, { recursive: true });
+      writeFileSync(join(base, "agent.json"), "{\"token\":\"secret\"}");
+      writeFileSync(join(task, "notes.md"), "notes");
+      symlinkSync(join(base, "agent.json"), join(task, "a.json"));
+      symlinkSync(join(task, "notes.md"), join(task, "b.md"));
+      symlinkSync(join(base, "nowhere.txt"), join(task, "c.txt"));
+      linkSync(join(base, "agent.json"), join(task, "d.json"));
+      const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, [task]);
+      // A link to a file outside, by its full path, by its plain name, or under any key a file tool names a file with.
+      expect(allow({ name: "read_file", locations: [{ path: join(task, "a.json") }] })).toBe(false);
+      expect(allow({ name: "read_file", rawInput: { path: "a.json" } })).toBe(false);
+      expect(allow({ name: "write_file", rawInput: { file_path: "a.json", content: "x" } })).toBe(false);
+      expect(allow({ name: "list_dir", rawInput: { paths: ["notes.md", "a.json"] } })).toBe(false);
+      // A link to nowhere, which a write would make the file at the far end of, and a second hard link to a file.
+      expect(allow({ name: "write_file", rawInput: { file_path: "c.txt", content: "x" } })).toBe(false);
+      expect(allow({ name: "read_file", rawInput: { absolute_path: join(task, "d.json") } })).toBe(false);
+      // A real file, a new one, one in a new folder, and a link that stays inside are all fine.
+      expect(allow({ name: "read_file", rawInput: { path: "notes.md" } })).toBe(true);
+      expect(allow({ name: "write_file", locations: [{ path: join(task, "artifacts", "page.html") }], rawInput: { file_path: "artifacts/page.html" } })).toBe(true);
+      expect(allow({ name: "read_file", rawInput: { path: "b.md" } })).toBe(true);
+      expect(allow({ name: "list_dir", rawInput: { dir_path: "." } })).toBe(true);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a call only read, never write, the folders a request's programs live in", () => {
+    const allow = (toolCall: Record<string, unknown>) => workspacePermission({ toolCall }, ["/w"], ["/opt/scarlet-fixture/bin"]);
+    expect(allow({ name: "write_file", kind: "edit", rawInput: { file_path: "/opt/scarlet-fixture/bin/ffmpeg", content: "x" } })).toBe(false);
+    expect(allow({ name: "write_file", kind: "edit", locations: [{ path: "/opt/scarlet-fixture/bin/new" }] })).toBe(false);
+    expect(allow({ name: "move", kind: "move", rawInput: { source: "/w/a", destination: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(false);
+    expect(allow({ name: "write_file", rawInput: { file_path: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(false);
+    expect(allow({ name: "read_file", kind: "read", rawInput: { file_path: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(true);
+    expect(allow({ name: "run_shell_command", kind: "execute", rawInput: { command: "/opt/scarlet-fixture/bin/ffmpeg -version" } })).toBe(true);
+    // And when agy omits `kind`, read/search/shell tool names still get readRoots, while edit/write tools do not.
+    expect(allow({ name: "read_file", rawInput: { Path: "/opt/scarlet-fixture/bin/ffmpeg" } })).toBe(true);
+    expect(allow({ name: "run_command", rawInput: { CommandLine: "/opt/scarlet-fixture/bin/ffmpeg -version" } })).toBe(true);
+    expect(allow({ name: "edit_file", rawInput: { Path: "/opt/scarlet-fixture/bin/ffmpeg", Target: "a", Replacement: "b" } })).toBe(false);
+    // `edit_file`'s `Target` is the text snippet to replace, not a file path (`~50ms` is not a home path).
+    expect(allow({ name: "edit_file", kind: "edit", rawInput: { Path: "/w/artifacts/page.css", Target: "~50ms fade", Replacement: "100ms fade" } })).toBe(true);
+    expect(allow({ name: "write_file", kind: "edit", rawInput: { file_path: "/w/artifacts/page.html" } })).toBe(true);
+    expect(allow({ name: "read_file", kind: "read", rawInput: { file_path: "/etc/passwd" } })).toBe(false);
+  });
+
+  it("refuses a path it can't look at, rather than throwing and leaving agy without an answer", () => {
+    // A name longer than any file system takes, in a folder that is there: both looks at it fail with ENAMETOOLONG.
+    const task = mkdtempSync(join(tmpdir(), "scarlet-perm-"));
+    try {
+      const long = { toolCall: { name: "read_file", kind: "read", rawInput: { path: join(task, "a".repeat(300), "b.txt") } } };
+      expect(() => workspacePermission(long, [task])).not.toThrow();
+      // Windows takes long names, so there it is only a file not written yet, inside the task folder.
+      expect(workspacePermission(long, [task])).toBe(process.platform === "win32");
+    } finally {
+      rmSync(task, { recursive: true, force: true });
+    }
   });
 });
 

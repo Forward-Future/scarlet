@@ -1,5 +1,6 @@
 import { LEFT_OUT_READING } from "@scarlet/timeline";
 import type { Db } from "./db.js";
+import { humanDuration } from "./logText.js";
 
 /** Versioned migrations; `PRAGMA user_version` tracks how many have been applied. */
 export const MIGRATIONS: string[] = [
@@ -340,16 +341,27 @@ export const MIGRATIONS: string[] = [
   `SELECT 1;`,
 ];
 
-export function migrate(db: Db, throughVersion = MIGRATIONS.length): void {
+export function migrate(db: Db, throughVersion = MIGRATIONS.length, log: (line: string) => void = () => {}): void {
   const current = db.pragma("user_version", { simple: true }) as number;
+  const began = Date.now();
+  let applied = 0;
   for (let i = current; i < throughVersion; i++) {
-    db.transaction(() => {
+    const started = Date.now();
+    const ran = db.transaction(() => {
       // Another engine opening this library may have applied it since the version was read. Look again with the write lock held.
-      if ((db.pragma("user_version", { simple: true }) as number) > i) return;
+      if ((db.pragma("user_version", { simple: true }) as number) > i) return false;
       db.exec(MIGRATIONS[i]!);
       db.pragma(`user_version = ${i + 1}`);
+      return true;
     }, "immediate")();
+    if (ran) {
+      applied++;
+      // A new library runs them all at once: its one line below is enough.
+      if (current > 0) log(`[db] Applied migration ${i + 1} of ${MIGRATIONS.length} in ${humanDuration(Date.now() - started)}`);
+    } else log(`[db] Migration ${i + 1} was already applied by another engine`);
   }
+  if (applied) log(`[db] Library schema ${current ? `${current} → ${throughVersion}` : `${throughVersion} created`}: ${applied} ${applied === 1 ? "migration" : "migrations"} in ${humanDuration(Date.now() - began)}`);
+  else if (current > MIGRATIONS.length) log(`[db] Library schema ${current} is newer than this build's ${MIGRATIONS.length}: a newer Scarlet has opened it`);
   if (throughVersion === MIGRATIONS.length) {
     ensureProjectFormat(db);
     ensureTelemetryRevision(db);
@@ -410,6 +422,15 @@ export function ensureProjectRowRevision(db: Db): void {
  */
 export function ensureGraphics(db: Db): void {
   ensureColumn(db, "projects", "style_guide", "ALTER TABLE projects ADD COLUMN style_guide TEXT;");
+  db.exec(`CREATE TABLE IF NOT EXISTS style_guides (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS style_guides_name ON style_guides(name COLLATE NOCASE);`);
 }
 
 /** These derived lookups can coexist with any library that has task events and transcripts.
@@ -466,7 +487,7 @@ const LOOKUP_INDEXES: Record<string, string> = {
   tasks_dialogue_unset: "ON tasks(created_at) WHERE kind IN ('edit','revise','note') AND json_type(json, '$.context.dialogueOperation') IS NULL",
 };
 
-export function ensureLookupIndexes(db: Db): void {
+export function ensureLookupIndexes(db: Db, log: (line: string) => void = () => {}): void {
   const names = Object.keys(LOOKUP_INDEXES);
   const definition = (name: string) => `CREATE INDEX ${name} ${LOOKUP_INDEXES[name]}`;
   const stale = () => names.filter(name => {
@@ -474,10 +495,14 @@ export function ensureLookupIndexes(db: Db): void {
     return row?.sql !== definition(name);
   });
   if (!stale().length) return;
-  db.transaction(() => {
+  const started = Date.now();
+  const rebuilt = db.transaction(() => {
     // Another engine opening this library may have updated them since. Look again with the write lock held.
-    for (const name of stale()) {
+    const names = stale();
+    for (const name of names) {
       db.exec(`DROP INDEX IF EXISTS ${name}; ${definition(name)};`);
     }
+    return names.length;
   }, "immediate")();
+  if (rebuilt) log(`[db] Rebuilt ${rebuilt} lookup ${rebuilt === 1 ? "index" : "indexes"} in ${humanDuration(Date.now() - started)}`);
 }

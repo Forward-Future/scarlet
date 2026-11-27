@@ -16,6 +16,8 @@ import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { actorFor, logActivity, quote } from "./activity.js";
+import { clip, humanDuration, logId } from "../logText.js";
+import { errorMessage } from "../util.js";
 import { ingestMedia } from "./ingest.js";
 import { safeFileName } from "./fileName.js";
 import { previewPictures } from "./previewPictures.js";
@@ -85,8 +87,11 @@ export async function checkAttachments(ctx: Ctx, projectId: string, attachments:
 
 const MIME: Record<string, string> = {
   ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown", ".html": "text/html", ".htm": "text/html", ".css": "text/css",
-  ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+  ".json": "application/json", ".yaml": "text/yaml", ".yml": "text/yaml", ".toml": "text/plain", ".xml": "text/xml", ".csv": "text/csv",
+  ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
   ".gif": "image/gif", ".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2",
+  ".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac",
+  ".cube": "text/plain", ".3dl": "text/plain",
 };
 export const mimeFor = (name: string): string | undefined => MIME[extname(name).toLowerCase()];
 
@@ -105,7 +110,7 @@ export async function saveStyleGuide(ctx: Ctx, projectId: string, body: SaveStyl
     try {
       await mkdir(staging, { recursive: true, mode: 0o700 });
       await cp(found.path, join(staging, found.attachment.name));
-      await swapInFolder(staging, folder);
+      await swapInFolder(staging, folder, line => ctx.log(`[graphics] style guide of ${logId(projectId)}: ${line}`));
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
@@ -131,7 +136,7 @@ export async function removeStyleGuide(ctx: Ctx, projectId: string, user: User |
  * Put a folder made beside `folder` in its place. The folder there before is moved aside first and put back if the new
  * one can't go in, so `folder` is never left missing while the database points at it. The one aside is then removed.
  */
-export async function swapInFolder(staging: string, folder: string) {
+export async function swapInFolder(staging: string, folder: string, log?: (line: string) => void) {
   const aside = `${folder}.old-${randomUUID()}`;
   const hadOld = await rename(folder, aside).then(() => true, (error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return false;
@@ -140,7 +145,13 @@ export async function swapInFolder(staging: string, folder: string) {
   try {
     await rename(staging, folder);
   } catch (error) {
-    if (hadOld) await rename(aside, folder).catch(() => undefined);
+    log?.(`the new ${basename(folder)} folder couldn’t go in${hadOld ? ", the old one is put back" : ""}: ${clip(errorMessage(error))}`);
+    if (hadOld) {
+      await rename(aside, folder).catch((undo: unknown) => {
+        // The database points at a folder that is now missing: the old one is kept aside, not removed.
+        log?.(`the old ${basename(folder)} folder couldn’t be put back and is left at ${basename(aside)}: ${clip(errorMessage(undo))}`);
+      });
+    }
     throw error;
   }
   if (hadOld) await rm(aside, { recursive: true, force: true }).catch(() => undefined);
@@ -241,7 +252,7 @@ async function writeAssets(folder: string, assets: Map<string, Buffer>) {
 const chrome = (ctx: Ctx) => findChrome(undefined, ctx.options.env ?? process.env);
 
 /** A graphic Scarlet drew in this project, and its page. */
-function graphicMedia(ctx: Ctx, projectId: string, mediaId: string): { media: MediaAsset; page: string } {
+export function graphicMedia(ctx: Ctx, projectId: string, mediaId: string): { media: MediaAsset; page: string } {
   const media = ctx.repos.projects.getMedia(mediaId);
   if (!media || media.projectId !== projectId) throw notFound(`media ${mediaId}`);
   if (!media.graphic) throw badRequest("not_a_drawn_graphic", `${quote(media.name)} wasn't drawn by Scarlet from a page, so it has none to revise.`);
@@ -287,7 +298,7 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
   try {
     if (based) await copyFiles(dirname(based.page), folder);
     await writeAssets(folder, input.assets);
-    const html = await adoptLinkedFiles(input.html, folder, [ctx.paths.project(project.id)]);
+    const html = await adoptLinkedFiles(input.html, folder, [ctx.paths.project(project.id), ctx.paths.styleGuidesLibrary]);
     const page = join(folder, "index.html");
     await writeFile(page, html);
 
@@ -301,22 +312,40 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
       const timeline = project.head ? resolveTimeline(ctx, project, "head") : null;
       checkAt = timeline && o.checkAt !== undefined ? o.checkAt : undefined;
       const size = { width: 960, height: Math.round(960 * height / width) };
+      // The check goes on without the picture; the log says why it came back without one.
+      const checkPictureFailed = (stage: "background" | "overlay", at: number, error: unknown) =>
+        ctx.log(`[graphics] check-picture-failed stage=${stage} task=${input.taskId ? logId(input.taskId) : "none"} project=${logId(project.id)} at=${at.toFixed(2)} ${errorMessage(error).slice(0, 200)}`);
       pictures = await Promise.all(checkTimes.map(async t => {
         let background: Buffer | null = null;
         if (timeline && checkAt !== undefined) {
           const at = checkAt + t;
           const range = { start: at, end: at + 1 / project.settings.fps };
           const root = ctx.paths.media(project.id);
-          background = await renderTimelineFrame(project, timeline, range, root, signal, 960, { pictureSource: previewPictures(root, { signal }) })
-            .catch(() => renderTimelineFrame(project, timeline, range, root, signal, 960)).catch(() => null);
+          const lutRoots = [ctx.paths.styleGuidesLibrary];
+          const fontDirs = [ctx.paths.styleGuidesLibrary, ctx.paths.attachments(project.id)];
+          background = await renderTimelineFrame(project, timeline, range, root, signal, 960, { pictureSource: previewPictures(root, { signal }), lutRoots, fontDirs })
+            .catch((error: unknown) => {
+              if (!signal.aborted) ctx.log(`[graphics] check-picture-fallback stage=background task=${input.taskId ? logId(input.taskId) : "none"} project=${logId(project.id)} at=${t.toFixed(2)} preview pictures failed, drawn from the originals: ${clip(errorMessage(error))}`);
+              return renderTimelineFrame(project, timeline, range, root, signal, 960, { lutRoots, fontDirs });
+            }).catch((error: unknown) => {
+              if (!signal.aborted) checkPictureFailed("background", t, error);
+              return null;
+            });
         }
-        return graphicOver(movie, t, background, size, { signal }).catch(() => undefined);
+        return graphicOver(movie, t, background, size, { signal }).catch((error: unknown) => {
+          if (!signal.aborted) checkPictureFailed("overlay", t, error);
+          return undefined;
+        });
       }));
     }
     const checks = coverage.map((c, i) => ({ ...c, ...(pictures[i] && { jpeg: pictures[i]!.toString("base64") }) }));
     const base = { missingFonts: drawn.missingFonts, ...(drawn.installedFonts.length && { installedFonts: drawn.installedFonts }), problems: drawn.problems, checks, ...(checkAt !== undefined && { checkAt }),
       width, height, fps, duration, renderMs: drawn.elapsedMs };
-    if (drawn.missingFonts.length) return base;
+    const drawnLine = `task=${input.taskId ? logId(input.taskId) : "none"} project=${logId(project.id)} ${duration}s ${width}x${height}@${fps} drawn in ${humanDuration(drawn.elapsedMs)}${drawn.problems.length ? ` problems=${drawn.problems.length}` : ""}`;
+    if (drawn.missingFonts.length) {
+      ctx.log(`[graphics] graphic-not-added ${drawnLine} missing-fonts=${drawn.missingFonts.length}: the editor chooses a font`);
+      return base;
+    }
 
     const source = relative(ctx.paths.project(project.id), page).split(sep).join("/");
     const name = o.name ?? "Graphic";
@@ -337,6 +366,7 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
       return stored;
     }, "immediate")();
     kept = true;
+    ctx.log(`[graphics] graphic-added ${drawnLine} media=${logId(saved.id)}${based ? ` based-on=${logId(based.media.id)}` : ""}`);
     return { ...base, media: await ready(ctx, saved.id) ?? saved, source: page };
   } finally {
     if (!kept) await rm(folder, { recursive: true, force: true });
@@ -397,6 +427,25 @@ export interface DocumentRead {
   image?: { mime: string; data: string };
 }
 
+/** Read a file on disk as something a model can inspect: text, image, PDF pages, or metadata + path. */
+export async function readFileDocument(ctx: Ctx, path: string, name: string, pages?: number[], signal?: AbortSignal): Promise<DocumentRead> {
+  const info = await stat(path);
+  const mime = mimeFor(name);
+  const base: DocumentRead = { name, path, size: info.size, ...(mime && { mime }) };
+  if (mime && TEXT_TYPES.test(mime)) return { ...base, text: (await readFile(path, "utf8")).slice(0, 200_000) };
+  if (mime && IMAGE_TYPES.test(mime)) {
+    if (info.size <= 4 * 1024 * 1024) return { ...base, image: { mime, data: (await readFile(path)).toString("base64") } };
+    const jpeg = await ctx.render.extractFrame(path, 0, { width: 1600, signal });
+    return { ...base, image: { mime: "image/jpeg", data: jpeg.toString("base64") } };
+  }
+  if (mime === "application/pdf") {
+    const wanted = pages?.length ? pages.filter(n => Number.isInteger(n) && n >= 1).slice(0, MAX_DOCUMENT_PAGES) : [1, 2, 3, 4, 5, 6];
+    const { pageCount, pages: rendered } = await renderPdfDocument(path, wanted, { signal });
+    return { ...base, pageCount, pages: rendered.map(({ page, jpeg }) => ({ page, jpeg: jpeg.toString("base64") })) };
+  }
+  return base;
+}
+
 /** An attachment, or the project's style guide, as something a model can read: its text, its pages or its picture. */
 export async function readDocument(ctx: Ctx, projectId: string, ref: { attachmentId?: string; styleGuide?: boolean; pages?: number[] }, signal?: AbortSignal): Promise<DocumentRead> {
   let path: string, name: string;
@@ -411,19 +460,5 @@ export async function readDocument(ctx: Ctx, projectId: string, ref: { attachmen
     if (!found) throw notFound("attachment");
     path = found.path; name = found.attachment.name;
   }
-  const info = await stat(path);
-  const mime = mimeFor(name);
-  const base: DocumentRead = { name, path, size: info.size, ...(mime && { mime }) };
-  if (mime && TEXT_TYPES.test(mime)) return { ...base, text: (await readFile(path, "utf8")).slice(0, 200_000) };
-  if (mime && IMAGE_TYPES.test(mime)) {
-    if (info.size <= 4 * 1024 * 1024) return { ...base, image: { mime, data: (await readFile(path)).toString("base64") } };
-    const jpeg = await ctx.render.extractFrame(path, 0, { width: 1600, signal });
-    return { ...base, image: { mime: "image/jpeg", data: jpeg.toString("base64") } };
-  }
-  if (mime === "application/pdf") {
-    const wanted = ref.pages?.length ? ref.pages.filter(n => Number.isInteger(n) && n >= 1).slice(0, MAX_DOCUMENT_PAGES) : [1, 2, 3, 4, 5, 6];
-    const { pageCount, pages } = await renderPdfDocument(path, wanted, { signal });
-    return { ...base, pageCount, pages: pages.map(({ page, jpeg }) => ({ page, jpeg: jpeg.toString("base64") })) };
-  }
-  return base;
+  return readFileDocument(ctx, path, name, ref.pages, signal);
 }

@@ -291,6 +291,61 @@ describe("timeline_framing", () => {
     } finally { await c.close(); }
   });
 
+  it("flags a glide that crosses a screen change in picture-cuts", async () => {
+    const others = mock.state.extra!;
+    mock.state.extra = (req, res) => {
+      if (req.method === "GET" && req.path === "/projects/prj_test/media/scr/picture-cuts") {
+        // A screen change inside the 9.5..10.5 s move (source time 12.1 s on clip s1 at timeline 10.1 s).
+        return reply(res, { from: 0, to: 120, readSeconds: 120, done: true, cuts: [{ at: 12.1, cells: Buffer.alloc(288, 0xff).toString("base64") }] });
+      }
+      return others(req, res);
+    };
+    const c = await connect();
+    try {
+      await ok(c, "timeline_get");
+      const preview = JSON.parse(textOf(await ok(c, "timeline_framing", { mediaId: "scr", framings, preview: true })).split("\n")[0]!);
+      expect(preview.movesAcrossScreenChange).toEqual([1]);
+      expect(preview.framings[1]).toMatchObject({ screenChanged: true, screenChangeAt: 10.1 });
+      // Switching that framing to a straight cut (over: 0) clears the flag.
+      const cut = JSON.parse(textOf(await ok(c, "timeline_framing", {
+        mediaId: "scr", preview: true,
+        framings: [framings[0], { ...framings[1], at: 10.1, over: 0 }],
+      })).split("\n")[0]!);
+      expect(cut.movesAcrossScreenChange).toBeUndefined();
+      expect(cut.framings[1].screenChanged).toBeUndefined();
+    } finally { await c.close(); }
+  });
+
+  it("skips video-only beside picture reads for still image overlays", async () => {
+    mock.state.project.media.push({ id: "photo", kind: "image", name: "photo.jpg", path: "photo.jpg", width: 1200, height: 800, hasAudio: false });
+    const others = mock.state.extra!;
+    const photoReads: string[] = [];
+    mock.state.extra = (req, res) => {
+      if (req.method === "GET" && /^\/projects\/prj_test\/media\/photo\/(screen-text|screen-motion|picture-cuts|faces)$/.test(req.path)) {
+        photoReads.push(req.path);
+        return reply(res, { error: "no_picture", message: "Only a video has a picture to read." }, 400);
+      }
+      return others(req, res);
+    };
+    const c = await connect();
+    try {
+      await ok(c, "timeline_get");
+      const result = JSON.parse(textOf(await ok(c, "timeline_propose", {
+        description: "Place a framed still photo over the video.",
+        reason: "Highlight the photo beside the narration.",
+        ops: [
+          { op: "addTrack", track: { id: "v_photo", kind: "video", name: "Photo", muted: false, hidden: false, clips: [] } },
+          { op: "addClip", trackId: "v_photo", clip: {
+            kind: "media", id: "photo_clip", mediaId: "photo", sourceIn: 0, sourceOut: 4, timelineIn: 2,
+            transform: { x: 0, y: 0, scale: 1.2, rotation: 0, cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 },
+          } },
+        ],
+      })).split("\n")[0]!);
+      expect(result.framed?.some((f: { mediaId: string }) => f.mediaId === "photo")).toBe(true);
+      expect(photoReads).toEqual([]);
+    } finally { await c.close(); }
+  });
+
   it("saves a stretch as one edit in the agent's words, and a second framing of it as that edit revised", async () => {
     let saves = 0;
     const others = mock.state.extra!;
@@ -809,6 +864,16 @@ describe("hand_off", () => {
       expect(told.map(r => (r.body as { text: string }).text)).toEqual(["Handed motion graphics to gemini-3-pro."]);
     } finally { await c.close(); }
   });
+  it("doesn't say the work was handed over again when a resumed run asks after a hand-off it already started", async () => {
+    mock.state.extra = (req, res) => req.path === "/projects/prj_test/hand-off"
+      ? reply(res, { state: "done", handoffId: "hand-task", summary: "Saved chg_1.", changeIds: ["chg_1"], by: { agent: "gemini", model: "gemini-3-pro" } }) : false;
+    // A run that carries on after a restart is a new session: it knows the hand-off only by its id.
+    const c = await connect({ taskId: edit.id, task: edit, taskModels: offers });
+    try {
+      expect(JSON.parse(textOf(await ok(c, "hand_off", { handoffId: "hand-task" })))).toMatchObject({ saved: ["chg_1"] });
+      expect(mock.requests.filter(r => r.path.endsWith("/tasks/edit-task/events")).map(r => (r.body as { text?: string }).text)).toEqual([]);
+    } finally { await c.close(); }
+  });
   it("is offered only to a request with work given to another model, and a hand-off can't ask the editor or hand off again", async () => {
     const sessions = [await connect({ taskId: edit.id, task: edit }), await connect({ taskId: helper.id, task: helper, taskModels: offers })];
     try {
@@ -860,6 +925,19 @@ describe("listen", () => {
       expect(hears).toContain("source_audio");
       expect(agyThirdParty).toContain("listen");
       expect(agyThirdParty).not.toContain("source_audio");
+    } finally { await Promise.all(sessions.map(c => c.close())); }
+  });
+  it("is offered to work handed to a model that can't hear, by the same rule: only with a listener signed in", async () => {
+    const handOff = Task.parse({ ...base, id: "hand-off-task", kind: "hand_off", instruction: "Cut the dialogue",
+      context: { checksTaskId: edit.id, handOff: { typeId: "cutting", name: "Cutting", brief: "Cut the dialogue" } } });
+    const sessions = [
+      await connect({ taskId: handOff.id, task: handOff, listener: { agent: "gemini" } }),
+      await connect({ taskId: handOff.id, task: handOff }),
+    ];
+    try {
+      const [withListener, none] = await Promise.all(sessions.map(async c => (await c.listTools()).tools.map(t => t.name)));
+      expect(withListener).toContain("listen");
+      expect(none).not.toContain("listen");
     } finally { await Promise.all(sessions.map(c => c.close())); }
   });
   it("gives the run that listens the passage as a file and nothing else", async () => {
@@ -962,9 +1040,9 @@ describe("review notes", () => {
 describe("tool annotations", () => {
   // Every tool that saves an edit, a recommendation, a file or a message to the editor. A harness may retry or
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
-  const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
+  const writes = ["timeline_propose", "timeline_first_cut", "timeline_sync_multicam", "timeline_switch_cameras", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
     "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "hand_off", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
-    "graphic_render", "style_guide_save", "transcript_fix"];
+    "graphic_render", "style_guide_save", "style_guide_update", "style_guide_preview_render", "style_guide_sound_import", "transcript_fix"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);
 
   it("gives every tool an input schema a harness can convert: no array that lists an item per position", async () => {
@@ -1054,9 +1132,10 @@ describe("tool annotations", () => {
   it("registers each tool with its annotation", async () => {
     const task = Task.parse({ id: "skill-task", state: "running", projectId: "prj_test", kind: "skill_edit", agent: "codex", instruction: "Shorter pauses",
       context: { skillId: "skl_1" }, hostId: "host_a", createdBy: { type: "human", name: "Editor" } });
+    const styleGuideTask = Task.parse({ ...task, id: "style-guide-task", kind: "style_guide_edit", instruction: "Warm editorial look", context: { styleGuideId: "sg_1" } });
     const check = Task.parse({ ...task, id: "check-task", kind: "learning_check", context: { checksTaskId: "asked-task" } });
     const edit = Task.parse({ ...task, id: "edit-task", kind: "edit", instruction: "Add B-roll", context: {} });
-    const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: check.id, task: check }),
+    const sessions = [await hearing(), await connect({ agent: "codex", taskId: task.id, task }), await connect({ agent: "codex", taskId: styleGuideTask.id, task: styleGuideTask }), await connect({ agent: "codex", taskId: check.id, task: check }),
       await connect({ agent: "codex", taskId: edit.id, task: edit }), await connect({ taskId: edit.id, task: edit, listener: { agent: "gemini" },
         taskModels: [{ id: "motion-graphics", name: "Motion graphics", by: { agent: "gemini" } }] })];
     try {
@@ -1305,7 +1384,12 @@ describe("what goes to stderr when a read fails and the tool answers without it"
       const saved = JSON.parse((result.content[0] as { text: string }).text);
       expect(saved).toMatchObject({ continueFrom: "applied" });
       expect(saved).not.toHaveProperty("keptSilences");
-      expect(logged()).toEqual(["[scarlet-mcp] failed to place the kept silences on applied: Scarlet server error 500 (engine_error): The database is busy."]);
+      // The extra readings the receipt goes on without say why on stderr too, but only the kept silences are measured.
+      expect([...logged()].sort()).toEqual([
+        "[scarlet-mcp] failed to find the short pieces left in the part on applied: Scarlet server error 500 (engine_error): The database is busy.",
+        "[scarlet-mcp] failed to place the kept silences on applied: Scarlet server error 500 (engine_error): The database is busy.",
+        "[scarlet-mcp] failed to read the words heard only in the part on applied: Scarlet server error 500 (engine_error): The database is busy.",
+      ]);
       // The result says what it was answered without, so its silence about kept silences isn't read as none.
       expect(result.content.at(-1)).toEqual({ type: "text",
         text: "Not measured: failed to place the kept silences on applied (Scarlet server error 500 (engine_error): The database is busy.)." });

@@ -19,7 +19,7 @@ export const LEFT_OF_STAGED_CUT = 0.15;
  * What to do with a finding about a call the editor holds. The same pass asked "Scarlet has locked edit 5 for your
  * review. May I revise it…?" about a call that already waited on the editor's Approve, Skip and Revise (2026-11-16).
  */
-export const CALL_WITH_EDITOR = "The editor decides this call with Approve, Skip or Revise, so don’t ask them about it with task_question. "
+export const CALL_WITH_EDITOR = "The editor decides this call with Keep, Reject edit or Revise, so don’t ask them about it with task_question. "
   + "If they should know something before deciding, add it to the call’s note with dialogue_review_save and amend:true on that cut.";
 
 export function authorFor(user: User, override?: Partial<Author>): Author {
@@ -114,13 +114,12 @@ export function authorsAgent(ctx: Ctx, author: Author): { agent: AgentId; model?
 }
 
 /**
- * A staged cut as the engine's tools number it (its index, from 0) and, once it is a call, as the editor knows it
- * ("Cut 4"). A pass told only "cut 4 … is with the editor" asked the editor about "edit 5", while the window called it
- * Cut 4 (2026-11-16).
+ * A staged cut as the engine's tools number it (its index, from 0) and, once it is a call, that it is one. The editor
+ * never sees a number: the window names a call by its time ("Cut at 2:47"), so Scarlet speaks of it by its time too.
+ * A pass told only "cut 4 … is with the editor" asked the editor about "edit 5" (2026-11-16).
  */
 export function editorsCut(change: Change, index: number): string {
-  const n = callNumbers(change, 0, false).get(index);
-  return n ? `cut ${index} (the editor’s “Cut ${n}”)` : `cut ${index}`;
+  return callNumbers(change, 0, false).has(index) ? `cut ${index} (one of the editor’s calls, which they know by its time)` : `cut ${index}`;
 }
 
 export const capitalized = (words: string) => words.charAt(0).toUpperCase() + words.slice(1);

@@ -8,7 +8,7 @@ import { hasInitialTimeline, newId, ProjectSettings, videoFormat, type MediaAsse
 import { engineIsAlive, type Ctx } from "../context.js";
 import { readMissingColors } from "./mediaColor.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
-import { logId } from "../logText.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import type { MediaWithStatus } from "../repo/projects.js";
 import type { importTranscriptionPolicy } from "../transcribe/index.js";
 import { errorMessage, sameStamp } from "../util.js";
@@ -198,7 +198,15 @@ export async function ingestMedia(
     const deadline = AbortSignal.timeout(URL_IMPORT_TIMEOUT_MS);
     const downloadSignal = AbortSignal.any([signal, deadline]);
     const timeout = () => new HttpError(408, "download_timed_out", "This URL import exceeded six hours. Download the recording locally and add the file.");
+    // The address itself stays out of the log: its query can carry a share token.
+    const began = performance.now();
+    const ids = `media=${logId(mediaId)} project=${logId(project.id)}`;
+    // A file system message names the library's path, so an error with a code is logged by its code.
+    const why = (error: unknown) => deadline.aborted ? "timed out" : clientSignal?.aborted ? "cancelled" : signal.aborted ? "stopped"
+      : error instanceof HttpError ? `${error.code}: ${clip(error.message)}`
+      : typeof (error as NodeJS.ErrnoException | undefined)?.code === "string" ? (error as NodeJS.ErrnoException).code! : clip(errorMessage(error));
     const res = await downloadImport(new URL(url), downloadSignal).catch(error => {
+      ctx.log(`[ingest] url import ${ids} couldn't start after ${humanDuration(performance.now() - began)}: ${why(error)}`);
       if (deadline.aborted) throw timeout();
       if (clientSignal?.aborted) throw cancelled();
       // A lookup, connection, certificate or timeout failure is about the address, not a fault in the engine.
@@ -206,12 +214,18 @@ export async function ingestMedia(
       throw badRequest("download_failed", `Couldn’t download that URL: ${errorMessage(error)}`);
     });
     const partial = join(mediaDir, `.${mediaId}.part`);
+    let received = 0;
+    async function* counted(chunks: AsyncIterable<Buffer>) {
+      for await (const chunk of chunks) { received += chunk.byteLength; yield chunk; }
+    }
     try {
       if (!opts.name) name = filenameFromResponse(res.headers["content-disposition"], url);
-      hash = await writeHashedFile(partial, downloadChunks(mediaDir, res, ctx.options.env ?? process.env), downloadSignal);
+      hash = await writeHashedFile(partial, counted(downloadChunks(mediaDir, res, ctx.options.env ?? process.env)), downloadSignal);
       downloadSignal.throwIfAborted();
       await rename(partial, join(mediaDir, mediaId + safeExt(name)));
+      ctx.log(`[ingest] url import ${ids} downloaded ${received} bytes in ${humanDuration(performance.now() - began)}`);
     } catch (error) {
+      ctx.log(`[ingest] url import ${ids} stopped after ${humanDuration(performance.now() - began)} and ${received} bytes: ${why(error)}`);
       if (deadline.aborted) throw timeout();
       if (clientSignal?.aborted) throw cancelled();
       throw error;
@@ -224,11 +238,13 @@ export async function ingestMedia(
       if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
       throw error;
     });
+    if (info?.isDirectory()) throw badRequest("path_is_directory", `${basename(source.path)} is a folder`);
     if (!info?.isFile()) throw badRequest("path_not_found", `no file at ${source.path}`);
     if (!opts.name) name = basename(source.path);
     const destination = join(mediaDir, mediaId + safeExt(name));
     // The project owns an independent file: a clone where the disk allows it, a throttled copy otherwise.
-    await cloneOrSteadyCopy(source.path, destination, signal);
+    await cloneOrSteadyCopy(source.path, destination, signal,
+      { log: line => ctx.log(`[ingest] file import media=${logId(mediaId)} project=${logId(project.id)}: ${line}`) });
     const { importId } = source;
     if (importId && info.size > 0) {
       let lastReport = -Infinity;
@@ -350,9 +366,11 @@ async function ingestInBackground(ctx: Ctx, projectId: string, asset: MediaAsset
   let preparation = asset.preparation;
   const publish = ctx.db.transaction((status: MediaWithStatus["status"], preparation?: MediaAsset["preparation"], error?: string) => {
     // A manual transcription can finish while the proxy is being built, and the recording's voice roles or audio track can be saved.
+    // So can the editor's note on the file, and the page a graphic was drawn from.
     const current = ctx.repos.projects.getMedia(asset.id);
     const media = ctx.repos.projects.putMedia(projectId, { ...asset, transcriptId: current?.transcriptId,
       lastTranscription: current?.lastTranscription, voiceRoles: current?.voiceRoles,
+      editorNote: current?.editorNote, graphic: current?.graphic ?? asset.graphic,
       audioTrack: current?.audioTrack, audioStreams: current?.audioStreams ?? asset.audioStreams, preparation }, status, error);
     ctx.bus.publish({ type: "media.updated", projectId, media });
     return media;
@@ -390,10 +408,12 @@ async function ingestInBackground(ctx: Ctx, projectId: string, asset: MediaAsset
         signal.throwIfAborted();
         const { size, mtimeMs, ctimeMs } = await stat(src);
         const report = reportStage("fingerprint");
+        const hashing = performance.now();
         asset.hash = await ctx.render.hashFile(src, bytes => report(size ? bytes / size : 1), signal);
         const latest = await stat(src);
         if (!sameStamp(latest, { size, mtimeMs, ctimeMs })) throw new Error("Source changed while fingerprinting. Reimport the recording.");
         asset.fingerprintStamp = { size, mtimeMs, ctimeMs };
+        ctx.log(`[ingest] ${logId(asset.id)} fingerprinted ${size} bytes in ${humanDuration(performance.now() - hashing)}`);
       })();
       hashQueue.set(ctx, Promise.all([previous, job.catch(() => {})]).then(() => {}));
       await job;
@@ -405,9 +425,11 @@ async function ingestInBackground(ctx: Ctx, projectId: string, asset: MediaAsset
       onProgress(0);
       // The editor can pick the recording's audio track while it is added: the preview plays the one chosen.
       const heard = ctx.repos.projects.getMedia(asset.id) ?? asset;
+      const previewing = performance.now();
       await ctx.render.makeProxy(src, proxy, { height, audioTrack: heard.audioTrack, onProgress, signal,
         onFallback: stage => ctx.log(`[media] proxy_fallback media=${logId(asset.id)} project=${logId(projectId)} height=${height} stage=${stage}`),
       });
+      ctx.log(`[ingest] ${logId(asset.id)} preview made at ${height}p in ${humanDuration(performance.now() - previewing)}`);
       previewTrack = heard;
     }
     signal.throwIfAborted();
@@ -420,6 +442,7 @@ async function ingestInBackground(ctx: Ctx, projectId: string, asset: MediaAsset
   } catch (e) {
     if (signal.aborted) {
       ctx.db.prepare("UPDATE media SET ingest_pid = NULL WHERE id = ? AND status = 'ingesting' AND ingest_pid = ?").run(asset.id, process.pid);
+      ctx.log(`[ingest] ${logId(asset.id)} preparation stopped at ${preparation?.stage ?? "start"} and stays unfinished until its project's media work goes on`);
       return;
     }
     const message = errorMessage(e);

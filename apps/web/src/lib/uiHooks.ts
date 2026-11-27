@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type RefObject } from "react";
+import { appLog } from "./appLog";
 import { IS_DESKTOP } from "./client";
 import { dropTargets, fileDropZone } from "./dropTargets";
 import { isComposing, isInEditableElement } from "./hotkeys";
@@ -22,6 +23,17 @@ export function useClippedExpand<T extends HTMLElement = HTMLParagraphElement>(t
   return { ref, clipped, open, opens: clipped || open, toggle: () => setOpen(v => !v) };
 }
 
+/** True when `target` is inside `container` or a portaled popup owned by an expanded control inside it. */
+function withinPopover(container: HTMLElement | null, target: Node | null): boolean {
+  if (!container || !target) return false;
+  if (container.contains(target)) return true;
+  for (const opener of container.querySelectorAll<HTMLElement>('[aria-expanded="true"][aria-controls]')) {
+    const popupId = opener.getAttribute("aria-controls");
+    if (popupId && document.getElementById(popupId)?.contains(target)) return true;
+  }
+  return false;
+}
+
 /** Dismisses a popover on outside pointer/focus or Escape (returning focus to its trigger on Escape). */
 export function usePopoverDismiss(
   open: boolean,
@@ -34,10 +46,12 @@ export function usePopoverDismiss(
   useEffect(() => {
     if (!open) return;
     const dismissOutside = (event: Event) => {
-      if (!containerRef.current?.contains(event.target as Node)) dismissRef.current();
+      if (!withinPopover(containerRef.current, event.target as Node | null)) dismissRef.current();
     };
     const dismissEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || isComposing(event)) return;
+      // An expanded child picker (such as PreferenceSelect) consumes this Escape to close its own list first.
+      if (containerRef.current?.querySelector('[role="combobox"][aria-expanded="true"]')) return;
       event.preventDefault();
       event.stopPropagation();
       dismissRef.current();
@@ -85,7 +99,7 @@ export function useFloatingPosition(
 export function useBeforeUnloadGuard(active: boolean) {
   useEffect(() => {
     if (!active) return;
-    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    const warn = (e: BeforeUnloadEvent) => { appLog("window", "unload-blocked"); e.preventDefault(); e.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [active]);

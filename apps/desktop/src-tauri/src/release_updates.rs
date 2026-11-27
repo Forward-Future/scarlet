@@ -63,6 +63,16 @@ struct Inner {
     failed: Option<(String, u32, Instant)>,
     /// The editor chose Restart to update on Windows, where the release installs as Scarlet exits.
     relaunch: bool,
+    /// What the last periodic check said in the log, so a check every few minutes writes only what changed.
+    noted: Option<String>,
+}
+
+/// Log what a periodic check found when it differs from what the last one said.
+fn note(inner: &mut Inner, line: String) {
+    if inner.noted.as_deref() != Some(line.as_str()) {
+        log::info!("{line}");
+        inner.noted = Some(line);
+    }
 }
 
 #[derive(Default)]
@@ -121,21 +131,34 @@ async fn check(app: &AppHandle) -> Result<Option<String>, String> {
     let updates = app.state::<ReleaseUpdates>();
     let _one = updates.checking.lock().await;
     let found = app.updater().map_err(|e| format!("no updater: {e}"))?.check().await.map_err(|e| format!("check failed: {e}"))?;
-    let Some(update) = found else { return Ok(None) };
+    let Some(update) = found else {
+        note(&mut updates.inner.lock().unwrap(), format!("release update: none newer than {}", app.package_info().version));
+        return Ok(None);
+    };
     let version = update.version.clone();
     if let Some(ready) = updates.status().ready {
         if ready.parse::<semver::Version>().ok() >= version.parse::<semver::Version>().ok() {
+            note(&mut updates.inner.lock().unwrap(), format!("release update: found {version}; {ready} is already ready to install"));
             return Ok(Some(ready));
         }
     }
     {
         let mut inner = updates.inner.lock().unwrap();
         if waits(&inner.failed, &version, Instant::now()) {
+            let failures = inner.failed.as_ref().map_or(0, |(_, failures, _)| *failures);
+            let line = format!(
+                "release update: found {version}; skipped for now, its download failed {failures} time(s) in a row (waits up to {} between tries)",
+                crate::util::human_duration(retry_after(failures))
+            );
+            note(&mut inner, line);
             return Ok(None);
         }
         inner.downloading = Some((version.clone(), 0, None));
+        // The download writes its own lines. Whatever the next check finds is news again.
+        inner.noted = None;
     }
     log::info!("release update: downloading {version} (running {})", update.current_version);
+    let started = Instant::now();
     let progress = updates.inner.clone();
     // The package is checked against the release's signature before it comes back.
     let downloaded = update.download(move |chunk, total| {
@@ -144,7 +167,9 @@ async fn check(app: &AppHandle) -> Result<Option<String>, String> {
             *size = total;
         }
     }, || {}).await;
-    let kept = downloaded.map_err(|e| format!("download of {version} failed: {e}")).and_then(|bytes| keep(&bytes));
+    let took = crate::util::human_duration(started.elapsed());
+    let size = downloaded.as_ref().map_or(0, Vec::len);
+    let kept = downloaded.map_err(|e| format!("download of {version} failed after {took}: {e}")).and_then(|bytes| keep(&bytes));
     let mut inner = updates.inner.lock().unwrap();
     inner.downloading = None;
     let file = match kept {
@@ -162,7 +187,7 @@ async fn check(app: &AppHandle) -> Result<Option<String>, String> {
     // The release on offer until now gives way to the newer one.
     if !inner.installing {
         inner.ready = Some((update, file));
-        log::info!("release update: {version} is ready to install");
+        log::info!("release update: {version} is ready to install (downloaded {size} bytes in {took})");
     }
     Ok(Some(version))
 }
@@ -195,7 +220,10 @@ pub async fn check_now(app: &AppHandle) -> Result<Option<String>, String> {
         Some(version) => {
             let here = inner.ready.as_ref().is_some_and(|(update, _)| update.version == version)
                 || inner.downloading.as_ref().is_some_and(|(downloading, _, _)| *downloading == version);
-            if !here {
+            if here {
+                log::info!("release update: check asked from Settings found {version}, already here");
+            } else {
+                log::info!("release update: check asked from Settings found {version}; downloading it");
                 // The editor asked: a release that failed before downloads again now.
                 inner.failed.take_if(|(failed, _, _)| *failed == version);
                 updates.wake.notify_one();
@@ -203,7 +231,14 @@ pub async fn check_now(app: &AppHandle) -> Result<Option<String>, String> {
             Ok(Some(version))
         }
         // The manifest has nothing newer than this version, though one may already be here from earlier.
-        None => Ok(inner.ready.as_ref().map(|(update, _)| update.version.clone())),
+        None => {
+            let ready = inner.ready.as_ref().map(|(update, _)| update.version.clone());
+            match &ready {
+                Some(ready) => log::info!("release update: check asked from Settings found nothing newer; {ready} is ready to install"),
+                None => log::info!("release update: check asked from Settings found none newer than {}", app.package_info().version),
+            }
+            Ok(ready)
+        }
     }
 }
 
@@ -232,12 +267,14 @@ pub fn restart(app: &AppHandle, version: &str) -> Result<(), String> {
         app.exit(0);
         return Ok(());
     }
+    let started = Instant::now();
     let installed = install(update, &file);
     if let Err(error) = installed {
         log::error!("release update: installing {version} failed: {error}");
         updates.inner.lock().unwrap().installing = false;
         return Err("Couldn’t install the update. Try again, or quit Scarlet to install it.".into());
     }
+    log::info!("release update: installed {version} in {}; restarting", crate::util::human_duration(started.elapsed()));
     // The exit stops the host and engine, then the new version opens in this one's place.
     app.request_restart();
     Ok(())

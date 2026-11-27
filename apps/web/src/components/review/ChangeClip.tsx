@@ -3,6 +3,7 @@ import type { Render } from "@scarlet/shared";
 import { planPlaybackSegments, type Change, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { api, errorMessage, IS_MOCK } from "../../lib/client";
 import { openCutStream, playbackLoader } from "../../lib/cutStream";
+import { player } from "../../lib/player";
 import { logPlayRefusal, playbackLog } from "../../lib/playbackLog";
 import { ignorePageShortcut } from "../../lib/hotkeys";
 import { pct } from "../../lib/format";
@@ -11,6 +12,7 @@ import { usePlayerStore } from "../../stores/player";
 import { Progress, Spinner } from "../ui/primitives";
 import { MonitorPlayback, PlaybackTime } from "../player/MonitorPlayback";
 import { FramedVideo } from "../player/FramedVideo";
+import { ReportLink } from "../shell/ReportLink";
 
 const REVIEW_WINDOW_SECONDS = 10;
 
@@ -33,7 +35,10 @@ function Overlay({ render, label, loading, error, retry }: {
         <>
           <span className="text-bad font-medium">The {label.toLowerCase()} clip failed to render</span>
           <span className="text-muted max-w-sm break-words">{error ?? render?.error}</span>
-          {retry && <button className="btn-ghost" onClick={retry}>Retry preview</button>}
+          <div className="flex gap-2">
+            {retry && <button className="btn-ghost" onClick={retry}>Retry preview</button>}
+            <ReportLink about={`The ${label.toLowerCase()} clip failed to render${(error ?? render?.error) ? `: ${error ?? render?.error}` : ""}`} />
+          </div>
         </>
       ) : (
         <>
@@ -192,7 +197,10 @@ export function ChangeClip({ change, active = true, loading, clock: pageClock, p
     if (el.paused) {
       if (cursor.current >= lastFrame) seek(rangeStart);
       play(el);
-    } else el.pause();
+    } else {
+      el.pause();
+      player.resetRateOnPause();
+    }
   }
   function position() {
     const el = video.current;

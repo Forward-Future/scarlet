@@ -3,9 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { fileInDirectory, heardAudio, heardAudioKey, speechActivityOf, speechActivityStart, type HeardAudio } from "@scarlet/render";
-import type { DialogueDetections, ServerSettings } from "@scarlet/shared";
+import { isHandOff, type DialogueDetections, type ServerSettings } from "@scarlet/shared";
 import type { MediaAsset, TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
+import { clip, humanDuration, logId, throttledLog } from "../logText.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { UhmDetector } from "../transcribe/uhm.js";
 import { getTranscriptionProvider } from "../transcribe/index.js";
@@ -101,6 +102,8 @@ export function sharedDialogueDetector(ctx: Ctx) {
 /** First-cut-only evidence, kept separate from the editor's transcript and captions. */
 export function dialogueDetector(ctx: Ctx) {
   const uhm = new UhmDetector(join(ctx.paths.root, "models"));
+  /** The other voice's input fails the same way on every page of a recording: logged once a minute for each. */
+  const voiceRoleFailures = throttledLog(line => ctx.log(line));
   // SQLite owns completed pages. Share in-flight work and run one cold window at a time.
   const acousticWindows = new AnalysisCache<DialogueDetections>(() => 0, 0, 1);
   const keptWindows = new AnalysisCache<DialogueDetections>(r => r.segments.reduce((n, s) => n + 100 * s.words.length, 0), 2 * 1024 * 1024);
@@ -112,8 +115,8 @@ export function dialogueDetector(ctx: Ctx) {
   const unalignedPages = new WeakSet<DialogueDetections>();
   function scanEdit(projectId: string, taskId: string, startedAt?: string): ScanEdit {
     const owner = ctx.repos.tasks.get(taskId);
-    // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does.
-    if (!owner || owner.projectId !== projectId || !editsDialogue(owner.kind)) throw notFound("edit in this project");
+    // A request sent about a point is a note and one sent back is a revision. Both edit, as a whole request does, and a hand-off does a request's cutting, so it scans as the request would.
+    if (!owner || owner.projectId !== projectId || !(editsDialogue(owner.kind) || isHandOff(owner))) throw notFound("edit in this project");
     return { taskId, startedAt: startedAt ?? owner.startedAt };
   }
   function activeEdit(edit: ScanEdit) {
@@ -205,7 +208,9 @@ export function dialogueDetector(ctx: Ctx) {
     // recording's speakers as its own page would, and reads the page itself only if that one stops, as the pause stops it.
     const ahead = edit && policy.settings.provider !== "openai" ? pending.get(JSON.stringify([...params, keptSide, false])) : undefined;
     if (ahead) {
-      void ctx.track(ctx.speakers.turns(ctx, projectId, media, undefined, true).catch(() => {}), projectId);
+      void ctx.track(ctx.speakers.turns(ctx, projectId, media, undefined, true).catch(error => {
+        if (!ctx.mediaSignal(projectId).aborted) ctx.log(`[dialogue] speaker-turns-failed media=${logId(media.id)} project=${logId(projectId)} ${error instanceof Error ? error.message : String(error)}`);
+      }), projectId);
       const ready = ahead.ready.catch(() => openPage(projectId, media, from, to, edit, policy, keptSide).then(page => page.ready));
       return { analyzed: ready, ready, work: ahead.work };
     }
@@ -256,7 +261,12 @@ export function dialogueDetector(ctx: Ctx) {
       // The page's minute, its speech detection and any emissions its alignment lacks all come from one decode of
       // the recording, shared with the pages before and after it.
       const recording = await recordingWav(ctx, file, signal, pageAudio(media, stream));
+      const hasWindowSamples = (samples: number, start: number, end: number) =>
+        samples === 0 || (Math.round(start * SAMPLE_RATE) < samples && Math.round(end * SAMPLE_RATE) > Math.round(start * SAMPLE_RATE));
       try {
+        if (!hasWindowSamples(recording.samples, from, to)) {
+          return keptSide ? { acoustic: [], segments: [] } : { segments: [], acoustic: [], speechActivity: [] };
+        }
         await recording.writeWindow(wav, from, to);
         if (keptSide) {
           const speech = await inWhisperLane(() => transcribeWindow(wav));
@@ -316,9 +326,9 @@ export function dialogueDetector(ctx: Ctx) {
               // The other voice's minute comes from one decode of its track, shared with the pages before and after it,
               // as the page's own does: cut from the source, each page of a long recording took ffmpeg most of a second.
               const other = await recordingWav(ctx, file, signal, { audioTrack: roles.other - 1 });
-              try { await other.writeWindow(wav, from, to); } finally { other.release(); }
-              const isolated = await inWhisperLane(() => transcribeWindow(wav));
-              const words = isolated.segments.flatMap(s => s.words);
+              const otherHasAudio = hasWindowSamples(other.samples, from, to);
+              try { if (otherHasAudio) await other.writeWindow(wav, from, to); } finally { other.release(); }
+              const words = otherHasAudio ? (await inWhisperLane(() => transcribeWindow(wav))).segments.flatMap(s => s.words) : [];
               result.otherVoiceTurns = turns.map(turn => ({ ...turn, text: words.filter(w => {
                 const mid = from + (w.start + w.end) / 2;
                 return mid >= turn.start - .12 && mid < turn.end + .12;
@@ -326,6 +336,7 @@ export function dialogueDetector(ctx: Ctx) {
             }
           } catch (err) {
             signal.throwIfAborted();
+            voiceRoleFailures(media.id, `[dialogue] ${media.id} ${from}-${to}: couldn't read the other voice's input: ${clip(err instanceof Error ? err.message : String(err))}`);
             result.voiceRoleIssue = (err as Error).message;
           }
         }
@@ -448,12 +459,15 @@ export function dialogueDetector(ctx: Ctx) {
       let failure: Error | undefined;
       /** The scan has analysed a page and seen it labelled, so later pages run ahead of their labels. */
       let ahead = false;
+      const began = Date.now();
+      let read = 0, reused = 0, stoppedEarly = false;
       try {
         for (let start = from; start < end;) {
           const to = Math.min(end, start + 60);
           if (pages.get(start) !== to) {
-            if (failure || dropped || !currentEdit()) break;
+            if (failure || dropped || !currentEdit()) { stoppedEarly = true; break; }
             const page = await openPage(projectId, media, start, to, edit, policy);
+            read++;
             const pageStart = start;
             const reported = page.ready.then(result => {
               if (!currentEdit() || failure) return;
@@ -473,12 +487,14 @@ export function dialogueDetector(ctx: Ctx) {
             }
             ahead = true;
             if (labeling.size >= 64) await Promise.race(labeling);
-          }
+          } else reused++;
           if (to === end) break;
           start = to - 2;
         }
       } finally { await Promise.all(labeling); }
       if (failure) throw failure;
+      // One line a scan: how much was read now and how much was saved already.
+      if (read) ctx.log(`[dialogue-scan] ${media.id}${announced ? "" : " (ahead of the pass)"}: ${taskId} read ${read} page${read === 1 ? "" : "s"} in ${humanDuration(Date.now() - began)}, ${reused} saved already${stoppedEarly ? "; stopped early" : ""}`);
     }
     const done = ctx.track(scan().catch(err => {
       const task = currentEdit();

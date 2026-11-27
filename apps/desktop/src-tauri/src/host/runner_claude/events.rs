@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 use super::plan::{flatten_tool_result, plan_call, plan_change, plan_result};
 use super::ClaudeState;
 use crate::host::runner::parse_json_object;
-use crate::host::types::{brief, brief_input, compacting_event, compaction_ended_event, is_question_tool, pretty_tool_name, prune_nulls, question_words, value_text, RunnerEvent};
+use crate::host::types::{brief, brief_input, compacting_event, compaction_ended_event, is_question_tool, pretty_tool_name, prune_nulls, question_words, tool_call_target, value_text, RunnerEvent};
 use crate::host::usage::claude_usage;
 
 /// A compaction Claude Code reports once it has happened: what set it off and the context's size before and after.
@@ -114,7 +114,13 @@ pub fn parse_claude_line(line: &str, st: &mut ClaudeState) -> Vec<RunnerEvent> {
                     } else if btype == "tool_use" {
                         let id = block.get("id").map(value_text).unwrap_or_default();
                         let name = block.get("name").map(value_text).unwrap_or_default();
-                        let input = block.get("input");
+                        // A run with brief tools (Ollama, LM Studio, OpenRouter) reaches most tools through
+                        // `tool_call`: the call it makes is what the run did, named as Claude Code names that tool.
+                        let through = tool_call_target(&name, block.get("input"));
+                        let (name, input) = match &through {
+                            Some((tool, arguments)) => (format!("mcp__scarlet__{tool}"), Some(arguments)),
+                            None => (name, block.get("input")),
+                        };
                         let pretty = pretty_tool_name(&name);
                         let question = question_words(input);
                         if plan_call(&mut st.plan, &name, &id, input) {

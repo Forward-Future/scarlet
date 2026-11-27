@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { appLog, errorName } from "../../lib/appLog";
 import { desktop } from "../../lib/desktop";
+import { ReportLink } from "./ReportLink";
 
 export function StartupRecovery({ title, detail, showLogs = false }: { title: string; detail: string; showLogs?: boolean }) {
   const [feedback, setFeedback] = useState("");
@@ -18,7 +20,8 @@ export function StartupRecovery({ title, detail, showLogs = false }: { title: st
     try {
       await navigator.clipboard.writeText(`${title}\n${detail}`);
       setFeedback("Diagnostics copied.");
-    } catch {
+    } catch (error) {
+      appLog("error", "clipboard", { what: "diagnostics", name: errorName(error) }, { level: "warn" });
       setFeedback("Select the error message above and copy it manually.");
     }
   }
@@ -29,6 +32,7 @@ export function StartupRecovery({ title, detail, showLogs = false }: { title: st
         <h1 className="text-lg font-semibold">{title}</h1>
         <p role="status" className="text-muted whitespace-pre-wrap break-words select-text">{detail}</p>
         <div className="flex flex-wrap gap-2">
+          <ReportLink className="btn-primary" label="Report a problem" about={`${title}: ${detail}`} />
           {showLogs && <button className="btn-ghost" onClick={openLogs}>Open logs</button>}
           <button className="btn-ghost" onClick={copyDiagnostics}>Copy diagnostics</button>
         </div>

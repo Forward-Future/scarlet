@@ -7,6 +7,9 @@
 [data-new-layout] .composer-aim-row { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
 [data-new-layout] .composer-aim-row:empty { display: none; }
 [data-new-layout] .composer-aim-rowcopy { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+/* Keep the amber timestamp pill unclipped inside .composer-aim-name's overflow: hidden box (list rows use negative margins to align digits). */
+[data-new-layout] .composer-aim-row .simple-pass-time { flex: none; white-space: nowrap; }
+[data-new-layout] .composer-aim-row .simple-pass-time.is-need { margin: 0; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row:not(:empty)) .composer-aim-plain { display: none; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row:empty) .composer-aim-row-time { display: none; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row .edit-row-time),
@@ -15,9 +18,6 @@
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row .simple-pass-time) .composer-aim-row-time { display: none; }
 [data-new-layout] .composer-aim-row-time { flex: none; margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--color-dim); font-variant-numeric: tabular-nums; }
 [data-new-layout] .composer-aim-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-fg); }
-[data-new-layout] .composer-timestamp { border-radius: 3px; background: #3a3835; box-shadow: 0 0 0 2px #3a3835; color: var(--color-fg); }
-[data-new-layout] .composer-timestamp:hover,
-[data-new-layout] .composer-timestamp:focus-visible { background: #4a4743; box-shadow: 0 0 0 2px #4a4743; }
 
 [data-new-layout] .composer-ask { min-width: 0; margin-bottom: calc(-1 * var(--model-row-gap, 9px)); padding: 10px 12px 11px; border: 1px solid #4b3f2c; border-bottom: 0;
   border-radius: 12px 12px 0 0; background: #1b1915; }
@@ -79,32 +79,26 @@
 [data-new-layout] .unit-bubble,
 [data-new-layout] .simple-turn > .simple-msg.from-you,
 [data-new-layout] .req-say.is-yours { --bubble: #2a2a2a; }
-[data-new-layout] .unit-bubble { display: flex; max-width: 86%; min-width: 0; padding: 7px 12px; border-radius: 12px; background: var(--bubble); }
-[data-new-layout] .unit-msg .unit-bubble > p { color: var(--color-fg); }
+[data-new-layout] .unit-bubble { position: relative; display: flex; max-width: 86%; min-width: 0; padding: 7px 12px; border-radius: 12px; background: var(--bubble); }
+[data-new-layout] .unit > .unit-msg .unit-bubble > p,
+[data-new-layout] .simple-pin .unit > .unit-msg .unit-bubble > p { display: block; -webkit-line-clamp: unset; overflow: visible; color: var(--color-fg); }
 [data-new-layout] .unit-meta { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; max-width: 100%; }
 [data-new-layout] .unit-meta:not(:has(> :not(.unit-state:empty, .run-tokens.is-quiet))) { display: none; }
 [data-new-layout] .unit > .unit-msg.is-markable:hover { background: none; }
 [data-new-layout] .unit > .unit-msg.is-markable:hover .unit-bubble { background: #313131; }
-[data-new-layout] .unit-fold { position: absolute; top: 12px; left: -5px; margin: 0; opacity: 0; }
-[data-new-layout] .unit-msg:hover > .unit-fold,
-[data-new-layout] .unit-fold:focus-visible,
-[data-new-layout] .unit.is-collapsed .unit-fold { opacity: 1; }
-[data-new-layout] .unit > .unit-msg:not(.is-live, .is-marked) p,
-[data-new-layout] .simple-pin .unit > .unit-msg:not(.is-live, .is-marked) p { -webkit-line-clamp: 2; }
-[data-new-layout] .unit.is-collapsed > .unit-msg p,
-[data-new-layout] .simple-pin .unit.is-collapsed > .unit-msg p { -webkit-line-clamp: 1; }
-[data-new-layout] .simple-chat > .simple-turn:has(> .unit.is-collapsed:last-child) + .simple-turn:has(> .unit.is-collapsed:first-child) { margin-top: -10px; }
-[data-new-layout] .simple-turn > .unit.is-collapsed + .unit.is-collapsed { margin-top: -6px; }
-[data-new-layout] .unit:not(.is-collapsed):has(.simple-review-tab-count) > .unit-msg > .unit-meta > .unit-state:has(> .unit-dot) { display: none; }
+[data-new-layout] .unit:has(.simple-review-tab-count) > .unit-msg > .unit-meta > .unit-state:has(> .unit-dot) { display: none; }
 [data-new-layout] .unit-answer { flex: none; align-self: center; line-height: 19px; white-space: nowrap; }
-[data-new-layout] .unit > .unit-msg .run-tokens.is-quiet { top: auto; bottom: 0; right: 0; }
+[data-new-layout] .unit-bubble > .run-tokens.is-quiet { top: 0; bottom: 0; right: 0; }
+[data-new-layout] .unit-bubble > .run-tokens.is-quiet:focus-visible { top: calc(100% + 2px); bottom: auto; }
 [data-new-layout] .unit-meta > .unit-state:has(> .unit-dot) { height: 19px; }
 [data-new-layout] .simple-turn > .simple-msg.from-you { align-self: flex-end; max-width: 86%; padding: 7px 12px; border: 0; border-radius: 12px; background: var(--bubble); }
-[data-new-layout] .simple-turn > .simple-msg.from-you p { color: var(--color-fg); }
+[data-new-layout] .simple-turn > .simple-msg.from-you p { display: block; -webkit-line-clamp: unset; overflow: visible; color: var(--color-fg); }
 [data-new-layout] .simple-pin { border-top: 0; }
 [data-new-layout] .simple-pin > .unit > .unit-msg { padding-top: 8px; }
 [data-new-layout] .simple-pin:has(> .unit:not([hidden])) + .composer-dock { border-top: 0; padding-top: 9px; }
-[data-new-layout] .req-say.is-yours { width: fit-content; max-width: 86%; margin-left: auto; padding: 7px 12px; border-left: 0; border-radius: 12px; background: var(--bubble); color: var(--color-fg); }
+[data-new-layout] .req-say.is-yours { display: block; -webkit-line-clamp: unset; overflow: visible; width: fit-content; max-width: 86%; margin-left: auto; padding: 7px 12px; border-left: 0; border-radius: 12px; background: var(--bubble); color: var(--color-fg); }
+[data-new-layout] .req-say.said:not(.is-yours),
+[data-new-layout] .simple-msg.from-scarlet .said { -webkit-line-clamp: 3; }
 
 /* Numbered pass calls short list. */
 [data-new-layout] .simple-pass-list.is-short > li > .subunit { margin-left: 16px; padding-left: 16px; }
@@ -124,10 +118,10 @@
 [data-new-layout] .queue-row:hover,
 [data-new-layout] .queue-row:focus-within { background: none; color: inherit; }
 [data-new-layout] .queue-row.is-rewording { background: none; color: inherit; }
-[data-new-layout] .queue-bubble { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0; padding: 7px 12px; border-radius: 12px;
-  background: #2a2a2a; font-size: 13px; line-height: 1.45; color: var(--color-fg); overflow-wrap: anywhere; }
+[data-new-layout] .queue-bubble { display: block; -webkit-line-clamp: unset; overflow: visible; margin: 0; padding: 7px 12px; border-radius: 12px;
+  background: #2a2a2a; font-size: 13px; line-height: 1.45; color: var(--color-fg); white-space: pre-wrap; overflow-wrap: anywhere; }
 [data-new-layout] .queue-target { flex: none; margin-right: 7px; padding: 0 6px; border: 1px solid var(--color-line); border-radius: 4px; font-size: 12px; line-height: inherit; color: var(--color-muted); }
-[data-new-layout] .queue-text { flex: none; overflow: visible; text-overflow: clip; white-space: normal; }
+[data-new-layout] .queue-text { flex: none; overflow: visible; text-overflow: clip; white-space: inherit; }
 [data-new-layout] .queue-foot { display: flex; align-items: center; gap: 2px; min-height: 20px; }
 [data-new-layout] .queue-row:not(:hover, :focus-within, .is-rewording) .queue-foot:not(:has(.queue-next)) { min-height: 0; height: 0; overflow: hidden; }
 [data-new-layout] .queue-next { width: auto; margin-left: 4px; color: var(--color-dim); white-space: nowrap; }
@@ -140,35 +134,62 @@
 [data-new-layout] .queue-start { width: 20px; height: 20px; }
 [data-new-layout] .queue-row.is-rewording .queue-bubble { box-shadow: inset 0 0 0 1px var(--color-muted); }
 [data-new-layout] .queue-reword[aria-pressed="true"] { background: var(--color-line); color: var(--color-fg); }
+/* The same request in a row about several spots: one bubble, its tag a press away from each. */
+[data-new-layout] .queue-batch-open { display: inline; margin-left: 0; font: inherit; font-size: 12px; background: none; cursor: pointer; }
+[data-new-layout] .queue-batch-open:hover,
+[data-new-layout] .queue-batch-open:focus-visible { border-color: var(--color-muted); color: var(--color-fg); }
+[data-new-layout] .queue-batch-close { align-self: flex-end; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; color: var(--color-dim); cursor: pointer; }
+[data-new-layout] .queue-batch-close:hover,
+[data-new-layout] .queue-batch-close:focus-visible { color: var(--color-fg); }
 
 /* Three-column edits rail between the chat and the video. */
-[data-new-layout] .review-rail { display: flex; flex-direction: column; flex: none; width: clamp(260px, 22vw, 320px); min-height: 0; border-right: 1px solid var(--color-line); background: var(--color-bg); }
+[data-new-layout] .review-rail { position: relative; display: flex; flex-direction: column; flex: none; width: clamp(320px, 27vw, 400px); min-height: 0; border-right: 1px solid var(--color-line); background: var(--color-bg); }
 [data-new-layout] .review-rail[hidden] { display: none; }
-[data-new-layout] .review-rail-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 54px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--color-line); }
-[data-new-layout] .review-rail-head h2 { display: flex; align-items: baseline; gap: 7px; margin: 0; font-size: 13px; font-weight: 600; color: var(--color-fg); }
-[data-new-layout] .review-rail-count { font-weight: 500; color: var(--color-warn); font-variant-numeric: tabular-nums; }
+[data-new-layout] .review-rail-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 54px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--color-line); }
+[data-new-layout] .review-rail-head h2 { display: flex; align-items: baseline; gap: 6px; margin: 0; font-size: 13px; font-weight: 600; color: var(--color-fg); white-space: nowrap; }
+[data-new-layout] .review-rail-total { font-weight: 500; color: var(--color-dim); font-variant-numeric: tabular-nums; font-size: 12px; }
+[data-new-layout] .review-rail-sep { color: var(--color-dim); font-size: 12px; }
+[data-new-layout] .review-rail-count { font-weight: 500; color: var(--color-warn); font-variant-numeric: tabular-nums; font-size: 12px; }
+[data-new-layout] .review-head-keep { flex: none; height: 22px; padding: 0 2px; border: 0; border-radius: 5px; background: none; color: var(--color-muted);
+  font: inherit; font-size: 11.5px; font-weight: 400; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; white-space: nowrap; cursor: pointer; }
+[data-new-layout] .review-head-keep:is(:hover, :focus-visible) { color: var(--color-fg); text-decoration-color: var(--color-muted); }
 [data-new-layout] .review-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-[data-new-layout] .review-rail-list { padding: 8px 12px 12px; }
+[data-new-layout] .review-rail-list { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; column-gap: 8px; align-content: start; padding: 8px 12px 12px; }
+[data-new-layout] .review-rail-list:has(.has-hours) { grid-template-columns: 60px minmax(0, 1fr) auto; }
+[data-new-layout] .review-rail-list > * { grid-column: 1 / -1; }
+[data-new-layout] .review-rail-list > .review-tier-sep,
+[data-new-layout] .review-rail-list > .simple-review-empty { contain: inline-size; }
+[data-new-layout] .review-rail-list > .review-low-body:not([hidden]) { display: grid; grid-template-columns: subgrid; }
 [data-new-layout] .review-slot { display: contents; }
-[data-new-layout] .review-low { padding: 4px 12px 12px; }
-[data-new-layout] .review-low[hidden] { display: none; }
-[data-new-layout] .review-low-head { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 6px; border: 0; background: none; color: var(--color-dim);
-  font: inherit; font-size: 11.5px; font-weight: 500; text-align: left; cursor: pointer; }
-[data-new-layout] .review-low-head:is(:hover, :focus-visible) { color: var(--color-muted); }
-[data-new-layout] .review-low-head b { font-weight: 400; color: var(--color-dim); font-variant-numeric: tabular-nums; margin-left: 2px; }
-[data-new-layout] .review-low-row { position: relative; }
-[data-new-layout] .review-low-done { position: absolute; top: 3px; right: 24px; display: inline-flex; align-items: center; height: 20px; width: auto; padding: 0 5px; border: 0;
-  border-radius: 5px; background: none; color: var(--color-muted); font: inherit; font-size: 11.5px; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; cursor: pointer; }
-[data-new-layout] .review-low-done:is(:hover, :focus-visible) { color: var(--color-fg); text-decoration-color: var(--color-muted); }
-[data-new-layout] .review-low-done:focus-visible { outline: 2px solid var(--color-muted); outline-offset: 1px; }
-[data-new-layout] .review-low-head svg { margin-left: auto; color: var(--color-dim); transition: transform .14s ease; }
-[data-new-layout] .review-low-head[aria-expanded="true"] svg { transform: rotate(90deg); }
-@media (prefers-reduced-motion: reduce) { [data-new-layout] .review-low-head svg { transition: none; } }
+[data-new-layout] .review-rail :is(.simple-edits, .simple-pass-list) > li[data-flash] > button { background: rgba(255, 255, 255, .07); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2); }
+[data-new-layout] .review-tier-sep { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; margin: 10px 6px 5px; padding-top: 8px;
+  border-top: 1px solid var(--color-line); font-size: 11.5px; font-weight: 500; color: var(--color-dim); font-variant-numeric: tabular-nums; }
+[data-new-layout] .review-tier-sep.is-first { margin-top: 0; padding-top: 2px; border-top: 0; }
+[data-new-layout] .review-tier-sep.is-leaving { opacity: 0; transition: opacity .3s ease; }
+[data-new-layout] .review-tier-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; }
+[data-new-layout] .review-tier-toggle:is(:hover, :focus-visible), [data-new-layout] .review-tier-toggle[aria-expanded="true"] { color: var(--color-muted); }
+[data-new-layout] .review-tier-toggle svg { color: var(--color-dim); transition: transform .14s ease; }
+[data-new-layout] .review-tier-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  [data-new-layout] .review-tier-sep.is-leaving,
+  [data-new-layout] .review-tier-toggle svg { transition: none; }
+}
+[data-new-layout] .review-low-body[hidden] { display: none; }
 [data-new-layout] .review-low-body .simple-pass-list > li > button,
 [data-new-layout] .review-low-body .simple-edit { color: var(--color-muted); }
 [data-new-layout] .review-low-body :is(.simple-pass-value, .simple-edit-value, .simple-pass-time, .simple-pass-check, .simple-edit-check, .edit-version, .edit-row-time) { color: var(--color-dim); }
 [data-new-layout] .edit-row-time { flex: none; justify-self: start; min-width: 30px; font-size: 11.5px; line-height: 17px; font-family: var(--font-mono, monospace); font-variant-numeric: tabular-nums; color: var(--color-dim); }
-[data-new-layout] .review-rail .simple-edits > li > button { grid-template-columns: minmax(18px, max-content) minmax(0, 1fr) auto; }
+[data-new-layout] .edit-row-time.is-need { color: var(--color-warn); }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; column-gap: 8px; align-content: start; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits.has-hours { grid-template-columns: 60px minmax(0, 1fr) auto; }
+[data-new-layout] .review-rail-list .simple-pass-list.simple-edits { grid-template-columns: subgrid; grid-column: 1 / -1; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits > li > * { grid-column: 1 / -1; }
+[data-new-layout] .review-rail .simple-edits > li > button,
+[data-new-layout] .review-rail .simple-pass-list.simple-edits > li > button { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; width: 100%; margin: 0; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits > li > .simple-pass-list.is-moment { margin-left: 46px; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits.has-hours > li > .simple-pass-list.is-moment { margin-left: 60px; }
 [data-new-layout] .review-rail :is(.simple-edits, .simple-pass-list) > li:has(> button.is-asking) > .subunit { display: none; }
 [data-new-layout] .review-rail :is(.simple-edits, .simple-pass-list) > li > button.is-asking-current:not(.is-on) { background: rgba(255, 255, 255, .07); border-radius: 8px; }
 [data-new-layout] .review-low-body .edit-badge { border-color: var(--color-dim); color: var(--color-muted); }
@@ -176,13 +197,55 @@
 [data-new-layout] .review-rail .simple-review-empty { padding: 8px 6px; }
 [data-new-layout] .review-rail .simple-review-rest { padding-left: 6px; }
 [data-new-layout] .review-rail :is(.simple-pass-list, .simple-edits) { max-height: none; overflow: visible; margin: 0; border-top: 0; }
-[data-new-layout] .review-rail .simple-edit { width: 100%; margin: 0; align-items: start; }
-[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) { white-space: normal; }
-[data-new-layout] .review-rail :is(.simple-edit-words, .simple-pass-words) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; }
+[data-new-layout] .review-rail .simple-edit { width: 100%; margin: 0; align-items: center; }
+[data-new-layout] .review-rail .simple-edits > li.has-unkeep > .simple-row-unkeep { right: 6px; }
+[data-new-layout] .review-rail .simple-pass-list > li > button { align-items: center; }
+[data-new-layout] .review-rail :is(.simple-pass-time, .edit-row-time) { white-space: nowrap; }
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) { display: flex; align-items: baseline; min-width: 0; overflow: hidden; white-space: nowrap; }
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label) > :is(.simple-pass-tick, .simple-pass-spin, .edit-version, .simple-pass-more) { flex: none; }
+
+/* Compact stepper on the edit card when stepping through a collapsed batch. */
+[data-new-layout] .edit-card-stepper {
+  flex: none; display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 3px;
+  border: 1px solid var(--color-line); border-radius: 999px; background: var(--color-raised);
+  font-size: 11.5px; color: var(--color-muted); font-variant-numeric: tabular-nums;
+}
+[data-new-layout] .edit-card-step {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--color-fg); font: inherit; font-size: 13px; line-height: 1; cursor: pointer;
+}
+[data-new-layout] .edit-card-step:hover:not(:disabled) { background: rgba(255, 255, 255, .1); }
+[data-new-layout] .edit-card-step:disabled { opacity: .35; cursor: default; }
+[data-new-layout] .edit-card-step-count { padding: 0 4px; color: var(--color-fg); font-weight: 500; white-space: nowrap; }
+[data-new-layout] .review-rail :is(.simple-edit, .simple-edit.is-on, .simple-pass-list > li > button, .simple-pass-list > li > button.is-on) :is(.simple-edit-words, .simple-pass-words) {
+  display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label):has(> .edit-version):not(:has(> .simple-pass-more)) > :is(.simple-edit-words, .simple-pass-words) {
+  flex: 1 1 auto;
+}
+[data-new-layout] .review-rail-tip {
+  position: fixed; z-index: 40; display: flex; flex-direction: column; gap: 3px;
+  width: max-content; max-width: min(400px, calc(100vw - 24px));
+  padding: 7px 10px; border: 1px solid var(--color-line); border-radius: 7px;
+  background: var(--color-raised); box-shadow: 0 4px 16px rgb(0 0 0 / 45%);
+  font-size: 12px; line-height: 1.4; font-weight: 400; color: var(--color-fg);
+  text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none;
+}
+[data-new-layout] .review-rail-tip-title { font-weight: 500; color: var(--color-fg); }
+[data-new-layout] .review-rail-tip-meta { font-size: 11.5px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+[data-new-layout] .review-rail-tip-detail {
+  font-size: 11.5px; color: var(--color-dim);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-new-layout] .review-rail-tip { animation: review-rail-tip-in 90ms ease-out; }
+  @keyframes review-rail-tip-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+}
 [data-new-layout] .review-rail .subunit { margin-left: 8px; }
 
 /* One-row in-line revision style everywhere inside the beta layout. */
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)):not([data-lingering="working"]) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li[data-lingering="working"]:is(:hover, :focus-within):has(> .subunit .unit-actions) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { opacity: 0; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit { position: relative; margin-top: 0; margin-bottom: 6px; border-left-color: transparent; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg > p {
   position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -197,40 +260,48 @@
 @media (hover: hover) {
   [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)):not(:hover, :focus-within) > .subunit .unit-actions { opacity: 0; }
 }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) { position: relative; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button { color: var(--color-fg); }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)):hover > button:not(:disabled, .is-on) { background: rgba(255, 255, 255, .04); }
-[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button > :is(.simple-edit-title, .simple-pass-label) {
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])):not(:has(> .subunit .is-auto)) { position: relative; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button { color: var(--color-fg); }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])):hover > button:not(:disabled, .is-on) { background: rgba(255, 255, 255, .04); }
+[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)):not([data-lingering="working"]) > button > :is(.simple-edit-title, .simple-pass-label) {
   grid-column: 2 / -1; justify-self: stretch; padding-right: 22px; contain: inline-size; }
-[data-new-layout] .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button { grid-template-columns: 15px minmax(0, 1fr); align-items: center; padding-right: 30px; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit { position: static; margin: 0; padding: 0; border: 0; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .req {
+[data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button { grid-template-columns: 15px minmax(0, 1fr); align-items: center; padding-right: 30px; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now), [data-lingering="working"][data-working]:not([data-paused])):not(:has(> .subunit .is-auto)) > .subunit { position: static; margin: 0; padding: 0; border: 0; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now), [data-lingering="working"][data-working]:not([data-paused])):not(:has(> .subunit .is-auto)) > .subunit > .req {
   position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { position: absolute; top: 5px; right: 6px; z-index: 1; padding: 0; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now), [data-lingering="working"][data-working]:not([data-paused])):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { position: absolute; top: 5px; right: 6px; z-index: 1; padding: 0; }
 [data-new-layout] .req .simple-edits > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg { right: -2px; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge {
   position: relative; border-color: transparent; background: var(--color-raised); color: var(--color-fg); }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge.is-kept svg { display: none; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button .edit-badge::after { content: ""; position: absolute; inset: -1.2px;
   border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.simple-pass-time, .edit-row-time) {
+/* In beta layout the leading time slot becomes the 15px spinning ring while working, so hide the inline title spinner. */
+[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button .simple-pass-spin,
+[data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button .simple-pass-spin { display: none; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button :is(.simple-pass-time, .edit-row-time) {
   position: relative; margin: 0; padding: 0; background: none; color: transparent; }
-[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.simple-pass-time, .edit-row-time)::after { content: ""; position: absolute; left: 0; top: 50%;
+[data-new-layout] :is(.simple-edits, .simple-pass-list:not(.is-short, .is-moment)) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button :is(.simple-pass-time, .edit-row-time)::after { content: ""; position: absolute; left: 0; top: 50%;
   width: 15px; height: 15px; margin-top: -7.5px; border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-[data-new-layout] .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { content: ""; width: 15px; height: 15px;
+[data-new-layout] .review-low-body :is(.simple-edits, .simple-pass-list) > li[data-lingering="working"] > button > :is(.simple-edit-check, .simple-pass-check, .simple-edit-value, .simple-pass-value),
+[data-new-layout] .review-low-body :is(.simple-edits, .simple-pass-list) > li[data-lingering="done"] > button > :is(.simple-edit-value, .simple-pass-value) { color: var(--color-muted); }
+[data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button::before { content: ""; width: 15px; height: 15px;
   border-radius: 50%; border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
 @media (prefers-reduced-motion: no-preference) {
-  [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.edit-badge, .simple-pass-time, .edit-row-time)::after,
-  [data-new-layout] .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { animation: req-mark-turn 1s linear infinite; }
+  [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button :is(.edit-badge, .simple-pass-time, .edit-row-time)::after,
+  [data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button::before { animation: req-mark-turn 1s linear infinite; }
 }
 @media (prefers-reduced-motion: reduce) {
-  [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button :is(.edit-badge, .simple-pass-time, .edit-row-time)::after,
-  [data-new-layout] .simple-pass-list.is-moment > li:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)) > button::before { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
+  [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"], [data-lingering="working"][data-working="pending"]:not([data-paused])) > button :is(.edit-badge, .simple-pass-time, .edit-row-time)::after,
+  [data-new-layout] .simple-pass-list.is-moment > li:is(:has(> .subunit > .req > .req-now):not(:has(> .subunit .is-auto)), [data-working="busy"]) > button::before { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
 }
 
-[data-new-layout] .review-rail-foot { flex: none; max-height: 55%; overflow-y: auto; padding: 0 12px 8px; border-top: 1px solid var(--color-line); }
-[data-new-layout] .review-sec { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 6px; border: 0; background: none; color: var(--color-muted);
+[data-new-layout] .review-rail-foot { flex: 0 1 auto; display: flex; flex-direction: column; max-height: max(55%, 82px); min-height: 0; overflow: hidden; padding: 0 0 8px; border-top: 1px solid var(--color-line); }
+[data-new-layout] .review-rail-foot:has(> .review-sec-body:last-child:not([hidden])) { padding-bottom: 0; }
+[data-new-layout] .review-sec { flex: none; display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 18px; border: 0; background: none; color: var(--color-muted);
   font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; cursor: pointer; }
+[data-new-layout] .review-sec:focus-visible { outline-offset: -2px; }
+[data-new-layout] .review-sec-body + .review-sec { height: 37px; border-top: 1px solid var(--color-line); }
 [data-new-layout] .review-sec:is(:hover, :focus-visible),
 [data-new-layout] .review-sec[aria-expanded="true"] { color: var(--color-fg); }
 [data-new-layout] .review-sec.is-none,
@@ -239,41 +310,13 @@
 [data-new-layout] .review-sec b { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; }
 [data-new-layout] .review-sec svg { color: var(--color-dim); transition: transform .14s ease; }
 [data-new-layout] .review-sec[aria-expanded="true"] svg { transform: rotate(90deg); }
-[data-new-layout] .review-sec-body { padding: 0 0 6px; }
+[data-new-layout] .review-sec-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 6px; }
+[data-new-layout] .review-sec-body:last-child { padding-bottom: 12px; }
+[data-new-layout] .review-sec-body[hidden] { display: none; }
+/* When both Working and Done are open, cap Working's share so a long Done list can't shrink Working away and a long Working list can't crowd Done out. */
+[data-new-layout] .review-rail-foot > .review-sec-body:not([hidden]):has(~ .review-sec-body:not([hidden])) { flex: 0 0 auto; max-height: max(0px, calc(27.5vh - 44px)); }
 @media (prefers-reduced-motion: reduce) { [data-new-layout] .review-sec svg { transition: none; } }
-@media (max-width: 1100px) { [data-new-layout] .review-rail { width: 232px; } }
 @media (max-width: 767px) { [data-new-layout] .review-rail { display: none; } }
 [data-new-layout] .simple-need-link { align-self: flex-start; display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 0; border: 0; background: none; color: var(--color-fg);
   font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 
-/* Project-wide Pause / Resume pill beside "Scarlet is editing" under the timeline. */
-[data-new-layout] .timeline-working-group { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-[data-new-layout] .timeline-working-paused { font-size: 12px; color: var(--color-warn); white-space: nowrap; }
-[data-new-layout] .timeline-working-pause { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border: 1px solid var(--color-line);
-  border-radius: 999px; background: rgba(255, 255, 255, .05); color: var(--color-muted); font: inherit; font-size: 11.5px; font-weight: 500; cursor: pointer; }
-[data-new-layout] .timeline-working-pause:is(:hover, :focus-visible) { border-color: var(--color-muted); background: rgba(255, 255, 255, .09); color: var(--color-fg); }
-[data-new-layout] .timeline-working-pause.is-resume { border-color: rgba(237, 194, 133, .38); color: var(--color-fg); }
-
-/* Slim card above the timeline when opening an edit Scarlet is currently revising. */
-[data-new-layout] .edit-card.is-working { padding: 10px 14px; }
-[data-new-layout] .working-card-bar { display: flex; align-items: center; gap: 8px; min-width: 0; }
-[data-new-layout] .working-card-badge { flex: none; position: relative; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
-  background: var(--color-raised); color: var(--color-fg); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-[data-new-layout] .working-card-badge.is-ring { background: none; }
-[data-new-layout] .working-card-badge::after { content: ""; position: absolute; inset: -1.2px; border-radius: 50%;
-  border: 1.5px solid #4c4c4c; border-top-color: var(--color-fg); border-right-color: var(--color-fg); }
-[data-new-layout] .working-card-badge.is-ask::after { border-color: var(--color-warn); }
-@media (prefers-reduced-motion: no-preference) {
-  [data-new-layout] .working-card-badge:not(.is-ask)::after { animation: req-mark-turn 1s linear infinite; }
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-new-layout] .working-card-badge:not(.is-ask)::after { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
-}
-[data-new-layout] .working-card-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--color-fg); }
-[data-new-layout] .working-card-status { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--color-muted); }
-[data-new-layout] .working-card-status.is-ask { color: var(--color-warn); }
-[data-new-layout] .working-card-actions { flex: none; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
-[data-new-layout] .working-card-btn { height: 26px; padding: 0 12px; border: 0; border-radius: 999px; background: var(--color-raised); color: var(--color-fg);
-  font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
-[data-new-layout] .working-card-btn:is(:hover, :focus-visible) { background: #343230; }
-[data-new-layout] .working-card-btn.is-ask { background: rgba(237, 194, 133, .16); color: var(--color-warn); }

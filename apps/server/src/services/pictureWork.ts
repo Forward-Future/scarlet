@@ -156,15 +156,15 @@ export async function pictureDecoder(accel: HwAccel): Promise<"cuda" | "videotoo
  * 24 frames of a 55-minute 4K recording (a keyframe every 8 s), the editor's own frames took 1.0 s at the median and
  * 2.0 s at p95 with every frame on the CPU, and 0.51 s and 1.2 s with the agent's on VideoToolbox (0.4 s alone;
  * 2026-11-26). Each of the agent's takes a little longer there, so they go back to the CPU once the editor has looked
- * away. An HDR file's frame stays on the CPU, which tone-maps it.
+ * away. `cpuOnly` keeps a frame on the CPU: an HDR file's, which the CPU tone-maps, and a still's, which has no video.
  */
-export async function frameDecoder(accel: HwAccel, priority: PicturePriority, lane: PictureLane, hdr?: unknown): Promise<"cuda" | "videotoolbox" | undefined> {
+export async function frameDecoder(accel: HwAccel, priority: PicturePriority, lane: PictureLane, cpuOnly?: unknown): Promise<"cuda" | "videotoolbox" | undefined> {
   const gpu = await pictureDecoder(accel);
   if (gpu === "cuda") return gpu;
-  if (gpu === "videotoolbox" && priority === false && !hdr && lane.editorLooking()) return gpu;
+  if (gpu === "videotoolbox" && priority === false && !cpuOnly && lane.editorLooking()) return gpu;
 }
 
 /** Whether `frameDecoder` sends this frame to a Mac's media engine while the editor looks: the lane's `gpu` option. */
-export async function frameGoesToGpu(accel: HwAccel, priority: PicturePriority, hdr?: unknown): Promise<boolean> {
-  return priority === false && !hdr && await pictureDecoder(accel) === "videotoolbox";
+export async function frameGoesToGpu(accel: HwAccel, priority: PicturePriority, cpuOnly?: unknown): Promise<boolean> {
+  return priority === false && !cpuOnly && await pictureDecoder(accel) === "videotoolbox";
 }

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { applyOps, createProject, emptyTimeline, makeMediaClip, splitJoinOps, timelineFromKeepRanges, type MediaClip, type Project } from "@scarlet/timeline";
 import { createApp, type ScarletApp } from "../app.js";
 import { localUser } from "../auth.js";
-import { recordHistoryEdit, rejectEdits } from "./cutHistory.js";
+import { adjustAppliedCut, adjustAppliedEdit, recordHistoryEdit, rejectEdits } from "./cutHistory.js";
 import { storeVersion } from "./timeline.js";
 
 let dataDir: string;
@@ -220,4 +220,164 @@ it("keeps the cuts a built video left out when its one named edit is rejected", 
   expect(() => rejectEdits(ctx, user, project.id, "thread", [{ changeId: "chg_built", spot: 0, label: "Title", range: { start: 5, end: 5 } }],
     marked.version, ctx.repos.projects.get(project.id)!.branch ?? "main")).toThrow("This edit can’t be put back as it was.");
   expect(ctx.repos.projects.get(project.id)!.head).toBe(marked.version);
+});
+
+it("adjusts an applied cut's edges directly, projects the updated cut through threadTimeline, and reverts cleanly with undo", async () => {
+  const { threadTimeline } = await import("@scarlet/shared");
+  const { ctx } = app;
+  const user = localUser(ctx);
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov", duration: 60 }, "ready");
+  const first = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 60 }]), { parent: null });
+  const cut = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 10 }, { start: 12, end: 40 }, { start: 45, end: 60 }]), { parent: first.version, changeId: "chg_pass" });
+  const passChange = {
+    id: "chg_pass", projectId: project.id, description: "Trimmed pauses", author: { type: "agent" as const, id: "claude", name: "Claude" },
+    state: "approved" as const, threadId: "thread", fromVersion: first.version, toVersion: cut.version, appliedOnto: first.version, appliedVersion: cut.version,
+    timelineEdits: [
+      { label: "Cut pause", range: { start: 10, end: 10 }, reason: "Removed filler before next sentence." },
+      { label: "Cut tangent", range: { start: 38, end: 38 }, reason: "Tightened tangent." },
+    ],
+    leftOut: { version: first.version, joins: [{ at: 10, removed: { start: 10, end: 12 } }, { at: 38, removed: { start: 40, end: 45 } }] },
+    noteIds: [], renders: [], ranges: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  ctx.repos.changes.put(passChange);
+  ctx.repos.projects.update(project.id, { head: cut.version });
+  const branch = ctx.repos.projects.get(project.id)!.branch ?? "main";
+
+  // Pull left edge forward by 0.5 s (restores 10.0–10.5 s).
+  const target = { changeId: "chg_pass", spot: 0, label: "Cut pause", range: { start: 8.5, end: 11.5 }, at: 10, before: { version: first.version, removed: { start: 10, end: 12 } } };
+  const { project: after, change } = adjustAppliedCut(ctx, user, project.id, "thread", target, { start: 10.5, end: 12 }, cut.version, branch);
+  expect(change).toMatchObject({ state: "approved", threadId: "thread", description: "Adjusted · Cut pause" });
+  const headTl = ctx.repos.versions.get(project.id, after.head!)!.timeline;
+  expect(headTl.tracks[0]!.clips.map(c => c.kind === "media" && [c.timelineIn, c.sourceIn, c.sourceOut]))
+    .toEqual([[0, 0, 10.5], [10.5, 12, 40], [38.5, 45, 60]]);
+
+  // threadTimeline keeps the cut's identity (via previous), preserves the note, and updates its removed range!
+  const links = ctx.repos.versions.links(project.id);
+  const read = (v: string) => ctx.repos.versions.get(project.id, v)?.timeline;
+  const projected = threadTimeline({ id: "thread", title: "Tighten", changes: [passChange, change], tasks: [], notes: [] } as never, headTl, links, read, 30);
+  expect(projected).toHaveLength(2);
+  expect(projected[0]).toMatchObject({ changeId: change.id, at: 10.5, reason: "Removed filler before next sentence.", beforeCut: { version: first.version, removed: { start: 10.5, end: 12 } } });
+  expect(projected[0]!.previous).toEqual([{ changeId: "chg_pass", spot: 0 }]);
+
+  // ⌘Z revert takes back the adjustment cleanly.
+  const { project: reverted } = recordHistoryEdit(ctx, user, project.id, change.appliedVersion!, "revert", after.head!, branch);
+  expect(ctx.repos.versions.get(project.id, reverted.head!)!.timeline.tracks[0]!.clips.map(c => c.kind === "media" && [c.timelineIn, c.sourceIn, c.sourceOut]))
+    .toEqual([[0, 0, 10], [10, 12, 40], [38, 45, 60]]);
+
+  // Pulling edges together to zero puts back the full footage cleanly.
+  const { project: restored, change: rej } = adjustAppliedCut(ctx, user, project.id, "thread", target, { start: 12, end: 12 }, reverted.head!, branch);
+  expect(rej.rejects).toBe(true);
+  expect(ctx.repos.versions.get(project.id, restored.head!)!.timeline.tracks[0]!.clips.length).toBe(2);
+
+  // Opening cut pulled all the way to zero restores the opening footage cleanly too.
+  const openCut = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 2, end: 60 }]), { parent: first.version, changeId: "chg_open" });
+  ctx.repos.projects.update(project.id, { head: openCut.version });
+  const openTarget = { changeId: "chg_open", spot: 0, label: "Trim opening", range: { start: 0, end: 0 }, at: 0, before: { version: first.version, removed: { start: 0, end: 2 } } };
+  const { project: openRestored, change: openRej } = adjustAppliedCut(ctx, user, project.id, "thread", openTarget, { start: 0, end: 0 }, openCut.version, branch);
+  expect(openRej.rejects).toBe(true);
+  expect(ctx.repos.versions.get(project.id, openRestored.head!)!.timeline.tracks[0]!.clips[0]).toMatchObject({ timelineIn: 0, sourceIn: 0, sourceOut: 60 });
+});
+
+it("adjusts a non-cut caption edit directly, preserves its kind in threadTimeline, reverts with undo, and removes when pulled to zero", async () => {
+  const { threadTimeline } = await import("@scarlet/shared");
+  const { ctx } = app;
+  const user = localUser(ctx);
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov", duration: 20 }, "ready");
+  const base = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 20 }]), { parent: null });
+  const withCap = storeVersion(ctx, project.id, {
+    ...base,
+    tracks: [
+      ...base.tracks,
+      { id: "c1", kind: "caption", name: "Captions", muted: false, hidden: false, clips: [{ id: "cap_1", kind: "caption", timelineIn: 1, timelineOut: 3, text: "Welcome", enabled: true }] },
+    ],
+  }, { parent: base.version, changeId: "chg_cap" });
+  const capChange = {
+    id: "chg_cap", projectId: project.id, description: "Add opening caption", author: { type: "agent" as const, id: "claude", name: "Claude" },
+    state: "approved" as const, threadId: "thr_cap", fromVersion: base.version, toVersion: withCap.version, appliedOnto: base.version, appliedVersion: withCap.version,
+    ops: [{ op: "addClip", trackId: "c1", clip: { id: "cap_1", kind: "caption", timelineIn: 1, timelineOut: 3, text: "Welcome", enabled: true } }],
+    timelineEdits: [{ label: "Opening caption", range: { start: 1, end: 3 }, reason: "Call out intro." }],
+    noteIds: [], renders: [], ranges: [{ start: 1, end: 3 }], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  };
+  ctx.repos.changes.put(capChange);
+  ctx.repos.projects.update(project.id, { head: withCap.version });
+  const branch = ctx.repos.projects.get(project.id)!.branch ?? "main";
+
+  const target = { changeId: "chg_cap", spot: 0, label: "Opening caption", range: { start: 1, end: 3 }, kind: "text" };
+  const { project: after, change } = adjustAppliedEdit(ctx, user, project.id, "thr_cap", target, { start: 0.5, end: 4.5 }, withCap.version, branch);
+  expect(change).toMatchObject({ state: "approved", threadId: "thr_cap", description: "Adjusted · Opening caption" });
+  const headTl = ctx.repos.versions.get(project.id, after.head!)!.timeline;
+  const cap = headTl.tracks.find(t => t.id === "c1")!.clips[0]!;
+  expect(cap.kind === "caption" && [cap.timelineIn, cap.timelineOut]).toEqual([0.5, 4.5]);
+
+  // threadTimeline preserves kind: "text", reason, and previous identity while updating range.
+  const links = ctx.repos.versions.links(project.id);
+  const read = (v: string) => ctx.repos.versions.get(project.id, v)?.timeline;
+  const projected = threadTimeline({ id: "thr_cap", title: "Caption", changes: [capChange, change], tasks: [], notes: [] } as never, headTl, links, read, 30);
+  expect(projected).toHaveLength(1);
+  expect(projected[0]).toMatchObject({ changeId: change.id, kind: "text", reason: "Call out intro.", range: { start: 0.5, end: 4.5 } });
+  expect(projected[0]!.previous).toEqual([{ changeId: "chg_cap", spot: 0 }]);
+
+  // ⌘Z revert restores original caption timing.
+  const { project: reverted } = recordHistoryEdit(ctx, user, project.id, change.appliedVersion!, "revert", after.head!, branch);
+  const revCap = ctx.repos.versions.get(project.id, reverted.head!)!.timeline.tracks.find(t => t.id === "c1")!.clips[0]!;
+  expect(revCap.kind === "caption" && [revCap.timelineIn, revCap.timelineOut]).toEqual([1, 3]);
+
+  // Pulling edges together removes the caption and marks the change as rejected.
+  const { project: removed, change: rej } = adjustAppliedEdit(ctx, user, project.id, "thr_cap", target, { start: 2, end: 2 }, reverted.head!, branch);
+  expect(rej.rejects).toBe(true);
+  expect(ctx.repos.versions.get(project.id, removed.head!)!.timeline.tracks.find(t => t.id === "c1")!.clips).toHaveLength(0);
+});
+
+it("keeps unmoved non-frame-aligned cut edges intact, handles sub-ms video overlaps and picture-sync offsets, and preserves crossfades in proposeChange", async () => {
+  const { proposeChange } = await import("./changes/propose.js");
+  const { ctx } = app;
+  const user = localUser(ctx);
+  const fps = 29.970037204161414;
+  ctx.repos.projects.update(project.id, { settings: { ...project.settings, fps } });
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov", duration: 60.12, hasAudio: true }, "ready");
+  const before = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 60.12 }]), { parent: null });
+  const branch = ctx.repos.projects.get(project.id)!.branch ?? "main";
+
+  // 1. Closing cut whose recording end (60.12 s) is not an exact frame multiple: dragging start keeps end untouched.
+  const closedTl = timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 50 }]);
+  const closed = storeVersion(ctx, project.id, closedTl, { parent: before.version, changeId: "chg_close" });
+  ctx.repos.projects.update(project.id, { head: closed.version });
+  const closeTarget = { changeId: "chg_close", spot: 0, label: "Cut outro", range: { start: 50, end: 50 }, at: 50, before: { version: before.version, removed: { start: 50, end: 60.12 } } };
+  const { project: afterClose } = adjustAppliedCut(ctx, user, project.id, "thr_close", closeTarget, { start: 51, end: 60.12 }, closed.version, branch);
+  expect(ctx.repos.versions.get(project.id, afterClose.head!)!.timeline.tracks[0]!.clips[0]).toMatchObject({ sourceOut: expect.closeTo(51, 1) });
+
+  // 2. Interior cut with a sub-ms video overlap AND a 0.16 s whole-track picture-sync offset relative to `before`.
+  const syncedTl = timelineFromKeepRanges(project.id, "camera", [{ start: 0.16, end: 10.16 }, { start: 20.16, end: 40.16 }]);
+  // Introduce a 0.3 ms micro-overlap between the two video clips (as seen in real timelines).
+  syncedTl.tracks[0]!.clips[1]!.timelineIn = 10 - 0.0003;
+  const synced = storeVersion(ctx, project.id, syncedTl, { parent: before.version, changeId: "chg_sync" });
+  ctx.repos.projects.update(project.id, { head: synced.version });
+  const syncTarget = { changeId: "chg_sync", spot: 0, label: "Cut middle", range: { start: 10, end: 10 }, at: 10 - 0.0003, before: { version: before.version, removed: { start: 10, end: 20 } } };
+  const { project: afterSync } = adjustAppliedCut(ctx, user, project.id, "thr_sync", syncTarget, { start: 10, end: 19 }, synced.version, branch);
+  expect(ctx.repos.versions.get(project.id, afterSync.head!)!.timeline.tracks[0]!.clips[1]).toMatchObject({ sourceIn: expect.closeTo(19.16, 1) });
+
+  // 3. Rearranged cut that mapped to 0:00 while its `before` removal starts at 42 s is refused safely.
+  const badOpenTarget = { changeId: "chg_sync", spot: 1, label: "Rearranged", range: { start: 0, end: 0 }, at: 0, before: { version: before.version, removed: { start: 42, end: 45 } } };
+  expect(() => adjustAppliedCut(ctx, user, project.id, "thr_sync", badOpenTarget, { start: 42, end: 44 }, afterSync.head!, branch)).toThrow(/adjusted directly/);
+
+  // 4. proposeChange does not independently frame-snap audio clips that carry crossfade durations.
+  const fade = 2 / fps;
+  const half = fade / 2;
+  const headNow = ctx.repos.versions.get(project.id, afterSync.head!)!.timeline;
+  const joinAt = 10;
+  const srcOutL = 10.16 + half;
+  const srcInR = 19.16 - half;
+  const res = proposeChange(ctx, user, project.id, {
+    fromVersion: headNow.version,
+    description: "Add two-frame dialogue crossfade",
+    autoApprove: true,
+    ops: [
+      { op: "addClip", trackId: "a1", clip: { id: "a_l", kind: "media", mediaId: "camera", timelineIn: 0, sourceIn: 0.16, sourceOut: srcOutL, speed: 1, opacity: 1, volume: 1, audioFadeIn: 0, audioFadeOut: fade, videoFadeIn: 0, videoFadeOut: 0, effects: [], enabled: true } },
+      { op: "addClip", trackId: "a1", clip: { id: "a_r", kind: "media", mediaId: "camera", timelineIn: joinAt - half, sourceIn: srcInR, sourceOut: 40.16, speed: 1, opacity: 1, volume: 1, audioFadeIn: fade, audioFadeOut: 0, videoFadeIn: 0, videoFadeOut: 0, effects: [], enabled: true } },
+    ],
+  });
+  const savedA1 = ctx.repos.versions.get(project.id, res.change.toVersion)!.timeline.tracks.find(t => t.id === "a1")!;
+  const [al, ar] = savedA1.clips;
+  expect(al!.kind === "media" && al.sourceOut).toBe(srcOutL);
+  expect(ar!.kind === "media" && [ar.timelineIn, ar.sourceIn]).toEqual([joinAt - half, srcInR]);
 });

@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import * as client from "../lib/client";
 import { api } from "../lib/client";
+import * as desktopModule from "../lib/desktop";
 import { desktop } from "../lib/desktop";
 import { dropTargets } from "../lib/dropTargets";
 import { pendingImports } from "../lib/pendingImports";
@@ -98,6 +99,7 @@ it("offers New project in an empty library, names the project for the first vide
   useProjectStore.setState({ list: [], listStatus: "ready", createProject: vi.fn(), loadList: vi.fn() });
   vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
   vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  vi.spyOn(api, "expandMediaPaths").mockImplementation(async paths => ({ files: [...paths], folders: 0, emptyFolders: [] }));
   vi.spyOn(client, "IS_DESKTOP", "get").mockReturnValue(true);
   const picked = vi.spyOn(desktop, "pickFiles").mockResolvedValue(["/clips/Sam interview.mov", "/clips/b-roll.mov"]);
   const container = document.createElement("div");
@@ -138,9 +140,53 @@ it("offers New project in an empty library, names the project for the first vide
     expect(chosen()).toEqual(["wide.mov"]);
     // Videos dropped on the dialog join the ones chosen, once each.
     const zone = container.querySelector("dialog [data-file-drop]")!;
-    await act(() => dropTargets.get(zone)!.drop(["/clips/cutaway.mov", "/clips/wide.mov"]));
+    await act(async () => { dropTargets.get(zone)!.drop(["/clips/cutaway.mov", "/clips/wide.mov"]); });
     expect(chosen()).toEqual(["wide.mov", "cutaway.mov"]);
     expect(name.value).toBe("Episode 12");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("expands a folder dropped onto Projects or New project into its video files, and reports an empty folder", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const db = buildDb();
+  useProjectStore.setState({ list: [], listStatus: "ready", createProject: vi.fn(), loadList: vi.fn() });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  const expand = vi.spyOn(api, "expandMediaPaths")
+    .mockResolvedValueOnce({ files: [], folders: 1, emptyFolders: [{ path: "D:\\Matt B\\docs", name: "docs" }] })
+    .mockResolvedValueOnce({ files: ["D:\\Matt B\\raw\\intro.mp4", "D:\\Matt B\\raw\\main.mov"], folders: 1, emptyFolders: [] })
+    .mockResolvedValueOnce({ files: ["D:\\Matt B\\b-roll\\extra.mp4"], folders: 1, emptyFolders: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const chosen = () => [...container.querySelectorAll('[aria-label="Selected files"] li')].map(li => li.textContent);
+  try {
+    await act(async () => root.render(<MemoryRouter><ProjectsPage /></MemoryRouter>));
+    const pageZone = container.querySelector("[data-file-drop]")!;
+
+    // Dropping a folder with no videos shows a plain error without opening an empty modal.
+    await act(async () => { dropTargets.get(pageZone)!.drop(["D:\\Matt B\\docs"]); });
+    expect(container.querySelector("dialog[open]")).toBeNull();
+    expect(container.textContent).toContain("No video files found in “docs”.");
+
+    // Dropping a folder with videos opens New project with every detected video listed.
+    await act(async () => { dropTargets.get(pageZone)!.drop(["D:\\Matt B\\raw"]); });
+    expect(container.querySelector("dialog[open]")).toBeTruthy();
+    expect(container.querySelector<HTMLInputElement>("#np-name")!.value).toBe("intro");
+    expect(chosen()).toEqual(["intro.mp4", "main.mov"]);
+
+    // Dropping another folder onto the open dialog appends its videos too.
+    const modalZone = container.querySelector("dialog [data-file-drop]")!;
+    await act(async () => { dropTargets.get(modalZone)!.drop(["D:\\Matt B\\b-roll"]); });
+    expect(chosen()).toEqual(["intro.mp4", "main.mov", "extra.mp4"]);
+    expect(expand).toHaveBeenCalledTimes(3);
   } finally {
     await act(() => root.unmount());
     container.remove();
@@ -653,6 +699,78 @@ it("shows one window-wide update on Projects while building and when ready", asy
     await act(() => root.unmount());
     container.remove();
     useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("offers Try a sample project on an empty library, opens it on success, and reports errors inline", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const db = buildDb();
+  const sample = { ...db.projects.find(p => p.id === PRJ)!, id: "prj_sample", name: "Sample project" };
+  const createSample = vi.fn<() => Promise<typeof sample>>()
+    .mockRejectedValueOnce(new Error("Install FFmpeg first to create the sample project."))
+    .mockResolvedValueOnce(sample);
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  useProjectStore.setState({ list: [], listStatus: "ready", createSampleProject: createSample });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text)!;
+  try {
+    await act(async () => root.render(<MemoryRouter><Routes>
+      <Route path="/" element={<ProjectsPage />} />
+      <Route path="/p/:id" element={<p>Opened sample workspace</p>} />
+    </Routes></MemoryRouter>));
+    expect(button("Try a sample project")).toBeTruthy();
+    await act(async () => button("Try a sample project").click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Install FFmpeg first");
+    await act(async () => button("Try a sample project").click());
+    expect(createSample).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Opened sample workspace");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("waits to offer the sample project until FFmpeg is installed, since the sample clip is made with it", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const previous = useProjectStore.getState();
+  const db = buildDb();
+  const missing = { installed: false, canInstall: true, installDir: "/Users/editor/.local/bin", ffmpegPath: null, ffprobePath: null };
+  vi.spyOn(desktopModule, "isDesktop").mockReturnValue(true);
+  vi.spyOn(desktop, "ffmpegStatus").mockResolvedValue(missing);
+  vi.spyOn(desktop, "ffmpegInstall").mockResolvedValue({ ...missing, installed: true, ffmpegPath: "/Users/editor/.local/bin/ffmpeg", ffprobePath: "/Users/editor/.local/bin/ffprobe" });
+  vi.spyOn(api, "projects").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "trash").mockResolvedValue({ projects: [] });
+  vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings });
+  useProjectStore.setState({ list: [], listStatus: "ready" });
+  // On the desktop an empty library first asks to sign in to a plan; this editor chose to look around first.
+  const previousUi = useUiStore.getState().signInLater;
+  useUiStore.setState({ signInLater: true });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const button = (text: string) => [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === text);
+  try {
+    await act(async () => root.render(<MemoryRouter><ProjectsPage /></MemoryRouter>));
+    await vi.waitFor(() => expect(button("Install FFmpeg")).toBeTruthy());
+    expect(button("Try a sample project")).toBeUndefined();
+    await act(async () => button("Install FFmpeg")!.click());
+    expect(button("Install FFmpeg")).toBeUndefined();
+    expect(button("Try a sample project")).toBeTruthy();
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useProjectStore.setState(previous, true);
+    useUiStore.setState({ signInLater: previousUi });
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   }

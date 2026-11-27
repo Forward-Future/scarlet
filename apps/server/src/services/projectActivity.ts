@@ -1,7 +1,10 @@
 import { cachedShare, Task, type ProjectActivity, type ProjectSummary } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
+import { clip, throttledPerCtx } from "../logText.js";
 import { sourceCacheStatuses } from "./sourcePreviews.js";
 import { PROJECT_EDIT_KINDS } from "./tasks.js";
+
+const cachingFailures = throttledPerCtx();
 
 /**
  * What Scarlet is doing in each listed project, for the project list: a request it is working on, then files it
@@ -55,7 +58,11 @@ export async function withActivity(ctx: Ctx, summaries: ProjectSummary[]): Promi
         ...(!words.running && paused.has(id) && { paused: true }) });
     }
     if (caching.has(id)) {
-      const cache = await cachingActivity(ctx, id, paused.has(id)).catch(() => undefined);
+      const cache = await cachingActivity(ctx, id, paused.has(id)).catch((error: unknown) => {
+        // The project list asks on every refresh, so this is logged once a minute for each project.
+        cachingFailures(ctx)(id, `[media] ${id}: the caching figure for the project list couldn’t be read: ${clip((error as Error)?.message ?? String(error))}`);
+        return undefined;
+      });
       if (cache) add(id, cache);
     }
   }));

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { cutText } from "@scarlet/shared";
 
 /** Elapsed time for log lines: "850ms", "12s", "45m 2s", "1h 3m". Matches the desktop host's log. */
 export function humanDuration(ms: number): string {
@@ -40,7 +41,7 @@ export function throttledLog(log: (line: string) => void, everyMs = 60_000, capa
 /** One line of a request or error for the log. */
 export function clip(text: string, max = 160): string {
   const line = text.replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  return line.length > max ? `${cutText(line, max - 1)}…` : line;
 }
 export const REQUEST_ID_HEADER = "x-scarlet-request-id";
 const requestIds = new WeakMap<Request, string>();
@@ -56,4 +57,14 @@ export function requestLogId(request: Request): string {
 /** Only opaque engine-generated identifiers belong in shareable diagnostics. */
 export function logId(id: string): string {
   return /^(?:(?:tsk|med|prj|rnd|chg|host)_[a-z0-9]{12}|chg_[a-f0-9]{64}_(?:applied|review))$/.test(id) ? id : "unknown";
+}
+
+/** A `throttledLog` for each engine context, made on first use: `const failures = throttledPerCtx(); failures(ctx)(key, line)`. */
+export function throttledPerCtx() {
+  const logs = new WeakMap<object, ReturnType<typeof throttledLog>>();
+  return (ctx: { log(line: string): void }) => {
+    let log = logs.get(ctx);
+    if (!log) logs.set(ctx, log = throttledLog(line => ctx.log(line)));
+    return log;
+  };
 }

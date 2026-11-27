@@ -1,5 +1,15 @@
+import { builtInCommand, skillRuns } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
-import { createSkill, updateSkill } from "./skills.js";
+import { BUNDLED_SKILLS } from "../bundledSkills.js";
+import { createSkill, parseFrontmatter, updateSkill } from "./skills.js";
+import { formerNames } from "./skillSeed.js";
+
+/** The shipped skills that guide the dialogue pass, by the names they go and went by: what their files say, not a name in code. */
+function dialogueGuideNames() {
+  const pass = builtInCommand("first-cut").name;
+  const current = BUNDLED_SKILLS.filter(s => skillRuns(s).includes(pass)).map(s => parseFrontmatter(s.content).name ?? s.folder);
+  return { current, all: [...current, ...current.flatMap(formerNames)] };
+}
 
 /** The single JSON settings row written by earlier releases, before these choices moved to skills. */
 interface LegacyDialogueSettings {
@@ -43,16 +53,19 @@ function preservePendingSuggestions(ctx: Ctx, levels: LegacyDialogueSettings["ai
 }
 
 export function migrateDialogueSettings(ctx: Ctx) {
-  ctx.db.transaction(() => {
+  const outcome = ctx.db.transaction((): string | undefined => {
     // ServerSettings strips retired fields. Read the original row, then consume it in the same transaction
     // as the skill revisions so an interrupted upgrade or a second engine cannot import the choices twice.
     const row = ctx.db.prepare("SELECT json_extract(json, '$.dialogue') AS dialogue FROM settings WHERE id = 1 AND json_type(json, '$.dialogue') = 'object'")
       .get() as { dialogue: string } | undefined;
     if (!row) return;
+    let outcome: string;
     const legacy: LegacyDialogueSettings = JSON.parse(row.dialogue);
     preservePendingSuggestions(ctx, legacy.aiCuts);
     const lines = editorialPreferences(legacy);
-    const guides = ctx.repos.skills.select(`name = 'dialogue-pass' OR json_extract(json, '$.bundledName') IN ('first-cut-dialogue', 'dialogue-pass')`);
+    const names = dialogueGuideNames();
+    const marks = (list: string[]) => list.map(() => "?").join(", ") || "NULL";
+    const guides = ctx.repos.skills.select(`name IN (${marks(names.current)}) OR json_extract(json, '$.bundledName') IN (${marks(names.all)})`, [...names.current, ...names.all]);
     // Scarlet used to add the default two-frame crossfade at every join by itself, and no longer does: a join is a
     // straight cut unless a skill asks for a crossfade. An editor's own guide that says nothing about crossfades would
     // lose the one they had, so it is written into that guide. The stock guide states its own.
@@ -62,6 +75,7 @@ export function migrateDialogueSettings(ctx: Ctx) {
       defaultFade && guide.source !== "bundled" && guide.source !== "seed" && !/crossfade/i.test(guide.content)
         ? [...lines, "Use a 2-frame audio crossfade at dialogue joins."] : lines;
     if (guides.length) {
+      let updated = 0;
       for (const guide of guides) {
         const own = preferencesFor(guide);
         if (!own.length) continue;
@@ -70,7 +84,9 @@ export function migrateDialogueSettings(ctx: Ctx) {
         const source = guide.source === "bundled" || guide.source === "seed" ? undefined : guide.source;
         const content = `${guide.content}\n\n## Editor preferences for dialogue cuts\n\nUse these preferences in place of the general defaults above.\n\n${preferences}\n`;
         updateSkill(ctx, null, { ...guide, source }, { content });
+        updated++;
       }
+      outcome = `wrote ${lines.length} ${lines.length === 1 ? "preference" : "preferences"} into ${updated} of ${guides.length} dialogue ${guides.length === 1 ? "guide" : "guides"}`;
     } else if (lines.length) {
       // The editor may have deleted the workflow or chosen an empty library. Keep their choices recoverable
       // without restoring a deleted guide or activating a replacement.
@@ -80,7 +96,10 @@ export function migrateDialogueSettings(ctx: Ctx) {
       const description = "Preferences saved for dialogue cuts in an earlier version of Scarlet.";
       const content = `---\nname: ${name}\ndescription: ${description}\n---\n\n# Dialogue preferences\n\n${preferences}\n`;
       createSkill(ctx, null, { name, content, description, scope: "team", enabled: false }, { source: "dialogue-settings" });
-    }
+      outcome = `saved ${lines.length} ${lines.length === 1 ? "preference" : "preferences"} in a new disabled skill, since no dialogue guide was found`;
+    } else outcome = "found no preferences to keep";
     ctx.db.prepare("UPDATE settings SET json = json_remove(json, '$.dialogue') WHERE id = 1").run();
+    return outcome;
   }, "immediate")();
+  if (outcome) ctx.log(`[skills] moved the dialogue settings of an earlier version: ${outcome}`);
 }

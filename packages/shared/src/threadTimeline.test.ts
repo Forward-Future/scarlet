@@ -802,6 +802,87 @@ describe("a doubt a later request raises about an edit already in the video", ()
     const note = { ...marks, ops: [{ op: "addMarker", marker: { id: "n", time: 144.21, kind: "chapter", text: "Boats", resolved: false } }] };
     expect(threadTimeline(thread([note]), head, links, () => earlier, 30)[0]?.check).toBeUndefined();
   });
+
+  it("drops earlier to-do marker rows when a later request updates or resolves the same markers, even without replaces, and restores them on undo", () => {
+    const wright = { id: "br_wright_flyer", time: 153.32, kind: "todo" as const, text: "B-roll: Show the Wright Flyer.", resolved: false };
+    const jet = { id: "br_boeing_747", time: 186.61, kind: "todo" as const, text: "B-roll: Show a Boeing 747 lifting off.", resolved: false };
+    const wrightLong = { ...wright, time: 148.28, text: "B-roll: Show the Wright Flyer, then later aircraft." };
+    const v2 = { ...head, version: "v2", markers: [wright, jet] };
+    const v3 = { ...head, version: "v3", markers: [wrightLong, { ...jet, resolved: true }] };
+    const versions: Record<string, typeof head> = { v1: earlier, v2, v3 };
+    const read = (version: string) => versions[version];
+    const first = { ...change, id: "chg_first", threadId: "thr_broll", taskId: "tsk_broll", fromVersion: "v1", toVersion: "v2",
+      createdAt: "2026-01-01T00:00:00Z",
+      ops: [{ op: "addMarker", marker: wright }, { op: "addMarker", marker: jet }],
+      timelineEdits: [
+        { label: "The Wright Flyer’s first flights", range: { start: 153.32, end: 157.9 } },
+        { label: "A Boeing 747 lifting off", range: { start: 186.61, end: 190.43 } },
+      ] };
+    const followup = { ...change, id: "chg_followup", threadId: "thr_followup", taskId: "tsk_followup", fromVersion: "v2", toVersion: "v3",
+      createdAt: "2026-01-02T00:00:00Z",
+      ops: [
+        { op: "updateMarker", markerId: "br_wright_flyer", patch: { time: 148.28, text: wrightLong.text } },
+        { op: "updateMarker", markerId: "br_boeing_747", patch: { resolved: true } },
+      ],
+      timelineEdits: [{ label: "From the Wright Flyer to later designs", range: { start: 148.28, end: 167.87 } }] };
+    const allChanges = [first, followup];
+    const brollThread = { ...thread([first]), id: "thr_broll" };
+    const followupThread = { ...thread([followup]), id: "thr_followup" };
+    const tree = [...links, { version: "v3", parent: "v2" }];
+
+    // Neither superseded marker nor resolved marker stays listed under the earlier request.
+    expect(threadTimeline(brollThread, v3, tree, read, 30, undefined, allChanges)).toEqual([]);
+    expect(threadTimeline(followupThread, v3, tree, read, 30, undefined, allChanges)).toMatchObject([
+      { changeId: "chg_followup", label: "From the Wright Flyer to later designs", marker: true, todo: wrightLong.text, check: wrightLong.text },
+    ]);
+    // Client-side fallback matches too.
+    expect(threadEditList(brollThread, undefined, allChanges)).toEqual([]);
+
+    // Undoing the follow-up restores both original to-dos on the earlier request.
+    const undoneTree = [...tree, { version: "v4", parent: "v3", revertsVersion: "v3" }];
+    const v4 = { ...v2, version: "v4" };
+    expect(threadTimeline(brollThread, v4, undoneTree, v => v === "v4" ? v4 : read(v), 30, undefined, allChanges).map(e => e.label)).toEqual([
+      "The Wright Flyer’s first flights", "A Boeing 747 lifting off",
+    ]);
+  });
+
+  it("drops an edit replaced across requests via replaces and carries its lineage onto the replacement", () => {
+    const first = { ...change, id: "chg_1", threadId: "thr_1", taskId: "tsk_1", fromVersion: "v1", toVersion: "v2",
+      createdAt: "2026-01-01T00:00:00Z",
+      timelineEdits: [
+        { label: "Punch in on intro", range: { start: 10, end: 15 }, check: "Check framing" },
+        { label: "Punch in on demo", range: { start: 30, end: 35 } },
+      ] };
+    const second = { ...change, id: "chg_2", threadId: "thr_2", taskId: "tsk_2", fromVersion: "v2", toVersion: "v3",
+      createdAt: "2026-01-02T00:00:00Z",
+      timelineEdits: [
+        { label: "Tighter intro punch-in", range: { start: 10, end: 15 }, replaces: { changeId: "chg_1", spot: 0 } },
+      ] };
+    const allChanges = [first, second];
+    const t1 = { ...thread([first]), id: "thr_1" };
+    const t2 = { ...thread([second]), id: "thr_2" };
+    const tree = [...links, { version: "v3", parent: "v2" }];
+    const v3 = { ...head, version: "v3" };
+    const read = (v: string) => v === "v1" ? earlier : head;
+
+    // Spot 0 was replaced by thr_2 so thr_1 lists only spot 1; thr_2 carries the lineage and revised check.
+    expect(threadTimeline(t1, v3, tree, read, 30, undefined, allChanges).map(e => e.label)).toEqual(["Punch in on demo"]);
+    expect(threadTimeline(t2, v3, tree, read, 30, undefined, allChanges)).toMatchObject([
+      { changeId: "chg_2", spot: 0, label: "Tighter intro punch-in", check: REVISED_CHECK, previous: [{ changeId: "chg_1", spot: 0 }] },
+    ]);
+  });
+
+  it("replaces an earlier marker in place when updated in the same thread without replaces", () => {
+    const first = { ...change, id: "chg_1", fromVersion: "v1", toVersion: "v2", createdAt: "2026-01-01T00:00:00Z",
+      ops: [{ op: "addMarker", marker: { id: "br_1", time: 20, kind: "todo", text: "B-roll: Short clip.", resolved: false } }],
+      timelineEdits: [{ label: "Short clip", range: { start: 20, end: 24 } }] };
+    const updated = { ...change, id: "chg_2", fromVersion: "v2", toVersion: "v3", createdAt: "2026-01-02T00:00:00Z",
+      ops: [{ op: "updateMarker", markerId: "br_1", patch: { time: 18, text: "B-roll: Longer clip covering the full thought." } }],
+      timelineEdits: [{ label: "Longer clip", range: { start: 18, end: 32 } }] };
+    expect(threadEditList(thread([first, updated]))).toMatchObject([
+      { changeId: "chg_2", label: "Longer clip", marker: true, todo: "B-roll: Longer clip covering the full thought.", previous: [{ changeId: "chg_1", spot: 0 }] },
+    ]);
+  });
 });
 
 it("names a cut saved without a summary by what came out, not by why it was made", () => {

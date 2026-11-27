@@ -18,7 +18,7 @@
  * from those clips and from audio tracks, mixed. No transforms, fades, captions
  * or colour clips (gaps render black/silent).
  */
-import { audioMapArgs, LOCAL_MEDIA_INPUT, extractWaveformFull as decodeWaveform, hashFile, renderPlaybackSegment, type WaveformCache as BinaryWaveformCache } from "@scarlet/render";
+import { audioMapArgs, LOCAL_MEDIA_INPUT, extractWaveformFull as decodeWaveform, hashFile, logReason, logRender, renderPlaybackSegment, type WaveformCache as BinaryWaveformCache } from "@scarlet/render";
 import { join } from "node:path";
 import type { MediaAsset, MediaClip, MediaKind, Project, Timeline, TimeRange } from "@scarlet/timeline";
 import { clipEnd, timelineDuration, timelineToSource } from "@scarlet/timeline";
@@ -54,6 +54,8 @@ export interface WaveformCache extends WaveformData<number[] | Float32Array> {
 export interface RenderOptions {
   /** Absolute dir that MediaAsset.path is relative to. */
   mediaRoot: string;
+  /** Optional extra trusted directories (such as library-wide style guides) for `.cube`/`.3dl` LUTs. */
+  lutRoots?: readonly string[];
   quality: "preview" | "delivery";
   exportRange?: TimeRange;
   exportHeight?: number;
@@ -62,6 +64,8 @@ export interface RenderOptions {
   best?: boolean;
   /** Output height in px (width follows the project aspect). Defaults to project height. */
   height?: number;
+  /** Extra font directories searched before OS defaults (e.g. style guide and attachment fonts). */
+  fontDirs?: string[];
   hwaccel?: "none" | "auto" | "nvenc" | "qsv" | "videotoolbox";
   onProgress?: (p: number) => void;
   /** Called once for each thing the renderer couldn't do as asked and worked around: a missing source, an unsupported effect. */
@@ -83,6 +87,8 @@ export interface RenderAdapter {
   extractFrame(path: string, t: number, opts: { width: number; signal?: AbortSignal; indexedMp4?: boolean; decoder?: "cuda" | "videotoolbox"; fps?: number;
     /** The file's HDR transfer: the frame is tone-mapped to SDR. The fallback adapter leaves it as decoded. */
     hdr?: "hlg" | "pq";
+    /** True when the asset is known to be a still image regardless of filename extension. */
+    still?: boolean;
     /** Only this area of the picture, as fractions of it, and labelled percent lines over it. */
     area?: [number, number, number, number]; grid?: { width: number; height: number } }): Promise<Buffer>;
   makeProxy(input: string, output: string, opts: { height?: number; audioTrack?: MediaAsset["audioTrack"]; checkpointDir?: string; range?: TimeRange; hwaccel?: RenderOptions["hwaccel"]; signal?: AbortSignal; onProgress?: (p: number) => void; onFallback?: (stage: "decode" | "encode") => void }): Promise<void>;
@@ -214,7 +220,10 @@ async function makeProxy(input: string, output: string, opts: Parameters<RenderA
   const h = Math.max(2, Math.round((opts.height ?? 540) / 2) * 2);
   // The preview plays the track the editor chose, or every track mixed, named by number: left to itself FFmpeg plays
   // the stream with the most channels.
-  const probed = await probeMedia(input).catch(() => undefined);
+  const probed = await probeMedia(input).catch((error: unknown) => {
+    logRender(() => `[media] proxy: couldn't read the file's streams first, so ffmpeg picks its tracks: ${logReason(error)}`, "fallback-proxy-probe");
+    return undefined;
+  });
   const duration = probed?.duration;
   const audioOnly = probed?.kind === "audio";
   const streams = probed ? [...audioOnly ? [] : ["-map", "0:v:0"],

@@ -245,6 +245,20 @@ it("asks about words in the edit by the clips they play from", async () => {
   useUiStore.setState(ui, true);
 });
 
+it("labels words asked about in the edit with the version they were read on, while a newer one isn't on screen yet", async () => {
+  const ui = useUiStore.getState();
+  useUiStore.setState({ agentContext: null, composerFocus: 0, notePopover: null });
+  // The head moved on, but its timeline isn't here yet: the words and their times are the older version's.
+  const older = { ...timelineFromKeepRanges(PRJ, source.id, [{ start: 10, end: 60 }]), version: "old" };
+  useProjectStore.setState({ current: { ...useProjectStore.getState().current!, timeline: older, project: { ...project, head: "new" } } });
+  await act(async () => root.render(<MemoryRouter><TranscriptPane onAsk={() => {}} /></MemoryRouter>));
+  expect(at(0).textContent).toBe("word10");
+  await act(async () => at(0).dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight", shiftKey: true })));
+  await act(async () => button("Ask about this")!.click());
+  expect(useUiStore.getState().agentContext).toMatchObject({ version: "old", time: 0, end: 2 });
+  useUiStore.setState(ui, true);
+});
+
 it("lets Shift+Tab leave the words, and still takes a Tab in from outside, or a press between the words, to a word", async () => {
   await mount();
   const list = container.querySelector<HTMLElement>(".reading-scroll")!;
@@ -373,4 +387,29 @@ it("follows the playhead without gliding when motion is reduced, and glides agai
   await act(async () => usePlayerStore.setState({ time: 20.5 }));
   expect(scroll.mock.contexts.at(-1)).toBe(at(20));
   expect(scroll).toHaveBeenLastCalledWith({ block: "center", behavior: "smooth" });
+});
+
+it("leaves Enter and Esc to an input method that is composing in the search", async () => {
+  await mount();
+  await search("word4");
+  const field = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const count = () => container.querySelector(".transcript-search-count")?.textContent;
+  const key = (init: KeyboardEventInit) => act(async () => { field.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
+  const seek = vi.spyOn(player, "seek").mockImplementation(() => {});
+  expect(count()).toBe("1 of 11");
+  // The Enter that commits a composition (keyCode 229 in WebKit) places no playhead and steps to no match, and its
+  // Esc clears nothing.
+  await key({ key: "Enter", keyCode: 229 });
+  await key({ key: "Enter", isComposing: true });
+  expect(seek).not.toHaveBeenCalled();
+  expect(count()).toBe("1 of 11");
+  await key({ key: "Escape", isComposing: true });
+  expect(field.value).toBe("word4");
+  // Enter places the playhead on the match in view, then steps on.
+  await key({ key: "Enter" });
+  expect(seek).toHaveBeenCalledTimes(1);
+  await key({ key: "Enter" });
+  expect(count()).toBe("2 of 11");
+  await key({ key: "Escape" });
+  expect(field.value).toBe("");
 });

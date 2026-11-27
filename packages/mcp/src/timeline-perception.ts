@@ -7,7 +7,7 @@ import { clipDuration, formatTimecode, type MediaClip, type Project, type TimeRa
 import type { PictureEntrance } from "./picture-entrance.js";
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { captionSourceClips, dbfs, isTag, wordsByMidpoint } from "./analysis.js";
-import { QUIET_PEAK, quietBuckets, quietRms } from "./gap-sound.js";
+import { quietBuckets, quietPeak, quietRms } from "./gap-sound.js";
 
 // ---------------------------------------------------------------------------
 // Joins and time mapping
@@ -318,7 +318,8 @@ function bucketing(r: Reading, words?: readonly TranscriptWord[]) {
   // A span that only touches a bucket boundary (within float error) does not voice it.
   const voiced = (s: number, e: number) => (r.speechActivity ?? []).some(v => v.start < e - 1e-6 && v.end > s + 1e-6);
   const quietBelow = quietRms(r.rms ?? [], step);
-  const low = (i: number) => i >= 0 && i < n && (r.rms?.[i] ?? 0) <= quietBelow && r.peaks[i]! <= QUIET_PEAK;
+  const peakBelow = quietPeak(quietBelow);
+  const low = (i: number) => i >= 0 && i < n && (r.rms?.[i] ?? 0) <= quietBelow && r.peaks[i]! <= peakBelow;
   // Measured as the join check places edges: a breath after a word is part of the quiet after it.
   const spoken = words?.filter(w => w.end > w.start && w.text.trim() && !isTag(w.text));
   const still = r.rms ? quietBuckets(r.rms, r.peaks, r.from, step, r.speechActivity ?? [], quietBelow, spoken) : undefined;

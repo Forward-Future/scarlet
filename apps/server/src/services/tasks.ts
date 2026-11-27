@@ -2,9 +2,12 @@ import {
   AgentId,
   dialogueCommand,
   isAsideTask,
+  isBatchSummary,
+  isHandOff,
   isLearningCheck,
   isProjectEditTask,
   isSkillEdit,
+  isStyleGuideEdit,
   planText,
   PROJECT_EDIT_TASK_KINDS,
   questionChoicesOf,
@@ -25,9 +28,12 @@ import { now } from "../db.js";
 import { badRequest, conflict } from "../errors.js";
 import { clip, logId, since } from "../logText.js";
 import { recordTaskFinished, recordTaskRequested } from "../telemetry/events.js";
+import { taskFailureReason } from "../telemetry/failureReason.js";
 import { actorFor, agentName, logActivity, quote } from "./activity.js";
 import { applyChoicesWhenDone, applySettledCuts, retireStaleSaves } from "./changes.js";
+import { finishBatchSummaryTask } from "./batchSummaries.js";
 import { skillEditEnded, startLearningCheck } from "./learnings.js";
+import { renamedTo } from "./skillSeed.js";
 import { notify } from "./notify.js";
 import { restoreUnreplacedProposal } from "./revisionState.js";
 import { runAttemptIds } from "./runAttempts.js";
@@ -35,6 +41,17 @@ import { aboutStagedCut, followUpInstruction, RESUMABLE } from "./taskPrompts.js
 
 /** States a task never leaves. */
 export const FINISHED_TASK: ReadonlySet<string> = new Set(["done", "failed", "cancelled"]);
+
+/** Failure categories where a sibling learning_check on the same assistant would only repeat the failure. */
+const ASSISTANT_FAILURE_CANCEL_LEARNING: ReadonlySet<string> = new Set([
+  "agent_not_installed",
+  "agent_not_signed_in",
+  "agent_incompatible",
+  "rate_limited",
+  "model_unavailable",
+  "provider_error",
+  "crashed",
+]);
 
 /** Requests that can edit a project's video. */
 export const PROJECT_EDIT_KINDS = `(${PROJECT_EDIT_TASK_KINDS.map(kind => `'${kind}'`).join(",")})`;
@@ -91,8 +108,16 @@ export function stagesCut(kind: TaskKind, change: Change): boolean {
 }
 
 function requestedDialogue(ctx: Ctx, text: string) {
-  const names = skillCommands(text).map(command => command.name).filter(Boolean);
-  if (names.length) return dialogueCommand(text, ctx.repos.skills.select("name IN (SELECT value FROM json_each(?))", [JSON.stringify(names)]));
+  const commands = skillCommands(text).filter(command => command.name);
+  if (!commands.length) return;
+  const library = ctx.repos.skills.select("1=1");
+  // A command sent under a skill's former name (skills/retired.json) means the one it goes by now, unless a skill
+  // has taken the old name since.
+  const current = commands.reduceRight((said, { name, start, end }) => {
+    const to = renamedTo(name);
+    return to && !library.some(skill => skill.name === name) ? `${said.slice(0, start)}/${to}${said.slice(end)}` : said;
+  }, text);
+  return dialogueCommand(current, library);
 }
 
 /** Upgrade old requests and their answers once, before a host or the renderer reads them. */
@@ -262,11 +287,9 @@ export function appendTaskEvent(ctx: Ctx, task: Task, ev: TaskEvent): { task: Ta
     // The CLI session this run works in. A run cut short when Scarlet quits carries on in it.
     if (next.session?.id !== ev.data.sessionId) next = { ...next, session: { agent: task.agent, id: ev.data.sessionId } };
   }
+  // The step it takes (running, waiting for the editor, queued again) is logged once, where it is saved. What was asked
+  // and what was answered stay out of the log.
   if (next !== task) next = saveTask(ctx, next);
-  // What was asked and what was answered stay out of the log.
-  if (next.state !== task.state) {
-    ctx.log(`[task] ${task.id} ${task.state} → ${next.state}${ev.type === "question" ? ": asked the editor a question" : ev.type === "answer" ? ": the editor answered" : ""}`);
-  }
   ctx.bus.publish({ type: "task.event", projectId: task.projectId, taskId: task.id, event });
   if (ev.type === "answer") ctx.bus.taskQueued({ taskId: task.id, projectId: task.projectId });
   return { task: next, event };
@@ -408,6 +431,11 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
   });
   recordTaskFinished(ctx, saved);
   dropWaitingLooks(ctx, saved);
+  // If the request failed because the assistant/model itself is broken, unavailable or rate-limited,
+  // cancel its sibling learning check instead of letting it fail with the same error.
+  if (saved.state === "failed" && ASSISTANT_FAILURE_CANCEL_LEARNING.has(taskFailureReason(saved))) {
+    for (const check of openChecks(ctx, saved, "learning_check")) cancelTask(ctx, check);
+  }
   const ran = since(saved.startedAt, Date.parse(saved.finishedAt!));
   ctx.db.afterCommit(() => {
     ctx.log(`[task] ${saved.id} ${saved.state}${ran ? ` after ${ran}` : ""}${body.error ? `: ${clip(body.error, 400)}` : ""}` +
@@ -416,21 +444,27 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
     if (needsTranscripts.length) ctx.log(`[task] completion_deferred task=${logId(task.id)} project=${logId(task.projectId)} outcome=awaiting_transcripts reason=transcripts remaining=${needsTranscripts.length}`);
   });
   const asked = saved.context.message ?? saved.instruction.split("\n").pop() ?? saved.instruction;
-  // A learning check is Scarlet's own reading of a request. What it offers is in Learnings; the run itself is no one's news.
-  if (!isLearningCheck(saved)) logActivity(ctx, {
-    projectId: isSkillEdit(saved) ? null : saved.projectId,
+  // A hand-off is told the editor's words, but its end is its own, not the request's: it is logged as the kind of work
+  // it did and its brief, so the request reads as finished once.
+  const handOff = isHandOff(saved);
+  const did = handOff ? `${saved.context.handOff?.name ?? "a hand-off"}: ${quote(saved.instruction)}` : quote(asked);
+  // A learning check or batch summary is Scarlet's own reading. Neither needs an entry in the activity log.
+  if (!isLearningCheck(saved) && !isBatchSummary(saved)) logActivity(ctx, {
+    projectId: isSkillEdit(saved) || isStyleGuideEdit(saved) ? null : saved.projectId,
     actor: { type: "agent", id: saved.agent, name: saved.agent, model: saved.model },
-    type: `request.${body.state}`,
+    type: `${handOff ? "hand_off" : "request"}.${body.state}`,
     summary:
       body.state === "done"
-        ? `${agentName(saved.agent)} finished ${quote(asked)}${changeIds.length ? ` and saved ${changeIds.length} edit${changeIds.length === 1 ? "" : "s"}` : ""}`
+        ? `${agentName(saved.agent)} finished ${did}${changeIds.length ? ` and saved ${changeIds.length} edit${changeIds.length === 1 ? "" : "s"}` : ""}`
         : body.state === "failed"
-          ? `${agentName(saved.agent)} couldn’t finish ${quote(asked)}${body.error ? `: ${body.error.slice(0, 160)}` : ""}`
-          : `${agentName(saved.agent)} stopped working on ${quote(asked)}`,
+          ? `${agentName(saved.agent)} couldn’t finish ${did}${body.error ? `: ${body.error.slice(0, 160)}` : ""}`
+          : `${agentName(saved.agent)} stopped working on ${did}`,
     data: { taskId: saved.id, threadId: saved.context.threadId, changeIds },
   });
   // A rule the editor approved is saved now, or goes back to them, and the skill's next one starts.
   skillEditEnded(ctx, saved);
+  // A silent batch summary finishes by caching its title and updating the edits rail live.
+  if (isBatchSummary(saved)) finishBatchSummaryTask(ctx, saved);
   // A follow-up queued behind this task in its thread can start now.
   ctx.bus.taskQueued({ taskId: saved.id, projectId: saved.projectId });
   // A skill's page says how its own request went, and a learning check says nothing.
@@ -444,7 +478,8 @@ export function completeTask(ctx: Ctx, task: Task, body: CompleteTaskRequest): T
 
 /** The side checks of one kind a request started that haven't finished. */
 function openChecks(ctx: Ctx, task: Task, kind: "learning_check" | "area_check" | "listen_check" | "hand_off"): Task[] {
-  if (!editsDialogue(task.kind)) return [];
+  // A hand-off's saves ask for looks at frames as a request's do, in its own name.
+  if (!editsDialogue(task.kind) && !isHandOff(task)) return [];
   return ctx.repos.tasks.select("project_id = ? AND kind = ? AND json_extract(json, '$.context.checksTaskId') = ?", [task.projectId, kind, task.id])
     .filter(check => !FINISHED_TASK.has(check.state));
 }
@@ -460,6 +495,21 @@ export function dropWaitingLooks(ctx: Ctx, task: Task): void {
   // run that handed it the work, which is over.
   for (const check of openChecks(ctx, task, "listen_check")) cancelTask(ctx, check);
   for (const check of openChecks(ctx, task, "hand_off")) cancelTask(ctx, check);
+}
+
+/**
+ * A look, a listen or a hand-off still waiting to start for a run that is over, or gone, never starts: it is claimed
+ * only while that run is at work. Left waiting, a look holds back every later ask about its recording until the ask
+ * gives up (a hand-off's looks were left so until 2026-11-24). Run as the engine starts.
+ */
+export function dropOrphanedChecks(ctx: Ctx): void {
+  const orphans = ctx.db.prepare(`SELECT q.id FROM tasks q LEFT JOIN tasks asker ON asker.id = json_extract(q.json, '$.context.checksTaskId')
+    WHERE q.state = 'queued' AND q.kind IN ('area_check', 'listen_check', 'hand_off')
+    AND (asker.id IS NULL OR asker.state IN ('done', 'failed', 'cancelled'))`).all() as Array<{ id: string }>;
+  for (const { id } of orphans) {
+    const check = ctx.repos.tasks.get(id);
+    if (check) cancelTask(ctx, check);
+  }
 }
 
 /**
@@ -536,7 +586,7 @@ export function startBeforeCalls(ctx: Ctx, user: User, task: Task): Task {
  * it so: the instruction is built again the way it was when the request was sent, the note a revision or a new edit at
  * a point was sent as says it too, and the skills are the ones the new words name, as they'd be if sent so.
  */
-export function rewordTask(ctx: Ctx, user: User, task: Task, text: string, skillIds?: string[]): Task {
+export function rewordTask(ctx: Ctx, user: User, task: Task, text: string, skillIds?: string[], styleGuideIds?: string[]): Task {
   stillWaiting(task);
   const said = task.context.message ?? task.instruction;
   if (text === said) return holdForRewording(ctx, task, false);
@@ -547,7 +597,8 @@ export function rewordTask(ctx: Ctx, user: User, task: Task, text: string, skill
   const message = task.context.message !== undefined ? { message: text } : {};
   // Reworded, the request is the editor's own words: what the app had worded for them, such as an undo, no longer stands.
   const skills = skillIds?.length ? [...new Set(skillIds)] : undefined;
-  const saved = saveTask(ctx, { ...task, instruction, context: { ...task.context, ...message, skillIds: skills, asked: undefined,
+  const styleGuides = styleGuideIds?.length ? [...new Set(styleGuideIds)] : undefined;
+  const saved = saveTask(ctx, { ...task, instruction, context: { ...task.context, ...message, skillIds: skills, styleGuideIds: styleGuides, asked: undefined,
     ...(editsDialogue(task.kind) && { dialogueOperation: requestedDialogue(ctx, text) ?? "none", dialogueRange: undefined }) }, rewordingUntil: undefined });
   // The prompt quotes a request's notes beside its instruction, so a note left with the old words would ask them still.
   for (const id of task.kind === "revise" || task.kind === "note" ? task.context.noteIds ?? [] : []) {

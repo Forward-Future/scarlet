@@ -1,0 +1,694 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { findChrome, hasChrome } from "@scarlet/render";
+import { createProject, type MediaAsset, type Project } from "@scarlet/timeline";
+import { ATTEMPT_HEADER, TASK_HEADER, type StyleGuideAsset, type StyleGuideRecord, type Task, type TaskPrompt } from "@scarlet/shared";
+import { createApp, type ScarletApp } from "../app.js";
+import { accessToken } from "../auth.js";
+import { saveTask } from "../services/tasks.js";
+
+let directory: string;
+let workspace: ScarletApp;
+let project: Project;
+
+beforeEach(() => {
+  directory = mkdtempSync(join(tmpdir(), "scarlet-style-guides-test-"));
+  workspace = createApp({
+    dataDir: directory,
+    skillsSeedDir: join(directory, "empty-seed"),
+    env: hasChrome() ? { SCARLET_CHROME: findChrome() } : {},
+    log: () => {},
+  });
+  project = workspace.ctx.repos.projects.insert(
+    createProject("Style Guides Test", { width: 1280, height: 720, fps: 30, aspect: "16:9" }),
+  );
+});
+
+afterEach(async () => {
+  if (!workspace.ctx.shutdown.aborted) await workspace.ctx.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+const auth = () => ({ Authorization: `Bearer ${accessToken(workspace.ctx)}` });
+function api(method: string, path: string, body?: unknown, extraHeaders?: Record<string, string>) {
+  return workspace.app.request("/api" + path, {
+    method,
+    body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
+    headers: {
+      ...auth(),
+      ...(body !== undefined && !(body instanceof FormData) && { "Content-Type": "application/json" }),
+      ...extraHeaders,
+    },
+  });
+}
+
+async function prompt(task: Task): Promise<string> {
+  const res = await api("GET", `/tasks/${task.id}/prompt`);
+  expect(res.status).toBe(200);
+  return (await res.json() as TaskPrompt).systemPrompt;
+}
+
+describe("style guides CRUD & default semantics", () => {
+  it("creates, lists, updates, enforces a single default, rejects duplicates, and cleans up files on delete", async () => {
+    const firstRes = await api("POST", "/style-guides", {
+      name: "channel-brand",
+      description: "Warm cream and terracotta lower thirds.",
+      instructions: "Use #F5F2EB panels and #E05A3A accents.",
+      isDefault: true,
+    });
+    expect(firstRes.status).toBe(201);
+    const first = (await firstRes.json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    expect(first).toMatchObject({ name: "channel-brand", isDefault: true });
+
+    // Invalid uppercase slug is rejected with 400; duplicate slug is rejected with 409.
+    const badRes = await api("POST", "/style-guides", { name: "Channel-Brand", description: "Bad", instructions: "" });
+    expect(badRes.status).toBe(400);
+    const dupRes = await api("POST", "/style-guides", { name: "channel-brand", description: "Dup", instructions: "" });
+    expect(dupRes.status).toBe(409);
+
+    // Setting a second style guide as default clears isDefault on the first.
+    const secondRes = await api("POST", "/style-guides", {
+      name: "tech-brief",
+      description: "Dark slate with cyan badges.",
+      instructions: "Use #0F172A cards and #38BDF8 highlights.",
+      isDefault: true,
+    });
+    expect(secondRes.status).toBe(201);
+    const second = (await secondRes.json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    expect(second.isDefault).toBe(true);
+
+    const listRes = await api("GET", "/style-guides");
+    const { styleGuides } = await listRes.json() as { styleGuides: StyleGuideRecord[] };
+    expect(styleGuides.map(g => [g.name, g.isDefault])).toEqual([
+      ["tech-brief", true],
+      ["channel-brand", false],
+    ]);
+
+    // Upload an asset so the style guide has a folder on disk, then delete it and verify cleanup.
+    const form = new FormData();
+    form.append("file", new Blob(["hello"], { type: "text/plain" }), "brand.txt");
+    const upRes = await api("POST", `/style-guides/${first.id}/assets`, form);
+    expect(upRes.status).toBe(201);
+    expect(existsSync(workspace.ctx.paths.styleGuideDir(first.id))).toBe(true);
+
+    const delRes = await api("DELETE", `/style-guides/${first.id}`);
+    expect(delRes.status).toBe(200);
+    expect((await api("GET", `/style-guides/${first.id}`)).status).toBe(404);
+    await vi.waitFor(() => expect(existsSync(workspace.ctx.paths.styleGuideDir(first.id))).toBe(false), { timeout: 2000, interval: 10 });
+  });
+});
+
+describe("style guide assets", () => {
+  it("stores multipart and path uploads, sandboxes active SVGs on download, and reads text documents", async () => {
+    const created = (await (await api("POST", "/style-guides", { name: "brand-assets" })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    // Multipart SVG upload
+    const form = new FormData();
+    form.append("file", new Blob(['<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'], { type: "image/svg+xml" }), "logo.svg");
+    const svgUp = await api("POST", `/style-guides/${created.id}/assets`, form);
+    expect(svgUp.status).toBe(201);
+    const { asset: svgAsset } = await svgUp.json() as { asset: StyleGuideAsset };
+
+    const svgDownload = await api("GET", `/style-guides/${created.id}/assets/${svgAsset.id}`);
+    expect(svgDownload.status).toBe(200);
+    expect(svgDownload.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect(svgDownload.headers.get("content-disposition")).toBe(`attachment; filename="logo.svg"; filename*=UTF-8''logo.svg`);
+
+    // Local path upload + read
+    const tmpFile = join(directory, "rules.md");
+    writeFileSync(tmpFile, "# Brand Guide\nAlways use matte black.");
+    const pathUp = await api("POST", `/style-guides/${created.id}/assets`, { path: tmpFile });
+    expect(pathUp.status).toBe(201);
+    const { asset: mdAsset } = await pathUp.json() as { asset: StyleGuideAsset };
+
+    const readRes = await api("POST", `/style-guides/${created.id}/assets/${mdAsset.id}/read`, {});
+    expect(readRes.status).toBe(200);
+    const doc = await readRes.json() as { text: string };
+    expect(doc.text).toContain("Always use matte black.");
+  });
+});
+
+describe("1-click save as style from graphic", () => {
+  it("copies graphic HTML and linked files into a reusable style guide with clean names", async () => {
+    const mediaId = "med_gfx_save";
+    const gfxDir = join(workspace.ctx.paths.project(project.id), "graphics", mediaId);
+    const linkedDir = join(gfxDir, "linked");
+    mkdirSync(linkedDir, { recursive: true });
+    writeFileSync(join(linkedDir, "a1b2c3d4-logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    writeFileSync(
+      join(gfxDir, "index.html"),
+      `<!doctype html><html><head><style>body{background:#121316;color:#f5f2eb;font-family:Inter,sans-serif;}</style></head><body><img src="linked/a1b2c3d4-logo.svg"></body></html>`,
+    );
+
+    const media: MediaAsset = {
+      id: mediaId,
+      name: "Lower Third.mov",
+      kind: "video",
+      path: `graphics/${mediaId}/graphic.mov`,
+      duration: 4,
+      width: 1280,
+      height: 720,
+      fps: 30,
+      hasAudio: false,
+      graphic: {
+        source: `graphics/${mediaId}/index.html`,
+      },
+    };
+    workspace.ctx.repos.projects.putMedia(project.id, media, "ready");
+
+    const res = await api("POST", "/style-guides/from-graphic", {
+      projectId: project.id,
+      mediaId,
+      name: "lower-third-look",
+    });
+    expect(res.status).toBe(201);
+    const { styleGuide } = await res.json() as { styleGuide: StyleGuideRecord };
+    expect(styleGuide.name).toBe("lower-third-look");
+    expect(styleGuide.description).toBe("Saved from Lower Third");
+    expect(styleGuide.instructions).toContain("#121316");
+    expect(styleGuide.instructions).toContain("Inter,sans-serif");
+    // Dedupe hash prefix stripped from linked asset name
+    expect(styleGuide.assets).toHaveLength(1);
+    expect(styleGuide.assets[0]!.name).toBe("logo.svg");
+    const copiedPath = join(workspace.ctx.paths.styleGuideAssets(styleGuide.id), styleGuide.assets[0]!.id, "logo.svg");
+    expect(readFileSync(copiedPath, "utf8")).toContain("<svg");
+  });
+
+  it("rewrites each asset link to its own copy when one file name is inside another", async () => {
+    const mediaId = "med_gfx_overlap";
+    const gfxDir = join(workspace.ctx.paths.project(project.id), "graphics", mediaId);
+    mkdirSync(gfxDir, { recursive: true });
+    writeFileSync(join(gfxDir, "bg.png"), "bg");
+    writeFileSync(join(gfxDir, "hero-bg.png"), "hero");
+    writeFileSync(
+      join(gfxDir, "index.html"),
+      `<!doctype html><html><head><style>.hero{background:url(hero-bg.png)}</style></head><body><img src="bg.png"><img src="./hero-bg.png"></body></html>`,
+    );
+    workspace.ctx.repos.projects.putMedia(project.id, {
+      id: mediaId,
+      name: "Hero.mov",
+      kind: "video",
+      path: `graphics/${mediaId}/graphic.mov`,
+      duration: 4,
+      width: 1280,
+      height: 720,
+      fps: 30,
+      hasAudio: false,
+      graphic: { source: `graphics/${mediaId}/index.html` },
+    }, "ready");
+
+    const res = await api("POST", "/style-guides/from-graphic", { projectId: project.id, mediaId, name: "hero-look" });
+    expect(res.status).toBe(201);
+    const { styleGuide } = await res.json() as { styleGuide: StyleGuideRecord };
+    const pathOf = (name: string) => {
+      const asset = styleGuide.assets.find(a => a.name === name)!;
+      return join(workspace.ctx.paths.styleGuideAssets(styleGuide.id), asset.id, name);
+    };
+    const html = styleGuide.instructions.split("## Reference HTML")[1]!;
+    expect(html).toContain(`url(${pathOf("hero-bg.png")})`);
+    expect(html).toContain(`src="${pathOf("bg.png")}"`);
+    expect(html).toContain(`src="${pathOf("hero-bg.png")}"`);
+    expect(html).not.toContain("hero-/");
+    expect(html).not.toContain(".//");
+  });
+});
+
+describe("style_guide_edit authoring flow and project isolation", () => {
+  it("runs style_guide_edit outside project tasks, builds its prompt, accepts authorized saves, and blocks project edits", async () => {
+    const guide = (await (await api("POST", "/style-guides", { name: "editorial-look" })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    // Direct style_guide_edit creation on project tasks route is rejected.
+    const direct = await api("POST", `/projects/${project.id}/tasks`, {
+      kind: "style_guide_edit",
+      agent: "claude",
+      instruction: "nope",
+    });
+    expect(direct.status).toBe(400);
+
+    // Start an authoring task via the style guide edit route.
+    const editRes = await api("POST", `/style-guides/${guide.id}/edit`, {
+      prompt: "Make it warm cream and editorial serif.",
+      agent: "claude",
+    });
+    expect(editRes.status).toBe(201);
+    const { task } = await editRes.json() as { task: Task };
+    expect(task.kind).toBe("style_guide_edit");
+
+    // Excluded from project conversation task list.
+    const projectTasks = (await (await api("GET", `/projects/${project.id}/tasks`)).json() as { tasks: Task[] }).tasks;
+    expect(projectTasks.some(t => t.id === task.id)).toBe(false);
+
+    // Prompt describes style guide authoring mode and tools.
+    const text = await prompt(task);
+    expect(text).toContain("@editorial-look");
+    expect(text).toContain("style_guide_preview_render");
+    expect(text).toContain("style_guide_update");
+
+    // Claim and mark task running so active attempt checks pass.
+    const startedAt = "2026-11-24T12:00:00.000Z";
+    saveTask(workspace.ctx, { ...task, state: "running", hostId: "host_1", startedAt });
+
+    // Authorized save succeeds and sets resultStyleGuideId.
+    const saveRes = await api(
+      "POST",
+      `/projects/${project.id}/tasks/${task.id}/style-guide-edit`,
+      {
+        styleGuideId: guide.id,
+        hostId: "host_1",
+        description: "Editorial serif on warm cream.",
+        instructions: "Use warm cream #F5F2EB and Playfair Display.",
+      },
+      { [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: startedAt },
+    );
+    expect(saveRes.status).toBe(200);
+    const { styleGuide: updated } = await saveRes.json() as { styleGuide: StyleGuideRecord };
+    expect(updated.description).toBe("Editorial serif on warm cream.");
+    expect(workspace.ctx.repos.tasks.get(task.id)?.resultStyleGuideId).toBe(guide.id);
+
+    // Wrong hostId is rejected with 403.
+    const wrongHost = await api(
+      "POST",
+      `/projects/${project.id}/tasks/${task.id}/style-guide-edit`,
+      {
+        styleGuideId: guide.id,
+        hostId: "host_other",
+        instructions: "hijack",
+      },
+      { [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: startedAt },
+    );
+    expect(wrongHost.status).toBe(403);
+
+    // Style guide tasks cannot modify the borrowed project.
+    const projectWrite = await api(
+      "PUT",
+      `/projects/${project.id}/style-guide`,
+      { text: "should fail" },
+      { [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: startedAt },
+    );
+    expect(projectWrite.status).toBe(403);
+  });
+
+  it("stops a style guide's waiting update when the project it borrowed goes to the trash, so the guide can be updated again", async () => {
+    const guide = (await (await api("POST", "/style-guides", { name: "editorial-look" })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    const edit = () => api("POST", `/style-guides/${guide.id}/edit`, { prompt: "Make it warm cream.", agent: "claude" });
+    const { task } = await (await edit()).json() as { task: Task };
+    expect([task.projectId, task.state]).toEqual([project.id, "queued"]);
+    expect((await edit()).status).toBe(409);
+    // No host takes a request in the trash: left waiting there, it would hold the guide until the project came back.
+    expect((await api("DELETE", `/projects/${project.id}`)).status).toBeLessThan(300);
+    expect(workspace.ctx.repos.tasks.get(task.id)?.state).toBe("cancelled");
+    workspace.ctx.repos.projects.insert(createProject("Another"));
+    expect((await edit()).status).toBe(201);
+  });
+
+  it("allows editing and answering a style guide with only attached files and no message text", async () => {
+    const guide = (await (await api("POST", "/style-guides", { name: "brand-doc" })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    // Empty prompt with no attachments (or unknown attachment IDs) is rejected.
+    expect((await api("POST", `/style-guides/${guide.id}/edit`, { prompt: "", agent: "claude" })).status).toBe(400);
+    expect((await api("POST", `/style-guides/${guide.id}/edit`, {
+      prompt: "   ",
+      attachments: [{ id: "sga_unknown", name: "ghost.md", size: 10 }],
+      agent: "claude",
+    })).status).toBe(400);
+
+    // Upload a brand guide markdown file, then start an edit with an empty prompt.
+    const form = new FormData();
+    form.append("file", new Blob(["# Forward Future\nUse matte black and terracotta."], { type: "text/markdown" }), "forward_future_brand_guide.md");
+    const upRes = await api("POST", `/style-guides/${guide.id}/assets`, form);
+    expect(upRes.status).toBe(201);
+    const { asset } = await upRes.json() as { asset: StyleGuideAsset };
+
+    const editRes = await api("POST", `/style-guides/${guide.id}/edit`, {
+      prompt: "",
+      attachments: [{ id: asset.id, name: asset.name, size: asset.size, mime: asset.mime }],
+      agent: "claude",
+    });
+    expect(editRes.status).toBe(201);
+    const { task } = await editRes.json() as { task: Task };
+    expect(task.instruction).toBe("");
+    expect(task.context.attachments).toEqual([expect.objectContaining({ id: asset.id, name: "forward_future_brand_guide.md" })]);
+
+    // Host prompt receives a non-empty fallback instruction referencing the attached file.
+    const promptRes = await api("GET", `/tasks/${task.id}/prompt`);
+    expect(promptRes.status).toBe(200);
+    const built = await promptRes.json() as TaskPrompt;
+    expect(built.instruction).toContain("forward_future_brand_guide.md");
+    expect(built.systemPrompt).toContain("forward_future_brand_guide.md");
+
+    // Answering a waiting question with only another file also succeeds.
+    const logoForm = new FormData();
+    logoForm.append("file", new Blob(["png"], { type: "image/png" }), "logo.png");
+    const { asset: logo } = await (await api("POST", `/style-guides/${guide.id}/assets`, logoForm)).json() as { asset: StyleGuideAsset };
+    const startedAt = "2026-11-25T08:00:00.000Z";
+    saveTask(workspace.ctx, { ...task, state: "waiting_for_user", hostId: "host_1", startedAt, question: "Drop your logo if you have one." });
+    const ansRes = await api("POST", `/tasks/${task.id}/answer`, {
+      text: "",
+      attachments: [{ id: logo.id, name: logo.name, size: logo.size, mime: logo.mime }],
+    });
+    expect(ansRes.status).toBe(200);
+    const answered = (await ansRes.json() as { task: Task }).task;
+    expect(answered.state).toBe("queued");
+    expect(answered.context.attachments?.map(a => a.name)).toEqual(["forward_future_brand_guide.md", "logo.png"]);
+  });
+});
+
+describe("prompt resolution priority (chat @mention > skill @mention > default)", () => {
+  it("applies default style guide automatically and honors @mention overrides", async () => {
+    const defGuide = (await (await api("POST", "/style-guides", {
+      name: "channel-default",
+      description: "Default cream look",
+      instructions: "DEFAULT_CREAM_RULE",
+      isDefault: true,
+    })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    const altGuide = (await (await api("POST", "/style-guides", {
+      name: "neon-dark",
+      description: "Neon cyberpunk look",
+      instructions: "NEON_DARK_RULE",
+    })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    // 1. Plain request with no @mention gets the default style automatically.
+    const t1 = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "Add a chapter card at 0:10",
+    })).json() as { task: Task }).task;
+    const p1 = await prompt(t1);
+    expect(p1).toContain("@channel-default");
+    expect(p1).toContain("DEFAULT_CREAM_RULE");
+    expect(p1).not.toContain("NEON_DARK_RULE");
+
+    // 2. Chat @mention overrides default.
+    const t2 = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "Add a chapter card in @neon-dark",
+      context: { styleGuideIds: [altGuide.id] },
+    })).json() as { task: Task }).task;
+    const p2 = await prompt(t2);
+    expect(p2).toContain("@neon-dark");
+    expect(p2).toContain("NEON_DARK_RULE");
+    expect(p2).not.toContain("DEFAULT_CREAM_RULE");
+
+    // 3. Skill mentioning @neon-dark overrides default when chat has no @mention.
+    const skillRes = await api("POST", "/skills", {
+      name: "chapter-cards",
+      description: "Builds chapter cards",
+      content: "Always draw chapter cards matching @neon-dark.",
+    });
+    expect(skillRes.status).toBe(201);
+    const { skill } = await skillRes.json() as { skill: { id: string } };
+    const t3 = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "Run /chapter-cards",
+      context: { skillIds: [skill.id] },
+    })).json() as { task: Task }).task;
+    const p3 = await prompt(t3);
+    expect(p3).toContain("@neon-dark");
+    expect(p3).toContain("NEON_DARK_RULE");
+    expect(p3).not.toContain("DEFAULT_CREAM_RULE");
+    expect(defGuide.id).not.toBe(altGuide.id);
+  });
+
+  it("persists captionStyle through CRUD and style_guide_edit, injects it into prompts, and resolves active style guides by priority", async () => {
+    const defCaption = { fontFamily: "Inter", fontWeight: "bold" as const, color: "#FFFFFF", backgroundColor: "#000000CC", y: 0.85 };
+    const altCaption = { fontFamily: "JetBrains Mono", fontWeight: "semibold" as const, color: "#E2E8F0", highlightColor: "#38BDF8", y: 0.82 };
+
+    const defRes = await api("POST", "/style-guides", {
+      name: "cap-default",
+      description: "Default caption look",
+      instructions: "Clean white Inter bold captions.",
+      captionStyle: defCaption,
+      isDefault: true,
+    });
+    expect(defRes.status).toBe(201);
+    const defGuide = (await defRes.json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    expect(defGuide.captionStyle).toEqual(defCaption);
+
+    const altGuide = (await (await api("POST", "/style-guides", {
+      name: "cap-alt",
+      description: "Mono caption look",
+      instructions: "Monospace captions with cyan highlight.",
+      captionStyle: altCaption,
+    })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    // 1. Plain task -> active style guide is default, and system prompt includes ### Caption style.
+    const tDefault = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "/add-captions",
+    })).json() as { task: Task }).task;
+    const pDefault = await prompt(tDefault);
+    expect(pDefault).toContain("### Caption style");
+    expect(pDefault).toContain(`"fontWeight": "bold"`);
+
+    const activeDefaultRes = await api("GET", `/style-guides/active?projectId=${project.id}&taskId=${tDefault.id}`);
+    expect(activeDefaultRes.status).toBe(200);
+    const activeDefault = await activeDefaultRes.json() as { styleGuides: Array<{ name: string; reason: string; captionStyle?: Record<string, unknown> }> };
+    expect(activeDefault.styleGuides).toEqual([expect.objectContaining({ name: "cap-default", reason: "default", captionStyle: defCaption })]);
+
+    // 2. Chat @mention -> active style guide is mentioned guide instead of default.
+    const tMentioned = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "/add-captions in @cap-alt",
+      context: { styleGuideIds: [altGuide.id] },
+    })).json() as { task: Task }).task;
+    const activeMentionRes = await api("GET", `/style-guides/active?projectId=${project.id}&taskId=${tMentioned.id}`);
+    expect(activeMentionRes.status).toBe(200);
+    const activeMention = await activeMentionRes.json() as { styleGuides: Array<{ name: string; reason: string; captionStyle?: Record<string, unknown> }> };
+    expect(activeMention.styleGuides).toEqual([expect.objectContaining({ name: "cap-alt", reason: "mentioned", captionStyle: altCaption })]);
+
+    // 3. style_guide_edit saves updated captionStyle and PATCH with captionStyle: null clears it.
+    const editRes = await api("POST", `/style-guides/${altGuide.id}/edit`, { prompt: "Use uppercase captions.", agent: "claude" });
+    expect(editRes.status).toBe(201);
+    const { task: editTask } = await editRes.json() as { task: Task };
+    const startedAt = "2026-11-26T12:00:00.000Z";
+    saveTask(workspace.ctx, { ...editTask, state: "running", hostId: "host_1", startedAt });
+    const saveRes = await api(
+      "POST",
+      `/projects/${project.id}/tasks/${editTask.id}/style-guide-edit`,
+      {
+        styleGuideId: altGuide.id,
+        hostId: "host_1",
+        instructions: "Uppercase mono captions.",
+        captionStyle: { ...altCaption, uppercase: true },
+      },
+      { [TASK_HEADER]: editTask.id, [ATTEMPT_HEADER]: startedAt },
+    );
+    expect(saveRes.status).toBe(200);
+    const saved = (await saveRes.json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    expect(saved.captionStyle).toEqual({ ...altCaption, uppercase: true });
+
+    const clearRes = await api("PUT", `/style-guides/${altGuide.id}`, { captionStyle: null });
+    expect(clearRes.status).toBe(200);
+    expect((await clearRes.json() as { styleGuide: StyleGuideRecord }).styleGuide.captionStyle).toBeUndefined();
+  });
+});
+
+describe("live preview rendering", () => {
+  it.skipIf(!hasChrome())("renders a 16:9 PNG preview and returns its HTML source", async () => {
+    const guide = (await (await api("POST", "/style-guides", { name: "live-preview-test" })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    const html = `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;background:#111;color:#fff;display:flex;align-items:center;justify-content:center;font:700 48px sans-serif;}</style></head><body>STYLE SHEET</body></html>`;
+
+    const renderRes = await api("POST", `/style-guides/${guide.id}/preview`, { html, width: 640, height: 360 });
+    expect(renderRes.status).toBe(200);
+    const rendered = await renderRes.json() as { styleGuide?: StyleGuideRecord; missingFonts: string[] };
+    expect(rendered.missingFonts).toEqual([]);
+    expect(rendered.styleGuide?.preview).toMatchObject({ width: 640, height: 360 });
+
+    const imgRes = await api("GET", `/style-guides/${guide.id}/preview`);
+    expect(imgRes.status).toBe(200);
+    expect(imgRes.headers.get("content-type")).toBe("image/png");
+    const png = Buffer.from(await imgRes.arrayBuffer());
+    expect(png.subarray(1, 4).toString()).toBe("PNG");
+
+    const srcRes = await api("GET", `/style-guides/${guide.id}/preview/source`);
+    expect(srcRes.status).toBe(200);
+    const src = await srcRes.json() as { html: string; width: number; height: number };
+    expect(src.html).toContain("STYLE SHEET");
+    expect([src.width, src.height]).toEqual([640, 360]);
+  });
+});
+
+describe("style guide transitions, sound effects, and camera color looks", () => {
+  it("streams built-in starter SFX (including Range requests), imports built-in and custom SFX into project media with dedupe, and cleans up deleted assets", async () => {
+    const catalogRes = await api("GET", "/style-guides/sounds/builtin");
+    expect(catalogRes.status).toBe(200);
+    const { sounds: builtIns } = await catalogRes.json() as { sounds: Array<{ id: string; name: string }> };
+    expect(builtIns.some(s => s.id === "soft-whoosh")).toBe(true);
+
+    const wavRes = await api("GET", "/style-guides/sounds/builtin/soft-whoosh");
+    expect(wavRes.status).toBe(200);
+    expect(wavRes.headers.get("content-type")).toBe("audio/wav");
+    const wavBytes = new Uint8Array(await wavRes.arrayBuffer());
+    expect(Buffer.from(wavBytes.subarray(0, 4)).toString("ascii")).toBe("RIFF");
+
+    const rangeRes = await api("GET", "/style-guides/sounds/builtin/soft-whoosh", undefined, { Range: "bytes=0-31" });
+    expect(rangeRes.status).toBe(206);
+    expect((await rangeRes.arrayBuffer()).byteLength).toBe(32);
+
+    const createdRes = await api("POST", "/style-guides", {
+      name: "motion-audio-color",
+      description: "Full studio kit",
+      isDefault: true,
+      transitions: [
+        { id: "tr_push", name: "Section push", type: "push", duration: 0.4, direction: "left", soundId: "sfx_whoosh", usageRule: "Default between sections", isDefault: true },
+      ],
+      sounds: [
+        { id: "sfx_whoosh", name: "Soft whoosh", source: "builtin", builtInId: "soft-whoosh", volumeDb: -14, duration: 0.45, usageRule: "With section push" },
+      ],
+      colorLook: {
+        name: "Warm Studio",
+        notes: "Gentle warmth and soft highlights",
+        adjustments: { exposure: 0.15, contrast: 1.06, warmth: 0.22, highlights: -0.2 },
+      },
+    });
+    expect(createdRes.status).toBe(201);
+    const { styleGuide: guide } = await createdRes.json() as { styleGuide: StyleGuideRecord };
+    expect(guide.transitions).toHaveLength(1);
+    expect(guide.sounds).toHaveLength(1);
+    expect(guide.colorLook?.name).toBe("Warm Studio");
+
+    const wavForm = new FormData();
+    wavForm.append("file", new Blob([wavBytes], { type: "audio/wav" }), "custom-swoosh.wav");
+    const wavUp = await api("POST", `/style-guides/${guide.id}/assets`, wavForm);
+    expect(wavUp.status).toBe(201);
+    const { asset: audioAsset } = await wavUp.json() as { asset: StyleGuideAsset };
+
+    const lutForm = new FormData();
+    lutForm.append("file", new Blob(["LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n"], { type: "text/plain" }), "StudioWarm.cube");
+    const lutUp = await api("POST", `/style-guides/${guide.id}/assets`, lutForm);
+    expect(lutUp.status).toBe(201);
+    const { asset: lutAsset } = await lutUp.json() as { asset: StyleGuideAsset };
+
+    const updatedRes = await api("PUT", `/style-guides/${guide.id}`, {
+      sounds: [
+        ...guide.sounds,
+        { id: "sfx_custom", name: "Custom swoosh", source: "asset", assetId: audioAsset.id, volumeDb: -12, usageRule: "When lower thirds enter" },
+      ],
+      colorLook: {
+        ...guide.colorLook!,
+        lutAssetId: lutAsset.id,
+        lutName: lutAsset.name,
+      },
+    });
+    expect(updatedRes.status).toBe(200);
+
+    const editTask = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "Grade cameras and add transitions",
+    })).json() as { task: Task }).task;
+    const builtPrompt = await prompt(editTask);
+    expect(builtPrompt).toContain("### Preferred transitions");
+    expect(builtPrompt).toContain("Section push [Default]: push left, 0.4 s");
+    expect(builtPrompt).toContain("### Sound effects (SFX)");
+    expect(builtPrompt).toContain("Custom swoosh");
+    expect(builtPrompt).toContain("### Camera color look");
+    expect(builtPrompt).toContain(`${guide.id}/assets/${lutAsset.id}/${lutAsset.name}`);
+
+    const imp1Res = await api("POST", `/projects/${project.id}/media/from-style-sound`, {
+      styleGuideId: guide.id,
+      soundId: "sfx_whoosh",
+    });
+    expect(imp1Res.status).toBe(201);
+    const imp1 = await imp1Res.json() as { media: MediaAsset; volumeDb: number; volume: number };
+    expect(imp1.media.kind).toBe("audio");
+    expect(imp1.volumeDb).toBe(-14);
+    expect(imp1.volume).toBeCloseTo(0.1995, 3);
+
+    const imp2Res = await api("POST", `/projects/${project.id}/media/from-style-sound`, {
+      builtInId: "soft-whoosh",
+    });
+    expect(imp2Res.status).toBe(201);
+    const imp2 = await imp2Res.json() as { media: MediaAsset };
+    expect(imp2.media.id).toBe(imp1.media.id);
+
+    const delLutRes = await api("DELETE", `/style-guides/${guide.id}/assets/${lutAsset.id}`);
+    expect(delLutRes.status).toBe(200);
+    const afterDel = (await delLutRes.json() as { styleGuide: StyleGuideRecord }).styleGuide;
+    expect(afterDel.colorLook?.lutAssetId).toBeUndefined();
+    expect(afterDel.assets.some(a => a.id === lutAsset.id)).toBe(false);
+  });
+
+  it("allows style_guide_edit tasks to update transitions, sounds, and colorLook without replacing instructions", async () => {
+    const guide = (await (await api("POST", "/style-guides", {
+      name: "keep-instructions",
+      instructions: "ORIGINAL_GRAPHICS_RULES",
+    })).json() as { styleGuide: StyleGuideRecord }).styleGuide;
+
+    const { task } = await (await api("POST", `/style-guides/${guide.id}/edit`, {
+      prompt: "Add a whip transition and warm look",
+      agent: "claude",
+    })).json() as { task: Task };
+    const startedAt = "2026-11-26T10:00:00.000Z";
+    saveTask(workspace.ctx, { ...task, state: "running", hostId: "host_1", startedAt });
+
+    const saveRes = await api(
+      "POST",
+      `/projects/${project.id}/tasks/${task.id}/style-guide-edit`,
+      {
+        styleGuideId: guide.id,
+        hostId: "host_1",
+        transitions: [{ id: "tr_w", name: "Quick whip", type: "whip", duration: 0.3, direction: "left", soundId: "builtin:airy-slide", usageRule: "Into demos", isDefault: true }],
+        colorLook: { name: "Warm Studio", notes: "Clean warm look", adjustments: { warmth: 0.18 } },
+      },
+      { [TASK_HEADER]: task.id, [ATTEMPT_HEADER]: startedAt },
+    );
+    expect(saveRes.status).toBe(200);
+    const { styleGuide: updated } = await saveRes.json() as { styleGuide: StyleGuideRecord };
+    expect(updated.instructions).toBe("ORIGINAL_GRAPHICS_RULES");
+    expect(updated.transitions).toHaveLength(1);
+    expect(updated.colorLook?.name).toBe("Warm Studio");
+  });
+
+  it("imports a portable .style.json file defining graphics, transitions, sounds, and color look, and reads YAML docs", async () => {
+    const def = {
+      version: 1,
+      name: "dropped-studio-kit",
+      description: "Full dropped style kit",
+      instructions: "## Typography\nUse SF Pro Display.",
+      sounds: [{ name: "Soft whoosh", builtInId: "soft-whoosh", volumeDb: -15 }],
+      transitions: [{ name: "Chapter push", type: "push", duration: 0.4, direction: "left", sound: "Soft whoosh", usageRule: "Between chapters", isDefault: true }],
+      colorLook: { name: "Warm Filmic", notes: "Soft highlight rolloff", adjustments: { exposure: 0.15, warmth: 0.22, highlights: -0.2 } },
+    };
+
+    const form = new FormData();
+    form.append("file", new Blob([JSON.stringify(def)], { type: "application/json" }), "dropped-studio-kit.style.json");
+    const impRes = await api("POST", "/style-guides/import-file", form);
+    expect(impRes.status).toBe(201);
+    const impBody = await impRes.json() as { imported: true; styleGuide: StyleGuideRecord };
+    expect(impBody.imported).toBe(true);
+    expect(impBody.styleGuide.name).toBe("dropped-studio-kit");
+    expect(impBody.styleGuide.transitions).toHaveLength(1);
+    expect(impBody.styleGuide.sounds).toHaveLength(1);
+    expect(impBody.styleGuide.colorLook?.name).toBe("Warm Filmic");
+
+    // Updating an existing guide in place via ?styleGuideId=
+    const updForm = new FormData();
+    updForm.append("file", new Blob([JSON.stringify({ description: "Updated via file drop", colorLook: { name: "Cool Studio", adjustments: { warmth: -0.15 } } })], { type: "application/json" }), "update.style.json");
+    const updRes = await api("POST", `/style-guides/import-file?styleGuideId=${impBody.styleGuide.id}`, updForm);
+    expect(updRes.status).toBe(200);
+    const updBody = await updRes.json() as { imported: true; styleGuide: StyleGuideRecord };
+    expect(updBody.imported).toBe(true);
+    expect(updBody.styleGuide.description).toBe("Updated via file drop");
+    expect(updBody.styleGuide.transitions).toHaveLength(1); // untouched section preserved
+    expect(updBody.styleGuide.colorLook?.name).toBe("Cool Studio");
+
+    // Unrecognized JSON returns { imported: false } so UI routes it to Scarlet in chat
+    const otherForm = new FormData();
+    otherForm.append("file", new Blob([JSON.stringify({ figmaTokens: { primary: "#111" } })], { type: "application/json" }), "tokens.json");
+    const otherRes = await api("POST", "/style-guides/import-file", otherForm);
+    expect(otherRes.status).toBe(200);
+    expect(await otherRes.json()).toEqual({ imported: false });
+
+    // YAML settings file uploaded as asset is readable via attachment_read
+    const yamlForm = new FormData();
+    yamlForm.append("file", new Blob(["transitions:\n  - type: push\n    duration: 0.4\n"], { type: "text/yaml" }), "style.yaml");
+    const yamlUp = await api("POST", `/style-guides/${impBody.styleGuide.id}/assets`, yamlForm);
+    expect(yamlUp.status).toBe(201);
+    const { asset: yamlAsset } = await yamlUp.json() as { asset: StyleGuideAsset };
+    const readRes = await api("POST", `/style-guides/${impBody.styleGuide.id}/assets/${yamlAsset.id}/read`, {});
+    expect(readRes.status).toBe(200);
+    const readDoc = await readRes.json() as { text?: string };
+    expect(readDoc.text).toContain("type: push");
+  });
+});

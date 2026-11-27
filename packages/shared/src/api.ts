@@ -27,6 +27,7 @@
  *
  *  Media
  *   POST   /projects/:id/media      multipart (file, kind?, provenance?) → { media: MediaAsset }   (ingest: probe, hash, proxy, waveform, transcript; MediaAsset.status tracks progress)
+ *   POST   /media/expand-paths      { paths }            → ExpandMediaPathsResponse   (expand dropped folders into their video files; files and URLs pass through)
  *   POST   /projects/:id/media/import { path | url }     → { media: MediaAsset }      (server-side path or Drive/HTTP URL)
  *   GET    /projects/:id/media                           → { media: MediaAsset[] }
  *   DELETE /projects/:id/media/:mediaId                  → {}                 (a file Scarlet couldn't read; 409 when a version of the video uses it, a request is at work in the project, or the file was read)
@@ -278,6 +279,13 @@ export interface MusicReading {
 
 /** One file of the folder an editor takes to another app: its text, or a copy of a file in Scarlet's library. */
 export type HandoffFile = { path: string; text: string } | { path: string; source: string; size: number };
+
+/** Dropped paths expanded for media import: folders become the video files inside them; files and links pass through. */
+export interface ExpandMediaPathsResponse {
+  files: string[];
+  folders: number;
+  emptyFolders: Array<{ path: string; name: string }>;
+}
 
 /** The folder for finishing the edit in DaVinci Resolve, Final Cut Pro or Premiere Pro, and the bytes of footage it copies. */
 export interface HandoffResponse { files: HandoffFile[]; mediaBytes: number }

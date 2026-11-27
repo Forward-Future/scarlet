@@ -204,7 +204,7 @@ export interface CaptureOptions {
   /** Bounded input produced by the renderer, such as a set of thumbnails. */
   stdin?: Buffer;
   /** Consume stdout incrementally instead of retaining it in the result buffer. */
-  onStdoutChunk?: (chunk: Buffer) => void;
+  onStdoutChunk?: (chunk: Buffer) => void | Promise<void>;
   onStdoutBytes?: (total: number) => void;
   signal?: AbortSignal;
   /** Maximum stdout size in bytes before the process is killed (default 512 MiB). */
@@ -226,6 +226,65 @@ export interface CaptureResult {
  */
 export const spawnObserver: { spawned?: (child: ChildProcess) => void } = {};
 
+/**
+ * Where this package writes its diagnostic lines, in the engine log's voice ("[render] …"). Unset, they go nowhere.
+ * One per process, as `spawnObserver` is: the engine sets it once at startup.
+ */
+export const renderLog: { log?: (line: string) => void } = {};
+
+const repeatedLines = new Map<string, { at: number; more: number }>();
+
+/**
+ * Write one diagnostic line to `renderLog`. With `key`, a line that can repeat (a failure on every scrub) is written at
+ * most once a minute for that key, with a count of the ones in between. Never throws.
+ */
+export function logRender(line: string | (() => string), key?: string): void {
+  const log = renderLog.log;
+  if (!log) return;
+  try {
+    let text = typeof line === "function" ? line() : line;
+    if (key !== undefined) {
+      const now = Date.now();
+      const seen = repeatedLines.get(key);
+      if (seen && now - seen.at < 60_000) { seen.more++; return; }
+      repeatedLines.delete(key);
+      repeatedLines.set(key, { at: now, more: 0 });
+      for (const [old, entry] of repeatedLines) {
+        if (repeatedLines.size <= 200 && now - entry.at < 60_000) break;
+        repeatedLines.delete(old);
+      }
+      if (seen?.more) text += ` (and ${seen.more} more like it)`;
+    }
+    log(text);
+  } catch {
+    // A diagnostic never changes what it describes.
+  }
+}
+
+/** Elapsed time for a log line, as the engine writes it: "850ms", "12s", "45m 2s", "1h 3m". */
+export function logElapsed(ms: number): string {
+  const secs = Math.floor(ms / 1000);
+  if (secs <= 0) return `${Math.max(0, Math.round(ms))}ms`;
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+  if (h) return m ? `${h}h ${m}m` : `${h}h`;
+  if (m) return s ? `${m}m ${s}s` : `${m}m`;
+  return `${s}s`;
+}
+
+/** Why something failed, in one short line for the log: `failureReason`, with folders left off any file path. */
+export function logReason(error: unknown, max = 200): string {
+  const line = failureReason(error).replace(/(?<=^|[\s'"(=])(?:[A-Za-z]:)?[\\/](?:[^\\/\n:'"]+[\\/])+/g, "");
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/** A media tool's name for the log, without its folder: "ffmpeg", "ffprobe". */
+function toolName(bin: string): string {
+  return basename(bin).replace(/\.exe$/i, "");
+}
+
+/** A process that runs this long leaves a line when it ends, whatever the outcome. */
+const LONG_RUN_MS = 60_000;
+
 function countSpawn(bin: string): void {
   if (/ffprobe/i.test(bin)) spawnStats.ffprobe++;
   else spawnStats.ffmpeg++;
@@ -234,7 +293,11 @@ function countSpawn(bin: string): void {
 interface ManagedHooks<T> {
   onSpawn?: (child: ChildProcess) => void;
   getStderr: () => string;
-  onClose: (code: number | null) => T;
+  /** Awaited after process close before resolving or rejecting (including aborts). */
+  onSettled?: () => Promise<void>;
+  onClose: (code: number | null) => T | Promise<T>;
+  /** True when the caller killed the process itself (output over its limit), so a signal says nothing new. */
+  stoppedByCaller?: () => boolean;
 }
 
 /** Shared subprocess lifecycle: abort check, spawn counting/observer, error wrapping, and cleanup. */
@@ -248,6 +311,7 @@ function spawnManaged<T>(
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new AbortError());
     countSpawn(bin);
+    const started = Date.now();
     const child = spawn(bin, args, { stdio, windowsHide: true });
     spawnObserver.spawned?.(child);
     let aborted = false;
@@ -257,18 +321,27 @@ function spawnManaged<T>(
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     hooks.onSpawn?.(child);
-    child.on("error", (e) => {
+    child.on("error", (e: NodeJS.ErrnoException) => {
       signal?.removeEventListener("abort", onAbort);
+      logRender(() => `[render] ${toolName(bin)} couldn't start: ${e.code ?? logReason(e)}`, `start:${bin}`);
       reject(new FfmpegError(mediaToolLaunchError(bin, e, `failed to start ${bin}: ${e.message}`), bin, args, null, hooks.getStderr(), false));
     });
-    child.on("close", (code) => {
+    child.on("close", (code, killedBy) => {
       signal?.removeEventListener("abort", onAbort);
-      if (aborted) return reject(new AbortError());
-      try {
-        resolve(hooks.onClose(code));
-      } catch (error) {
-        reject(error);
+      const ms = Date.now() - started;
+      // Something outside Scarlet (the system running out of memory, a user's task manager) stopped it.
+      if (killedBy && !aborted && !hooks.stoppedByCaller?.()) {
+        logRender(() => `[render] ${toolName(bin)} was stopped by ${killedBy} after ${logElapsed(ms)}`, `signal:${bin}:${killedBy}`);
+      } else if (ms >= LONG_RUN_MS) {
+        logRender(() => `[render] ${toolName(bin)} ${aborted ? "cancelled" : code === 0 ? "finished" : `exited with code ${code ?? killedBy}`} after ${logElapsed(ms)}`);
       }
+      Promise.resolve()
+        .then(() => hooks.onSettled?.())
+        .then(() => {
+          if (aborted) throw new AbortError();
+          return hooks.onClose(code);
+        })
+        .then(resolve, reject);
     });
   });
 }
@@ -283,12 +356,17 @@ export function runCapture(bin: string, args: string[], opts: CaptureOptions = {
   let err = "";
   let errBytes = 0, partialLine = "";
   let failure: Error | undefined;
+  let chunkWork: Promise<void> = Promise.resolve();
+  let draining = false;
+  const pendingChunks: Buffer[] = [];
   const maxStdout = opts.maxStdout ?? (opts.onStdoutChunk ? Infinity : 512 * 1024 * 1024);
   const maxStderr = opts.maxStderr ?? 8 * 1024 * 1024;
   const exceeded = (message: string) => new FfmpegError(message, bin, args, null, err.slice(-8192));
 
   return spawnManaged(bin, args, [opts.stdin ? "pipe" : "ignore", "pipe", "pipe"], opts.signal, {
     getStderr: () => err,
+    onSettled: () => chunkWork,
+    stoppedByCaller: () => !!failure,
     onSpawn(child) {
       if (child.stdin && opts.stdin) {
         // FFmpeg can close its input early on failure or cancellation. Its exit reports the cause.
@@ -301,15 +379,39 @@ export function runCapture(bin: string, args: string[], opts: CaptureOptions = {
         child.kill("SIGKILL");
       };
       child.stdout!.on("data", (chunk: Buffer) => {
-        if (failure) return;
+        if (failure || opts.signal?.aborted) return;
         outBytes += chunk.length;
         if (outBytes > maxStdout) {
           stop(exceeded(`stdout exceeded ${maxStdout} bytes`));
           return;
         }
         if (opts.onStdoutChunk) {
-          try { opts.onStdoutChunk(chunk); }
-          catch (error) { stop(error as Error); return; }
+          if (draining) {
+            pendingChunks.push(chunk);
+            opts.onStdoutBytes?.(outBytes);
+            return;
+          }
+          try {
+            const pending = opts.onStdoutChunk(chunk);
+            if (pending && typeof (pending as Promise<void>).then === "function") {
+              // Pause stdout and serialize any already-buffered chunks while an async consumer works or yields.
+              draining = true;
+              child.stdout!.pause();
+              chunkWork = (async () => {
+                try {
+                  await pending;
+                  while (pendingChunks.length && !failure && !opts.signal?.aborted) {
+                    await opts.onStdoutChunk!(pendingChunks.shift()!);
+                  }
+                } catch (error) {
+                  stop(error as Error);
+                } finally {
+                  draining = false;
+                  if (!failure && !opts.signal?.aborted && !child.stdout!.destroyed) child.stdout!.resume();
+                }
+              })();
+            }
+          } catch (error) { stop(error as Error); return; }
         } else out.push(chunk);
         opts.onStdoutBytes?.(outBytes);
       });

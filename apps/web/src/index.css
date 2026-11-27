@@ -130,6 +130,12 @@ input[type="range"] {
   .label {
     @apply block text-[12px] font-medium text-muted mb-1.5;
   }
+  /* What a Report beside an error says once pressed: sent, with Add details, or why it couldn't be. */
+  .report-status {
+    @apply inline-flex flex-wrap items-baseline gap-x-1 text-[12px] text-muted;
+  }
+  .report-status.is-bad { @apply text-bad; }
+  .report-status button { @apply text-muted underline underline-offset-2 hover:text-fg; }
   .chip {
     @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 whitespace-nowrap;
   }

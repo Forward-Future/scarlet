@@ -34,6 +34,8 @@ export interface FrameOptions {
   area?: [number, number, number, number];
   /** Lines over the picture at round percents of the whole source, each labelled, so an area of it can be named. Needs the source's size. */
   grid?: { width: number; height: number };
+  /** True when the asset is known to be a still image regardless of filename extension. */
+  still?: boolean;
   ffmpegPath?: string;
   signal?: AbortSignal;
 }
@@ -90,8 +92,9 @@ export async function extractFrame(file: string, tSeconds: number, opts: FrameOp
 
 async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Promise<Buffer> {
   // A still has one picture, shown for as long as its clip is (a GIF's first, as the render holds it). Its file ends
-  // after one frame, so a later time would find nothing.
-  const t = isImagePath(file) ? 0 : Math.max(0, tSeconds);
+  // after one frame, so a later time would find nothing, and FFmpeg 9's image demuxer yields no frames with `-ss 0`.
+  const still = opts.still ?? isImagePath(file);
+  const t = still ? 0 : Math.max(0, tSeconds);
   const width = Math.max(2, Math.round(opts.width ?? 320));
   // An area or a grid is drawn on the CPU, where the picture is in memory.
   // So is an HDR picture's tone-mapping, which has no GPU filter in the bundled builds.
@@ -104,8 +107,8 @@ async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Pr
   const picture = gpu ? `scale_cuda=${width}:-2:interp_algo=bicubic:format=yuv420p,hwdownload,format=yuv420p` : `${crop}scale=${width}:${height}${toneMap}${grid}`;
   const input = [
     ...FFMPEG_BASE_ARGS,
-    ...(gpu ? CUDA_FRAMES_INPUT : opts.decoder === "videotoolbox" ? ["-hwaccel", "videotoolbox"] : []),
-    ...(opts.indexedMp4 ? INDEXED_MP4_INPUT : []),
+    ...(gpu ? CUDA_FRAMES_INPUT : opts.decoder === "videotoolbox" && !still ? ["-hwaccel", "videotoolbox"] : []),
+    ...(opts.indexedMp4 && !still ? INDEXED_MP4_INPUT : []),
   ];
   /**
    * A seek gives the first frame starting at or after where it lands, which for a time inside a frame is the next
@@ -117,8 +120,9 @@ async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Pr
     const from = lookback === undefined ? t : Math.max(0, t - lookback);
     const end = t - from + FRAME_START_SLACK;
     const filter = lookback === undefined ? picture : `trim=end=${end + lookback * 0.4},select='lte(t,${end})',${picture},reverse`;
+    const seek = still || (lookback === undefined && from === 0) ? [] : ["-ss", ffSeconds(from)];
     const { stdout } = await runCapture(resolveFfmpeg(opts.ffmpegPath), [
-      ...inputArgs, "-ss", ffSeconds(from), ...LOCAL_MEDIA_INPUT, "-i", file,
+      ...inputArgs, ...seek, ...LOCAL_MEDIA_INPUT, "-i", file,
       "-map", "0:v:0", "-frames:v", "1", "-vf", filter,
       "-f", "image2", "-update", "1", "-c:v", "mjpeg", "-q:v", String(opts.quality ?? 4), "pipe:1",
     ], { signal: opts.signal });
@@ -131,6 +135,7 @@ async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Pr
   // Only a variable frame rate holds a frame longer than that. Before the second look, a time that near the start has nothing earlier to find.
   const lookbacks = t > near && near < LONG_FRAME_LOOKBACK ? [near, LONG_FRAME_LOOKBACK] : [near];
   return withStreamInfoFallback(input, opts.signal, async inputArgs => {
+    if (still) return decode(inputArgs);
     for (const lookback of lookbacks) {
       try { return await decode(inputArgs, lookback); }
       catch { opts.signal?.throwIfAborted(); } // Nothing up to the time: no frame has started yet, or past the end.
@@ -170,11 +175,11 @@ export async function extractFilmstrip(file: string, frames: number[], fps: numb
 
 /** Sample the edited picture, using the same composition as playback. */
 export async function renderTimelineFrame(project: Project, timeline: Timeline, range: TimeRange, mediaRoot: string, signal?: AbortSignal, maxDimension = 160,
-  inputs?: Pick<GraphOptions, "pictureSource" | "decoder"> & Pick<FrameOptions, "onFallback">) {
+  inputs?: Pick<GraphOptions, "pictureSource" | "decoder" | "fontDirs" | "lutRoots"> & Pick<FrameOptions, "onFallback">) {
   const { width, height } = project.settings;
   const scale = Math.min(1, maxDimension / Math.max(width, height));
   const graph = await buildFilterGraph(project, timeline, range, {
-    pictureSource: inputs?.pictureSource, decoder: inputs?.decoder, mediaRoot, signal, width: width * scale, height: height * scale, singleFrame: true, indexedInputs: true, rowThreads: true,
+    pictureSource: inputs?.pictureSource, decoder: inputs?.decoder, fontDirs: inputs?.fontDirs, lutRoots: inputs?.lutRoots, mediaRoot, signal, width: width * scale, height: height * scale, singleFrame: true, indexedInputs: true, rowThreads: true,
   });
   try {
     return await withStreamInfoFallback(graph.args, signal, async inputArgs => {

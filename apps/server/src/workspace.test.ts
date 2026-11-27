@@ -144,6 +144,24 @@ async function checkPassAudio(taskId: string) {
   expect(result).toMatchObject({ version, heard: 0, remaining: 0 });
 }
 
+it("tells the window a host is back when its claim comes before its heartbeat", async () => {
+  const { host } = await (await api("POST", "/hosts/register", { name: "Away", platform: "test", agents: [{ id: "codex", installed: true }] })).json();
+  // Not heard from for longer than the online window.
+  workspace.ctx.repos.hosts.put({ ...workspace.ctx.repos.hosts.get(host.id)!, lastSeenAt: new Date(Date.now() - 10 * 60_000).toISOString() });
+  const published = vi.fn();
+  workspace.ctx.bus.on("ws", published);
+  try {
+    await api("POST", `/hosts/${host.id}/claim`, {});
+    expect(published).toHaveBeenCalledWith(expect.objectContaining({ type: "host.updated", host: expect.objectContaining({ id: host.id, online: true }) }));
+    published.mockClear();
+    // Back already, its next claim says nothing new.
+    await api("POST", `/hosts/${host.id}/claim`, {});
+    expect(published.mock.calls.filter(([e]) => e.type === "host.updated")).toEqual([]);
+  } finally {
+    workspace.ctx.bus.off("ws", published);
+  }
+});
+
 it("returns cancellations missed before a native host subscribed to a new project", async () => {
   const { host } = await (await api("POST", "/hosts/register", {
     name: "test desktop", platform: "test", agents: [{ id: "codex", installed: true }],
@@ -1709,6 +1727,18 @@ it("applies activity filters and page limits before loading documents", async ()
     expect((await response.json()).activity.map((a: { id: string }) => a.id)).toEqual([id]);
     expect(parse).toHaveBeenCalledTimes(1);
   }
+});
+
+it("pages server activity through entries logged in the same millisecond", async () => {
+  const createdAt = "2025-02-01T00:00:00.000Z";
+  for (const id of ["tie-a", "tie-b", "tie-c"]) {
+    workspace.ctx.repos.activity.put({ id, projectId: null, createdAt, type: "note.added", summary: "test",
+      actor: { type: "scarlet", name: "Scarlet" }, data: {} });
+  }
+  const ids = async (path: string) => (await (await api("GET", path)).json()).activity.map((a: { id: string }) => a.id);
+  const first = await ids("/activity?limit=2&before=2025-02-01T00:00:00.001Z");
+  expect(first).toEqual(["tie-c", "tie-b"]);
+  expect(await ids(`/activity?limit=2&before=${createdAt}&beforeId=${first[1]}`)).toEqual(["tie-a"]);
 });
 
 it("uses the project frame rate for proposal previews and version diffs", async () => {
@@ -4406,7 +4436,7 @@ it("applies verified trims once and offers uncertain cuts at their remapped time
   const first = await call(); expect(first.status).toBe(201);
   const { changes } = await first.json();
   expect(changes.map((c: Change)=>c.state)).toEqual(["approved","ready"]);
-  expect(changes[0].description).toBe("Removed 2 s at 0:01.");
+  expect(changes[0].description).toBe("Cut 2 s at 0:01.");
   const saved = ctx.repos.changes.get(changes[1].id)!;
   expect(saved.cutReasons).toMatchObject([{ start: 5, end: 6, reason: "may be a demonstration", originalRange: { start:4.7, end:expect.closeTo(6.2) } }]);
   expect(saved.description).toBe("Review 1 optional dialogue cut");
@@ -4454,7 +4484,7 @@ it("applies verified trims once and offers uncertain cuts at their remapped time
   expect(ctx.repos.projects.get(project.id)!.head).toBe(head);
   await checkPassAudio(task.id);
   const completion = await api("POST", `/tasks/${task.id}/complete`, { state: "done", summary: "Removed the demonstration." });
-  expect((await completion.json()).task.summary).toContain("Removed 2 s at 0:01. Dialogue cuts are pending review.");
+  expect((await completion.json()).task.summary).toContain("Cut 2 s at 0:01. Dialogue cuts are pending review.");
   expect(ctx.repos.tasks.get(task.id)!.summary).not.toContain("Removed the demonstration");
   // What Scarlet said as it finished is kept beside the receipt, for the editor.
   expect(ctx.repos.tasks.get(task.id)!.reply).toBe("Removed the demonstration.");
@@ -4475,7 +4505,7 @@ it.each(["dialogue cuts", "whole timeline"])("finishes a first cut with its own 
   // Done the first time it says so: no second run of the request in between to replace its words.
   expect((await ended.json()).task).toMatchObject({ state: "done", repeatAudit: { remaining: 0, noFindings: true } });
   const done = ctx.repos.tasks.get(pass.id)!;
-  if (kind === "dialogue cuts") expect(done).toMatchObject({ reply: said, summary: expect.stringContaining("Removed 1 s") });
+  if (kind === "dialogue cuts") expect(done).toMatchObject({ reply: said, summary: expect.stringContaining("Cut 1 s") });
   else expect(done).toMatchObject({ summary: said });
 });
 
@@ -4516,7 +4546,7 @@ it("carries a part's staged cuts and their recommendations into the next part of
   expect(ctx.repos.changes.get(review.id)!.replacedBy).toBe(three.changes[1]!.id);
   await checkPassAudio(task.id);
   const completion = await api("POST", `/tasks/${task.id}/complete`, { state: "done" });
-  expect((await completion.json()).task.summary).toBe("Applied “Assemble”. Removed 3 s across 2 cuts. Dialogue cuts are pending review.");
+  expect((await completion.json()).task.summary).toBe("Applied “Assemble”. Cut 3 s across 2 cuts. Dialogue cuts are pending review.");
 });
 
 it("keeps the editor's calls through the pass's next part and applies them as soon as the pass finishes", async () => {
@@ -4822,8 +4852,8 @@ it("hands off one call while the pass can still trim and assess its other cuts",
   const direct = (start: number, end: number) => proposeChange(ctx, localUser(ctx), project.id,
     { intent: "requested", taskId: task.id, description: "Trim", ops: [{ op: "rippleDelete", start, end }] });
   // The engine's index names the cut for the tools, and the editor's number for Scarlet's words to them.
-  expect(() => direct(8.5, 9)).toThrow(/cut 1 \(the editor’s “Cut 1”\).*with the editor.*don’t ask them about it.*amend:true/);
-  expect(() => direct(3, 8)).toThrow(/would join cut 0 and cut 1 \(the editor’s “Cut 1”\)/);
+  expect(() => direct(8.5, 9)).toThrow(/cut 1 \(one of the editor’s calls, which they know by its time\).*with the editor.*don’t ask them about it.*amend:true/);
+  expect(() => direct(3, 8)).toThrow(/would join cut 0 and cut 1 \(one of the editor’s calls, which they know by its time\)/);
   const ownTrim = (index: number, start: number, end: number) => api("POST", `/changes/${review.id}/staged-cuts/${index}`,
     { taskId: task.id, start, end, reason: "Start after the breath." });
   expect((await ownTrim(1, 8.5, 10)).status).toBe(409);
@@ -6056,8 +6086,10 @@ it("removes day-old working files a killed engine left behind, and nothing newer
   for (const [name, file] of Object.entries(files)) if (name !== "freshTmp") utimesSync(file, old, old);
   await ctx.close();
   workspace = openWorkspace();
+  // The orphan copy landed just now, though it carries old times as an imported copy does: its import may still be
+  // under way in another engine, so it stays until a day after it landed.
   expect(Object.fromEntries(Object.entries(files).map(([name, file]) => [name, existsSync(file)]))).toEqual({
-    tmp: false, freshTmp: true, part: false, orphan: false, original: true, proxyPart: false, proxy: true, segmentPart: false });
+    tmp: false, freshTmp: true, part: false, orphan: true, original: true, proxyPart: false, proxy: true, segmentPart: false });
 });
 
 it("carries a run's CLI session to the attempt that resumes it after a quit, and starts cold when the host no longer has it", async () => {
@@ -7083,7 +7115,7 @@ it("revises an edit saved with an empty list of named edits by its range, as one
   expect(revised.status).toBe(201);
 });
 
-it("files a completed thread separately from its applied edits and rejects stale or cross-thread revisions", async () => {
+it("files a completed thread separately from its applied edits and rejects stale disposition or invalid replacements", async () => {
   const { ctx } = workspace;
   ctx.repos.projects.putMedia(project.id, { id: "camera", name: "Interview", kind: "video", path: "camera.mov" }, "ready");
   const source = timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 120 }]);
@@ -7122,9 +7154,9 @@ it("files a completed thread separately from its applied edits and rejects stale
   expect(isThreadDone(snapshot(), filed.completedThreads)).toBe(false);
   expect((await post(true, revision)).status).toBe(409);
   const other = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Adjust closing shot", createdBy: editor });
-  const invalid = await api("POST", projectsPath() + "/changes", { taskId: other.id, intent: "requested", description: "Target another thread",
+  const invalid = await api("POST", projectsPath() + "/changes", { taskId: other.id, intent: "requested", description: "Target nonexistent spot",
     ops: [{ op: "addMarker", marker: { id: "replacement", time: 8, text: "opening" } }],
-    timelineEdits: [{ ...named[1], replaces: { changeId: change.id, spot: 1 } }] });
+    timelineEdits: [{ ...named[1], replaces: { changeId: change.id, spot: 5 } }] });
   expect(invalid.status).toBe(400);
   expect(ctx.repos.projects.header(project.id)?.head).toBe(edits.version);
 });
@@ -7185,7 +7217,7 @@ it("keeps a pass's own later save from changing footage under a cut that waits f
   // timeline over its four staged cuts left the editor's calls with nothing under them (2026-11-11).
   const rewrite = () => proposeChange(ctx, localUser(ctx), project.id, { intent: "requested", taskId: pass.id, fromVersion: staged.fromVersion,
     description: "Complete the pass", ops: [{ op: "rippleDelete", start: 11, end: 14 }] });
-  expect(rewrite).toThrow(/takes away the footage of a staged cut that waits for the editor’s call.*cut 0 (\(the editor’s “Cut 1”\) )?at 12\.00–13\.00 s.*dialogue_apply_cuts/s);
+  expect(rewrite).toThrow(/takes away the footage of a staged cut that waits for the editor’s call.*cut 0 (\(one of the editor’s calls, which they know by its time\) )?at 12\.00–13\.00 s.*dialogue_apply_cuts/s);
   expect(ctx.repos.projects.get(project.id)!.head).toBe(staged.fromVersion);
   expect(ctx.repos.changes.get(staged.id)!.state).toBe("ready");
   // Leaving a sliver of the cut is taking it away all the same.
@@ -7277,14 +7309,16 @@ it("records the editor's dialogue shortcut across rewords, answers, retries, not
   const revision = await (await api("POST", `/changes/${review.id}/revise`, { assignTo: "codex", text: "Try /tighten-pauses-here on this cut", position: { version: base, cutIndex: 0, time: 7, end: 8 } })).json();
   expect(revision.task.context).toMatchObject({ dialogueOperation: "local-pauses", cutIndex: 0 });
 
+  // Scarlet's own command names are reserved: a skill by the same name guides the command, on or off, and never takes it over.
   await api("POST", "/skills", { name: "tighten-pauses-here", content: "# An editor's custom guide", scope: "team" });
   const custom = await task("/tighten-pauses-here");
-  expect(custom.context.dialogueOperation).toBe("none");
+  expect(custom.context.dialogueOperation).toBe("local-pauses");
   const shadow = ctx.repos.skills.select("name = ?", ["tighten-pauses-here"])[0]!;
   await api("PUT", `/skills/${shadow.id}`, { enabled: false });
-  expect((await task("/tighten-pauses-here")).context.dialogueOperation).toBe("none");
+  expect((await task("/tighten-pauses-here")).context.dialogueOperation).toBe("local-pauses");
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
-  await api("PUT", `/skills/${guide.id}`, { content: "# My first cut" });
+  // Rewritten from scratch, a guide still runs the pass whatever it is called, by saying so in its header.
+  await api("PUT", `/skills/${guide.id}`, { content: "---\nname: dialogue-pass\nruns: dialogue-pass\n---\n# My first cut" });
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
   expect((await api("PUT", `/skills/${guide.id}`, { name: "my-first-pass" })).status).toBe(200);
   expect((await task("/my-first-pass")).context.dialogueOperation).toBe("first-cut");
@@ -7293,7 +7327,7 @@ it("records the editor's dialogue shortcut across rewords, answers, retries, not
   await api("DELETE", `/skills/${guide.id}`);
   expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
   await api("POST", "/skills", { name: "dialogue-pass", content: "# My different guide", scope: "team" });
-  expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("none");
+  expect((await task("/dialogue-pass")).context.dialogueOperation).toBe("first-cut");
   expect(ctx.repos.tasks.get(reworded.id)!.context.dialogueOperation).toBe("local-pauses");
 });
 
@@ -7549,26 +7583,38 @@ it("puts a doubt a later request found about an earlier request's edit in front 
   expect((await listed(cutting.id)).map(e => e.check)).toEqual([undefined, undefined]);
 });
 
-it("revises an edit another request made from the request that flagged it, and from no other", async () => {
+it("allows a later request in the same project to replace an earlier approved edit and hides the superseded row from the earlier request", async () => {
   const { ctx } = workspace;
   ctx.repos.projects.putMedia(project.id, { id: "camera", name: "Interview", kind: "video", path: "camera.mov" }, "ready");
   const base = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 120 }]), { parent: null });
   ctx.repos.projects.update(project.id, { head: base.version });
   const by = { type: "human" as const, name: "Editor" };
-  const maker = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Dim the opening", createdBy: by });
-  const flagger = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Check the music", createdBy: by });
-  const propose = (taskId: string, opacity: number, timelineEdits: object[]) => api("POST", projectsPath() + "/changes?summary=true", { taskId, intent: "requested",
-    description: "Dim the opening", timelineEdits, skipRender: true, ops: [{ op: "updateClip", clipId: base.tracks[0]!.clips[0]!.id, patch: { opacity } }] });
-  const made = (await (await propose(maker.id, 0.8, [{ label: "opening", range: { start: 0, end: 10 } }])).json()).change;
-  const revise = () => propose(flagger.id, 0.6, [{ label: "opening", range: { start: 0, end: 10 }, replaces: { changeId: made.id, spot: 0 } }]);
-  // Another request can't name it until it has flagged it.
-  const refused = await revise();
-  expect(refused.status).toBe(400);
-  expect((await refused.json()).error.code).toBe("invalid_replacement");
-  ctx.repos.changes.put({ ...ctx.repos.changes.get(made.id)!, flags: [{ spot: 0, check: "The fade clips the music.", taskId: flagger.id, at: new Date().toISOString() }] });
-  const revised = await revise();
+  const maker = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Suggest B-roll", createdBy: by });
+  const followup = createTask(ctx, { projectId: project.id, kind: "edit", agent: "codex", instruction: "Make B-roll suggestions longer", createdBy: by });
+  const propose = (taskId: string, ops: object[], timelineEdits: object[]) => api("POST", projectsPath() + "/changes?summary=true", { taskId, intent: "requested",
+    description: "B-roll suggestions", timelineEdits, skipRender: true, ops });
+  const made = (await (await propose(maker.id,
+    [{ op: "addMarker", marker: { id: "br_intro", time: 10, kind: "todo", text: "B-roll: Show the Wright Flyer.", resolved: false } }],
+    [{ label: "The Wright Flyer’s first flights", range: { start: 10, end: 14 } }])).json()).change;
+
+  // Out-of-range spot is still rejected.
+  const badSpot = await propose(followup.id,
+    [{ op: "updateMarker", markerId: "br_intro", patch: { time: 8, text: "B-roll: Show the Wright Flyer and later planes." } }],
+    [{ label: "From the Wright Flyer to later designs", range: { start: 8, end: 24 }, replaces: { changeId: made.id, spot: 1 } }]);
+  expect(badSpot.status).toBe(400);
+  expect((await badSpot.json()).error.code).toBe("invalid_replacement");
+
+  // Follow-up request can replace the earlier request's approved edit directly.
+  const revised = await propose(followup.id,
+    [{ op: "updateMarker", markerId: "br_intro", patch: { time: 8, text: "B-roll: Show the Wright Flyer and later planes." } }],
+    [{ label: "From the Wright Flyer to later designs", range: { start: 8, end: 24 }, replaces: { changeId: made.id, spot: 0 } }]);
   expect(revised.status).toBe(201);
   expect(await revised.json()).toMatchObject({ change: { state: "approved", timelineEdits: [{ replaces: { changeId: made.id, spot: 0 } }] } });
+
+  // The earlier request drops the superseded row so Needs review lists only the updated suggestion.
+  const editsOf = async (threadId: string) => ((await (await api("GET", `${projectsPath()}/threads/${threadId}/edits`)).json()) as { edits: Array<{ label: string; previous: unknown[] }> }).edits;
+  expect(await editsOf(maker.id)).toEqual([]);
+  expect(await editsOf(followup.id)).toMatchObject([{ label: "From the Wright Flyer to later designs", previous: [{ changeId: made.id, spot: 0 }] }]);
 });
 
 it("records the editor's Keep on the edit's change, once, and tells the request's runs what they kept", async () => {

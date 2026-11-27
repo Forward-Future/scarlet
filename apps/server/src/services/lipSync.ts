@@ -11,6 +11,7 @@ import { curvePeak, fileInDirectory, heardAudio, heardAudioKey, lipSyncStretch, 
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { atomicWriteFile, rememberLast } from "../util.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import { faceSamples, type FaceSample } from "./faces.js";
 import { r3, readingIdentity, type VideoMedia } from "./pictureReading.js";
 import { pictureDecoder, pictureLane } from "./pictureWork.js";
@@ -139,7 +140,8 @@ export async function lipSync(ctx: Ctx, media: VideoMedia, range: { from?: numbe
     const next = (saving.get(path) ?? Promise.resolve()).catch(() => {})
       .then(() => atomicWriteFile(path, JSON.stringify(kept), `${path}.${randomUUID()}.tmp`));
     saving.set(path, next);
-    void next.catch(() => {}).finally(() => { if (saving.get(path) === next) saving.delete(path); });
+    void next.catch(error => ctx.log(`[media] lip-sync-save-failed id=${logId(media.id)} project=${logId(media.projectId)} ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => { if (saving.get(path) === next) saving.delete(path); });
     return next;
   };
 
@@ -150,25 +152,33 @@ export async function lipSync(ctx: Ctx, media: VideoMedia, range: { from?: numbe
     if (running) return running;
     const job = ctx.track((async (): Promise<LipSyncStretch> => {
       const signal = ctx.projectSignal(media.projectId);
-      // The faces in the stretch say where the mouth is: found once for the video and kept, as `faces` answers.
-      const found = await faceSamples(ctx, media, stretch, { waitMs: 120_000, signal });
-      // Not kept: asked again, the faces may be found by then.
-      if (!found.done) return { ...stretch, unmeasured: found.error ? `Faces couldn't be found: ${found.error}` : STILL_FINDING };
-      const face = mouthOf(found.samples, stretch.from, stretch.to);
-      const length = stretch.to - stretch.from;
-      let result: LipSyncStretch;
-      if (!face || face.seconds < length / 2) {
-        result = { ...stretch, ...(face && { face }), unmeasured: face ? `A face is in frame for only ${face.seconds.toFixed(1)} of ${length.toFixed(0)} s.` : "No face is in frame." };
-      } else {
-        const decoder = await pictureDecoder(ctx.settings().render.hwaccel);
-        const reading = await pictureLane(ctx).run(() => lipSyncStretch(file, { start: stretch.from, end: stretch.to },
-          { box: face.mouth satisfies CropBox, width, height, fps, maxShift: MAX_SHIFT, decoder, signal, audio: heardAudio(media) }), { signal });
-        const { curve, ...measured } = reading;
-        result = { ...stretch, face, reading: measured, curve };
+      const began = performance.now();
+      const what = `id=${logId(media.id)} project=${logId(media.projectId)} stretch=${stretch.from}-${stretch.to}`;
+      try {
+        // The faces in the stretch say where the mouth is: found once for the video and kept, as `faces` answers.
+        const found = await faceSamples(ctx, media, stretch, { waitMs: 120_000, signal });
+        // Not kept: asked again, the faces may be found by then.
+        if (!found.done) return { ...stretch, unmeasured: found.error ? `Faces couldn't be found: ${found.error}` : STILL_FINDING };
+        const face = mouthOf(found.samples, stretch.from, stretch.to);
+        const length = stretch.to - stretch.from;
+        let result: LipSyncStretch;
+        if (!face || face.seconds < length / 2) {
+          result = { ...stretch, ...(face && { face }), unmeasured: face ? `A face is in frame for only ${face.seconds.toFixed(1)} of ${length.toFixed(0)} s.` : "No face is in frame." };
+        } else {
+          const decoder = await pictureDecoder(ctx.settings().render.hwaccel);
+          const reading = await pictureLane(ctx).run(() => lipSyncStretch(file, { start: stretch.from, end: stretch.to },
+            { box: face.mouth satisfies CropBox, width, height, fps, maxShift: MAX_SHIFT, decoder, signal, audio: heardAudio(media) }), { signal });
+          const { curve, ...measured } = reading;
+          result = { ...stretch, face, reading: measured, curve };
+        }
+        ctx.log(`[media] lip-sync ${what} ${result.reading ? `measured on ${result.reading.frames} frames` : "unmeasured: no face held in frame"} in ${humanDuration(performance.now() - began)}`);
+        kept.stretches[key] = result;
+        await save();
+        return result;
+      } catch (error) {
+        if (!signal.aborted) ctx.log(`[media] lip-sync ${what} failed after ${humanDuration(performance.now() - began)}: ${clip(error instanceof Error ? error.message : String(error))}`);
+        throw error;
       }
-      kept.stretches[key] = result;
-      await save();
-      return result;
     })(), media.projectId).finally(() => measuring.delete(`${fileKey}\0${key}`));
     measuring.set(`${fileKey}\0${key}`, job);
     return job;

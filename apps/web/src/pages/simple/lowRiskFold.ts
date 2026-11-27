@@ -1,11 +1,11 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { LINGER_FADE_MS } from "../../lib/reviewTabs";
 
-/** How long a low risk row takes to open into For you's list, or to close out of it. */
+/** How long a low risk row takes to open into Needs review's list, or to close out of it. */
 export const FOLD_MS = 220;
 const EASE = "cubic-bezier(.2, 0, 0, 1)";
 
-/** The rows that are in For you's list only while low risk edits are included. */
+/** The rows that are in Needs review's list only while low risk edits are included. */
 const LOW_ROWS = "li[data-low-risk]";
 
 const canMove = () => typeof window !== "undefined" && typeof Element !== "undefined" && typeof Element.prototype.animate === "function"
@@ -99,60 +99,135 @@ function fold(host: HTMLElement | null, way: "in" | "out", held: Held | undefine
 }
 
 /**
- * Low risk edits open into For you's list and close out of it, and nothing else moves: each row grows from nothing in
+ * Low risk edits open into Needs review's list and close out of it, and nothing else moves: each row grows from nothing in
  * its place, the row the editor was on stays where it was, and unticked the rows close before they leave. `shown` is
- * whether the list still draws them. With motion reduced they are there or gone at once.
+ * whether the list still draws them. Switching away from Needs review and back (`visible` false -> true) reloads the
+ * existing list immediately without replaying the open animation, and leaving Needs review stops any close animation at
+ * once. With motion reduced they are there or gone at once.
  */
-export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean, setOn: (on: boolean) => void) {
+/**
+ * A row (or departing Safe edits divider) on its way out of Needs review or Done closes as it fades, so the rows under it
+ * don't jump up when it goes. One that stays after all (⌘Z took its Keep back or a revision restarted it while it faded)
+ * is its own height again.
+ */
+export function useLeavingRows(host: RefObject<HTMLElement | null>) {
+  const leaving = useRef(new Map<HTMLElement, Animation>());
+  useLayoutEffect(() => {
+    for (const [row, room] of leaving.current) {
+      if (row.isConnected && row.classList.contains("is-leaving")) continue;
+      room.cancel();
+      delete row.dataset.closing;
+      row.style.overflowY = "";
+      leaving.current.delete(row);
+    }
+    if (!canMove()) return;
+    for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-leaving:not([data-closing]), .review-tier-sep.is-leaving:not([data-closing])") ?? []) {
+      row.dataset.closing = "";
+      row.style.overflowY = "clip";
+      const height = `${row.getBoundingClientRect().height}px`;
+      const isSep = row.classList.contains("review-tier-sep");
+      const keyframes: Keyframe[] = isSep
+        ? (() => {
+          const style = getComputedStyle(row);
+          return [
+            { height, marginTop: style.marginTop, marginBottom: style.marginBottom, paddingTop: style.paddingTop },
+            { height: "0px", marginTop: "0px", marginBottom: "0px", paddingTop: "0px" },
+          ];
+        })()
+        : [{ height }, { height: "0px" }];
+      const room = row.animate(keyframes, { duration: LINGER_FADE_MS - 40, easing: EASE, fill: "forwards" });
+      room.finished?.catch(() => {});
+      leaving.current.set(row, room);
+    }
+  });
+}
+
+/**
+ * A row that just finished lingering and landed in Working or Done smoothly opens into place with a brief soft highlight
+ * so the eye catches where it moved. With motion reduced, or when the section is hidden, nothing animates.
+ */
+export function useArrivingRows(host: RefObject<HTMLElement | null>) {
+  const arriving = useRef(new Map<HTMLElement, Animation[]>());
+  useLayoutEffect(() => {
+    for (const [row, anims] of arriving.current) {
+      if (row.isConnected && row.classList.contains("is-arriving")) continue;
+      for (const a of anims) a.cancel();
+      delete row.dataset.arrived;
+      row.style.overflowY = "";
+      arriving.current.delete(row);
+    }
+    if (!canMove()) return;
+    for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-arriving:not([data-arrived])") ?? []) {
+      const height = row.getBoundingClientRect().height;
+      if (height <= 0) continue;
+      row.dataset.arrived = "";
+      row.style.overflowY = "clip";
+      const room = row.animate([{ height: "0px" }, { height: `${height}px` }], { duration: 240, easing: EASE });
+      const anims: Animation[] = [room];
+      const btn = row.firstElementChild as HTMLElement | null;
+      if (btn) {
+        anims.push(btn.animate(
+          [{ opacity: 0, transform: "translateY(-4px)" }, { opacity: 1, transform: "none" }],
+          { duration: 220, easing: EASE },
+        ));
+        anims.push(btn.animate(
+          [{ backgroundColor: "rgba(255, 255, 255, .07)" }, { backgroundColor: "rgba(255, 255, 255, 0)" }],
+          { duration: 650, delay: 120, easing: "ease-out" },
+        ));
+      }
+      arriving.current.set(row, anims);
+      void room.finished?.then(() => {
+        row.style.overflowY = "";
+      }, () => {});
+    }
+  });
+}
+
+export function useLowRiskFold(host: RefObject<HTMLElement | null>, on: boolean, setOn: (on: boolean) => void, visible = true) {
   const [closing, setClosing] = useState(false);
   const held = useRef<Held>(undefined);
-  const was = useRef(on);
+  const was = useRef({ on, visible });
   useLayoutEffect(() => {
-    const opened = on && !was.current;
-    was.current = on;
+    const before = was.current;
+    was.current = { on, visible };
+    // Animate only when low risk edits are opened into an already-visible Needs review list, never on a tab switch back.
+    const opened = visible && before.visible && on && !before.on;
     if (!opened) return;
     const keep = held.current;
     held.current = undefined;
     return fold(host.current, "in", keep);
-  }, [on]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [on, visible]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
-    if (!closing) return;
+    if (!closing || !visible) return;
     const keep = held.current;
     held.current = undefined;
     return fold(host.current, "out", keep, () => setClosing(false));
-  }, [closing]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Included again from somewhere else while they close (an edit opened from the timeline): they stay.
-  if (on && closing) setClosing(false);
-  // A row on its way out of For you closes as it fades, so the rows under it don't jump up when it goes.
-  useLayoutEffect(() => {
-    if (!canMove()) return;
-    for (const row of host.current?.querySelectorAll<HTMLElement>("li.is-leaving:not([data-closing])") ?? []) {
-      row.dataset.closing = "";
-      row.style.overflowY = "clip";
-      row.animate([{ height: `${row.getBoundingClientRect().height}px` }, { height: "0px" }], { duration: LINGER_FADE_MS - 40, easing: EASE, fill: "forwards" });
-    }
-  });
+  }, [closing, visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Included again from somewhere else while they close (an edit opened from the timeline), or switched away: stop closing.
+  if ((on || !visible) && closing) setClosing(false);
+  useLeavingRows(host);
   const toggle = () => {
     held.current = hold(host.current);
-    if (on && canMove()) setClosing(true);
+    if (on && visible && canMove()) setClosing(true);
     setOn(!on);
   };
-  return { shown: on || closing, toggle };
+  return { shown: visible && (on || closing), closing: visible && closing, toggle };
 }
 
 /**
  * The low risk line goes once there is no such edit left, as once the last of them is kept. It closes rather than vanishing, so the
  * rows under it glide up: `count` is what the line still says while it closes, and `leaving` that it is on its way out.
+ * Switching away from Needs review (`shown = false`) hides the line immediately without animating.
  */
-export function useLowRiskLine(host: RefObject<HTMLElement | null>, count: number) {
+export function useLowRiskLine(host: RefObject<HTMLElement | null>, count: number, shown = true) {
   const [left, setLeft] = useState<number>();
-  const was = useRef(count);
+  const was = useRef({ count, shown });
   useLayoutEffect(() => {
     const before = was.current;
-    was.current = count;
-    if (count > 0) setLeft(undefined);
-    else if (before > 0 && canMove()) setLeft(before);
-  }, [count]);
+    was.current = { count, shown };
+    if (!shown || count > 0) setLeft(undefined);
+    else if (before.shown && before.count > 0 && canMove()) setLeft(before.count);
+  }, [count, shown]);
   useLayoutEffect(() => {
     const line = left === undefined ? null : host.current?.querySelector<HTMLElement>(".simple-low-risk");
     if (!line) return;
@@ -163,5 +238,5 @@ export function useLowRiskLine(host: RefObject<HTMLElement | null>, count: numbe
     void closing.finished.then(() => setLeft(undefined), () => {});
     return () => closing.cancel();
   }, [left]); // eslint-disable-line react-hooks/exhaustive-deps
-  return count > 0 ? { count, leaving: false } : left !== undefined ? { count: left, leaving: true } : undefined;
+  return !shown ? undefined : count > 0 ? { count, leaving: false } : left !== undefined ? { count: left, leaving: true } : undefined;
 }

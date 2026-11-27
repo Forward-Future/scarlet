@@ -120,8 +120,13 @@ export async function withInference<T>(ort: typeof Ort, model: string, work: (se
     } finally { if (!sessions) await session?.release().catch(() => {}); }
   }
   const session = await acquire("cpu");
-  try { return await work(session, "cpu"); }
-  finally { if (!sessions) await session.release(); }
+  try {
+    const result = await work(session, "cpu");
+    // Where no GPU path was tried, say where it runs; a GPU given up has said so above. A run the caller keeps on the
+    // CPU on purpose, such as a check of the GPU's output, says nothing.
+    if (!gpu && options.gpu !== false) sessions?.tell(`${name} runs on the CPU`);
+    return result;
+  } finally { if (!sessions) await session.release(); }
 }
 
 /** Source: 16 kHz mono PCM as produced by extractWav. FFmpeg may include LIST chunks. */

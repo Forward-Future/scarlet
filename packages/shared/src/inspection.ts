@@ -36,7 +36,7 @@ export interface SilenceLeft { id: string; start: number; end: number; seconds: 
 /**
  * A wordless stretch this long that a pass leaves playing is accounted for: cut, or kept for what the viewer sees or
  * hears in it. The default when the check isn't given one; how long a silence may play unremarked is the skill's pace,
- * so the default is the stock dialogue-pass skill's dead air, about a second. It was 2 s: passes left five times the
+ * so the default is the dead air the shipped dialogue skill describes, about a second. It was 2 s: passes left five times the
  * published editor's pauses of a second or more and asked about none of them (benchmarks/safety-only-sol-2026-11-21).
  */
 export const SILENCE_LEFT_SECONDS = 1;
@@ -51,7 +51,7 @@ export interface ShortPiece { id: string; from: number; to: number; seconds: num
   source: TimeRange; plays: string; before: string; after: string; cutBefore: number; cutAfter: number }
 /**
  * A piece between two cuts shorter than this is listed by the check when it isn't given a length. How short a piece
- * plays as a stutter is the skill's pace, so the default is the stock dialogue-pass skill's, about a second. Passes left
+ * plays as a stutter is the skill's pace, so the default is the shipped dialogue skill's, about a second. Passes left
  * about twice the published editor's pieces under a second, and nothing they read showed them one: each comes from two
  * cuts made apart, and the pass reads the recording, not the edit it leaves (benchmarks/dead-air-sol-2026-11-21).
  */
@@ -95,16 +95,25 @@ export interface RepeatAuditResult {
   /** Joins in scope with a side that wasn't heard, per recording. */
   unheardJoins?: UnheardJoins[];
   /**
-   * What the picture does that the pass has neither changed nor kept: a picture on screen for under a second between
-   * two others, or a recording laid over the main picture that is off it while it still shows what it showed. They
-   * count in `remaining`.
+   * What the picture does that the pass has neither changed nor kept: a brief picture, a recording off picture while
+   * it still shows what it showed, a glide across a screen change, text cut off by the frame's edge, content under an
+   * inset, text too small to read, visible video player controls, or a blank/loading screen. They count in `remaining`.
    */
   pictures?: PictureCheckFinding[];
 }
 
+/**
+ * Text whose usual line height is below this percent of the video's height (about 27 px at 1080p) is listed by the
+ * closing check as `smallText` when it isn't given another bar. Matches what the shipped screen-framing skill says.
+ */
+export const SMALL_TEXT_PERCENT = 2.5;
+
 /** A picture finding the closing check lists, read by Scarlet's MCP server on the version checked. */
-export const PictureCheckFinding = z.object({ id: z.string().min(1), kind: z.enum(["brief", "offPicture"]),
-  from: z.number().finite(), to: z.number().finite() }).passthrough();
+export const PictureCheckFinding = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["brief", "offPicture", "moveAcrossCut", "clippedText", "underCover", "smallText", "blankScreen", "playerControls"]),
+  from: z.number().finite(), to: z.number().finite(),
+}).passthrough();
 export type PictureCheckFinding = z.infer<typeof PictureCheckFinding>;
 
 /** Subtracting two times in seconds can land a hair past an exact limit (16.1 - 8.1 > 8): a window that long still counts. */

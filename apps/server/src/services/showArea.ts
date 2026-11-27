@@ -11,8 +11,10 @@ import { AREA_HOLDS_AT, AREA_PICTURE_CHANGE, AREA_SIDES, SHOW_EDGE_HEIGHT, SHOW_
   type AreaBox, type AreaSide, type HeldArea, type ShowArea } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest, notFound } from "../errors.js";
-import { areaAt, wholePicture } from "@scarlet/shared";
+import { waitFor } from "../events.js";
+import { agentCapabilities, areaAt, wholePicture } from "@scarlet/shared";
 import { atomicWriteFile, errorMessage, rememberLast } from "../util.js";
+import { clip, humanDuration } from "../logText.js";
 import { FINISHED_TASK, createTask } from "./tasks.js";
 import { pictureChanges } from "./pictureCuts.js";
 import { withFrames, type VideoMedia } from "./pictureReading.js";
@@ -62,7 +64,10 @@ function edges(ctx: Ctx, media: VideoMedia): Promise<Edges> {
       return { frames: parts.length, bits };
     })();
     reading.set(media.id, run);
-    run.then(found => { failed.delete(media.id); rememberLast(kept, media.id, found, 3); }, error => failed.set(media.id, errorMessage(error)))
+    run.then(found => { failed.delete(media.id); rememberLast(kept, media.id, found, 3); }, error => {
+      failed.set(media.id, errorMessage(error));
+      if (!ctx.projectSignal(media.projectId).aborted) ctx.log(`[show-area] ${media.id}: its edges couldn’t be read: ${clip(errorMessage(error))}`);
+    })
       .finally(() => reading.delete(media.id));
   }
   return run;
@@ -99,7 +104,11 @@ async function frameEdges(ctx: Ctx, media: VideoMedia, at: number): Promise<Uint
   let bits: Uint8Array | undefined;
   const file = await sourceFile(ctx, media);
   await withFrames(ctx, media, file, "show-area", { start: at, end: Math.min(media.duration ?? at + 1, at + 0.5), fps: 4, width: SHOW_EDGE_WIDTH, height: SHOW_EDGE_HEIGHT,
-    signal: ctx.projectSignal(media.projectId), fromCopy: true }, (_at, rgb) => { bits ??= edgeBits(rgb); return false; }, async () => undefined).catch(() => undefined);
+    signal: ctx.projectSignal(media.projectId), fromCopy: true }, (_at, rgb) => { bits ??= edgeBits(rgb); return false; }, async () => undefined).catch((error: unknown) => {
+    // The box is saved as given, with no line to hold it by.
+    if (!ctx.projectSignal(media.projectId).aborted) ctx.log(`[show-area] ${media.id}: the frame at ${at.toFixed(2)} s couldn’t be read, its box is kept as given: ${clip(errorMessage(error))}`);
+    return undefined;
+  });
   return bits;
 }
 
@@ -147,9 +156,9 @@ const ASKS_AT_ONCE = 12;
 
 /**
  * Ask what viewers may see at these source seconds of a recording: a short run of its own for each, with the asking
- * request's agent and model, beside that request and outside the project's queue. Each looks at one full-size frame and
- * saves an area. Waits for them up to `waitMs`. A second an area already holds for starts none unless asked `again`, and
- * neither does one in a stretch another run is already looking at.
+ * request's agent and model, beside that request and outside the project's queue, when that model can see images. Each
+ * looks at one full-size frame and saves an area. Waits for them up to `waitMs`. A second an area already holds for
+ * starts none unless asked `again`, and neither does one in a stretch another run is already looking at.
  *
  * A recording with no area yet gets one look before the rest: a camera's answer is the whole picture, which holds for
  * all of it, and ten looks at once all said so (29 of one pass's 48 looks were at its camera, 2026-11-17). Once two
@@ -157,10 +166,16 @@ const ASKS_AT_ONCE = 12;
  */
 export async function askAreas(ctx: Ctx, media: VideoMedia, opts: { seconds: number[]; taskId: string; waitMs: number; again?: boolean }): Promise<{ asked: number; answered: number; waiting: number }> {
   const asker = ctx.repos.tasks.get(opts.taskId);
-  if (!asker || asker.projectId !== media.projectId || asker.agent === "api" || asker.kind === "area_check") return { asked: 0, answered: 0, waiting: 0 };
+  if (!asker || asker.projectId !== media.projectId || asker.agent === "api" || asker.kind === "area_check"
+    || !agentCapabilities(asker.agent, (ctx.options.env ?? process.env).SCARLET_AGENT_CAPS, asker.model).images) {
+    return { asked: 0, answered: 0, waiting: 0 };
+  }
   const deadline = Date.now() + opts.waitMs;
   let state = await showArea(ctx, media, { waitMs: Math.min(opts.waitMs, 240_000) });
-  if (!state.done) return { asked: 0, answered: 0, waiting: 0 };
+  if (!state.done) {
+    ctx.log(`[show-area] ${media.id}: ${state.error ? "its edges couldn’t be read" : `its edges weren’t read within ${humanDuration(Math.min(opts.waitMs, 240_000))}`}, so no frames are asked about for ${asker.id}`);
+    return { asked: 0, answered: 0, waiting: 0 };
+  }
   const live = ctx.repos.tasks.select("project_id = ? AND kind = 'area_check' AND state NOT IN ('done', 'failed', 'cancelled')", [media.projectId])
     .filter(task => task.context.areaCheck?.mediaId === media.id);
   const watched = [...live];
@@ -169,7 +184,13 @@ export async function askAreas(ctx: Ctx, media: VideoMedia, opts: { seconds: num
   const NEAR = 150;
   const taken: number[] = live.map(task => task.context.areaCheck!.at);
   const open = () => watched.filter(task => !FINISHED_TASK.has(ctx.repos.tasks.get(task.id)?.state ?? "done"));
-  const settle = async () => { while (open().length && Date.now() < deadline) await new Promise(done => setTimeout(done, 500)); };
+  // Woken as a look this engine runs changes state; read again every half second for looks another engine runs.
+  const settle = async () => {
+    while (open().length && Date.now() < deadline) {
+      const ids = new Set(open().map(task => task.id));
+      await waitFor(ctx.bus, "ws", Math.min(500, deadline - Date.now()), e => e.type === "task.updated" && ids.has(e.task.id));
+    }
+  };
   const start = (seconds: number[], most: number) => {
     const allWhole = state.areas.length >= 2 && state.areas.every(a => wholePicture(a.area));
     let started = 0;

@@ -3,8 +3,12 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { isDialogueGuide } from "@scarlet/shared";
+import { builtInCommand, commandGuides } from "@scarlet/shared";
+
+/** The skill that guides the dialogue pass, by what its header says. */
+const dialogueGuide = (skills: Parameters<typeof commandGuides>[1]) => commandGuides(builtInCommand("first-cut").name, skills)[0];
 import { api } from "../../lib/client";
+import { flushAppLog, startAppLog, stopAppLog } from "../../lib/appLog";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { dropTargets, fileDropZone } from "../../lib/dropTargets";
 import { useAttachmentsStore } from "../../stores/attachments";
@@ -39,7 +43,9 @@ beforeEach(() => {
   useProjectStore.setState({ current, createTask: vi.fn().mockResolvedValue(db.tasks[0]), createNote: vi.fn().mockResolvedValue({ note: db.notes[0] }), revise: vi.fn(), answerTask: vi.fn() });
   usePlayerStore.setState({ time: 3.5, playing: true });
   useHostsStore.setState({ hosts: db.hosts });
-  useUiStore.setState({ agentDraft: "", agentContext: null });
+  // Most spoken-message tests here are about where a message goes once it is sent at once, so they run with review off.
+  // The review tests turn it back on.
+  useUiStore.setState({ agentDraft: "", agentContext: null, reviewDictation: false });
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -88,7 +94,7 @@ it.each(["typing", "voice"])("dismisses the first-project glow for good on first
 
 // "There's no notice above the message box. The editor chose this design." (AGENTS.md)
 it("puts nothing above the message box on the first import, even with the dialogue pass ready", async () => {
-  const guide = db.skills.find(isDialogueGuide)!;
+  const guide = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ status: "ready", skills: [guide] });
   useUiStore.getState().offerFirstEditHint(PRJ);
   await show();
@@ -96,6 +102,29 @@ it("puts nothing above the message box on the first import, even with the dialog
   expect(container.querySelector('button[aria-label="Make a first cut"]')).toBeNull();
   expect(container.querySelector(".composer-first-cut")).toBeNull();
   expect(container.querySelector("textarea")!.value).toBe("");
+});
+
+it("logs what each press of send did, never the words: sent, ignored and why, or failed", async () => {
+  const lines: string[] = [];
+  startAppLog(batch => { lines.push(...batch); });
+  try {
+    await show();
+    const enter = () => act(async () => { container.querySelector("textarea")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    await enter();
+    await type("Lower the music under the interview.");
+    await enter();
+    vi.mocked(useProjectStore.getState().createTask).mockRejectedValueOnce(new Error("The engine is busy."));
+    await type("Trim the intro.");
+    await enter();
+    flushAppLog();
+    const said = lines.filter(line => line.startsWith("[request]"));
+    expect(said[0]).toMatch(/ send-ignored reason=empty how=typed dest=new-edit chars=0 aim=whole project=/);
+    expect(said.some(line => / send how=typed dest=new-edit chars=36 /.test(line))).toBe(true);
+    expect(said.some(line => / send-failed how=typed chars=15 name=Error error="The engine is busy."/.test(line))).toBe(true);
+    expect(said.join("\n")).not.toMatch(/music|intro/);
+  } finally {
+    stopAppLog();
+  }
 });
 
 it("switches models above the draft and sends the edit with the selected model", async () => {
@@ -107,11 +136,11 @@ it("switches models above the draft and sends the edit with the selected model",
   expect(picker.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   await act(() => picker.click());
   await act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Claude Code"]')!.click());
-  await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Haiku 5.5"]')!.click());
-  expect(picker.textContent).toContain("Haiku 5.5");
+  await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Fable 5.1"]')!.click());
+  expect(picker.textContent).toContain("Fable 5.1");
   await submit();
   expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
-    instruction: "Tighten the opening", agent: "claude", model: "haiku",
+    instruction: "Tighten the opening", agent: "claude", model: "fable",
   }));
 });
 
@@ -196,7 +225,7 @@ it("opens the skill library with / and sends the chosen skill for the whole vide
 });
 
 it.each(["missing", "disabled"])("sends and rewords explicit dialogue shortcuts with the shipped guide %s", async state => {
-  const guide = db.skills.find(isDialogueGuide)!;
+  const guide = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ status: "ready", skills: state === "missing" ? [] : [{ ...guide, enabled: false }] });
   await show();
   const request = "Start here /tighten-pauses-here please.";
@@ -281,7 +310,7 @@ it.each(["click", "keyboard"])("creates a skill from the picker by %s and return
 });
 
 it.each(["/dialogue-pass", "/tighten-pauses-here"])("submits %s with the canonical dialogue skill", async command => {
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   await show();
   const field = container.querySelector("textarea")!;
@@ -345,12 +374,12 @@ it("only ever sends: stopping a running edit is on its card, not in the message 
   const action = () => container.querySelector<HTMLButtonElement>(".composer-send");
   // With nothing typed the box has no button, though an edit is running in this request.
   expect(action()).toBeNull();
-  await act(() => useUiStore.getState().setAgent({ agent: "claude", model: "haiku" }));
+  await act(() => useUiStore.getState().setAgent({ agent: "claude", model: "fable" }));
   await type("Keep the first take");
   expect(action()!.getAttribute("aria-label")).toBe("Send reply");
   await submit();
   expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
-    instruction: "Keep the first take", agent: "claude", model: "haiku", context: expect.objectContaining({ threadId: thread.id }),
+    instruction: "Keep the first take", agent: "claude", model: "fable", context: expect.objectContaining({ threadId: thread.id }),
   }));
   await type("Another idea");
   await type("");
@@ -518,12 +547,12 @@ it("uses the same input for a selected transcript, revision, or agent question",
   await submit();
   expect(useProjectStore.getState().answerTask).toHaveBeenCalledWith(asking.question!.id, "Yes, keep it", undefined);
 
-  await show({ thread: asking, selectedEdit: { changeId: ready.latest!.id, editNumber: 2, editIndex: 0,
+  await show({ thread: asking, selectedEdit: { changeId: ready.latest!.id, editIndex: 0,
     label: "Sponsor transition", time: 8.75, end: 11.75, clipIds: [] } });
   await type("Keep the words on both sides");
   await submit();
   expect(useProjectStore.getState().answerTask).toHaveBeenLastCalledWith(asking.question!.id,
-    "Edit 2 · Sponsor transition — Keep the words on both sides", undefined);
+    "Edit at 0:08 · Sponsor transition — Keep the words on both sides", undefined);
 });
 
 it("prompts for a fix and sends feedback on the failed attempt", async () => {
@@ -686,6 +715,7 @@ it("sends a spoken edit to the explicitly attached moment and spoken revisions t
   await act(async () => { micProps.onStart?.(); });
   await act(async () => usePlayerStore.getState().setTime(8));
   await act(async () => { finishRecording(recording); });
+  expect(micProps.review).toBe(false);
   expect(createVoiceNote).toHaveBeenCalledWith(PRJ, recording.blob, expect.objectContaining({ time: 3.5 }));
   expect(useUiStore.getState().agentContext).toBeNull();
 
@@ -694,12 +724,52 @@ it("sends a spoken edit to the explicitly attached moment and spoken revisions t
   const picker = container.querySelector<HTMLButtonElement>('.composer-context-row .composer-model [aria-haspopup="dialog"]')!;
   await act(() => picker.click());
   await act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Claude Code"]')!.click());
-  await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Haiku 5.5"]')!.click());
-  expect(picker.textContent).toContain("Haiku 5.5");
+  await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Fable 5.1"]')!.click());
+  expect(picker.textContent).toContain("Fable 5.1");
   await act(async () => { micProps.onStart?.(); micProps.onResult(recording); });
   expect(useProjectStore.getState().revise).toHaveBeenCalledWith(ready.latest!.id,
-    expect.objectContaining({ assignTo: "claude:haiku", text: "Keep the last word", voiceTranscript: "Keep the last word" }));
+    expect.objectContaining({ assignTo: "claude:fable", text: "Keep the last word", voiceTranscript: "Keep the last word" }));
   expect(createVoiceNote).toHaveBeenCalledTimes(1);
+});
+
+it("with review on, leaves what was said in the box after the draft, aimed where it was, and sends nothing until Enter", async () => {
+  useUiStore.setState({ reviewDictation: true });
+  let micProps!: ComponentProps<typeof mic.MicButton>;
+  vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
+  const createVoiceNote = vi.fn();
+  useProjectStore.setState({ createVoiceNote });
+  const { createTask, createNote, revise, answerTask } = useProjectStore.getState();
+  vi.spyOn(api, "speechToText").mockResolvedValue({ text: "Keep the last word" });
+  const recording = { blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" };
+  const input = () => container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  await show();
+  // The red button says what a press does now.
+  expect(micProps.review).toBe(true);
+  const point = { time: 3.5, clipIds: [] };
+  await selectPoint(point);
+  await type("Tighten this,");
+  await act(async () => { micProps.onStart?.(); });
+  await act(async () => { micProps.onResult(recording); });
+  expect(input().value).toBe("Tighten this, Keep the last word");
+  expect(document.activeElement).toBe(input());
+  expect(input().selectionStart).toBe(input().value.length);
+  expect(useUiStore.getState().agentContext).toBe(point);
+  for (const sent of [createVoiceNote, createTask, createNote, revise, answerTask]) expect(sent).not.toHaveBeenCalled();
+  // Enter sends it as typed words, to the moment it was said about.
+  await act(async () => input().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  expect(createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({ time: 3.5, text: "Tighten this, Keep the last word" }));
+  expect(createVoiceNote).not.toHaveBeenCalled();
+
+  // A reply said into an open edit waits in its box too, and goes to that edit once sent.
+  const ready = buildThreads(current).find(t => t.needs === "decision")!;
+  await show({ thread: ready });
+  expect(input().value).toBe("");
+  await act(async () => { micProps.onStart?.(); });
+  await act(async () => { micProps.onResult(recording); });
+  expect(input().value).toBe("Keep the last word");
+  expect(revise).not.toHaveBeenCalled();
+  await submit();
+  expect(revise).toHaveBeenCalledWith(ready.latest!.id, expect.objectContaining({ text: "Keep the last word" }));
 });
 
 it("sends a late voice transcript to the project that owned the recording", async () => {
@@ -734,7 +804,7 @@ it("pins a reply to the selected individual edit while typing and sends it in th
   const target = { changeId: change.id, editIndex: 1, version: project.head!, time: 1, end: 3, clipIds: [], label: "Opening caption" };
   await show({ thread, selectedEdit: target });
   const header = container.querySelector(".composer-context-row")!;
-  expect(header.querySelector(".composer-target-name")?.textContent).toBe("Edit 2");
+  expect(header.querySelector(".composer-target-name")?.textContent).toBe("Edit at 0:01");
   expect(header.contains(container.querySelector(".composer-model"))).toBe(true);
   expect(container.querySelector(".composer-box")?.contains(header)).toBe(false);
   await type("Hold this caption for another second");
@@ -786,20 +856,18 @@ it("sends words chosen in a call's passage as a revision of that one cut, where 
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
 });
 
-it("shows a call's number and cut time, and clicking the time toggles milliseconds", async () => {
+it("shows a call by its time alone, never a number, and clicking the time toggles milliseconds", async () => {
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
-  useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut 3" });
-  usePlayerStore.setState({ time: 177.4 });
-  await show({ thread: ready, targetTag: "Cut 3", aimTime: 167.2, pausedAt: { time: 177.4, version: "ver_before" } });
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47");
+  useUiStore.getState().setAgentContext({ changeId: ready.latest!.id, cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "Cut at 2:47" });
+  await show({ thread: ready, targetTag: "Cut at 2:47", targetTime: 167.2 });
+  expect(aimName()?.textContent).toBe("Cut 2:47");
   expect(container.querySelector(".composer-aim-when")).toBeNull();
   const timeBtn = container.querySelector<HTMLButtonElement>(".composer-aim-time")!;
   await act(async () => timeBtn.click());
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47.200");
+  expect(aimName()?.textContent).toBe("Cut 2:47.200");
   expect(aimName()?.querySelector(".time-ms")?.textContent).toBe(".200");
   await act(async () => timeBtn.click());
-  expect(aimName()?.textContent).toBe("Cut 3 · 2:47");
-  usePlayerStore.setState({ time: 0 });
+  expect(aimName()?.textContent).toBe("Cut 2:47");
 });
 
 it("shows where the editor paused in an open cut's tag, and sends the message to the cut with that frame", async () => {
@@ -1333,8 +1401,8 @@ it("shows the Range tag for words chosen in the transcript (Ask about this), and
   expect(Array.from(aimName()!.querySelectorAll(".time-ms")).map(el => el.textContent)).toEqual([".200", ".500"]);
   // Words chosen inside an open cut still carry the cut's own tag.
   await act(async () => useUiStore.getState().setAgentContext({ changeId: "chg_1", cutIndex: 0, version: project.head!, time: 2.3, end: 2.5, clipIds: [], label: "“I”" }));
-  await show({ targetTag: "Cut 1" });
-  expect(aimName()?.textContent).toBe("Cut 1");
+  await show({ targetTag: "Cut at 0:02" });
+  expect(aimName()?.textContent).toBe("Cut 0:02");
 });
 
 it("answers Scarlet's question with words chosen in the transcript beside Answer, and clears the range before Answer", async () => {
@@ -1477,7 +1545,7 @@ it("changes a queued request's words in the box, across its whole width, saving 
 });
 
 it("saves a queued request's new words with the skills their /commands name, as a send does", async () => {
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   let text = "/dialogue-pass Keep the aside.";
   const rewording = { id: "task_queued", get text() { return text; }, onChange: vi.fn((t: string) => { text = t; }),
@@ -1730,7 +1798,7 @@ it("puts what was said for a queued request in the box, where the tick saves it 
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   vi.spyOn(api, "speechToText").mockResolvedValue({ text: "/dialogue-pass Keep the aside, but trim the breath before it." });
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   let text = "Keep the aside.";
   const rewording = { id: "task_queued", get text() { return text; }, onChange: vi.fn((t: string) => { text = t; }),
@@ -1999,6 +2067,24 @@ it("counts the marked frame among the 20 files a message can carry, so the messa
   expect(sent.at(-1)).toMatchObject({ id: "att_frame" });
 });
 
+it("keeps a message with twenty files and a frame marked after them in the box, says why, and uploads nothing more", async () => {
+  vi.spyOn(markedFrame, "markedFramePicture").mockResolvedValue(new Blob(["png"], { type: "image/png" }));
+  const upload = vi.spyOn(api, "uploadAttachment").mockImplementation(async (_project, file) => "path" in file
+    ? { attachment: { id: `att_${file.path}`, name: file.path.split("/").pop()!, size: 10 } }
+    : { attachment: { id: "att_frame", name: "Marked frame 0.07.png", size: 3, mime: "image/png" } });
+  await show();
+  await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(Array.from({ length: 20 }, (_, i) => `/Users/me/shot-${i + 1}.png`)));
+  // The frame is marked once the twenty files are on the box: there is no place left for it.
+  await act(async () => usePictureMarksStore.setState({ marking: null, byProject: { [PRJ]: { time: 7, version: project.head!, picture: "frame://7", marks: [{ kind: "box", box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } }] } } }));
+  await type("Match these shots to the marked frame");
+  await submit();
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+  expect(upload).toHaveBeenCalledTimes(20);
+  expect(container.querySelector("textarea")!.value).toBe("Match these shots to the marked frame");
+  expect(container.querySelector('.composer-dock > [role="alert"]')?.textContent).toBe("A message can carry 20 files, the marked frame included. Remove one.");
+  expect(usePictureMarksStore.getState().byProject[PRJ]?.marks).toHaveLength(1);
+});
+
 it("sends a message about a moment that carries files as a request about that moment, since a note takes none", async () => {
   vi.spyOn(api, "uploadAttachment").mockResolvedValue({ attachment: { id: "att_logo", name: "logo.png", size: 3 } });
   await show();
@@ -2227,4 +2313,30 @@ it("has nothing to send while the box holds only a time", async () => {
   expect(container.querySelector("textarea")!.value).toBe("0:04 ");
   await type("0:04 zoom in");
   expect(container.querySelector(".composer-send")).not.toBeNull();
+});
+
+it("lets ⌘Z put back a chosen transcript range that Esc took off an empty box, and keeps that Esc to the box", async () => {
+  useUiStore.getState().setAgentContext({ time: 12, end: 18, version: project.head!, clipIds: [] });
+  await show();
+  expect(aimName()?.textContent).toContain("Range");
+
+  const field = container.querySelector("textarea")!;
+  let escapedDefaultPrevented = false;
+  const checkEscape = (e: KeyboardEvent) => { if (e.key === "Escape") escapedDefaultPrevented = e.defaultPrevented; };
+  window.addEventListener("keydown", checkEscape);
+  try {
+    await act(async () => {
+      field.focus();
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(escapedDefaultPrevented).toBe(true);
+    expect(useUiStore.getState().agentContext).toBeNull();
+    // ⌘Z in the empty box puts the transcript range back.
+    await act(async () => {
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(useUiStore.getState().agentContext).toMatchObject({ time: 12, end: 18 });
+  } finally {
+    window.removeEventListener("keydown", checkEscape);
+  }
 });

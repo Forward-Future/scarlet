@@ -19,6 +19,7 @@ import type { Ctx } from "../../context.js";
 import { now } from "../../db.js";
 import { badRequest, conflict, notFound } from "../../errors.js";
 import type { BusEvents } from "../../events.js";
+import { clip } from "../../logText.js";
 import { errorMessage } from "../../util.js";
 import { actorFor, authorName, logActivity, quote } from "../activity.js";
 import { proposalAfterRevisions, resumeReviewState } from "../revisionState.js";
@@ -94,7 +95,7 @@ function resolveRestoredCutsTarget(
   restoredCuts: number[],
 ): ResolvedTarget {
   const { head } = project;
-  if (change.state !== "ready") throw conflict("cut_review_stale", "This pass has changed since. Open the call again from For you.");
+  if (change.state !== "ready") throw conflict("cut_review_stale", "This pass has changed since. Open the call again from Needs review.");
   const unchanged = head === change.fromVersion && !change.cutEdits?.length;
   const { review, draft, joinFades } = prepareCutReview(ctx, change, unchanged ? restoredCuts : undefined);
   if (!review) throw badRequest("cuts_unsupported", "This proposal has no individually restorable cuts.");
@@ -224,7 +225,7 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
   if (change.cutAssessments?.length && !opts.restoredCuts) {
     const review = prepareCutReview(ctx, change).review;
     if (!review || opts.spots || change.cutAssessments.length !== review.cuts.length || change.cutAssessments.some(a => a.verdict === "ask"))
-      throw conflict("review_decisions_needed", "Make this pass’s calls in For you first.");
+      throw conflict("review_decisions_needed", "Make this pass’s calls in Needs review first.");
     // The editor's call on a cut stands over Scarlet's verdict, as when the pass is applied once it finishes.
     opts = { ...opts, restoredCuts: keptCuts(change, review) };
   }
@@ -328,6 +329,9 @@ export function approveChange(ctx: Ctx, user: User, change: Change, opts: { spot
       ...(saved.restoredCuts?.length && { restoredCuts: saved.restoredCuts }),
     },
   });
+  // A plain apply is in the edit's own line (eventLog). One merged onto a moved edit, or only in part, says so.
+  if (outcome === "rebased" || outcome === "partial")
+    ctx.db.afterCommit(() => ctx.log(`[edit] ${saved.id} went in ${outcome === "rebased" ? "merged onto" : `with ${spots?.length ?? 0} of ${change.ranges.length} spots onto`} ${head}, which had moved from ${change.fromVersion}, as ${target}`));
   // A pass whose calls the editor made went in: their decisions are read for a rule once nothing else of it waits.
   if (saved.cutChoices?.length) startDecisionCheck(ctx, saved.projectId, saved.threadId);
   return { change: saved, project: updated, outcome };
@@ -354,6 +358,7 @@ function sendBack(ctx: Ctx, user: User, change: Change, project: Project, reason
     createdBy: { type: "scarlet", name: "Scarlet" },
   });
   const saved = saveChange(ctx, { ...beginRevision(change, task), error: `Sent back: ${reason}` });
+  ctx.db.afterCommit(() => ctx.log(`[edit] ${change.id} couldn't be merged onto the current edit and went back to ${target.agent} as ${task.id}: ${clip(reason)}`));
   logActivity(ctx, {
     projectId: project.id,
     actor: actorFor(user),

@@ -14,6 +14,7 @@ import { useHostsStore } from "../../stores/hosts";
 import { editNote } from "../../lib/editKind";
 import { clock as clockLabel, lengthLabel } from "../../lib/format";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
+import { ariaKeyShortcut, matchesShortcut, shortKeyLabel, useShortcutsStore } from "../../stores/shortcuts";
 import { editKey } from "../../lib/keptEdits";
 import type { Call, CutChoice, Revision } from "../../lib/passCalls";
 import { isRecheck, type Thread } from "../../lib/threads";
@@ -62,30 +63,35 @@ function CallStanding({ run, answer }: { run?: Task; answer?(): void }) {
  */
 function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { choice?: CutChoice; proposes?: CutChoice; disabled: boolean; decide(choice: CutChoice): void; revise(): void }) {
   const skips: CutChoice = proposes === "cut" ? "keep" : "cut";
+  const keepBinding = useShortcutsStore(s => s.bindings.keep);
+  const reviseBinding = useShortcutsStore(s => s.bindings.revise);
+  const rejectBinding = useShortcutsStore(s => s.bindings.reject);
+  const keepLabel = shortKeyLabel(keepBinding);
+  const reviseLabel = shortKeyLabel(reviseBinding);
+  const rejectLabel = shortKeyLabel(rejectBinding);
   useHotkeys(event => {
-    if (disabled || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-    const key = event.key.toLowerCase();
-    if (key === "r") { event.preventDefault(); revise(); return; }
-    const chosen = key === "k" ? proposes : key === "x" ? skips : undefined;
+    if (disabled || event.repeat) return;
+    if (matchesShortcut(event, "revise")) { event.preventDefault(); revise(); return; }
+    const chosen = matchesShortcut(event, "keep") ? proposes : matchesShortcut(event, "reject") ? skips : undefined;
     if (chosen) { event.preventDefault(); decide(chosen); }
   });
   // The decisions stay on the card for the next call. Clicked, one lets go of the focus (WebView2 leaves it there), or
   // Space would press it again on the next call while the video is paused. Pressed by keyboard, it keeps it.
   return <div className="review-actions">
-    <button type="button" className="btn-ghost" data-key="R" data-log-control="revise-call" aria-keyshortcuts="R" title="Revise (R)" disabled={disabled} onClick={revise}>Revise</button>
-    <button type="button" className="btn-primary" data-key="K" data-log-control="approve-call" aria-keyshortcuts="K" title="Keep (K)" aria-pressed={choice === proposes} disabled={disabled}
+    <button type="button" className="btn-ghost" data-key={reviseLabel || undefined} data-log-control="revise-call" aria-keyshortcuts={ariaKeyShortcut(reviseBinding)} title={reviseLabel ? `Revise (${reviseLabel})` : "Revise"} disabled={disabled} onClick={revise}>Revise</button>
+    <button type="button" className="btn-primary" data-key={keepLabel || undefined} data-log-control="approve-call" aria-keyshortcuts={ariaKeyShortcut(keepBinding)} title={keepLabel ? `Keep (${keepLabel})` : "Keep"} aria-pressed={choice === proposes} disabled={disabled}
       onClick={letGo(() => decide(proposes))}>Keep</button>
     {/* Reject edit is a small × after the decision, named on hover, as on an applied edit's card, so the row's one button is Keep. */}
-    <button type="button" className="edit-card-icon edit-card-skip" data-log-control="skip-call" aria-label="Reject edit" aria-keyshortcuts="X" title="Reject edit (X)" aria-pressed={choice === skips}
+    <button type="button" className="edit-card-icon edit-card-skip" data-log-control="skip-call" aria-label="Reject edit" aria-keyshortcuts={ariaKeyShortcut(rejectBinding)} title={rejectLabel ? `Reject edit (${rejectLabel})` : "Reject edit"} aria-pressed={choice === skips}
       disabled={disabled} onClick={letGo(() => decide(skips))}><Icon name="x" size={12} /></button>
   </div>;
 }
 
-/** Over a card's row while Before plays footage another cut took out: whose it is. */
+/** Over a card's row while Before plays footage another cut removed: whose it is. */
 function PlayingTakenOut({ at }: { at: string }) {
   return <div className="edit-card-switched" role="status">
     <span className="edit-card-switched-side">Before</span>
-    <span className="edit-card-switched-text">The cut at {at} took this part out.</span>
+    <span className="edit-card-switched-text">This part was cut at {at}.</span>
   </div>;
 }
 
@@ -134,38 +140,13 @@ export function RejectedEditCard({ edit }: { edit: ThreadEdit }) {
   </section>;
 }
 
-/** A slim card for an edit Scarlet is currently revising (or waiting on an answer for), in the beta layout. */
-export function WorkingEditCard({ number, label, status, asking, onStop, onAnswer }: {
-  number?: number;
-  label: string;
-  status: string;
-  asking?: boolean;
-  onStop?(): void;
-  onAnswer?(): void;
-}) {
-  return <section className="edit-card is-working" role="region" aria-label="Edit in progress">
-    <div className="edit-card-bar working-card-bar">
-      <span className={`working-card-badge${number === undefined ? " is-ring" : ""}${asking ? " is-ask" : ""}`} aria-hidden="true">
-        {number !== undefined ? number : null}
-      </span>
-      <span className="working-card-title" title={label}>{label}</span>
-      <span className={`working-card-status${asking ? " is-ask" : ""}`} role="status">· {status}</span>
-      <span className="working-card-actions">
-        {asking && onAnswer && <button type="button" className="working-card-btn is-ask" onClick={letGo(onAnswer)}>Answer</button>}
-        {onStop && <button type="button" className="working-card-btn" onClick={letGo(onStop)}>Stop</button>}
-      </span>
-    </div>
-  </section>;
-}
-
-export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPassNo, editPlace, flaggedCount, editDid, selectedMoment,
+export function AppliedEditCard({ projectId, focusThread, reviewingEdit, editPlace, flaggedCount, editDid, selectedMoment,
   shownKind, shownMarker, reviewRange, onPlayCheck, visiting, beforeCut, cutBeforeTimeline, cutBeforeError, onRetryCutBefore,
   media, removedLength, otherCuts, scriptKey, scriptOpen, onToggleScript, shownSource, sourceKey, sourceOpen, onToggleSource, cutSwitched, cutTake, appliedSide, workspaceActive,
-  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject, madeBy }: {
+  cutKey, onChooseCutSide, setCompareHost, onRevise, onKeep, onSentAdd, onPressAdd, onFailedAdd, appliedTarget, rejectTarget, openEditKey, rejectedEdits, onEngineReject, onSentReject, madeBy, batch }: {
   projectId: string;
   focusThread: Thread;
   reviewingEdit: ThreadEdit;
-  shownPassNo?: string;
   editPlace: number;
   flaggedCount: number;
   editDid?: ReactNode;
@@ -200,6 +181,10 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   onKeep(): void;
   /** A to-do that still waits or was parked has Add: the request it sent. */
   onSentAdd?: (task: Task) => void;
+  /** Add was pressed: the card goes on at once, without waiting for the request to arrive. */
+  onPressAdd?: () => void;
+  /** Add's request couldn't be sent: the to-do's card comes back with the reason. */
+  onFailedAdd?: () => void;
   appliedTarget?: AgentContext;
   rejectTarget?: AgentContext;
   openEditKey?: string;
@@ -208,15 +193,29 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
   onSentReject(sent: { task?: Task; version?: string }): void;
   /** The task model that made it, when the chat's model handed it off. */
   madeBy?: Change["handedOff"];
+  /** When this edit was opened from a collapsed +N batch in the beta edits column, step through its edits and keep them together. */
+  batch?: { index: number; count: number; kept?: boolean; onPrev(): void; onNext(): void };
 }) {
+  const inBatch = !!batch && batch.count > 1;
+  useHotkeys(event => {
+    if (!workspaceActive || !inBatch || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "[" && batch.index > 0) { event.preventDefault(); batch.onPrev(); }
+    else if (event.key === "]" && batch.index < batch.count - 1) { event.preventDefault(); batch.onNext(); }
+  });
   return <section className="edit-card" role="region" aria-label="Applied edit">
     {/* Whose footage is playing, and nothing else: the lit icon in the row under it is the way back, and names its key. */}
     {visiting && <PlayingTakenOut at={visiting.at} />}
     <div className="edit-card-bar">
-      {/* One the pass still waits on leads with its number, as on its line in the chat and its dot; its place among the
-          ones still to check is on hover. Any other flagged edit leads with that place. */}
-      {shownPassNo ? <span className="edit-card-count" title={editPlace >= 0 ? `${editPlace + 1} of ${flaggedCount} still to check` : undefined}>{shownPassNo}</span>
-        : editPlace >= 0 && <span className="edit-card-count" title="Edits still to check">{editPlace + 1} of {flaggedCount}</span>}
+      {/* A grouped batch leads with a compact stepper so the editor can inspect each edit on the timeline. */}
+      {inBatch && <span className="edit-card-stepper" role="group" aria-label="Edits in this group">
+        <button type="button" className="edit-card-step" aria-label="Previous edit in group" title="Previous edit ([)"
+          disabled={batch.index <= 0} onClick={letGo(batch.onPrev)}>‹</button>
+        <span className="edit-card-step-count">{batch.index + 1} of {batch.count}</span>
+        <button type="button" className="edit-card-step" aria-label="Next edit in group" title="Next edit (])"
+          disabled={batch.index >= batch.count - 1} onClick={letGo(batch.onNext)}>›</button>
+      </span>}
+      {/* A flagged edit still to check leads with its place among the ones that are: nothing else says how many are left. */}
+      {!inBatch && editPlace >= 0 && <span className="edit-card-count" title="Edits still to check">{editPlace + 1} of {flaggedCount}</span>}
       {/* The note explains the choice and includes any cue for the editor to check. */}
       {/* It's on up to two lines, so an edit with a short note is a single line. A clipped note opens on a click. */}
       {editDid ? <div className="edit-card-text">{editDid}<EditNote key={editKey(reviewingEdit)} text={editNote(reviewingEdit, !!reviewRange)} /></div>
@@ -254,29 +253,31 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, shownPa
             find what it says to add, Revise (R) aims the message box at it to change what it proposes, and the ×
             rejects it. */}
         <ReviewActions lead={shownMarker && onSentAdd && rejectTarget && <AddTodo key={`add ${openEditKey}`} projectId={projectId} thread={focusThread}
-            target={rejectTarget} ask={reviewingEdit.todo} onSent={onSentAdd} />}
+            target={rejectTarget} ask={reviewingEdit.todo} onPress={onPressAdd} onSent={onSentAdd} onFailed={onFailedAdd} />}
           revise={onRevise}
-          approve={shownMarker ? undefined : onKeep} approveLabel="Keep" approveKey="K" />
+          approve={shownMarker ? undefined : onKeep}
+          approveLabel={inBatch && !batch.kept ? `Keep all ${batch.count}` : "Keep"} approveKey="K" />
         {/* Reject edit is a small × after Keep, as on a call's card: it puts back just this edit, also on
-            a moment's card. The edit leaves the timeline where it is and the card stays, saying Rejected. A to-do marked for the editor has it too:
+            a moment's card, and moves straight to the next edit in line. A to-do marked for the editor has it too:
             its marker comes off. Each edit has its own: one on its way for the edit before doesn't hold this one's back. */}
         {appliedTarget && rejectTarget && <RejectEdit key={`reject ${openEditKey}`} projectId={projectId} thread={focusThread} target={rejectTarget}
           edits={rejectedEdits} editsOn={appliedTarget.version}
+          titleOverride={inBatch ? "Reject just this edit" : undefined}
           onEngine={onEngineReject} onSent={onSentReject} />}
       </span>
     </div>
   </section>;
 }
 
-export function CallCard({ projectId, pass, openCall, listening, callNum, callAt, callHistory, callWords, callLength, callKey,
+export function CallCard({ projectId, pass, openCall, listening, callAt, callHistory, callWords, callLength, callKey,
   callScriptOpen, media, conflict, heard, visit, decideError, placing, stagedOnError, onRetryStagedOn, workspaceActive,
   onToggleSide, onToggleScript, openCallBack, callRun, onAnswerCut, choice, deciding, onDecide, onRevise }: {
   projectId: string;
   pass: Change;
   openCall: Call;
   listening: Listening;
-  callNum?: number;
-  callAt?: number;
+  /** Where the cut is, as the clock says it: "2:47", or "2:47.120" beside another call in the same second. */
+  callAt?: string;
   callHistory: readonly Revision[];
   callWords?: { timeline: Timeline; range: TimeRange };
   callLength: string;
@@ -306,14 +307,13 @@ export function CallCard({ projectId, pass, openCall, listening, callNum, callAt
     {visit?.side === "before" && <PlayingTakenOut at={visit.label} />}
     {(decideError || pass.error) && <p className="text-bad" role="alert">{decideError || pass.error}</p>}
     <div className="edit-card-bar">
-      {/* The call's number, the same as on its line in the chat and its dot on the timeline. */}
-      {/* Hovered, it says where the cut is in the video. */}
-      <span className="edit-card-count" title={callAt !== undefined ? `Cut at ${clockLabel(callAt)}` : undefined}>Cut {callNum}</span>
+      {/* Where the cut is in the video, the same as on its row in the chat and its tag in the box. */}
+      <span className="edit-card-count">{callAt !== undefined ? `Cut ${callAt}` : "Cut"}</span>
       {callHistory.length > 0 && <EditVersion n={callHistory.length + 1}
         title={`v${callHistory.length}: ${callHistory.at(-1)!.reason ?? "Scarlet’s earlier version."}${callHistory.at(-1)!.note ? `\nYou: “${callHistory.at(-1)!.note}”` : ""}`} />}
       {/* What Keep would take out, struck, over Scarlet's reason. A revision that leaves the footage in has no such line. */}
       {callWords && !conflict && approves(openCall) === "cut" ? <div className="edit-card-text">
-        <CutWordsLine key={`what ${callKey}`} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength} verb="Takes out" />
+        <CutWordsLine key={`what ${callKey}`} timeline={callWords.timeline} media={media} range={callWords.range} length={callLength} verb="Cut" />
         <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} /></div>
         : <EditNote key={callKey} text={openCall.reason} unchecked={openCall.unchecked} />}
       {pass.handedOff && <MadeBy by={pass.handedOff} />}

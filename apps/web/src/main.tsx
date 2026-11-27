@@ -40,9 +40,10 @@ async function launch() {
       enableUpdateStatus(updates);
     }
     restoreLastProject();
-    const [{ App }, { restoreAgentSelection }, hosts] = await Promise.all([
+    const [{ App }, { restoreAgentSelection, useUiStore }, { startRequestLog }, hosts] = await Promise.all([
       import("./App"),
       import("./stores/ui"),
+      import("./lib/requestLog"),
       customOpenaiModels?.length || customClaudeModels?.length || customGeminiModels?.length ? import("./stores/hosts") : undefined,
     ]);
     hosts?.useHostsStore.setState({
@@ -51,10 +52,13 @@ async function launch() {
       customGeminiModels: customGeminiModels ?? [],
     });
     restoreAgentSelection(editorModel);
+    startRequestLog(useUiStore);
     view.render(<StrictMode>
       {updates ? <UpdateButton /> : __SCARLET_RELEASE_CHANNEL__ && <ReleaseUpdateNotice channel={__SCARLET_RELEASE_CHANNEL__} />}
       <App platform={platform} />
     </StrictMode>);
+    // Time from the window opening to the editor's first render: a slow start shows here before any page line.
+    appLog("app", "editor-loaded", { ms: Math.round(performance.now()) });
   } catch (error) {
     appLog("app", "startup-failed", { name: errorName(error), error: withoutAddresses(describeUiError(error)).slice(0, 2000) }, { level: "error" });
     const view = await opening.catch(() => undefined);

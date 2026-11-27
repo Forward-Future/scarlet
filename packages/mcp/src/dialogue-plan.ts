@@ -4,7 +4,7 @@
  * and record each change Scarlet makes for the agent's gate report. The MCP tool supplies live reads;
  * offline replay (evals/src/replay.ts) supplies stored ones, so both run the same code.
  */
-import { cutScope, type DialogueDetections } from "@scarlet/shared";
+import { builtInCommand, cutScope, type DialogueDetections } from "@scarlet/shared";
 import { clipDuration, clipsAt, indexClipsAt, timelineDuration, timelineToSource, type Project, type TimeRange, type Timeline } from "@scarlet/timeline";
 import { round2 } from "./analysis.js";
 import {
@@ -80,6 +80,12 @@ export function dialogueScanPage(mediaId: string, from: number, to: number, audi
 
 const r2 = round2;
 
+/** A planning step the batch goes on without. The planner's own refusals are answers; anything else is noted. */
+const plannedWithout = <T>(sources: DialoguePlanSources, what: string, fallback: T) => (err: unknown): T => {
+  if (!(err instanceof CutNotPlaced || err instanceof NoPauseToTrim)) sources.unavailable?.(what, err);
+  return fallback;
+};
+
 /**
  * A batch as dialogue_apply_cuts saves it, shared with offline replay. A dispute names the cuts whose edges make it,
  * and the rest of the batch is saved without them, so a pass resubmits only what was disputed instead of the whole
@@ -97,7 +103,7 @@ export async function planDialogueBatch(req: DialoguePlanRequest, sources: Dialo
     if (round) edges.push(...rest.disputedEdges);
     for (const i of named) disputed.add(i);
     rest = named.length && req.cuts.some((c, i) => !disputed.has(i) && c.decision !== "keep" && c.picture !== "protect")
-      ? await planDialogueCuts({ ...req, setAside: disputed }, sources).catch(() => undefined) : undefined;
+      ? await planDialogueCuts({ ...req, setAside: disputed }, sources).catch(plannedWithout(sources, "failed to plan the batch with its disputed cuts set aside", undefined)) : undefined;
   }
   return rest?.outcome === "ready" ? { plan: rest, setAside: { cuts: [...disputed].sort((a, b) => a - b), disputedEdges: edges } } : { plan };
 }
@@ -110,7 +116,7 @@ async function resolveAndValidatePlanCuts(req: DialoguePlanRequest, sources: Dia
   const { tl, cuts: requested, range, only, localPauses } = req;
   const otherKinds = [...new Set(requested.filter(c => c.kind !== "pause").map(c => c.kind))];
   if (localPauses && ((only && only !== "pause") || otherKinds.length))
-    throw new Error(`The editor requested only pauses in the local passage (/tighten-pauses-here). Remove the ${otherKinds.join(" and ") || only} decisions.`);
+    throw new Error(`The editor requested only pauses in the local passage (/${builtInCommand("local-pauses").name}). Remove the ${otherKinds.join(" and ") || only} decisions.`);
   if (only && requested.some(c => c.kind !== only)) throw new Error(`only is "${only}", so every decision must be kind "${only}".`);
   // Word references become timeline seconds first; everything after is the same plan.
   const unplaced: Array<{ reason: string; cuts: number[] }> = [];
@@ -153,7 +159,8 @@ async function resolveAndValidatePlanCuts(req: DialoguePlanRequest, sources: Dia
     // pass, two of eight such held cuts had one.
     const clean = c.mediaId !== undefined && c.fromWord !== undefined && c.toWord !== undefined && "problems" in resolved && resolved.problems.length
       ? await resolveWordCut(tl, { mediaId: c.mediaId, fromWord: c.fromWord, toWord: c.toWord }, sources, true)
-        .then(r => ("alternativeWordRanges" in r ? r.alternativeWordRanges ?? [] : []).filter(a => !a.problems.length)).catch(() => [])
+        .then(r => ("alternativeWordRanges" in r ? r.alternativeWordRanges ?? [] : []).filter(a => !a.problems.length))
+        .catch(plannedWithout(sources, `failed to look for a clean saying of the words cut on ${c.mediaId}`, []))
       : [];
     return { ...rest, start: resolved.start, end: resolved.end, input: i, ...("air" in resolved && resolved.air && { air: resolved.air }),
       ...(clean.length && { cleanAlternatives: clean.map(a => ({ fromWord: a.fromWord, toWord: a.toWord })) }),

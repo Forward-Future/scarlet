@@ -96,7 +96,7 @@ it("prepares sections concurrently, appends in order, and discards stale work af
   release(bytes);
   await vi.advanceTimersByTimeAsync(0);
   expect(offsets).toEqual([1070, 1080, 1790]);
-  expect(remove.mock.calls.some(([start, end]) => start === 1070 && end > 1079.99 && end < 1080)).toBe(true);
+  expect(remove.mock.calls.some(([start, end]) => start === 0 && end > 1789.99 && end < 1790)).toBe(true);
   expect(media.endOfStream).toHaveBeenCalledOnce();
   expect(fail).not.toHaveBeenCalled();
   stream.dispose();
@@ -198,12 +198,12 @@ it("keeps buffered sections until a seek across a cut lands, even when the next 
     video.dispatchEvent(new Event("seeked"));
     await vi.advanceTimersByTimeAsync(0);
     // WebKit can timestamp the retained section's opening keyframe just before the declared seam.
-    // Remove the preceding frame without touching that keyframe or its dependent frames.
-    expect(remove.mock.calls.map(([start]) => start)).toEqual([0, 4]);
-    for (const [start, end] of remove.mock.calls) {
-      expect(end).toBeGreaterThan(start + 4 - 1 / 30);
-      expect(end).toBeLessThan(start + 4 - 0.0001);
-    }
+    // Remove everything before the retained window in one sweep without touching that keyframe.
+    expect(remove.mock.calls).toHaveLength(1);
+    const [start, end] = remove.mock.calls[0]!;
+    expect(start).toBe(0);
+    expect(end).toBeGreaterThan(8 - 1 / 30);
+    expect(end).toBeLessThan(8 - 0.0001);
   } finally { stream.dispose(); }
 });
 
@@ -228,7 +228,7 @@ it("keeps the preceding fragment's tail when scrubbing back and evicting an upco
     const [from, to] = remove.mock.calls[0]!;
     expect(from).toBeGreaterThan(20);
     expect(from).toBeLessThan(20 + 1 / 30);
-    expect(to).toBeLessThan(24);
+    expect(to).toBe(48);
 
     video.currentTime = 6;
     video.dispatchEvent(new Event("timeupdate"));
@@ -450,6 +450,59 @@ it("cancels an earlier preroll when a newer bufferThrough starts, and ignores th
     expect(progress.at(-1)).toEqual([2, 2]);
   } finally {
     secondAbort.abort();
+    stream.dispose();
+  }
+});
+
+it("sweeps prior seam margins during continuous forward playback so orphaned slivers never accumulate", async () => {
+  const fixture = mediaFixture();
+  const { video, buffer } = fixture;
+  // Track the simulated SourceBuffer ranges across appends and removes.
+  let intervals: [number, number][] = [];
+  const merge = (list: [number, number][]) => {
+    const sorted = [...list].filter(([a, b]) => b > a + 1e-9).sort((a, b) => a[0] - b[0]);
+    const out: [number, number][] = [];
+    for (const [a, b] of sorted) {
+      const last = out.at(-1);
+      if (last && a <= last[1] + 1e-9) last[1] = Math.max(last[1], b);
+      else out.push([a, b]);
+    }
+    return out;
+  };
+  const ranges = Array.from({ length: 16 }, (_, i) => ({ start: i * 4, end: (i + 1) * 4 }));
+  buffer.appendBuffer = () => {
+    const start = buffer.timestampOffset;
+    const match = ranges.find(r => r.start === start);
+    if (match) intervals = merge([...intervals, [match.start, match.end]]);
+    queueMicrotask(() => buffer.dispatchEvent(new Event("updateend")));
+  };
+  buffer.remove.mockImplementation((from: number, to: number) => {
+    const next: [number, number][] = [];
+    for (const [a, b] of intervals) {
+      if (to <= a || from >= b) next.push([a, b]);
+      else {
+        if (a < from) next.push([a, from]);
+        if (to < b) next.push([to, b]);
+      }
+    }
+    intervals = merge(next);
+    queueMicrotask(() => buffer.dispatchEvent(new Event("updateend")));
+  });
+
+  const stream = openCutStream(video, ranges, 0.5, async () => new ArrayBuffer(1), vi.fn());
+  try {
+    fixture.media.dispatchEvent(new Event("sourceopen"));
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 1; i < 14; i++) {
+      video.currentTime = i * 4 + 0.5;
+      video.dispatchEvent(new Event("timeupdate"));
+      await vi.advanceTimersByTimeAsync(0);
+      // Every earlier seam sliver must be swept clean, leaving one contiguous window around the playhead.
+      expect(intervals).toHaveLength(1);
+    }
+    expect(intervals[0]![0]).toBeGreaterThan(47.99);
+    expect(intervals[0]![0]).toBeLessThan(48);
+  } finally {
     stream.dispose();
   }
 });

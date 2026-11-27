@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
 import { AGENT_LABEL, PROVIDER_DEFAULT_URL, type AgentAvailability, type ExtraProvider } from "@scarlet/shared";
 import { desktop, isDesktop, type ProviderSettingsView } from "../../lib/desktop";
+import { isComposing } from "../../lib/hotkeys";
 import { useHostsStore } from "../../stores/hosts";
 import { ProviderIcon } from "../agent/ModelProviders";
 import { useLocalHost } from "./AgentSignIn";
@@ -25,7 +26,7 @@ export function providerStatus(id: ExtraProvider, agent: AgentAvailability | und
   const n = agent.models?.length ?? 0;
   if (!n) return "Running, but none of its models can use tools, which editing needs.";
   const count = `${n} ${n === 1 ? "model" : "models"}`;
-  return id === "openrouter" ? `${count}. Turn on the ones you want in Model picker above.` : `${count} ready${customUrl ? ` · ${customUrl}` : ""}`;
+  return id === "openrouter" ? `${count}. Turn on the ones you want in Model selector above.` : `${count} ready${customUrl ? ` · ${customUrl}` : ""}`;
 }
 
 /**
@@ -75,7 +76,8 @@ export function ProviderSettings() {
     setError(null);
   };
   const onFormKeyDown = (e: KeyboardEvent<HTMLFormElement>) => {
-    if (e.key !== "Escape") return;
+    // While an input method composes, Esc is its own.
+    if (e.key !== "Escape" || isComposing(e)) return;
     e.preventDefault();
     e.stopPropagation();
     cancel();

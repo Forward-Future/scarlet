@@ -8,14 +8,15 @@
  * This module builds both command lines and the run's Codex home; `codexAppServer.ts` drives an App Server turn, and
  * `codexParse.ts` reads the events both report.
  */
-import { lstat, mkdir, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
+import { copyFile, link, lstat, mkdir, open, readFile, realpath, rm, stat, symlink } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { hasApiKey, stripVars } from "../detect.js";
 import { privateDirectory, writePrivateFile } from "../private-files.js";
 import { DEFAULT_STALL_MS, workspaceEnv, type CodexFallbackReason, type RunAgentOptions, type RunAgentResult } from "./types.js";
-import { resolveCli, spawnLines } from "./spawn.js";
+import { errMsg, resolveCli, runnerLog, spawnLines } from "./spawn.js";
+import { clip } from "../logText.js";
 import { codexResult, newCodexState, parseCodexLine } from "./codexParse.js";
 import { runCodexServer } from "./codexAppServer.js";
 
@@ -82,6 +83,9 @@ function codexConfig(opts: Pick<RunAgentOptions, "mcp" | "plan" | "workspace">, 
     ...(process.platform === "win32" ? ["-c", 'windows.sandbox="mxc"'] : []),
     ...(ws ? CODEX_OFF : ["shell_tool", "view_image", ...CODEX_OFF]).flatMap((feature) => ["--disable", feature]),
     "-c", 'approval_policy="never"',
+    // Codex's own usage metrics to OpenAI stay off. Its private home drops the editor's own config.toml, so an opt-out
+    // there wouldn't reach it otherwise.
+    "-c", "analytics.enabled=false",
     // A request's agent searches the live web; a side check has none.
     "-c", `web_search=${ws ? '"live"' : '"disabled"'}`,
     // Codex otherwise reads only the first 32 KiB of AGENTS.md. The prompt lists every clip ahead of the task, the
@@ -125,9 +129,42 @@ function codexServerArgs(opts: RunAgentOptions, executable: string | undefined):
     ...codexModelConfig({ effort: opts.effort })];
 }
 
-async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<{ home: string } | { reason: CodexFallbackReason }> {
+/**
+ * Share a Codex auth/lock file into the isolated CODEX_HOME.
+ * Uses a symlink where permitted; on standard Windows accounts (without symlink privilege / Developer Mode),
+ * falls back to an NTFS hard link so Codex still shares token refreshes and lock files without admin rights,
+ * and optionally copies for `codex exec` fallback when CODEX_HOME lives on a different drive.
+ */
+async function linkCodexAuthFile(from: string, to: string, createIfMissing: boolean, allowCopy: boolean): Promise<void> {
+  await rm(to, { force: true });
+  try {
+    await symlink(from, to, "file");
+    return;
+  } catch (err) {
+    if (process.platform !== "win32") throw err;
+  }
+  if (createIfMissing) {
+    try {
+      const fh = await open(from, "wx");
+      await fh.close();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
+  try {
+    await link(from, to);
+  } catch (err) {
+    if (allowCopy) {
+      await copyFile(from, to);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv, log: (msg: string) => void = () => undefined): Promise<{ home: string } | { reason: CodexFallbackReason }> {
   // App Server cannot skip the user's config, rules or MCP servers. Share only
-  // file-backed login, with a symlink so Codex can still refresh that login.
+  // file-backed login, linked so Codex can still refresh that login.
   if (hasApiKey("codex", env)) return { reason: "api_key" };
   const projectConfig = await lstat(join(cwd, ".codex")).catch((err: NodeJS.ErrnoException) => {
     if (err.code !== "ENOENT") throw err;
@@ -148,12 +185,12 @@ async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<{
     }
     // Linked again on each run: the login may have moved since the last one. The store locks around refresh commits,
     // so the lock is the ordinary CLI's too.
-    for (const [from, name] of [[authFile, "auth.json"], [join(originalHome, "auth.lock"), "auth.lock"]] as const) {
-      await rm(join(home, name), { force: true });
-      await symlink(from, join(home, name), "file");
+    for (const [from, name, createIfMissing] of [[authFile, "auth.json", false], [join(originalHome, "auth.lock"), "auth.lock", true]] as const) {
+      await linkCodexAuthFile(from, join(home, name), createIfMissing, false);
     }
     return { home };
-  } catch {
+  } catch (err) {
+    log(`could not share its sign-in with the run's own home: ${clip(errMsg(err))}`);
     return { reason: "isolation_unavailable" };
   }
 }
@@ -164,7 +201,7 @@ async function isolatedCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<{
  * run's own home too, with the file-backed login linked, wherever its login is an API key or that file: a login kept
  * anywhere else stays in the user's home, so the run still signs in.
  */
-async function execCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+async function execCodexHome(cwd: string, env: NodeJS.ProcessEnv, log: (msg: string) => void = () => undefined): Promise<string | undefined> {
   const configuredHome = Object.entries(env).find(([name]) => name.toUpperCase() === "CODEX_HOME")?.[1];
   const userHome = await realpath(resolve(cwd, configuredHome || join(homedir(), ".codex"))).catch(() => undefined);
   const authFile = userHome ? join(userHome, "auth.json") : undefined;
@@ -175,13 +212,14 @@ async function execCodexHome(cwd: string, env: NodeJS.ProcessEnv): Promise<strin
   try {
     await privateDirectory(home);
     if (hasAuth && userHome && authFile) {
-      for (const [from, name] of [[authFile, "auth.json"], [join(userHome, "auth.lock"), "auth.lock"]] as const) {
-        await rm(join(home, name), { force: true });
-        await symlink(from, join(home, name), "file");
+      for (const [from, name, createIfMissing] of [[authFile, "auth.json", false], [join(userHome, "auth.lock"), "auth.lock", true]] as const) {
+        await linkCodexAuthFile(from, join(home, name), createIfMissing, true);
       }
     }
     return home;
-  } catch {
+  } catch (err) {
+    // The run still signs in from the user's own home, and reads their AGENTS.md there too.
+    log(`exec could not use the run's own home, so it runs with the user's: ${clip(errMsg(err))}`);
     return undefined;
   }
 }
@@ -200,7 +238,11 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
   const env = { ...workspaceEnv(opts.env ?? process.env, opts.workspace), ...opts.mcp.env };
   const bin = await resolveCli("codex", opts.bin, env);
   await writePrivateFile(join(opts.cwd, "AGENTS.md"), opts.systemPrompt);
-  const isolation = await isolatedCodexHome(opts.cwd, env).catch(() => ({ reason: "isolation_unavailable" as const }));
+  const runLog = runnerLog(opts, "codex");
+  const isolation = await isolatedCodexHome(opts.cwd, env, runLog).catch((err) => {
+    runLog(`could not check for its own home: ${clip(errMsg(err))}`);
+    return { reason: "isolation_unavailable" as const };
+  });
   if ("home" in isolation) {
     const executable = codexExecutable(bin);
     const result = await runCodexServer(opts, env, executable ?? bin, codexServerArgs(opts, executable), isolation.home);
@@ -214,9 +256,11 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
   await mkdir(tmpDir, { recursive: true });
   const cmd = buildCodexCommand(opts, bin, tmpDir);
 
-  const execHome = await execCodexHome(opts.cwd, env);
+  const execHome = await execCodexHome(opts.cwd, env, runLog);
   const execEnv = execHome ? { ...stripVars(env, ["CODEX_HOME", "CODEX_SQLITE_HOME"]), CODEX_HOME: execHome } : env;
   const st = newCodexState();
+  // Lines that weren't one JSON object: passed on as they are, and counted here for the host's log.
+  let notJson = 0;
   const handle = spawnLines(cmd.file, cmd.args, {
     cwd: opts.cwd,
     env: execEnv,
@@ -224,8 +268,12 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
     signal: opts.signal,
     timeoutMs: opts.timeoutMs,
     stallMs: opts.stallMs ?? DEFAULT_STALL_MS,
+    log: opts.log,
+    task: opts.task,
     onLine: (line) => {
-      for (const ev of parseCodexLine(line, st)) opts.onEvent(ev);
+      const events = parseCodexLine(line, st);
+      if (events.length === 1 && events[0]!.type === "log" && events[0]!.text === line) notJson++;
+      for (const ev of events) opts.onEvent(ev);
       if (st.shouldStop) {
         st.shouldStop = false;
         setTimeout(() => handle.kill(), 250).unref();
@@ -233,6 +281,7 @@ export async function runCodex(opts: RunAgentOptions): Promise<RunAgentResult> {
     },
   });
   const outcome = await handle.done;
+  if (notJson) runLog(`wrote ${notJson} output line${notJson === 1 ? "" : "s"} that weren't JSON`);
 
   let last = st.lastMessage;
   try {

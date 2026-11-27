@@ -94,3 +94,29 @@ it("ranks a lane's turn as background only for a recording no pass is reading, a
   expect(await page).toBeUndefined();
   release();
 });
+
+it("tries again to put a process back to normal priority when the first try fails", async () => {
+  let time = 0;
+  const calls: Array<[number, boolean]> = [];
+  let failNext = false;
+  const first = new EditorFirst(async (pid, background) => {
+    calls.push([pid, background]);
+    if (failNext) { failNext = false; throw new Error("timed out"); }
+  }, () => time);
+  first.adopt(9, () => true);
+  first.touch();
+  await Promise.resolve();
+  expect(first.snapshot()).toEqual([{ pid: 9, lowered: true }]);
+
+  failNext = true;
+  time += 11_000;
+  first.check();
+  expect(calls).toEqual([[9, true], [9, false]]);
+  await new Promise(resolve => setImmediate(resolve));
+  expect(first.snapshot()).toEqual([{ pid: 9, lowered: true }]);
+
+  first.check();
+  expect(calls).toEqual([[9, true], [9, false], [9, false]]);
+  await new Promise(resolve => setImmediate(resolve));
+  expect(first.snapshot()).toEqual([{ pid: 9, lowered: false }]);
+});

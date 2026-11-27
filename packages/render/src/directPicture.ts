@@ -1,6 +1,6 @@
 import { open } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { FfmpegError, INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, fnum, runFfmpeg, type RunFfmpegOptions } from "./exec.js";
+import { FfmpegError, INDEXED_MP4_INPUT, LOCAL_MEDIA_INPUT, fnum, logReason, logRender, runFfmpeg, type RunFfmpegOptions } from "./exec.js";
 import type { FilterGraph } from "./graph.js";
 import { avcConfigurationArgs, sameAvcConfiguration } from "./avcConfiguration.js";
 
@@ -54,8 +54,10 @@ export async function encodeDirectPicture(graph: FilterGraph, device: NonNullabl
   } catch (error) {
     // The encoder may accept regular frames but reject this decoder or surface format.
     if (execution.signal?.aborted || !(error instanceof FfmpegError) || !error.started) throw error;
+    logRender(() => `[render] the ${device.decoder} picture couldn't go straight to the encoder, so it was rendered the usual way: ${logReason(error)}`);
     return;
   }
   if (await matchesFrameClock(stats, picture.frames, graph.fps, execution.signal) &&
       await sameAvcConfiguration(configuration, execution.signal)) return args;
+  logRender(`[render] the ${device.decoder} picture went straight to the encoder but didn't match the original's frames, so it was rendered the usual way`);
 }

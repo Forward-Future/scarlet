@@ -133,7 +133,7 @@ export function registerPerception(deps: PerceptionDeps) {
 
   /** Where the picture of each screen recording changes on a timeline (screen_motion), with how far each is read. */
   async function motionOn(tl: Timeline, project: Project, range: { start: number; end: number }, opts: { mediaId?: string; wait: number }) {
-    const transcripts = await wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>());
+    const transcripts = await wordsFor(tl, project).catch(without("failed to read the words heard on the timeline", new Map<string, TranscriptWord[]>()));
     const heard = new Set(transcripts.size ? timelineWords(tl, transcripts, range).map(w => w.mediaId) : []);
     const sources = pictureSources(tl, project, range, heard, opts.mediaId, true);
     const { reads, unread } = await readPictures<{ seconds: MotionSecond[] }>("screen-motion", sources, opts.wait);
@@ -148,18 +148,19 @@ export function registerPerception(deps: PerceptionDeps) {
   async function besideOn(tl: Timeline, project: Project, sources: Array<{ id: string; from: number; to: number }>, range: { start: number; end: number }, wait: number,
     clocks: Array<{ id: string; from: number; to: number }> = []) {
     const videos = new Set(project.media.filter(m => m.kind === "video").map(m => m.id));
+    const videoSources = sources.filter(s => videos.has(s.id));
     const [text, motion, cuts, transcripts, eyes] = await Promise.all([
-      readPictures<{ spans: ScreenLine[] }>("screen-text", sources, wait),
-      readPictures<{ seconds: MotionSecond[]; detail?: DetailFrame[] }>("screen-motion", sources, wait),
-      readPictures<{ cuts: RecordingCut[] }>("picture-cuts", sources, wait),
-      wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>()),
+      readPictures<{ spans: ScreenLine[] }>("screen-text", videoSources, wait),
+      readPictures<{ seconds: MotionSecond[]; detail?: DetailFrame[] }>("screen-motion", videoSources, wait),
+      readPictures<{ cuts: RecordingCut[] }>("picture-cuts", videoSources, wait),
+      wordsFor(tl, project).catch(without("failed to read the words heard on the timeline", new Map<string, TranscriptWord[]>())),
       // Where the speaker looks, in the picture of the recording heard beside each stretch: its face seen longest there.
       readPictures<{ tracks: Array<{ track: number; seconds: number }>; spans: Array<{ track: number; start: number; end: number; eyesDown?: number; box: number[] }> }>(
         "faces", clocks.filter(c => videos.has(c.id)), wait).then(({ reads, unread }) => ({ unread,
         spans: reads.map(({ id, read }) => {
           const main = [...read.tracks].sort((a, b) => b.seconds - a.seconds)[0]?.track;
           return [id, read.spans.filter(s => s.track === main)] as const;
-        }) })).catch(() => ({ spans: [], unread: [] })),
+        }) })).catch(without("failed to read where the speaker looks", { spans: [], unread: [] })),
     ]);
     return {
       evidence: {
@@ -180,7 +181,7 @@ export function registerPerception(deps: PerceptionDeps) {
    * a camera, a clip laid over it), by media id, with the recordings not read through yet. `wait` seconds for those.
    */
   async function cutsOn(tl: Timeline, project: Project, opts: { wait: number }) {
-    const transcripts = await wordsFor(tl, project).catch(() => new Map<string, TranscriptWord[]>());
+    const transcripts = await wordsFor(tl, project).catch(without("failed to read the words heard on the timeline", new Map<string, TranscriptWord[]>()));
     const heard = new Set(transcripts.size ? timelineWords(tl, transcripts).map(w => w.mediaId) : []);
     const sources = pictureSources(tl, project, { start: 0, end: timelineDuration(tl) }, heard).filter(s => !heard.has(s.id));
     const { reads, unread } = await readPictures<{ cuts: RecordingCut[] }>("picture-cuts", sources, opts.wait);
@@ -234,7 +235,7 @@ export function registerPerception(deps: PerceptionDeps) {
     await Promise.all([...new Set(shown.map(w => w.mediaId))].map(async mediaId => {
       const source = shown.filter(w => w.mediaId === mediaId).map(w => transcripts.get(mediaId)![w.index]!);
       const from = Math.max(0, Math.min(...source.map(w => w.start)) - 2), to = Math.max(...source.map(w => w.end)) + 2;
-      const saved = await client.dialogueVerbatimWords(deps.projectId, { mediaId, from, to }).catch(() => undefined);
+      const saved = await client.dialogueVerbatimWords(deps.projectId, { mediaId, from, to }).catch(without(`failed to read the verbatim words saved for ${mediaId}`, undefined));
       if (saved?.words.length) verbatim.set(mediaId, saved.words);
     }));
     if (!verbatim.size) return [];

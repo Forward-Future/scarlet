@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use super::detect::cli_binary;
 use super::install::{install_env, install_failure_reason, install_spawn_options, npm_package, INSTALL_LOCK};
-use super::spawn::{find_on_path, spawn_lines, SpawnLinesOptions};
+use super::spawn::{find_on_path, resolve_cli, spawn_lines, SpawnLinesOptions};
 use super::types::{AgentAvailability, CLI_AGENTS};
 use crate::util::child_env;
 
@@ -150,6 +150,12 @@ pub fn offer(agent: &AgentAvailability, latest: Option<&str>, binary: Option<&Pa
     Some(latest.to_string())
 }
 
+/// The copy of `agent`'s CLI an update is for: the one Scarlet found and runs (`resolve_cli`), which on Windows isn't
+/// always the first on PATH. An update aimed at a shim Scarlet passes over could never start.
+fn installed_cli(agent: &str, env: &HashMap<String, String>) -> Option<String> {
+    resolve_cli(cli_binary(agent), env).ok()
+}
+
 /// The update to offer for each installed agent in `agents`, by id, looked up as needed.
 pub async fn offers(agents: &[AgentAvailability], env: &HashMap<String, String>) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
@@ -157,7 +163,7 @@ pub async fn offers(agents: &[AgentAvailability], env: &HashMap<String, String>)
         // Ollama, LM Studio and OpenRouter aren't CLIs Scarlet updates.
         let offer = if agent.installed && agent.version.is_some() && CLI_AGENTS.contains(&agent.id.as_str()) {
             let latest = latest_version(&agent.id).await;
-            let binary = find_on_path(cli_binary(&agent.id), env).map(PathBuf::from);
+            let binary = installed_cli(&agent.id, env).map(PathBuf::from);
             offer(agent, latest.as_deref(), binary.as_deref())
         } else {
             None
@@ -183,7 +189,7 @@ pub async fn update(agent: &str, home: &Path) -> Result<(), String> {
     }
     let _guard = INSTALL_LOCK.lock().await;
     let env = child_env(home);
-    let Some(binary) = find_on_path(cli_binary(agent), &env) else {
+    let Some(binary) = installed_cli(agent, &env) else {
         return Err("It isn't installed on this computer anymore. Install it again from Settings.".into());
     };
     let Some(updater) = updater_for(agent, Path::new(&binary)) else {
@@ -322,6 +328,19 @@ mod tests {
         assert_eq!(offer(&gemini, Some("1.5.15"), Some(agy)), None);
         assert_eq!(offer(&gemini, Some("1.5.16"), Some(agy)).as_deref(), Some("1.5.16"));
         ALREADY_TRIED.lock().unwrap().remove("gemini");
+    }
+
+    /// On Windows the first copy on PATH can be a shim Scarlet passes over for the program it runs. An update aimed at
+    /// the shim never started.
+    #[test]
+    fn updates_the_copy_scarlet_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let (env, program) = crate::host::runner::testing::shadowed_cli(dir.path(), "claude");
+        let found = installed_cli("claude", &env).map(PathBuf::from).expect("the program on PATH");
+        assert_eq!(found.parent(), program.parent(), "found {}", found.display());
+        assert_eq!(updater_for("claude", &found), Some(Updater::SelfUpdate));
+        std::fs::remove_file(&program).unwrap();
+        assert_eq!(installed_cli("claude", &env), None);
     }
 
     #[tokio::test]

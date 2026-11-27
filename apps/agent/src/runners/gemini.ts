@@ -27,7 +27,8 @@ import {
   workspacePermission,
 } from "./geminiAcp.js";
 import { TranscriptUsageTailer } from "./geminiTranscript.js";
-import { asRecord, asString, earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { asRecord, asString, earlyResult, errMsg, exitError, jsonLine, resolveCli, runnerLog, spawnLines, tailSummary } from "./spawn.js";
+import { clip } from "../logText.js";
 import { addUsage, createUsageReporter, geminiUsage, usageWithModel } from "./usage.js";
 
 /** How long agy has to exit on its own once Scarlet has closed its input. It can stay up, and the run would stall. */
@@ -61,7 +62,9 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   const env = workspaceEnv(opts.env ?? process.env, opts.workspace);
   const bin = await resolveCli("agy", opts.bin, env);
   const ownDir = geminiDir(opts.cwd);
+  const runLog = runnerLog(opts, "agy");
   const madeOwnDir = await privateDirectory(ownDir).then(() => true, (err: unknown) => {
+    runLog(`runs with the user's own settings: its own folder couldn't be made (${clip(errMsg(err))})`);
     opts.onEvent({ type: "log", text: `Gemini runs with the user's own settings: its own folder couldn't be made (${err instanceof Error ? err.message : String(err)}).` });
     return false;
   });
@@ -78,6 +81,9 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   // Tools Scarlet refused during the turn under way. agy ends Gemini's turn on a refusal.
   let refused: string[] = [];
   let carryOns = 0;
+  // For the host's log: lines that weren't JSON, and the requests of agy's own Scarlet turned down, by method name.
+  let notJson = 0;
+  const refusedRequests = new Set<string>();
   const hasGeminiKey = hasApiKey("gemini", env);
   const resuming = Boolean(opts.resumeSession);
   const sendUsage = createUsageReporter(opts.onUsage, opts.model);
@@ -164,6 +170,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
       return true;
     }
     carryOns += 1;
+    runLog(`ended Gemini's turn on a refused tool (${clip(names, 80)}); carrying on (${carryOns} of ${MAX_CARRY_ONS})`);
     opts.onEvent({ type: "log", text: `Scarlet refused ${names}: only Scarlet's tools run here. Gemini carries on.`, data: { kind: "tool_refused", harnessTool: names } });
     sendTurn(words.replaceAll("{tool}", names));
     return true;
@@ -194,11 +201,21 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   const answerRequest = (msg: Record<string, unknown>) => {
     if (msg.method === "session/request_permission") {
       // A request's agent has agy's own tools inside its folder; a side check has Scarlet's only.
-      const allow = opts.workspace ? workspacePermission(msg.params, [opts.cwd, ...opts.workspace.readDirs])
-        : isScarletMcpPermission(msg.params);
+      // Every request is answered: agy waits on it, and a check that threw would hang the run until the stall limit.
+      let allow = false;
+      try {
+        allow = opts.workspace ? workspacePermission(msg.params, [opts.cwd], opts.workspace.readDirs) : isScarletMcpPermission(msg.params);
+      } catch (err) {
+        runLog(`permission check failed, so the tool was refused: ${clip(errMsg(err))}`);
+        opts.onEvent({ type: "log", text: `Scarlet couldn't check a tool's permission, so it was refused: ${err instanceof Error ? err.message : String(err)}` });
+      }
       if (!allow) refused.push(extractToolName(asRecord(asRecord(msg.params)?.toolCall) ?? {}));
       send({ id: msg.id, result: { outcome: permissionOutcome(msg.params, allow) } });
     } else {
+      if (typeof msg.method === "string" && !refusedRequests.has(msg.method)) {
+        refusedRequests.add(msg.method);
+        runLog(`asked for ${clip(msg.method, 60)}, which Scarlet turns down`);
+      }
       send({ id: msg.id, error: { code: -32601, message: "Unsupported by Scarlet" } });
     }
   };
@@ -224,6 +241,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
     const code = typeof err.code === "number" ? err.code : undefined;
     if (step === "session_open" && !triedApiKeyAuth && hasGeminiKey && isAcpAuthError(code, detail)) {
       triedApiKeyAuth = true;
+      runLog(`needs a sign-in to open the session; trying the Gemini API key`);
       step = "authenticate";
       sendRequest("authenticate", { methodId: "gemini-api-key" });
       return;
@@ -236,6 +254,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
     }
     // Nobody asked for an effort: the run goes on with agy's own rather than failing over Scarlet's default.
     if (step === "set_effort" && !opts.effort) {
+      runLog(`could not apply the default effort; carrying on with agy's own (${clip(detail)})`);
       opts.onEvent({ type: "log", text: `Gemini could not apply default effort (${detail}); continuing with agy's default.` });
       sendPrompt();
       return;
@@ -362,9 +381,12 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
     interrupt: cancelTurn,
     timeoutMs: opts.timeoutMs,
     stallMs: opts.stallMs ?? DEFAULT_STALL_MS,
+    log: opts.log,
+    task: opts.task,
     onLine: (line) => {
       const msg = jsonLine(line);
       if (!msg) {
+        notJson++;
         opts.onEvent({ type: "log", text: line });
         return;
       }
@@ -406,6 +428,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
     clearInterval(usagePoll);
     clearTimeout(stopTimer);
   }
+  if (notJson) runLog(`wrote ${notJson} output line${notJson === 1 ? "" : "s"} that weren't JSON`);
 
   const remaining: RunnerEvent[] = [];
   flushStreams(st, remaining);

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { wellFormed } from "@scarlet/shared";
 import { clip, humanDuration, since, throttledLog } from "./logText.js";
 
 it("writes elapsed time in the largest two units that matter", () => {
@@ -69,4 +70,10 @@ it("drops expired keys before live ones when full", () => {
   // "old" expired and went first, so "a" is still held back.
   log("a", "a failed", 70_002);
   expect(lines).toEqual(["old failed", "a failed", "b failed"]);
+});
+
+it("shortens a line with an emoji at the cut to whole characters only, so every reader can take it", () => {
+  const said = clip("a".repeat(398) + "👍 keep my jump cuts tight", 400);
+  expect(wellFormed(said)).toBe(said);
+  expect(said.endsWith("a…")).toBe(true);
 });

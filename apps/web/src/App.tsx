@@ -5,6 +5,8 @@ import { captureProjectPlace } from "./lib/updatePlace";
 import { createBrowserRouter, createRoutesFromElements, Navigate, Route, RouterProvider, useLocation, useParams } from "react-router-dom";
 import { AppShell } from "./components/shell/AppShell";
 import { BootSplash } from "./components/shell/BootSplash";
+import { ReportProblemHost } from "./components/shell/ReportProblem";
+import { RouteErrorScreen } from "./components/shell/RouteErrorScreen";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { useUiStore } from "./stores/ui";
 
@@ -16,19 +18,23 @@ export function ProjectHome() {
 }
 
 const loadSkillEditor = async () => ({ Component: (await import("./pages/SkillEditorPage")).SkillEditorPage });
+const loadStyleGuideEditor = async () => ({ Component: (await import("./pages/StyleGuideEditorPage")).StyleGuideEditorPage });
 
 const router = createBrowserRouter(createRoutesFromElements(
   <>
     {/* Older links from when Scarlet had accounts */}
     <Route path="/login" element={<Navigate to="/" replace />} />
     <Route path="/register" element={<Navigate to="/" replace />} />
-    <Route element={<AppShell />} hydrateFallbackElement={<BootSplash />}>
+    <Route element={<AppShell />} hydrateFallbackElement={<BootSplash />} errorElement={<RouteErrorScreen />}>
       <Route index element={<ProjectsPage />} />
       <Route path="/settings" lazy={async () => ({ Component: (await import("./pages/SettingsPage")).SettingsPage })}>
         <Route path="skills" lazy={async () => ({ Component: (await import("./pages/SkillsPage")).SkillsPage })} />
+        <Route path="style-guides" lazy={async () => ({ Component: (await import("./pages/StyleGuidesPage")).StyleGuidesPage })} />
       </Route>
       <Route path="/settings/skills/new" lazy={loadSkillEditor} />
       <Route path="/settings/skills/:skillId" lazy={loadSkillEditor} />
+      <Route path="/settings/style-guides/new" lazy={loadStyleGuideEditor} />
+      <Route path="/settings/style-guides/:styleGuideId" lazy={loadStyleGuideEditor} />
       <Route path="/p/:id" lazy={async () => ({ Component: (await import("./components/shell/ProjectLayout")).ProjectLayout })}>
         <Route index lazy={async () => ({ Component: (await import("./pages/SimpleWorkspace")).SimpleWorkspace })} />
         <Route path="*" element={<ProjectHome />} />
@@ -63,5 +69,8 @@ export function App({ platform }: { platform: DesktopPlatform }) {
     window.addEventListener("keydown", openSettings, true);
     return () => window.removeEventListener("keydown", openSettings, true);
   }, [platform]);
-  return <RouterProvider router={router} />;
+  return <>
+    <RouterProvider router={router} />
+    <ReportProblemHost />
+  </>;
 }

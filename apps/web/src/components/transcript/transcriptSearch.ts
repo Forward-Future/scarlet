@@ -1,5 +1,5 @@
 /** A word as search compares it: lower case, without punctuation, an apostrophe inside it (between cased letters, as in "don’t") read the same curly or straight. */
-const bare = (text: string) => text.toLowerCase().replace(/([\p{LC}\p{N}])’(?=\p{LC})/gu, "$1'").replace(/[^\p{L}\p{N}']+/gu, "");
+const bare = (text: string) => text.normalize("NFC").toLowerCase().replace(/([\p{LC}\p{N}])’(?=\p{LC})/gu, "$1'").replace(/[^\p{L}\p{M}\p{N}']+/gu, "");
 /** The words searched for, as `findWords` compares them: a run of punctuation alone is no word. */
 export const searchTerms = (query: string) => query.split(/\s+/).map(bare).filter(Boolean);
 /** Where the searched words start, each a run of `terms.length` words: every word but the last matched whole, the last from its start. */

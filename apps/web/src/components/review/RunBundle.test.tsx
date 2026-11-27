@@ -162,15 +162,24 @@ it("lists tokens by project, provider and model in Settings", async () => {
 
   const view = render(<UsageSettings />);
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-  const text = view.host.textContent ?? "";
-  expect(text).toContain("1.3M tokens");
-  expect(text).toContain(". 3 runs since ");
-  expect(text).toContain("Interview");
-  expect(text).toContain("Deleted project");
-  expect(text).toContain("Claude Code");
-  expect(text).toContain("Default model");
-  expect(text).not.toMatch(/agent/i);
-  expect(text).not.toMatch(/\$|cost/i);
+  const text = () => view.host.textContent ?? "";
+  expect(text()).toContain("1.3M tokens");
+  expect(text()).toContain("3 runs since ");
+  expect(text()).toContain("Interview");
+  expect(text()).toContain("Deleted project");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
+
+  const tabButton = (label: string) => [...view.host.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(b => b.textContent?.includes(label))!;
+  act(() => tabButton("Providers").click());
+  expect(text()).toContain("Claude Code");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
+
+  act(() => tabButton("Models").click());
+  expect(text()).toContain("Default model");
+  expect(text()).not.toMatch(/agent/i);
+  expect(text()).not.toMatch(/\$|cost/i);
 
   // The switch reflects the editor's choice and remembers it.
   const toggle = view.host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Show tokens in the chat"]')!;
@@ -235,10 +244,11 @@ it("says what Scarlet is doing this moment on one line under its opening sentenc
   const spoken = [...joins, said("The opening is saved, and I’ve found the retake of the letter.", 60)];
   view.rerender(<RunBundle task={running} events={spoken} changes={[]} banded />);
   expect(now(view.host)).toBe("The opening is saved, and I’ve found the retake of the letter.");
-  // A cut Scarlet asked about is named by its call's number, not by where it comes among the pass's cuts.
-  const asked = [{ id: "chg", cutAssessments: [{ index: 1, verdict: "ask", askOrder: 1 }, { index: 7, verdict: "ask", askOrder: 0 }] }] as never;
+  // A cut Scarlet asked about is named by its time, never by a number. One it hasn't asked about is a flagged cut.
+  const asked = [{ id: "chg", cutReasons: [{ start: 10, end: 11 }, { start: 167, end: 168 }, { start: 200, end: 201 }, { start: 300, end: 301 }],
+    cutAssessments: [{ index: 1, verdict: "ask", askOrder: 1 }, { index: 7, verdict: "ask", askOrder: 0 }] }] as never;
   view.rerender(<RunBundle task={running} events={[...spoken, tool("dialogue_review_inspect", 70, { changeId: "chg", index: 1, count: 1 })]} changes={asked} banded />);
-  expect(now(view.host)).toBe("Listening to Cut 2");
+  expect(now(view.host)).toBe("Listening to the cut at 2:47");
   view.rerender(<RunBundle task={running} events={[...spoken, tool("dialogue_review_inspect", 70, { changeId: "chg", index: 3, count: 1 })]} changes={asked} banded />);
   expect(now(view.host)).toBe("Listening to a flagged cut");
   // Under a heading that carries Stop, the line has none. With no heading, Stop ends the line.
@@ -302,7 +312,7 @@ it("says how far the transcripts it waits on are, and keeps file progress in Med
   expect(activity()).toBe("Transcribing the recordings · 30%");
   act(() => vi.advanceTimersByTime(30_000));
   view.rerender(run([wait, answer]));
-  expect(view.host.querySelector("[data-media]")?.textContent).toBe("Transcribing10%");
+  expect(view.host.querySelector("[data-media]")?.textContent).toBe("Transcribing10%Cancel");
   expect(activity()).toBe("Reading your answer");
 
   // A fresh transcript request can block the edit again.

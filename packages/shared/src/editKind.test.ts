@@ -104,9 +104,25 @@ describe("telling what an applied edit did", () => {
     // Faded in or out afterwards, it is still the graphic.
     expect(editKinds(change([{ op: "updateClip", clipId: "l", patch: { videoFadeIn: 0.3 } }]), [one], { before: withLower, after: withLower, media }))
       .toEqual(["graphic"]);
+    // Repositioned, re-rendered, extended, or shifted on the timeline, it is still a graphic (not a reframe or generic edit).
+    expect(editKinds(change([{ op: "updateClip", clipId: "l", patch: { transform: { x: -0.56, y: 0.29, scale: 1 } } }]), [one], { before: withLower, after: withLower, media }))
+      .toEqual(["graphic"]);
+    expect(editKinds(change([{ op: "updateClip", clipId: "l", patch: { keyframes: [{ time: 0, transform: { x: 0, scale: 1 } }, { time: 1, transform: { x: -0.5, scale: 1.2 } }] } }]), [one], { before: withLower, after: withLower, media }))
+      .toEqual(["graphic"]);
+    const media2 = [...media, { id: "lower-long", kind: "graphic" as const }];
+    const extended = after(t => { t.tracks.push({ ...upper, clips: [makeMediaClip("lower-long", 0, 6, 12, { id: "l" })] }); });
+    expect(editKinds(change([{ op: "updateClip", clipId: "l", patch: { mediaId: "lower-long", sourceOut: 6 } }]), [one], { before: withLower, after: extended, media: media2 }))
+      .toEqual(["graphic"]);
+    expect(editKinds(change([{ op: "updateClip", clipId: "l", patch: { sourceOut: 6 } }]), [one], { before: withLower, after: extended, media: media2 }))
+      .toEqual(["graphic"]);
+    expect(editKinds(change([{ op: "moveClip", clipId: "l", toTime: 12 }]), [one], { before: withLower, after: extended, media: media2 }))
+      .toEqual(["graphic"]);
     // Without the project's files nothing says it is a graphic.
     expect(editKinds(change([{ op: "addClip", trackId: "v2", clip: lower }]), [one], { before: base, after: withLower })).toEqual(["overlay"]);
     const both = after(t => { t.tracks.push({ ...upper, clips: [lower, broll] }); });
+    // Repositioning B-roll footage as an inset stays a reframe.
+    expect(editKinds(change([{ op: "updateClip", clipId: "b", patch: { transform: { x: 0.3, y: 0.3, scale: 0.35 } } }]), [{ start: 30, end: 34 }], { before: both, after: both, media }))
+      .toEqual(["reframe"]);
     expect(editKinds(change([{ op: "addClip", trackId: "v2", clip: broll }]), [one], { before: base, after: both, media })).toEqual(["broll"]);
     expect(editKinds(change([{ op: "addClip", trackId: "v2", clip: lower }, { op: "addClip", trackId: "v2", clip: broll }]), [one],
       { before: base, after: both, media })).toEqual(["overlay"]);

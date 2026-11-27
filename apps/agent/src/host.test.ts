@@ -12,7 +12,7 @@ import { AgentHost, type HostOptions } from "./host.js";
 import type { AgentConfig } from "./config.js";
 import { promptTimeLimit, stalledReason, timedOutReason } from "./runLimits.js";
 import { claudeConfigDir, claudeProjectDir, claudeProjectDirs, pruneTaskDirs, removeClaudeSessions, removeControlFiles } from "./taskDirs.js";
-import { humanDuration } from "./taskReports.js";
+import { humanDuration } from "./logText.js";
 import { codexHomeDir } from "./runners/codex.js";
 import { DEFAULT_STALL_MS } from "./runners/types.js";
 import type { RunAgentFn, RunAgentOptions } from "./runners/types.js";
@@ -204,6 +204,7 @@ it("records the engine's resulting state and a question that no longer pauses th
   expect(lines).toContainEqual(expect.stringMatching(/requested=done state=queued outcome=changed/));
   expect(lines).toContainEqual(expect.stringMatching(/requested=done state=done outcome=superseded/));
   expect(lines).toContain(`[host] question task=${task.id} attempt=${startedAt} outcome=not_waiting`);
+  expect(lines).toContainEqual(expect.stringMatching(new RegExp(`^task ${task.id}: \\w+ ended \\(exit code none\\) after \\d+m?s; 0 tool calls, 0 errors$`)));
   expect(requests.filter(path => path.endsWith("/complete"))).toHaveLength(2);
   expect(lines.join("\n")).not.toContain("Private");
 });
@@ -752,7 +753,7 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
     expect(plain.completes).toMatchObject([{ state: "done", summary: "Done." }]);
   });
 
-  it("falls back to the default limits when agent.json holds a value that isn't a positive number", async ({ signal }) => {
+  it("falls back to the default limits when agent.json holds a value that isn't a positive number, and turns the stall limit off at 0", async ({ signal }) => {
     const seen: RunAgentOptions[] = [];
     const runner: RunAgentFn = async (opts) => {
       seen.push(opts);
@@ -766,7 +767,8 @@ describe("AgentHost when a run or the engine misbehaves", { timeout: 30_000 }, (
       expect(srv.claims[0]).toMatchObject({ body: { agents: ["claude"], checkAgents: ["claude"] } });
       expect(srv.prompts.map((p) => p.timeLimit)).toEqual([undefined]);
     }
-    expect(seen.map((run) => [run.timeoutMs, run.stallMs])).toEqual([[undefined, DEFAULT_STALL_MS], [undefined, DEFAULT_STALL_MS], [undefined, DEFAULT_STALL_MS]]);
+    // 0 turns the stall limit off, as it does in desktop.json: it isn't a mistake to correct. A run has no time limit unless one is set, so 0 there changes nothing.
+    expect(seen.map((run) => [run.timeoutMs, run.stallMs])).toEqual([[undefined, DEFAULT_STALL_MS], [undefined, DEFAULT_STALL_MS], [undefined, 0]]);
   });
 
   it("says why it stopped a silent run or one at its time cap, and marks both as interrupted so they can be resumed", async ({ signal }) => {
@@ -1289,4 +1291,35 @@ it("keeps the engine hearing from a request it runs on its own, through a long t
   const after = heartbeat.mock.calls.length;
   await delay(100);
   expect(heartbeat.mock.calls.length).toBeLessThanOrEqual(after + 1);
+});
+
+
+it("gives up a heartbeat that hangs, so the next one still reaches the engine", async () => {
+  let beats = 0;
+  const client = new ScarletClient({
+    baseUrl: "https://fixture.test",
+    fetch: async (input, init) => {
+      const { pathname } = new URL(String(input));
+      if (pathname.endsWith("/hosts/register")) return Response.json({ host: { id: "host_1", userId: "u1", name: "one", platform: "test", agents: [], online: true } });
+      if (pathname.endsWith("/heartbeat")) {
+        beats++;
+        // A half-open connection: no answer ever comes, until the request is given up.
+        return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true }));
+      }
+      if (pathname.endsWith("/claim")) return Response.json({ task: null });
+      return Response.json({});
+    },
+  });
+  const host = new AgentHost({
+    client, config: { server: "https://fixture.test", token: "fixture" }, workRoot, mcpCliPath: "fixture-mcp",
+    runner: async () => ({ ok: true, summary: "" }), ws: false, heartbeatMs: 20, heartbeatTimeoutMs: 40, idlePollMs: 10, log: () => undefined,
+    detect: async () => [],
+  });
+  const started = host.start();
+  try {
+    await vi.waitFor(() => expect(beats).toBeGreaterThanOrEqual(3), { timeout: 2000 });
+  } finally {
+    await host.stop();
+    await started;
+  }
 });

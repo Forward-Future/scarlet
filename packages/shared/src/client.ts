@@ -12,14 +12,35 @@ import type { ThreadEdit } from "./threadEdits.js";
 import type { StorageCleanup, StorageProject } from "./storage.js";
 import type { AcousticWordsRequest, DialogueRangeRequest, DialogueScanRequest, DialogueWindowRequest, DialogueDetections, SourceAudioRequest, SoundPictureRequest, SoundPictureLayout, SheetRequest, TimelinePicturesRequest, InspectionReviewRequest, InspectionResult, PictureActivityRequest, PictureActivityWindow, RepeatAuditRequest, RepeatAuditResult } from "./inspection.js";
 import type { AudioTrackSelection, Author, Change, CutAssessment, CutReview, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript, TranscriptWord } from "@scarlet/timeline";
-import type { ActivityEntry, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
+import type { ActivityEntry, ExpandMediaPathsResponse, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
 import type { AgentHost, RunChoice } from "./agents.js";
 import type { CompleteTaskRequest, CreateTaskRequest, PictureMarks, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
-import type { KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
+import type { BatchSummariesRequest, BatchSummariesResponse, KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
 import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLearningRequest } from "./learnings.js";
 import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
 import type { GraphicRenderResponse, SaveStyleGuideRequest } from "./graphics.js";
 import type { Skill, SkillVersion, EditSkillRequest, UpsertSkillRequest } from "./skills.js";
+import type { BuiltInStyleSound } from "./builtInSfx.js";
+import type {
+  ActiveStyleGuide,
+  CreateStyleGuideRequest,
+  EditStyleGuideRequest,
+  ImportStyleGuideSoundRequest,
+  StyleGuideAsset,
+  StyleGuideFromGraphicRequest,
+  StyleGuidePreviewRenderRequest,
+  StyleGuidePreviewRenderResponse,
+  StyleGuideRecord,
+  TaskStyleGuideDraft,
+  UpdateStyleGuideRequest,
+} from "./styleGuides.js";
+import type {
+  YouTubeChaptersResponse,
+  YouTubeConfigRequest,
+  YouTubeConnectionStatus,
+  YouTubePublishRequest,
+  YouTubeUploadJob,
+} from "./youtube.js";
 
 /**
  * File extension for a recorded clip. Chromium (Windows) records webm/opus;
@@ -58,6 +79,9 @@ export class ScarletClient extends ClientTransport {
   }
   createProject(body: { name: string; settings?: Partial<Project["settings"]> }) {
     return this.post<{ project: Project }>("/projects", body);
+  }
+  createSampleProject() {
+    return this.post<{ project: Project }>("/projects/sample", {});
   }
   project(id: string) {
     return this.get<ProjectDetail>(`/projects/${id}`);
@@ -105,6 +129,17 @@ export class ScarletClient extends ClientTransport {
   }
   recordEditReview(projectId: string, body: EditReviewRequest) {
     return this.post<void>(`/projects/${projectId}/edit-reviews`, body);
+  }
+  /** Ask the engine for AI-generated short titles for collapsed edit batches. Gracefully returns empty on older engines. */
+  async summarizeBatches(projectId: string, body: BatchSummariesRequest): Promise<BatchSummariesResponse> {
+    try {
+      return await this.post<BatchSummariesResponse>(`/projects/${apiPathId(projectId)}/batch-summaries`, body);
+    } catch (error) {
+      if (isMissingRouteError(error, message => message.startsWith("no route for POST ") && message.endsWith("/batch-summaries"))) {
+        return { summaries: {}, pending: [] };
+      }
+      throw error;
+    }
   }
   setThreadDone(projectId: string, threadId: string, done: boolean, revision: string) {
     return this.post<{ completedThreads: Record<string, string>; project?: Project }>(`/projects/${projectId}/threads/${encodeURIComponent(threadId)}/disposition`, { done, revision });
@@ -180,6 +215,9 @@ export class ScarletClient extends ClientTransport {
     fd.append("file", file, name);
     appendFields(fd, { kind, provenance: provenance ? JSON.stringify(provenance) : undefined });
     return this.post<{ media: MediaAsset }>(`/projects/${projectId}/media`, fd);
+  }
+  expandMediaPaths(paths: string[], signal?: AbortSignal) {
+    return this.request<ExpandMediaPathsResponse>("POST", "/media/expand-paths", { paths }, { signal });
   }
   importMedia(projectId: string, body: { path?: string; url?: string; kind?: string; importId?: string; deferFormat?: boolean }, signal?: AbortSignal) {
     return this.request<{ media: MediaAsset }>("POST", `/projects/${projectId}/media/import`, body, { signal });
@@ -289,6 +327,18 @@ export class ScarletClient extends ClientTransport {
   rejectEdits(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
     edits: { changeId: string; spot: number; label: string; range: TimeRange; revised?: boolean; marker?: boolean; at?: number; before?: { version: string; removed: TimeRange } }[] }) {
     return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/rejected-edits`, body);
+  }
+  /** Adjust an applied cut's edges directly with no model. Refused (409) where another edit spans the join. */
+  adjustCut(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
+    cut: { changeId: string; spot: number; label: string; range: TimeRange; at: number; before: { version: string; removed: TimeRange } };
+    removed: TimeRange }) {
+    return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/adjusted-cut`, body);
+  }
+  /** Adjust a non-cut applied edit's start/end edges directly with no model (overlays, captions, zooms, dips, split edits). */
+  adjustEdit(projectId: string, body: { expectedHead: string; branch: string; threadId: string;
+    edit: { changeId: string; spot: number; label: string; range: TimeRange; kind?: string };
+    nextRange: TimeRange }) {
+    return this.post<{ project: Project; change: Change }>(`/projects/${projectId}/adjusted-edit`, body);
   }
   checkout(projectId: string, version: string) {
     return this.post<{ project: Project }>(`/projects/${projectId}/versions/${version}/checkout`);
@@ -494,7 +544,7 @@ export class ScarletClient extends ClientTransport {
   }
   tasks(projectId: string, state?: string, events?: "conversation") {
     // Not URLSearchParams.size: a WebView older than Safari 17 has none, and the whole query was dropped there.
-    return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]> }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
+    return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]>; handOffs?: Task[] }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
   }
   task(taskId: string, events: "all" | "conversation" | "none" = "all") {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener;
@@ -531,16 +581,16 @@ export class ScarletClient extends ClientTransport {
     return this.post<{ task: Task }>(`/tasks/${taskId}/start-now`, {});
   }
   /** Change the words of a request that is still waiting its turn. It keeps its place in the queue. */
-  rewordTask(taskId: string, text: string, skillIds?: string[]) {
-    return this.post<{ task: Task }>(`/tasks/${taskId}/reword`, { text, skillIds } satisfies RewordTaskRequest);
+  rewordTask(taskId: string, text: string, skillIds?: string[], styleGuideIds?: string[]) {
+    return this.post<{ task: Task }>(`/tasks/${taskId}/reword`, { text, skillIds, styleGuideIds } satisfies RewordTaskRequest);
   }
 
   // Agent hosts
   registerHost(body: { name: string; platform: string; agents: AgentHost["agents"] }) {
     return this.post<{ host: AgentHost }>("/hosts/register", body);
   }
-  heartbeat(hostId: string, agents: AgentHost["agents"], running?: string[]) {
-    return this.post<{ cancelled?: string[] }>(`/hosts/${hostId}/heartbeat`, { agents, running });
+  heartbeat(hostId: string, agents: AgentHost["agents"], running?: string[], signal?: AbortSignal) {
+    return this.request<{ cancelled?: string[] }>("POST", `/hosts/${hostId}/heartbeat`, { agents, running }, { signal });
   }
   postTaskEvent(taskId: string, event: TaskEvent, startedAt?: string) {
     return this.withResource("tasks", taskId, path => this.post<Record<string, never>>(path + "/events", { ...event, startedAt }));
@@ -638,6 +688,94 @@ export class ScarletClient extends ClientTransport {
     return this.post<{ skill: Skill }>(`/projects/${projectId}/tasks/${taskId}/skill-edit`, body);
   }
 
+  // Style guides
+  styleGuides() {
+    return this.get<{ styleGuides: StyleGuideRecord[] }>("/style-guides");
+  }
+  activeStyleGuides(opts?: { projectId?: string; taskId?: string }) {
+    return this.get<{ styleGuides: ActiveStyleGuide[] }>(withQuery("/style-guides/active", opts ?? {}));
+  }
+  styleGuide(styleGuideId: string) {
+    return this.get<{ styleGuide: StyleGuideRecord; edits?: Task[] }>(`/style-guides/${apiPathId(styleGuideId)}`);
+  }
+  createStyleGuide(body: CreateStyleGuideRequest) {
+    return this.post<{ styleGuide: StyleGuideRecord }>("/style-guides", body);
+  }
+  createStyleGuideFromGraphic(body: StyleGuideFromGraphicRequest) {
+    return this.post<{ styleGuide: StyleGuideRecord }>("/style-guides/from-graphic", body);
+  }
+  importStyleGuideFile(file: Blob | { path: string }, opts: { styleGuideId?: string; name?: string } = {}) {
+    const query = opts.styleGuideId ? `?styleGuideId=${encodeURIComponent(opts.styleGuideId)}` : "";
+    const path = `/style-guides/import-file${query}`;
+    if (!(file instanceof Blob)) {
+      return this.post<{ imported: true; styleGuide: StyleGuideRecord } | { imported: false }>(path, {
+        path: file.path,
+        ...(opts.styleGuideId && { styleGuideId: opts.styleGuideId }),
+      });
+    }
+    const fd = new FormData();
+    fd.append("file", file, opts.name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "style-guide.json"));
+    return this.post<{ imported: true; styleGuide: StyleGuideRecord } | { imported: false }>(path, fd);
+  }
+  updateStyleGuide(styleGuideId: string, body: UpdateStyleGuideRequest) {
+    return this.put<{ styleGuide: StyleGuideRecord }>(`/style-guides/${apiPathId(styleGuideId)}`, body);
+  }
+  deleteStyleGuide(styleGuideId: string) {
+    return this.delete<Record<string, never>>(`/style-guides/${apiPathId(styleGuideId)}`);
+  }
+  editStyleGuide(styleGuideId: string, body: EditStyleGuideRequest) {
+    return this.post<{ task: Task }>(`/style-guides/${apiPathId(styleGuideId)}/edit`, body);
+  }
+  saveTaskStyleGuideEdit(projectId: string, taskId: string, body: TaskStyleGuideDraft & { styleGuideId: string; hostId: string }) {
+    return this.post<{ styleGuide: StyleGuideRecord }>(`/projects/${apiPathId(projectId)}/tasks/${apiPathId(taskId)}/style-guide-edit`, body);
+  }
+  uploadStyleGuideAsset(styleGuideId: string, file: Blob | { path: string }, name?: string) {
+    const path = `/style-guides/${apiPathId(styleGuideId)}/assets`;
+    if (!(file instanceof Blob)) return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord; duration?: number }>(path, { path: file.path });
+    const fd = new FormData();
+    fd.append("file", file, name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "asset"));
+    return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord; duration?: number }>(path, fd);
+  }
+  deleteStyleGuideAsset(styleGuideId: string, assetId: string) {
+    return this.delete<{ styleGuide: StyleGuideRecord }>(`/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}`);
+  }
+  styleGuideAssetUrl(styleGuideId: string, assetId: string) {
+    return this.fileUrl(`/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}`);
+  }
+  builtInStyleSounds() {
+    return this.get<{ sounds: BuiltInStyleSound[] }>("/style-guides/sounds/builtin");
+  }
+  builtInStyleSoundUrl(soundId: string) {
+    const slug = soundId.startsWith("builtin:") ? soundId.slice("builtin:".length) : soundId;
+    return this.fileUrl(`/style-guides/sounds/builtin/${apiPathId(slug)}`);
+  }
+  importStyleGuideSound(projectId: string, body: ImportStyleGuideSoundRequest) {
+    return this.post<{
+      media: ProjectDetail["project"]["media"][number];
+      name: string;
+      volumeDb: number;
+      volume: number;
+      duration?: number;
+      usageRule: string;
+    }>(`/projects/${apiPathId(projectId)}/media/from-style-sound`, body);
+  }
+  readStyleGuideAsset(styleGuideId: string, assetId: string, pages?: number[]) {
+    return this.post<{ name: string; path: string; size: number; mime?: string; text?: string; pageCount?: number;
+      pages?: Array<{ page: number; jpeg: string }>; image?: { mime: string; data: string } }>(
+      `/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}/read`,
+      pages ? { pages } : {},
+    );
+  }
+  renderStyleGuidePreview(styleGuideId: string, body: StyleGuidePreviewRenderRequest) {
+    return this.post<StyleGuidePreviewRenderResponse>(`/style-guides/${apiPathId(styleGuideId)}/preview`, body);
+  }
+  styleGuidePreviewSource(styleGuideId: string) {
+    return this.get<{ html: string; width: number; height: number; updatedAt: string; jpeg?: string }>(`/style-guides/${apiPathId(styleGuideId)}/preview/source`);
+  }
+  styleGuidePreviewUrl(styleGuideId: string, updatedAt?: string) {
+    return this.fileUrl(`/style-guides/${apiPathId(styleGuideId)}/preview`, updatedAt ? { v: updatedAt } : undefined);
+  }
+
   // Learnings: rules picked up from requests, waiting for the editor
   learnings(projectId: string) {
     return this.get<{ learnings: Learning[] }>(`/projects/${projectId}/learnings`);
@@ -659,7 +797,7 @@ export class ScarletClient extends ClientTransport {
   activity(projectId: string, q: { before?: string; beforeId?: string; limit?: number; type?: string } = {}) {
     return this.get<{ activity: ActivityEntry[] }>(withQuery(`/projects/${projectId}/activity`, q));
   }
-  serverActivity(q: { before?: string; limit?: number } = {}) {
+  serverActivity(q: { before?: string; beforeId?: string; limit?: number } = {}) {
     return this.get<{ activity: ActivityEntry[] }>(withQuery("/activity", q));
   }
   trash() {
@@ -693,5 +831,42 @@ export class ScarletClient extends ClientTransport {
   }
   updateSettings(body: Partial<ServerSettings>) {
     return this.patch<{ settings: ServerSettings }>("/settings", body);
+  }
+
+  // YouTube connection, final-cut chapters & direct upload
+  youtubeStatus() {
+    return this.get<{ status: YouTubeConnectionStatus }>("/settings/youtube");
+  }
+  youtubeUpdateConfig(body: YouTubeConfigRequest) {
+    return this.put<{ status: YouTubeConnectionStatus }>("/settings/youtube/config", body);
+  }
+  youtubeConnect() {
+    return this.post<{ authUrl: string; status: YouTubeConnectionStatus }>("/settings/youtube/connect", {});
+  }
+  youtubeCancelConnect() {
+    return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/cancel", {});
+  }
+  youtubeDisconnect() {
+    return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/disconnect", {});
+  }
+  youtubeChapters(projectId: string, version?: string, signal?: AbortSignal) {
+    return this.request<YouTubeChaptersResponse>(
+      "GET",
+      withQuery(`/projects/${apiPathId(projectId)}/youtube/chapters`, { version }),
+      undefined,
+      { signal },
+    );
+  }
+  youtubePublish(projectId: string, body: YouTubePublishRequest) {
+    return this.post<{ upload: YouTubeUploadJob }>(`/projects/${apiPathId(projectId)}/youtube/publish`, body);
+  }
+  youtubeUploads(projectId: string) {
+    return this.get<{ uploads: YouTubeUploadJob[] }>(`/projects/${apiPathId(projectId)}/youtube/uploads`);
+  }
+  youtubeUpload(uploadId: string) {
+    return this.get<{ upload: YouTubeUploadJob }>(`/youtube/uploads/${apiPathId(uploadId)}`);
+  }
+  youtubeCancelUpload(uploadId: string) {
+    return this.post<{ upload: YouTubeUploadJob }>(`/youtube/uploads/${apiPathId(uploadId)}/cancel`, {});
   }
 }

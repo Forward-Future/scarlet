@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { heardAudio } from "@scarlet/render";
 import { newId } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
+import { clip, humanDuration } from "../logText.js";
 import { alignmentVersion, alignsLanguage, alignTranscript } from "../transcribe/wordAlign.js";
 import { emissionStore } from "./recordingAudio.js";
 import { linkedTranscript } from "./transcriptReader.js";
@@ -26,26 +27,35 @@ export async function realignTranscript(ctx: Ctx, projectId: string, mediaId: st
   if (original.alignment === alignmentVersion) return { state: "current" };
   const source = join(ctx.paths.media(projectId), media.path);
   const audio = heardAudio(media);
-  const emissions = await emissionStore(ctx, projectId, source, audio).catch(() => undefined);
+  const emissions = await emissionStore(ctx, projectId, source, audio).catch(error => {
+    ctx.log(`[align] ${mediaId}: couldn't place its transcript's words again, the source recording can't be read: ${clip((error as Error)?.message ?? String(error))}`);
+    return undefined;
+  });
   signal.throwIfAborted();
   if (!emissions) return { state: "unavailable", reason: "The source recording is unavailable." };
   let failed = false;
+  const started = Date.now();
   const segments = await alignTranscript(ctx, { source, audio, language: original.language, segments: original.segments, signal, emissions,
     work: { mediaId, kind: "alignment" }, onFailure: () => { failed = true; } });
   signal.throwIfAborted();
-  if (failed) return { state: "unavailable", reason: "Scarlet couldn’t realign this transcript. Try again when the source recording and aligner are available." };
+  if (failed) {
+    ctx.log(`[align] ${mediaId}: couldn't place its transcript's words again, the aligner failed after ${humanDuration(Date.now() - started)}`);
+    return { state: "unavailable", reason: "Scarlet couldn’t realign this transcript. Try again when the source recording and aligner are available." };
+  }
   return ctx.db.transaction((): Realigned => {
     // A transcription or a speaker reading that finished meanwhile wrote the transcript this one would replace.
     const current = ctx.repos.projects.getMedia(mediaId);
-    if (!current || current.projectId !== projectId || current.path !== media.path || linkedTranscript(ctx, projectId, mediaId, current.transcriptId)?.id !== original.id)
+    if (!current || current.projectId !== projectId || current.path !== media.path || linkedTranscript(ctx, projectId, mediaId, current.transcriptId)?.id !== original.id) {
+      ctx.log(`[align] ${mediaId}: its transcript changed while its words were placed again, so the new times weren't saved`);
       return { state: "unavailable", reason: "The transcript changed while it was aligned. Ask again." };
+    }
     const before = original.segments.flatMap(s => s.words), after = segments.flatMap(s => s.words);
     const moved = after.filter((w, i) => Math.abs(w.start - before[i]!.start) > 0.02 || Math.abs(w.end - before[i]!.end) > 0.02).length;
     const id = newId("trs");
     ctx.repos.transcripts.put({ ...original, segments, alignment: alignmentVersion, id, projectId, createdAt: new Date().toISOString() });
     const saved = ctx.repos.projects.putMedia(projectId, { ...current, transcriptId: id }, current.status, current.error);
     ctx.bus.publish({ type: "media.updated", projectId, media: saved });
-    ctx.log(`[align] ${mediaId}: placed its transcript's words again, ${moved} of ${after.length} moved`);
+    ctx.log(`[align] ${mediaId}: placed its transcript's words again in ${humanDuration(Date.now() - started)}, ${moved} of ${after.length} moved`);
     return { state: "realigned", transcriptId: id, words: after.length, moved };
   }, "immediate")();
 }

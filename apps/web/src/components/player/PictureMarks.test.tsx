@@ -290,3 +290,49 @@ it("says Esc is the marking's while a frame is marked or a mark is dragged, so n
   expect(marksTakeEscape(esc())).toBe(true);
 });
 
+it("puts a moved mark back on ⌘Z after leaving marking mode, keeps ⌘Z while marking, and caps undo at 20 marks", async () => {
+  await show();
+  let heardByWorkspace = 0;
+  const onBubbleKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "z" && e.metaKey) heardByWorkspace++; };
+  window.addEventListener("keydown", onBubbleKey);
+  try {
+    await act(async () => toggleMarking("prj", { time: 7, version: "v1" }));
+    // While marking, ⌘Z with nothing drawn takes nothing back, and doesn't reach the workspace's undo of an edit.
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+    expect(heardByWorkspace).toBe(0);
+
+    // Draw one point, leave marking with Esc, then grab and move the point on the paused frame.
+    await press("pointerdown", 100, 50);
+    await press("pointerup", 100, 50);
+    expect(marks()).toEqual([{ kind: "point", box: { x: 0.25, y: 0.25, w: 0, h: 0 } }]);
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(usePictureMarksStore.getState().marking).toBeNull();
+    const point = container.querySelector('.picture-mark-point[data-mark-index="0"]')!;
+    await act(async () => { point.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 100, clientY: 50, pointerId: 2, button: 0 })); });
+    await act(async () => { point.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 200, clientY: 100, pointerId: 2, button: 0 })); });
+    await act(async () => { point.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: 200, clientY: 100, pointerId: 2, button: 0 })); });
+    expect(marks()).toEqual([{ kind: "point", box: { x: 0.5, y: 0.5, w: 0, h: 0 } }]);
+
+    // ⌘Z puts the moved point back without reaching workspace ⌘Z; the next ⌘Z passes through to the workspace.
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+    expect(marks()).toEqual([{ kind: "point", box: { x: 0.25, y: 0.25, w: 0, h: 0 } }]);
+    expect(heardByWorkspace).toBe(0);
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })); });
+    expect(heardByWorkspace).toBe(1);
+    expect(marks()).toHaveLength(1);
+
+    // Adding beyond 20 marks does not push no-op history entries, so one undo removes the 20th mark immediately.
+    usePictureMarksStore.getState().clear("prj");
+    usePictureMarksStore.getState().start("prj", { time: 7, version: "v1" });
+    for (let i = 0; i < 23; i++) {
+      usePictureMarksStore.getState().add("prj", { kind: "point", box: { x: (i % 20) / 20, y: 0.5, w: 0, h: 0 } });
+    }
+    expect(marks()).toHaveLength(20);
+    usePictureMarksStore.getState().undo("prj");
+    expect(marks()).toHaveLength(19);
+  } finally {
+    window.removeEventListener("keydown", onBubbleKey);
+  }
+});
+
+

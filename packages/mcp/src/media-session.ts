@@ -595,6 +595,7 @@ export function createMediaSession(deps: MediaSessionDeps) {
       return result.segments.flatMap(s => s.words);
     }),
     sound: async (mediaId, range, betweenWords) => (await gapSounds(mediaId, [range], betweenWords ? undefined : 0))[0],
+    unavailable: unavailableOnce,
   };
 
   return {

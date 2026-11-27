@@ -44,10 +44,12 @@ export const TaskKind = z.enum([
   "revise", // revise a rejected/sent-back change
   "skill_from_change", // write a SKILL.md capturing an approved change
   "skill_edit", // revise one skill as the editor described; not part of a project's conversation
+  "style_guide_edit", // design or update one style guide in chat; not part of a project's conversation
   "learning_check", // read one request for a standing rule to offer; started with the request, beside it
   "area_check", // look at one frame of a recording and say what of it viewers may see; started when a save needs it
   "listen_check", // hear one passage of a recording and say what it heard, for a request whose model can't hear; started by its `listen` call
   "hand_off", // do one kind of work for a request with the model the editor chose for it in Task models; started by its `hand_off` call, its edits join that request
+  "batch_summary", // write one short editor-facing title summarizing a grouped batch of edits; silent side check, no tools
   "broll_make", // retired 2026-11-21: a run beside a request that made one piece of B-roll. Every request has the shell and the web now. Kept so saved tasks still read.
   "transcribe", // server-side job, not dispatched to hosts
 ]);
@@ -111,7 +113,7 @@ export const Task = z.object({
       changeId: Id.optional(),
       cutIndex: z.number().int().nonnegative().optional(),
       editIndex: z.number().int().nonnegative().optional(),
-      /** The selected edit's number in the editor's list, which is how they and Scarlet's replies refer to it. */
+      /** No longer set: the editor's lists go by time, not number. Kept so requests saved before still read. */
       editNumber: z.number().int().positive().optional(),
       /**
        * The other edits in the moment the editor's words are about, when they were looking at a moment of the list and
@@ -122,6 +124,8 @@ export const Task = z.object({
       skillName: SkillSlug.optional(),
       /** The skill the editor asked Scarlet to revise. */
       skillId: Id.optional(),
+      /** The style guide the editor asked Scarlet to design or revise. */
+      styleGuideId: Id.optional(),
       /** The learning this skill edit saves, when the editor approved one. */
       learningId: Id.optional(),
       /** The request a learning_check task reads. A rule it offers is that request's. */
@@ -137,6 +141,8 @@ export const Task = z.object({
        * and what the model running that request asked of it.
        */
       handOff: z.object({ typeId: z.string().max(40), name: z.string().max(40), description: z.string().max(300).optional(), brief: z.string().min(1).max(8000) }).optional(),
+      /** A grouped batch of edits to summarize into one short title for the edits rail. */
+      batchSummary: z.object({ key: z.string().min(1).max(120), prompt: z.string().min(1).max(6000) }).optional(),
       time: Seconds.optional(),
       end: Seconds.optional(),
       clipIds: z.array(Id).optional(),
@@ -150,6 +156,8 @@ export const Task = z.object({
       /** The local passage established on the first save, in this immutable version's timeline seconds. */
       dialogueRange: z.object({ version: Id, start: Seconds, end: Seconds }).optional(),
       skillIds: z.array(Id).optional(),
+      /** Style guides explicitly referenced with @name for this request. */
+      styleGuideIds: z.array(Id).optional(),
       /** The thread this task belongs to. Defaults to the task's own id (a new thread). */
       threadId: Id.optional(),
       /**
@@ -170,6 +178,8 @@ export const Task = z.object({
   hostId: Id.nullable().default(null),
   /** The skill a skill_from_change task produced, or a skill_edit task revised. */
   resultSkillId: Id.optional(),
+  /** The style guide a style_guide_edit task updated. */
+  resultStyleGuideId: Id.optional(),
   /**
    * What the pass's latest repeat check measured, on the version it read: evidence kept with the request for the window
    * and the evals. It holds nothing open: a pass that says it is done is done (2026-11-21).
@@ -271,7 +281,7 @@ export type Task = z.infer<typeof Task>;
 
 /** Retrying is safe only if an editing worker failed before saving an output. */
 export function canRetryTask(task: Task): boolean {
-  return task.state === "failed" && task.kind !== "transcribe" && !task.changeIds.length && !task.resultSkillId;
+  return task.state === "failed" && task.kind !== "transcribe" && !task.changeIds.length && !task.resultSkillId && !task.resultStyleGuideId;
 }
 
 /**
@@ -288,7 +298,7 @@ export function taskNeedsTranscripts(task: Task): boolean {
 }
 
 export function taskRecoveryAction(task: Task, hasLinkedChange: boolean): "resume" | "retry" | undefined {
-  if (task.kind === "transcribe" || task.resultSkillId) return;
+  if (task.kind === "transcribe" || task.resultSkillId || task.resultStyleGuideId) return;
   if (task.state === "cancelled" || taskWasStopped(task) || taskNeedsTranscripts(task)) return "resume";
   if (canRetryTask(task) && !hasLinkedChange) return task.resumeRootId ? "resume" : "retry";
   // A run that failed after saving picks up where it left off, keeping what it saved.
@@ -317,9 +327,21 @@ export function skillEditTarget(task: Task, projectId: string) {
   return { skillId: task.context.skillId, hostId: task.hostId };
 }
 
+/** The one style guide a live style-guide-edit task may revise: the one the editor asked about. */
+export function styleGuideEditTarget(task: Task, projectId: string) {
+  if (task.kind !== "style_guide_edit" || task.projectId !== projectId || !task.hostId ||
+      (task.state !== "claimed" && task.state !== "running") || !task.context.styleGuideId) return undefined;
+  return { styleGuideId: task.context.styleGuideId, hostId: task.hostId };
+}
+
 /** A request to revise a skill. It isn't about the project it runs in. */
 export function isSkillEdit(task: Pick<Task, "kind">): boolean {
   return task.kind === "skill_edit";
+}
+
+/** A request to design or revise a style guide. It isn't about the project it runs in. */
+export function isStyleGuideEdit(task: Pick<Task, "kind">): boolean {
+  return task.kind === "style_guide_edit";
 }
 
 /** The check that reads a request for a standing rule. It runs beside the request and edits nothing. */
@@ -351,27 +373,32 @@ export function isHandOff(task: Pick<Task, "kind">): boolean {
   return task.kind === "hand_off";
 }
 
+/** A silent background run that writes one short title summarizing a grouped batch of edits. */
+export function isBatchSummary(task: Pick<Task, "kind">): boolean {
+  return task.kind === "batch_summary";
+}
+
 /**
  * A run that stays out of the project's conversation and queue: one that edits no video (a skill edit, a learning
- * check, an area check or a listen check), or a hand-off, whose edits are the request's that handed it the work.
+ * check, an area check, a listen check, or a batch summary), or a hand-off, whose edits are the request's that handed it the work.
  */
 export function isAsideTask(task: Pick<Task, "kind">): boolean {
-  return isSkillEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBrollMake(task) || isHandOff(task);
+  return isSkillEdit(task) || isStyleGuideEdit(task) || isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBatchSummary(task) || isBrollMake(task) || isHandOff(task);
 }
 
 /**
  * A run beside a request that the request waits on, and that saves nothing to the video of its own: a learning check,
- * an area check, a listen check, or a hand-off, whose edits join the request. A host runs these in slots of their own,
+ * an area check, a listen check, a batch summary, or a hand-off, whose edits join the request. A host runs these in slots of their own,
  * so they never wait behind the requests they serve. A running edit waits on its area checks and its hand-offs, and
  * sharing its slots left it holding one while its checks queued for the rest (20 checks on 2 slots took 12 minutes,
  * 2026-11-20). A skill edit rewrites a skill and isn't one.
  */
 export function isSideCheck(task: Pick<Task, "kind">): boolean {
-  return isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isHandOff(task);
+  return isLearningCheck(task) || isAreaCheck(task) || isListenCheck(task) || isBatchSummary(task) || isHandOff(task);
 }
 
 /** The kinds `isSideCheck` names, for the engine's claim query. */
-export const SIDE_CHECK_KINDS = ["learning_check", "area_check", "listen_check", "hand_off"] as const satisfies readonly TaskKind[];
+export const SIDE_CHECK_KINDS = ["learning_check", "area_check", "listen_check", "batch_summary", "hand_off"] as const satisfies readonly TaskKind[];
 
 /**
  * Side checks a host runs at once per runtime, beside its `maxParallel` requests: twice as many, up to 12. Each looks at
@@ -408,6 +435,7 @@ export type CreateTaskRequest = z.infer<typeof CreateTaskRequest>;
 export const RewordTaskRequest = z.object({
   text: z.string().trim().min(1),
   skillIds: z.array(Id).optional(),
+  styleGuideIds: z.array(Id).optional(),
 });
 export type RewordTaskRequest = z.infer<typeof RewordTaskRequest>;
 

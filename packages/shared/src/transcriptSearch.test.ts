@@ -124,3 +124,12 @@ describe("fuzzy phrase search", () => {
     expect(fuzzySearchTranscript([], "thing")).toEqual([]);
   });
 });
+
+describe("normalizeTranscriptToken with marks", () => {
+  it("keeps the marks that make a word, and reads an accent the same however it is written", () => {
+    expect(normalizeTranscriptToken("ไก่")).not.toBe(normalizeTranscriptToken("ไก"));
+    expect(normalizeTranscriptToken("काम")).not.toBe(normalizeTranscriptToken("कम"));
+    expect(normalizeTranscriptToken("Cafe\u0301!")).toBe(normalizeTranscriptToken("café"));
+    expect(normalizeTranscriptToken("Don’t")).toBe("dont");
+  });
+});

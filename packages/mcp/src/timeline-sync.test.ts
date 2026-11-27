@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MediaAsset, MediaClip, Timeline } from "@scarlet/timeline";
+import { applyOps, buildMulticamTimeline, switchCameraOps, type MediaAsset, type MediaClip, type Timeline } from "@scarlet/timeline";
 import { syncRate } from "./audio-sync.js";
 import { lagBetween, syncSummary, timelineSync } from "./timeline-sync.js";
 
@@ -74,5 +74,56 @@ describe("recordings in line through the edit", () => {
     const ref = cameraLevels.slice(1000, 1150);
     expect(lagBetween(ref, cameraLevels.slice(1000 - 25 - 4, 1150 + 25 - 4), 25)).toBeCloseTo(4 / syncRate);
     expect(lagBetween(Array(150).fill(0.2), cameraLevels.slice(0, 200), 25)).toBeUndefined();
+  });
+
+  it("verifies drift-compensated multi-cam tracks and switched Program tracks through rippleDelete cuts without double-counting", async () => {
+    const driftRate = 1 + 0.0005;
+    const driftSpeed = 1 / driftRate;
+    const base = envelope(19, 300 * syncRate);
+    const cam2Offset = 2;
+    const driftLevels = Array.from({ length: 240 * syncRate }, (_, i) => {
+      const idx = Math.round(i * driftRate + cam2Offset * syncRate);
+      return (base[idx] ?? 0) * 0.6;
+    });
+    const mcAssets = [
+      asset("cam_wide", "video", true),
+      asset("cam_drift", "video", true),
+      asset("mic_main", "audio", true),
+    ];
+    const mcLevels = async (mediaId: string, from: number, to: number) => {
+      const src = mediaId === "cam_drift" ? driftLevels : base;
+      return src.slice(Math.round(from * syncRate), Math.round(to * syncRate));
+    };
+
+    const built = buildMulticamTimeline(
+      "prj_mc",
+      [
+        { mediaId: "cam_wide", duration: 200, offset: 0 },
+        { mediaId: "cam_drift", duration: 200, offset: cam2Offset, speed: driftSpeed },
+      ],
+      [{ mediaId: "mic_main", duration: 200, offset: 0 }],
+    );
+    const switched = applyOps(
+      built.timeline,
+      switchCameraOps(built.timeline, mcAssets, 30, [{ from: 30, to: 110, mediaId: "cam_drift" }]).ops,
+    );
+    const cut = applyOps(switched, [
+      { op: "rippleDelete", start: 60, end: 75 },
+      { op: "rippleDelete", start: 130, end: 145 },
+    ]);
+
+    const pairs = await timelineSync(cut, mcAssets, 30, mcLevels);
+    expect(pairs.length).toBeGreaterThanOrEqual(2);
+    for (const pair of pairs) {
+      expect(pair.outOfLine).toEqual([]);
+      expect(pair.heard.length).toBeGreaterThan(0);
+      expect(pair.heard.every(h => Math.abs(h.late) < 1 / 30)).toBe(true);
+    }
+    // Program + hidden reference track overlap must not double-count `togetherSeconds`.
+    const wideMic = pairs.find(p =>
+      (p.reference === "cam_wide" && p.secondary === "mic_main") ||
+      (p.reference === "mic_main" && p.secondary === "cam_wide"),
+    )!;
+    expect(wideMic.togetherSeconds).toBeLessThanOrEqual(171);
   });
 });

@@ -226,6 +226,22 @@ it("has background work yield while the editor looks at a source's frames, not w
   expect(touch).toHaveBeenCalledTimes(1);
 });
 
+it("shows a still's picture at any time in its clip, whatever its file is called", async () => {
+  const { ctx } = workspace;
+  // A JPEG saved as .jfif is imported under that name: it is a still by what it holds, not by how it is spelled.
+  const source = join(directory, "Chart.jfif");
+  await ffmpeg(["-f", "lavfi", "-i", "color=red:size=160x90", "-frames:v", "1", "-f", "image2", "-c:v", "mjpeg", "-y", source]);
+  const added = await api("POST", `/projects/${project.id}/media/import`, { path: source });
+  expect(added.status).toBe(201);
+  const { media } = await added.json() as { media: { id: string; kind: string; path: string } };
+  expect([media.kind, media.path.endsWith(".jfif")]).toEqual(["image", true]);
+  await settle();
+  for (const t of [0, 1.5, 6]) {
+    const res = await api("GET", `/media/${media.id}/frame?t=${t}&w=160`);
+    expect([t, res.status, res.headers.get("Content-Type")]).toEqual([t, 200, "image/jpeg"]);
+  }
+});
+
 it("says why a file can't be read without the path of Scarlet's library, and logs the path", async () => {
   const { ctx } = workspace;
   const lines: string[] = [];

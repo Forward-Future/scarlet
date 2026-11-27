@@ -20,7 +20,7 @@ Measure speed from the moment an editor asks for a change to the moment they can
 The editor sets the brief, supplies preferences and has the final say on taste. Everything mechanical belongs to the agent or to Scarlet: finding the words, placing an edge in silence, keeping tracks in sync, padding joins, rendering, versioning and exporting. The editor should never do work a tool could do.
 
 - Bring a decision back only when the editor's preference would change the result.
-- Replies say only what needs the editor. Edits are numbered so a reply can point at one.
+- Replies say only what needs the editor. Each edit is named by its time in the video, never by a number.
 - Review shows the changed moment with its before and after, so judging an edit takes seconds.
 - Every edit is versioned and can be undone on its own, so letting the agent act first is cheap.
 
@@ -65,7 +65,7 @@ Reading a skill is a read-only operation. Pinning a guide brings it into the age
 
 The sections below record the plan as written on 2026-10-30 and the decisions made since, in date order. Some of it has been superseded:
 
-- The Review / Watch / Changelog screens became the simple view, with the chat beside the player and the review panel under it (see `AGENTS.md`).
+- The Review / Watch / Changelog screens became the simple view, with the chat beside the player and the edits to review listed above the message box (see `AGENTS.md`).
 - Scarlet does not rewrite voice notes with its own model. The agent receives the editor's words and the raw voice transcript (principle 5).
 - Team features are paused (see Status).
 - The MCP tool names are now `project_get`, `timeline_propose`, `dialogue_apply_cuts` and so on (`packages/mcp/src/server.ts`).

@@ -340,7 +340,20 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
   let labeling: Promise<void> | undefined;
   /** The transcript was saved with its alignment still to come. */
   let early = false;
-  const started = Date.now();
+  let currentTask = task;
+  let started = Date.now();
+  let workStarted = false;
+  const markStarted = () => {
+    if (workStarted) return;
+    workStarted = true;
+    started = Date.now();
+    const startedAt = now();
+    currentTask = { ...currentTask, startedAt };
+    quietProgress(ctx, `transcription start (${task.id})`, () => ctx.db.transaction(() => {
+      const row = ctx.repos.tasks.get(task.id);
+      if (row?.state === "running" && !row.startedAt) saveTask(ctx, { ...row, startedAt });
+    }, "immediate")());
+  };
   const target = `media=${logId(asset.id)} project=${logId(projectId)} task=${logId(task.id)}`;
   try {
     const src = join(ctx.paths.media(projectId), asset.path);
@@ -361,6 +374,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     ctx.speakers.begin(ctx, projectId, asset);
     const recognized = saved.fraction ?? (asset.duration ? Math.min(1, saved.recognition.through / asset.duration) : 0);
     const transcribe = () => {
+      markStarted();
       ctx.log(`[transcribe] recognition_started ${target} provider=${provider.name}`);
       progress.transcribing(recognized);
       return provider.transcribe({ path: src, audio: heardAudio(asset),
@@ -377,6 +391,8 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     if (saved.aligned) ctx.log(`[transcribe] recognition_reused ${target} provider=${provider.name}`);
     else if (provider.name === "whispercpp") ctx.log(`[transcribe] recognition_queued ${target} provider=${provider.name}`);
     const result = saved.aligned ?? (provider.name === "whispercpp" ? await lane.run(work, signal, transcribe, { more: lane === audioLane(ctx) }) : await transcribe());
+    // When recognition was reused from a checkpoint, work starts here for alignment / post-processing.
+    markStarted();
     const configuredLanguage = ctx.settings().transcription.language;
     const language = result.language || (configuredLanguage === "auto" ? undefined : configuredLanguage);
     const alignable = alignsLanguage(language) && result.segments.some(s => s.words.length);
@@ -418,7 +434,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
           ctx.bus.publish({ type: "media.updated", projectId, media: speakerSource });
         }
       }
-      if (!aligning) recordTaskFinished(ctx, saveTask(ctx, { ...task, state: "done", summary: `${segments.length} segments`, finishedAt: savedAt }));
+      if (!aligning) recordTaskFinished(ctx, saveTask(ctx, { ...currentTask, state: "done", summary: `${segments.length} segments`, finishedAt: savedAt }));
       return { transcript, speakerSource };
     }, "immediate")();
     // ASR word times drift by 100–300 ms, and alignment places each word on the recorded audio. On a long recording
@@ -472,7 +488,7 @@ async function runTranscription(ctx: Ctx, projectId: string, asset: MediaAsset, 
     ctx.log(`[transcribe] ${asset.id} ${interrupted.aborted ? "interrupted" : "failed"} after ${humanDuration(Date.now() - started)}: ${message}`);
     const running = ctx.repos.tasks.get(task.id)?.state === "running";
     if (running) {
-      recordTaskFinished(ctx, saveTask(ctx, { ...task, state: "failed", interrupted: interrupted.aborted || undefined,
+      recordTaskFinished(ctx, saveTask(ctx, { ...currentTask, state: "failed", interrupted: interrupted.aborted || undefined,
         error: interrupted.aborted ? "Transcription was interrupted." : message, finishedAt: now() }));
     }
     // An interruption keeps the cursor. Any other ending leaves nobody to finish the

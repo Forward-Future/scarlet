@@ -117,3 +117,28 @@ it("refuses pictures read on another version, and a keep that names none of the 
   await check(task, version, { pictures: { version: "elsewhere", findings: [flash] } }, 409);
   await check(task, version, { keep: [{ id: "picture-off:screen:voz:9", reason: "Kept." }], pictures: { version, findings: [flash] } }, 400);
 });
+
+it("accepts framing picture findings, keeps them by id, and pages pictures past 25 with offset", async () => {
+  const { ctx } = workspace;
+  recording("voz");
+  ctx.repos.settings.update({ transcription: { language: "es" } });
+  const task = pass();
+  const version = assemble(task, [["one", "voz", 0, 15, 0]]);
+  const findings = [
+    { id: "picture-move:screen@867.0", kind: "moveAcrossCut", from: 543.4, to: 544.3, screenChangeAt: 543.4, mediaId: "screen" },
+    { id: "picture-clipped:screen@586.2", kind: "clippedText", from: 356.6, to: 416.2, mediaId: "screen", sides: ["left", "right"], lines: ["Scheduled"] },
+    { id: "picture-cover:screen@2396.0", kind: "underCover", from: 1436.1, to: 1478.7, mediaId: "screen", lines: ["$0.20 / MTok"] },
+    { id: "picture-small-text:screen@2460.2", kind: "smallText", from: 1478.7, to: 1502.7, mediaId: "screen", heightPct: 1.3, heightPx: 28, videoHeight: 2160 },
+    { id: "picture-blank:screen@1276.2", kind: "blankScreen", from: 800.4, to: 802.3, mediaId: "screen", detailPct: 0.4, showing: ["Loading scene.."] },
+    ...Array.from({ length: 25 }, (_, i) => ({ id: `picture-clipped:screen@${100 + i}.0`, kind: "clippedText", from: i, to: i + 1, mediaId: "screen" })),
+  ];
+  const page1 = await check(task, version, { pictures: { version, findings } });
+  expect(page1).toMatchObject({ remaining: 30, nextOffset: 25 });
+  expect(page1.pictures).toHaveLength(25);
+  const page2 = await check(task, version, { offset: 25, pictures: { version, findings } });
+  expect(page2).toMatchObject({ remaining: 30 });
+  expect(page2.nextOffset).toBeUndefined();
+  expect(page2.pictures).toHaveLength(5);
+  const kept = await check(task, version, { keep: [{ id: "picture-move:screen@867.0", reason: "Intentional push-in on same scene." }], pictures: { version, findings } });
+  expect(kept.remaining).toBe(29);
+});

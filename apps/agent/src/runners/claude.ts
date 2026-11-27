@@ -1,9 +1,9 @@
 /** Claude receives task text only on stdin. A side check can call only Scarlet MCP tools; a request has its shell, file and web tools too. */
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
-import { briefInput, COMPACTED, COMPACTING, COMPACTION_ENDED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, prettyToolName, questionText, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
-import { earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { briefInput, COMPACTED, COMPACTING, COMPACTION_ENDED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, prettyToolName, questionText, toolCallTarget, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
+import { earlyResult, exitError, jsonLine, resolveCli, runnerLog, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, claudeUsage, createUsageReporter, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
@@ -193,7 +193,11 @@ export function parseClaudeLine(line: string, st: ClaudeParseState): RunnerEvent
           events.push({ type: "log", text: t });
         }
       } else if (block.type === "tool_use") {
-        const b = block as { id: string; name: string; input: unknown };
+        const made = block as { id: string; name: string; input: unknown };
+        // A run with brief tools (Ollama, LM Studio, OpenRouter) reaches most tools through `tool_call`: the call it
+        // makes is what the run did, named as Claude Code names that tool.
+        const through = toolCallTarget(made.name, made.input);
+        const b = through ? { id: made.id, name: `mcp__scarlet__${through.name}`, input: through.input } : made;
         const pretty = prettyToolName(b.name);
         if (planCall(st.plan, b.name, b.id, b.input)) {
           events.push(...planChange(st.plan));
@@ -350,6 +354,59 @@ function mcpToolTimeout(user: string | undefined): string {
   return Number.isFinite(theirs) && theirs > TOOL_DEADLINE_MS ? String(Math.floor(theirs)) : String(TOOL_DEADLINE_MS);
 }
 
+/** Optional flags Scarlet passes to newer Claude Code CLIs that older versions reject on startup. */
+const CLAUDE_COMPAT_FLAGS: ReadonlyArray<readonly [flag: string, takesValue: boolean]> = [
+  ["--restricted", false],
+  ["--bare", false],
+  ["--disable-slash-commands", false],
+  ["--effort", true],
+];
+
+const UNKNOWN_OPTION_RE = /\b(?:unknown|unrecognized)\s+(?:option|flag)\b|\bunexpected argument\b/i;
+
+/** Remember unsupported optional flags per binary path + size + mtime so updates automatically re-enable them. */
+const unsupportedClaudeFlags = new Map<string, Set<string>>();
+
+async function binaryStamp(file: string): Promise<string> {
+  const info = await stat(file).catch(() => undefined);
+  return `${file}\0${info?.size ?? 0}\0${info?.mtimeMs ?? 0}`;
+}
+
+export function unsupportedClaudeCompatFlag(stderr: string): string | undefined {
+  if (!UNKNOWN_OPTION_RE.test(stderr)) return undefined;
+  const lower = stderr.toLowerCase();
+  for (const [flag] of CLAUDE_COMPAT_FLAGS) {
+    const needle = flag.toLowerCase();
+    let from = 0;
+    while (from < lower.length) {
+      const idx = lower.indexOf(needle, from);
+      if (idx === -1) break;
+      const before = idx > 0 ? lower[idx - 1]! : "";
+      const after = idx + needle.length < lower.length ? lower[idx + needle.length]! : "";
+      if ((!/[a-z0-9-]/.test(before)) && (!/[a-z0-9-]/.test(after))) return flag;
+      from = idx + needle.length;
+    }
+  }
+  return undefined;
+}
+
+export function stripClaudeCompatFlag(args: string[], flag: string): boolean {
+  const takesValue = CLAUDE_COMPAT_FLAGS.find(([name]) => name === flag)?.[1] ?? false;
+  const before = args.length;
+  const kept: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === flag) {
+      if (takesValue) i++;
+      continue;
+    }
+    if (takesValue && arg.startsWith(`${flag}=`)) continue;
+    kept.push(arg);
+  }
+  args.splice(0, args.length, ...kept);
+  return args.length < before;
+}
+
 export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> {
   // Scarlet's own variables stay out of the run, so its shell never holds the token.
   const env = workspaceEnv(opts.env ?? process.env, opts.workspace);
@@ -359,47 +416,78 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
   const cmd = buildClaudeCommand(opts, bin, tmpDir, claudeCanRunBare(env));
   for (const [p, content] of Object.entries(cmd.files)) await writePrivateFile(p, content);
 
-  const st = newClaudeState();
   // Avoid nested-session refusal when the host itself runs under Claude Code.
   delete env.CLAUDECODE;
   delete env.CLAUDE_CODE_ENTRYPOINT;
   env.MCP_TOOL_TIMEOUT = mcpToolTimeout(env.MCP_TOOL_TIMEOUT);
-  const reportUsage = createUsageReporter(opts.onUsage, opts.model);
 
-  const handle = spawnLines(cmd.file, cmd.args, {
-    cwd: opts.cwd,
-    env,
-    stdin: cmd.stdin,
-    signal: opts.signal,
-    timeoutMs: opts.timeoutMs,
-    stallMs: opts.stallMs ?? DEFAULT_STALL_MS,
-    onLine: (line) => {
-      for (const ev of parseClaudeLine(line, st)) {
-        // A resume that finds no session falls back to a fresh run. Keep its error out of the task log.
-        if (opts.resumeSession && !st.started && ev.type === "error") continue;
-        opts.onEvent(ev);
+  const stamp = await binaryStamp(cmd.file);
+  const known = unsupportedClaudeFlags.get(stamp);
+  const runLog = runnerLog(opts, "claude");
+  if (known) {
+    for (const flag of known) stripClaudeCompatFlag(cmd.args, flag);
+    if (known.size) runLog(`runs without ${[...known].join(", ")}: this version refused them before`);
+  }
+
+  for (let attempt = 0; attempt <= CLAUDE_COMPAT_FLAGS.length; attempt++) {
+    const st = newClaudeState();
+    const reportUsage = createUsageReporter(opts.onUsage, opts.model);
+    // Lines that weren't one JSON object: passed on as they are, and counted here for the host's log.
+    let notJson = 0;
+    const handle = spawnLines(cmd.file, cmd.args, {
+      cwd: opts.cwd,
+      env,
+      stdin: cmd.stdin,
+      signal: opts.signal,
+      timeoutMs: opts.timeoutMs,
+      stallMs: opts.stallMs ?? DEFAULT_STALL_MS,
+      log: opts.log,
+      task: opts.task,
+      onLine: (line) => {
+        const events = parseClaudeLine(line, st);
+        if (events.length === 1 && events[0]!.type === "log" && events[0]!.text === line) notJson++;
+        for (const ev of events) {
+          // A resume that finds no session falls back to a fresh run. Keep its error out of the task log.
+          if (opts.resumeSession && !st.started && ev.type === "error") continue;
+          opts.onEvent(ev);
+        }
+        // The run's tokens so far, each time they grow, as the other runners and the desktop host report them.
+        reportUsage(claudeRunUsage(st, opts.model));
+        if (st.shouldStop) {
+          st.shouldStop = false;
+          // The question is posted, or there are no tools; stop the agent instead of letting it ramble.
+          setTimeout(() => handle.kill(), 250).unref();
+        }
+      },
+    });
+    const outcome = await handle.done;
+    if (notJson) runLog(`wrote ${notJson} output line${notJson === 1 ? "" : "s"} that weren't JSON`);
+    const session = { sessionId: st.sessionId ?? (st.started ? opts.resumeSession : undefined), usage: claudeRunUsage(st, opts.model) };
+    const early = earlyResult(st, outcome, session);
+    if (early) return early;
+    const mcpFailed = st.mcpStatus === "failed";
+    const ok = !mcpFailed && !st.resultIsError && (outcome.code === 0 || st.result !== undefined);
+    if (!ok && !st.started && !mcpFailed && !st.resultIsError) {
+      const flag = unsupportedClaudeCompatFlag(outcome.stderr);
+      if (flag && stripClaudeCompatFlag(cmd.args, flag)) {
+        runLog(`refused ${flag}; trying again without it`);
+        let cached = unsupportedClaudeFlags.get(stamp);
+        if (!cached) {
+          cached = new Set();
+          unsupportedClaudeFlags.set(stamp, cached);
+        }
+        cached.add(flag);
+        continue;
       }
-      // The run's tokens so far, each time they grow, as the other runners and the desktop host report them.
-      reportUsage(claudeRunUsage(st, opts.model));
-      if (st.shouldStop) {
-        st.shouldStop = false;
-        // The question is posted, or there are no tools; stop the agent instead of letting it ramble.
-        setTimeout(() => handle.kill(), 250).unref();
-      }
-    },
-  });
-  const outcome = await handle.done;
-  const session = { sessionId: st.sessionId ?? (st.started ? opts.resumeSession : undefined), usage: claudeRunUsage(st, opts.model) };
-  const early = earlyResult(st, outcome, session);
-  if (early) return early;
-  const mcpFailed = st.mcpStatus === "failed";
-  const ok = !mcpFailed && !st.resultIsError && (outcome.code === 0 || st.result !== undefined);
-  return {
-    ok,
-    summary: st.result || tailSummary(st.texts),
-    error: ok ? undefined : mcpFailed ? MCP_FAILED : st.resultIsError ? st.result : exitError("claude", outcome),
-    exitCode: outcome.code,
-    resumeFailed: !ok && !!opts.resumeSession && !st.started || undefined,
-    ...session,
-  };
+    }
+    return {
+      ok,
+      summary: st.result || tailSummary(st.texts),
+      error: ok ? undefined : mcpFailed ? MCP_FAILED : st.resultIsError ? st.result : exitError("claude", outcome),
+      exitCode: outcome.code,
+      resumeFailed: !ok && !!opts.resumeSession && !st.started || undefined,
+      ...session,
+    };
+  }
+  return { ok: false, summary: "", error: "claude exited before starting", exitCode: null };
 }

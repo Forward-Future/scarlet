@@ -1,6 +1,6 @@
 import { z } from "zod/v3";
 import { startDecisionCheck } from "../services/learnings.js";
-import { checkoutVersion, recordHistoryEdit, rejectEdits } from "../services/cutHistory.js";
+import { adjustAppliedCut, adjustAppliedEdit, checkoutVersion, recordHistoryEdit, rejectEdits } from "../services/cutHistory.js";
 import { Hono } from "hono";
 import { CaptionExportError, captionExportHttpStatus, captionExportRange, clipById, describeDiff, diffTimelines, timelineDuration, toCaptions, toOtio } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
@@ -83,6 +83,45 @@ export function timelineRoutes(ctx: Ctx) {
     // The last Reject of what the request left the editor has its decisions read for a rule.
     startDecisionCheck(ctx, rejected.project.id, body.threadId);
     return c.json(rejected);
+  });
+
+  r.post("/projects/:id/adjusted-cut", async c => {
+    const range = z.object({ start: z.number().nonnegative(), end: z.number().nonnegative() }).refine(r => r.end >= r.start);
+    const body = await jsonBody(c, z.object({
+      expectedHead: z.string(),
+      branch: z.string(),
+      threadId: z.string(),
+      cut: z.object({
+        changeId: z.string(),
+        spot: z.number().int().nonnegative(),
+        label: z.string().trim().min(1),
+        range,
+        at: z.number().nonnegative(),
+        before: z.object({ version: z.string(), removed: range.refine(r => r.end > r.start) }),
+      }),
+      removed: range,
+    }));
+    const adjusted = adjustAppliedCut(ctx, c.var.user, c.req.param("id"), body.threadId, body.cut, body.removed, body.expectedHead, body.branch);
+    return c.json(adjusted);
+  });
+
+  r.post("/projects/:id/adjusted-edit", async c => {
+    const range = z.object({ start: z.number().nonnegative(), end: z.number().nonnegative() }).refine(r => r.end >= r.start);
+    const body = await jsonBody(c, z.object({
+      expectedHead: z.string(),
+      branch: z.string(),
+      threadId: z.string(),
+      edit: z.object({
+        changeId: z.string(),
+        spot: z.number().int().nonnegative(),
+        label: z.string().trim().min(1),
+        range: range.refine(r => r.end > r.start),
+        kind: z.string().optional(),
+      }),
+      nextRange: range,
+    }));
+    const adjusted = adjustAppliedEdit(ctx, c.var.user, c.req.param("id"), body.threadId, body.edit, body.nextRange, body.expectedHead, body.branch);
+    return c.json(adjusted);
   });
 
   r.get("/projects/:id/versions/:a/diff/:b", (c) => {

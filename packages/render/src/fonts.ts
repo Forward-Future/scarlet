@@ -37,6 +37,24 @@ const FALLBACKS = [
   "arial unicode.ttf",
 ];
 
+/** Fonts with Chinese, Japanese, Korean and Thai glyphs, for a caption in those scripts when its family isn't here. */
+const WIDE_FALLBACKS = [
+  "arial unicode.ttf",
+  "pingfang.ttc",
+  "hiragino sans gb.ttc",
+  "applesdgothicneo.ttc",
+  "msyh.ttc",
+  "msyh.ttf",
+  "yugothm.ttc",
+  "meiryo.ttc",
+  "malgun.ttf",
+  "notosanscjk-regular.ttc",
+  "notosanscjksc-regular.otf",
+  "wqy-microhei.ttc",
+  "droidsansfallbackfull.ttf",
+  "tahoma.ttf",
+];
+
 function defaultFontDirs(): string[] {
   const home = os.homedir();
   const dirs: string[] = [];
@@ -59,10 +77,12 @@ function defaultFontDirs(): string[] {
 
 const indexCache = new Map<string, Map<string, string>>();
 
-/** Lower-cased basename → full path for every font file under `dir` (3 levels deep). */
-function indexDir(dir: string): Map<string, string> {
-  const cached = indexCache.get(dir);
-  if (cached) return cached;
+/** Lower-cased basename → full path for every font file under `dir` (4 levels deep, covering style guide asset dirs). */
+function indexDir(dir: string, cache = true): Map<string, string> {
+  if (cache) {
+    const cached = indexCache.get(dir);
+    if (cached) return cached;
+  }
   const index = new Map<string, string>();
   const walk = (d: string, depth: number) => {
     let entries: fs.Dirent[];
@@ -74,7 +94,7 @@ function indexDir(dir: string): Map<string, string> {
     for (const e of entries) {
       const full = path.join(d, e.name);
       if (e.isDirectory()) {
-        if (depth < 3) walk(full, depth + 1);
+        if (depth < 4) walk(full, depth + 1);
       } else if (FONT_EXTS.has(path.extname(e.name).toLowerCase())) {
         const key = e.name.toLowerCase();
         if (!index.has(key)) index.set(key, full);
@@ -82,13 +102,13 @@ function indexDir(dir: string): Map<string, string> {
     }
   };
   walk(dir, 0);
-  indexCache.set(dir, index);
+  if (cache) indexCache.set(dir, index);
   return index;
 }
 
-function lookup(dirs: string[], names: string[]): string | undefined {
-  for (const dir of dirs) {
-    const index = indexDir(dir);
+function lookup(dirs: Array<{ dir: string; cache: boolean }>, names: string[]): string | undefined {
+  for (const { dir, cache } of dirs) {
+    const index = indexDir(dir, cache);
     for (const n of names) {
       const hit = index.get(n);
       if (hit) {
@@ -100,14 +120,55 @@ function lookup(dirs: string[], names: string[]): string | undefined {
   return undefined;
 }
 
-/** Candidate file names for a family, e.g. "Inter" → inter.ttf, inter-regular.ttf, ... */
-function candidates(family: string): string[] {
-  const base = family.trim().toLowerCase();
+export type CaptionFontWeight = "normal" | "medium" | "semibold" | "bold" | "black";
+
+const WEIGHT_SUFFIXES: Record<CaptionFontWeight, readonly string[]> = {
+  normal: ["", "-regular", "regular", "_regular", "-medium", "-book"],
+  medium: ["-medium", "medium", "_medium", "-med", "", "-regular", "regular"],
+  semibold: ["-semibold", "semibold", "_semibold", "-demibold", "demibold", "-bold", "bold", ""],
+  bold: ["-bold", "bold", "_bold", "bd", "b", "-semibold", "-heavy", "-medium", ""],
+  black: ["-black", "black", "_black", "-heavy", "heavy", "-extrabold", "extrabold", "-bold", "bold", ""],
+};
+
+const TRAILING_WEIGHT = /\s+(black|heavy|extrabold|semibold|demibold|bold|medium|regular|normal)$/i;
+
+function inferredWeight(family: string, weight?: CaptionFontWeight): { stem: string; weight?: CaptionFontWeight } {
+  const trimmed = family.trim();
+  if (weight) return { stem: trimmed, weight };
+  const match = TRAILING_WEIGHT.exec(trimmed);
+  if (!match) return { stem: trimmed };
+  const word = match[1]!.toLowerCase();
+  const mapped: CaptionFontWeight = word === "black" || word === "heavy" || word === "extrabold"
+    ? "black"
+    : word === "semibold" || word === "demibold"
+      ? "semibold"
+      : word === "bold"
+        ? "bold"
+        : word === "medium"
+          ? "medium"
+          : "normal";
+  return { stem: trimmed.slice(0, match.index).trim(), weight: mapped };
+}
+
+/** Candidate file names for a family and optional weight, e.g. ("Inter", "bold") → inter-bold.ttf, interbold.ttf, ... */
+function candidates(family: string, weight?: CaptionFontWeight): string[] {
+  const raw = family.trim().toLowerCase();
+  const { stem, weight: effective } = inferredWeight(family, weight);
+  const base = stem.toLowerCase();
   const compact = base.replace(/\s+/g, "");
+  const hyphen = base.replace(/\s+/g, "-");
+  const suffixes = effective ? WEIGHT_SUFFIXES[effective] : WEIGHT_SUFFIXES.normal;
   const out: string[] = [];
-  for (const stem of new Set([base, compact])) {
-    for (const suffix of ["", "-regular", "regular", "_regular", "-medium", "-book"]) {
-      for (const ext of [".ttf", ".otf", ".ttc"]) out.push(`${stem}${suffix}${ext}`);
+  const add = (name: string) => { if (!out.includes(name)) out.push(name); };
+  // If the caller already named a hyphenated/compound file stem (e.g. "Montserrat-Bold"), try it directly first.
+  if (raw !== base) {
+    for (const s of new Set([raw, raw.replace(/\s+/g, "-"), raw.replace(/\s+/g, "")])) {
+      for (const ext of [".ttf", ".otf", ".ttc"]) add(`${s}${ext}`);
+    }
+  }
+  for (const s of new Set([base, compact, hyphen])) {
+    for (const suffix of suffixes) {
+      for (const ext of [".ttf", ".otf", ".ttc"]) add(`${s}${suffix}${ext}`);
     }
   }
   return out;
@@ -118,19 +179,31 @@ function candidates(family: string): string[] {
  * could be found, in which case callers should fall back to `font=` and hope
  * fontconfig is present.
  */
-export function resolveFontFile(family: string, opts: FontOptions = {}): ResolvedFont | undefined {
+export function resolveFontFile(
+  family: string,
+  opts: FontOptions = {},
+  wideScript = false,
+  weight?: CaptionFontWeight,
+): ResolvedFont | undefined {
   if (opts.fontFile) return { file: opts.fontFile, exact: true };
-  const dirs = [...(opts.fontDirs ?? []), ...defaultFontDirs()].map((dir) => path.resolve(dir));
+  // Custom directories (style guide assets, project attachments) can gain new fonts at runtime, so scan them fresh.
+  const customDirs = (opts.fontDirs ?? []).map(dir => ({ dir: path.resolve(dir), cache: false }));
+  const osDirs = defaultFontDirs().map(dir => ({ dir: path.resolve(dir), cache: true }));
+  const dirs = [...customDirs, ...osDirs];
   // Timeline font paths may only select files in configured font directories.
   if (FONT_EXTS.has(path.extname(family).toLowerCase())) {
-    for (const dir of dirs) {
+    for (const { dir } of dirs) {
       const file = fileInDirectory(dir, family);
       if (file) return { file, exact: true };
     }
+    // Allow matching a bare filename (e.g. "Montserrat-Bold.ttf") inside configured font dirs.
+    const byName = lookup(dirs, [path.basename(family).toLowerCase()]);
+    if (byName) return { file: byName, exact: true };
   }
-  const exact = lookup(dirs, candidates(family));
+  const exact = lookup(dirs, candidates(family, weight));
   if (exact) return { file: exact, exact: true };
-  const fallback = lookup(dirs, FALLBACKS);
+  // A Latin fallback has no CJK or Thai glyphs, and drawtext can't borrow them from another font: they'd be boxes.
+  const fallback = (wideScript && lookup(dirs, WIDE_FALLBACKS)) || lookup(dirs, FALLBACKS);
   return fallback ? { file: fallback, exact: false } : undefined;
 }
 

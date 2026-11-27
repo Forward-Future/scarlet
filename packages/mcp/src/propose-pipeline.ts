@@ -138,7 +138,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
     showAreaFindings(before, laid, project.media, project.settings, id => { ids.add(id); return undefined; });
     if (!ids.size) return;
     const known = new Map<string, RecordingAreas>();
-    await Promise.all([...ids].map(async id => { const areas = await recordingAreas(id).catch(() => undefined); if (areas) known.set(id, areas); }));
+    await Promise.all([...ids].map(async id => { const areas = await recordingAreas(id).catch(withoutOnce(`failed to read the areas viewers may see in ${id}`, undefined)); if (areas) known.set(id, areas); }));
     let found = showAreaFindings(before, laid, project.media, project.settings, id => known.get(id));
     // Footage with no area on record is looked at now, a frame for each stretch, by short runs beside this one. An
     // area can end inside a stretch where the window moves, so what is still unset is asked about again, within the
@@ -157,7 +157,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
       const wait = Math.round((deadline - Date.now()) / 1000);
       const answers = await Promise.all([...bySource].map(async ([id, seconds]) => {
         const state = await client.post<RecordingAreas & { asked: number; answered: number }>(
-          `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(id)}/show-area/ask?wait=${wait}`, { seconds, taskId }).catch(() => undefined);
+          `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(id)}/show-area/ask?wait=${wait}`, { seconds, taskId }).catch(withoutOnce(`failed to ask where the areas of ${id} hold`, undefined));
         if (state) known.set(id, state);
         return state?.answered ?? 0;
       }));
@@ -172,9 +172,9 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
    * What an edit's framing shows, stretch by stretch, with the passages read aloud there that it leaves out or covers.
    * Text not read yet doesn't hold the save up: the report says how far it has got.
    */
-  async function framedOn(before: Timeline | null, made: Timeline) {
+  async function framedOn(before: Timeline | null, made: Timeline, smallTextUnder?: number) {
     const { project } = await getProject();
-    const framed = framingReport(before, made, project.media, project.settings);
+    const framed = framingReport(before, made, project.media, project.settings, [], [], undefined, smallTextUnder);
     if (!framed.length) return { framed, covered: [], readOff: [] as Array<readonly [number, number]>, unread: [] as string[], words: [] };
     const range = { start: Math.min(...framed.map(f => f.from)), end: Math.max(...framed.map(f => f.to)) };
     const besideReach = besideReachOf(made, framed);
@@ -186,7 +186,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
         .catch(error => { noteUnmeasured("what the screen shows beside the framed stretches", error); return undefined; }) : undefined,
     ]);
     const evidence = !!found?.readings.length || !!moving?.spans.length || !!beside;
-    const report = evidence ? framingReport(before, made, project.media, project.settings, found?.readings, moving?.spans, beside?.evidence) : framed;
+    const report = evidence ? framingReport(before, made, project.media, project.settings, found?.readings, moving?.spans, beside?.evidence, smallTextUnder) : framed;
     // The holds where a picture over the recording, such as a camera inset, hides its text or anything else on it, in timeline seconds.
     const covered = report.flatMap(f => f.holds.filter(h => h.underCover || h.coverHides).map(h => [h.from, h.to]));
     // The passages read aloud off a recording beside a stretch while it is off picture, once each: the time between two
@@ -288,7 +288,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
         }
         // An insert's edge that runs under a second past a cut in its recording goes onto that cut, reported as metRecordingCut.
         const laid = closed.ops.length ? applyOps(asked, closed.ops) : asked;
-        early = await cutsRead(laid).catch(() => undefined);
+        early = await cutsRead(laid).catch(withoutOnce("failed to read where the recordings cut before placing the edit", undefined));
         if (early?.read?.cuts.size) {
           const onCuts = edgesOntoRecordingCuts(before, laid, project.media, project.settings, early.read.cuts, stable, early.fresh);
           if (onCuts.ops.length) {
@@ -315,7 +315,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
     const action = change.state === "approved" ? "Applied" : "Proposed";
     const lines = diffDescription ?? (before && timeline ? describeDiff(diffTimelines(before, timeline), undefined, clipById) : []);
     const unframed = made && !notApplied ? unframedBeside(before, made) : [];
-    const bare = made && !notApplied ? await getProject().then(({ project }) => backgroundShows(before, made, project.media, project.settings)).catch(() => []) : [];
+    const bare = made && !notApplied ? await getProject().then(({ project }) => backgroundShows(before, made, project.media, project.settings)).catch(withoutOnce("failed to check what this edit shows with nothing behind it", [])) : [];
     const briefNow = made && !notApplied ? await briefOn(before, made, early).catch(error => { noteUnmeasured("the pictures this edit shows briefly", error); return undefined; }) : undefined;
     const brief = briefNow?.brief ?? [];
     const framedNow = made && !notApplied ? await framedOn(before, made).catch(error => { noteUnmeasured("the framing this edit made", error); return undefined; }) : undefined;

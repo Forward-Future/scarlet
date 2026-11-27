@@ -140,7 +140,7 @@ impl RunningTask {
 /// A run beside a request that the request waits on: a short check, or a hand-off whose edits join the request
 /// (`isSideCheck` in packages/shared/src/tasks.ts).
 fn is_side_check(kind: &str) -> bool {
-    matches!(kind, "learning_check" | "area_check" | "listen_check" | "hand_off")
+    matches!(kind, "learning_check" | "area_check" | "listen_check" | "batch_summary" | "hand_off")
 }
 
 /// Side checks run at once per runtime beside `max_parallel` requests (`sideCheckSlots` in packages/shared/src/tasks.ts).
@@ -500,7 +500,7 @@ impl HostRuntime {
             let on_quota: runner::QuotaSink = Arc::new(move |quota| {
                 live_host.apply_live_quota(&live_agent, quota);
             });
-            me.run_task_attempt(task, cancel, Some(run.clone()), Some(on_quota)).await;
+            let model_unavailable = me.run_task_attempt(task, cancel, Some(run.clone()), Some(on_quota)).await;
             // An immediate editor answer can launch the next claim before this run has returned.
             {
                 let mut running = me.running.lock().unwrap();
@@ -511,6 +511,16 @@ impl HostRuntime {
             me.subscriptions_changed.notify_one();
             me.wake.notify_one();
             me.emit_status();
+            // If the selected model was rejected as unavailable, refresh the model catalog so the picker stays current.
+            if model_unavailable && !me.cancel.is_cancelled() {
+                let bg = me.clone();
+                tauri::async_runtime::spawn(async move {
+                    let env = bg.agent_env();
+                    let _ = bg.detect_agents(&env).await;
+                    bg.heartbeat().await;
+                    bg.emit_status();
+                });
+            }
             // A side check is small and many finish together: the request they belong to reads the quota when it ends.
             if !me.cancel.is_cancelled() && !run.side_check {
                 let bg = me.clone();
@@ -570,6 +580,7 @@ impl HostRuntime {
     /// Cancel running tasks (they complete as cancelled) and stop the loops.
     async fn stop(&self) {
         log::info!("agent host stopping ({} running)", self.running.lock().unwrap().len());
+        let started = std::time::Instant::now();
         self.cancel.cancel();
         self.wake.notify_one();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -581,7 +592,10 @@ impl HostRuntime {
             log::warn!("still running 15 s after the stop: {}; ending their CLIs", left.join(", "));
         }
         // Nothing an agent started may outlive the app.
-        let _ = tokio::task::spawn_blocking(spawn::kill_stopped_now).await;
+        if let Err(e) = tokio::task::spawn_blocking(spawn::kill_stopped_now).await {
+            log::warn!("agent host: ending the stopped CLIs failed: {e}");
+        }
         self.connected.store(false, Ordering::SeqCst);
+        log::info!("agent host stopped in {}", crate::util::human_duration(started.elapsed()));
     }
 }

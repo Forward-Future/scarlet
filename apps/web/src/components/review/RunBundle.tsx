@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { callNumbers, taskNeedsTranscripts, type SpeakerProgress, type Task, type TaskEvent } from "@scarlet/shared";
 import type { Change } from "@scarlet/timeline";
 import { useProjectStore } from "../../stores/project";
+import { stagedCuts } from "../../lib/threads";
 import { useUiStore } from "../../stores/ui";
 import { blurOnPointerClick } from "../../lib/hotkeys";
 import { runProgress } from "../../lib/runProgress";
@@ -10,9 +11,9 @@ import { runningTranscription, transcriptionProgressLabel, transcriptsProgress }
 import { isWorkingTask, PAUSED_HINT, runAim, runIsActive, runItems, runLines, runSummary, type RunItem, type RunLine } from "../../lib/taskRun";
 import { toolName, TRANSCRIPT_WAIT } from "../../lib/taskActivity";
 import { useClippedExpand } from "../../lib/uiHooks";
-import { usePublishWorkingLine } from "../../lib/workingLines";
 import { Linked } from "../ui/Linked";
 import { Icon } from "../ui/primitives";
+import { ReportLink } from "../shell/ReportLink";
 import { RequestMetrics, Tokens } from "./RequestMetrics";
 
 export { RequestMetrics };
@@ -61,8 +62,8 @@ interface RunBundleProps {
   /** The history of the attempt Scarlet opened the request in, once the request was picked up again under this one. */
   opening?: readonly TaskEvent[];
   changes: readonly Change[];
-  /** The number a call of the waiting pass goes by in the window, when the window has numbered it. */
-  callNumber?(changeId: string, cutIndex: number): number | undefined;
+  /** Where a call of the waiting pass is in the video, as the window says it. */
+  callTime?(changeId: string, cutIndex: number): number | undefined;
   finalChange?: Change;
   /** Scarlet's words for the editor: a reply, a question, or why it stopped. */
   say?: ReactNode;
@@ -119,7 +120,7 @@ function useRunUsage(taskId: string, shown = true) {
   return useProjectStore(s => show ? s.current?.taskUsage?.[taskId] : undefined);
 }
 
-function WorkingRun({ task, events: all, opening, changes, callNumber, say, result, onStop, actions, under }: RunBundleProps) {
+function WorkingRun({ task, events: all, opening, changes, callTime, say, result, onStop, actions, under }: RunBundleProps) {
   // A pass sent back to check the finished cut for repeats runs again as the same request, in a new session. Its line
   // and its first sentence are that session's: what it said an hour ago on the first run isn't what it is doing now.
   const events = useMemo(() => sinceRerun(task, all), [task, all]);
@@ -130,12 +131,13 @@ function WorkingRun({ task, events: all, opening, changes, callNumber, say, resu
   const progress = useMemo(() => runProgress(events), [events]);
   const voices = useProjectStore(s => s.current?.speakerProgress);
   const voice = progress.read && !progress.read.seconds ? progress.recordings?.map(id => voices?.[id]).find(Boolean) : undefined;
-  // A call goes by the number the window shows for it, which it keeps; one the window hasn't numbered, by its place among the asks.
-  const numberOf = useRef(callNumber);
-  numberOf.current = callNumber;
+  // A call goes by its time, as the window shows it; one the window hasn't placed, by where the pass staged it.
+  const timeOf = useRef(callTime);
+  timeOf.current = callTime;
   const doing = useMemo(() => runNow(events, aim?.note, (changeId, index) => {
     const pass = changes.find(c => c.id === changeId);
-    return numberOf.current?.(String(changeId), Number(index)) ?? (pass && callNumbers(pass, 0, false).get(index));
+    return timeOf.current?.(String(changeId), Number(index))
+      ?? (pass && callNumbers(pass, 0, false).has(index) ? stagedCuts(pass)[index]?.start : undefined);
   }), [events, aim, changes]);
   // While the run waits on its recordings' transcripts, the line says how far along they are: the one figure there.
   const tasks = useProjectStore(s => s.current?.tasks);
@@ -160,8 +162,6 @@ function WorkingRun({ task, events: all, opening, changes, callNumber, say, resu
   const words = transcripts ? `Transcribing the recordings · ${transcripts}`
     : pickingUp ? PICKING_UP
     : doing ?? (voice ? voicePhase[voice.phase] : task.state === "claimed" ? STARTING : WORKING);
-  // The timeline's status says the same words, so the editor can tell what Scarlet is on without the chat in view.
-  usePublishWorkingLine(task.id, words);
   return <div className="req" data-state="working" aria-label="Scarlet’s work" aria-busy>
     {aim && !under && <div className="req-said req-lead"><Said className="req-say" text={aim.text} /></div>}
     <div className="req-row req-now">
@@ -229,6 +229,9 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
   const aside = usage?.totalTokens ? <Tokens usage={usage} /> : undefined;
   const rows = result?.(aside);
   const action = !paused && recovery && <button type="button" className="simple-link req-recover" onClick={recovery.run}>{recovery.label}</button>;
+  // A run that couldn't finish can be reported from here, with what went wrong.
+  const report = failed && <ReportLink className="simple-link req-recover" about={`Couldn’t finish${task.error ? `: ${task.error}` : ""}`} />;
+  const controls = action || report ? <>{action}{report}</> : undefined;
   const made = summary ?? (state ? stoppedSummary(task, finalChange) : runSummary(task, finalChange));
   // Scarlet's note on one cut reads on up to two lines; a count stays on one.
   const madeClass = `req-summary${state ? "" : " run-summary"}${summary ? " is-note" : ""}`;
@@ -247,7 +250,7 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
   return <div className="req" data-state={paused ? "paused" : stopped ? "stopped" : failed ? "failed" : "done"}>
     {state && !banded && <div className="req-row req-status">
       <span className={`req-state run-summary${failed ? " is-bad" : ""}`}>{state}</span>
-      <span className="req-right">{action}</span>
+      <span className="req-right">{controls}</span>
     </div>}
     {paused && <TranscriptWait task={task} onResume={onResume} onWait={onWaitForTranscripts} aside={waits && usage?.totalTokens ? aside : undefined} />}
     {say}
@@ -257,11 +260,11 @@ function FinishedRun({ task, finalChange, say, told, result, recovery, summary, 
           title={summary ? `${made}\nShow on the timeline` : "Show on the timeline"} onClick={e => { blurOnPointerClick(e); opens(); }}><span>{made}</span></button>
         : <span className={madeClass} title={summary}><span>{made}</span></span>}
       {/* What a stopped run saved is one line, and its one action follows on it. */}
-      {actsOnLine && action}
+      {actsOnLine && controls}
       <span className="req-right">{aside}</span>
     </div>)}
     {/* Under a heading that says "Stopped", the one action follows what the run left. */}
-    {state && banded && action && !actsOnLine && <div className="req-row req-act">{action}</div>}
+    {state && banded && controls && !actsOnLine && <div className="req-row req-act">{controls}</div>}
   </div>;
 }
 

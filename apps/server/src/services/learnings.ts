@@ -7,8 +7,10 @@ import { now } from "../db.js";
 import { clip } from "../logText.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { actorFor, logActivity, quote } from "./activity.js";
+import { flaggedCheckOf } from "./changes/editReviews.js";
 import { latestSkillEdit } from "./skills.js";
 import { createTask, editsDialogue, FINISHED_TASK } from "./tasks.js";
+import { taskFailureReason } from "../telemetry/failureReason.js";
 
 /**
  * Learnings: standing rules Scarlet picked up from the editor's requests and decisions. Every request is read for one
@@ -39,8 +41,42 @@ function wordsOf(task: Task): string {
 
 const enabledSkills = (ctx: Ctx) => ctx.repos.skills.select("1=1", [], "name ASC").filter(s => s.enabled);
 
-/** A message that only names a skill to run ("/dialogue-pass") says nothing about how the editor wants it done. */
+/** A message that only names a skill to run ("/name") says nothing about how the editor wants it done. */
 const ONLY_A_SKILL = /^\/[\w-]+$/;
+
+/** Persistent assistant/account failure categories that make a background learning check doomed to repeat the error. */
+const PERSISTENT_ASSISTANT_FAILURES: ReadonlySet<string> = new Set([
+  "agent_not_installed",
+  "agent_not_signed_in",
+  "agent_incompatible",
+  "model_unavailable",
+  "rate_limited",
+]);
+const RECENT_ASSISTANT_FAILURE_MS = 15 * 60 * 1000;
+
+/**
+ * Skip spawning a background learning check when every registered host reports the assistant unavailable
+ * or when its latest finished task recently failed with a setup, model, or rate-limit error.
+ */
+function assistantUnavailableForLearning(ctx: Ctx, agent: string, model?: string): boolean {
+  const hosts = ctx.repos.hosts.select();
+  if (hosts.length > 0) {
+    const ready = hosts.some(h => h.agents.some(a => a.id === agent && a.installed && a.loggedIn !== false));
+    if (!ready) return true;
+  }
+  const latest = ctx.repos.tasks.select(
+    "agent = ? AND state IN ('done', 'failed') AND kind != 'transcribe'",
+    [agent],
+    "json_extract(json, '$.finishedAt') DESC, rowid DESC LIMIT 1",
+  )[0];
+  if (!latest || latest.state !== "failed") return false;
+  const finishedAt = Date.parse(latest.finishedAt ?? "");
+  if (!Number.isFinite(finishedAt) || Date.now() - finishedAt > RECENT_ASSISTANT_FAILURE_MS) return false;
+  const reason = taskFailureReason(latest);
+  if (!PERSISTENT_ASSISTANT_FAILURES.has(reason)) return false;
+  if (reason === "model_unavailable" && model && latest.model && latest.model !== model) return false;
+  return true;
+}
 
 /**
  * Read what the editor just asked for a standing rule. The check is a run of its own with the request's agent and
@@ -52,6 +88,7 @@ export function startLearningCheck(ctx: Ctx, task: Task): Task | undefined {
   // The check is Scarlet's own. Whatever goes wrong starting it, the request it reads is already saved and runs.
   try {
     if (ONLY_A_SKILL.test(wordsOf(task)) || !enabledSkills(ctx).length) return;
+    if (assistantUnavailableForLearning(ctx, task.agent, task.model)) return;
     return createTask(ctx, {
       projectId: task.projectId, kind: "learning_check", agent: task.agent, model: task.model, fast: task.fast,
       instruction: wordsOf(task), context: { checksTaskId: task.id }, createdBy: task.createdBy,
@@ -68,6 +105,8 @@ const RECENT_DECISIONS = 40;
 const CITABLE_DECISIONS = 200;
 /** How many changes of each kind are read for decisions, newest first. */
 const DECISION_CHANGES = 40;
+/** How many unreviewed rules a single request can put in front of the editor at once. */
+const MAX_SUGGESTED_PER_REQUEST = 2;
 
 /** A decision as a check reads it: what it was about, what Scarlet measured, which skills made it and when it was made. */
 interface Decided extends LearningDecision { at: string; details: string[]; changeId?: string }
@@ -98,9 +137,12 @@ function recentDecisions(ctx: Ctx, limit: number): Decided[] {
   for (const change of recent("json_extract(json, '$.kept') IS NOT NULL")) {
     for (const k of change.kept ?? []) {
       const edit = edits(change)?.[k.spot];
+      const check = flaggedCheckOf(change, k.spot, k.check);
+      // Keeping an unflagged safe edit only clears the review list; it isn't a decision on a doubt Scarlet raised.
+      if (!check && !k.recheck) continue;
       out.push({ id: `kept:${change.id}:${k.spot}`, decision: "kept", label: k.label ?? edit?.label ?? change.description, projectId: change.projectId,
         threadId: k.threadId, ref: { changeId: change.id, spot: k.spot }, time: k.place?.range.start ?? edit?.range.start, at: k.at, changeId: change.id,
-        details: editDetails({ reason: edit?.reason, check: k.check ?? edit?.check }) });
+        details: editDetails({ reason: edit?.reason, check }) });
     }
   }
   for (const rejection of recent("json_extract(json, '$.rejects') = 1")) {
@@ -288,6 +330,9 @@ export function requireApprovedLearningEdit(skill: Skill, draft: TaskSkillDraft,
     "Save the rule in the editor’s approved wording, keeping the rest of the skill except for approved quotations. If another passage must change, quote it in your closing message for the editor to approve. If the rule needs different wording, ask the editor to reword it in Learnings.");
 }
 
+/** A rule normalized for duplicate checks: ignores case, quote styles, whitespace and trailing punctuation. */
+const ruleKey = (text: string) => plain(text).replace(/[.!?]+$/, "").trim();
+
 /**
  * A learning check offers a rule from the request it reads; the rule is that request's, with the editor's words and
  * what the skill already says that it would change. Offering the same rule again returns the first offer.
@@ -302,13 +347,35 @@ export function suggestLearning(ctx: Ctx, from: Task, body: SuggestLearningReque
   if (!skill) throw notFound(`a skill named "${body.skill}". Use skills_list to find the editor's skills`);
   const replaces = quotedFrom(skill, body.replaces);
   // The editor's decline stands: the same rule isn't put to them again for the same skill.
-  const rule = plain(body.rule);
-  if (ctx.repos.learnings.select("state = 'declined' AND json_extract(json, '$.skillId') = ?", [skill.id]).some(l => plain(l.rule) === rule))
+  const rule = ruleKey(body.rule);
+  const forSkill = ctx.repos.learnings.select("json_extract(json, '$.skillId') = ?", [skill.id]);
+  if (forSkill.some(l => l.state === "declined" && ruleKey(l.rule) === rule))
     throw conflict("declined", `The editor declined this rule for ${skill.name}. Don’t offer it again.`);
   const same = ctx.repos.learnings.select("project_id = ? AND json_extract(json, '$.taskId') = ?", [task.projectId, task.id])
-    .find(l => l.rule.toLowerCase() === body.rule.toLowerCase());
+    .find(l => ruleKey(l.rule) === rule);
   if (same) return { learning: same, skill: ctx.repos.skills.get(same.skillId) ?? skill };
+  const duplicate = forSkill.find(l => ruleKey(l.rule) === rule);
+  if (duplicate)
+    throw conflict("already_offered", `This rule is already ${duplicate.state === "saved" ? "saved in" : "offered for"} ${skill.name}. Don’t offer it again.`);
+  const waiting = ctx.repos.learnings.count("project_id = ? AND state = 'suggested' AND json_extract(json, '$.taskId') = ?", [task.projectId, task.id]);
+  if (waiting >= MAX_SUGGESTED_PER_REQUEST) {
+    throw conflict("too_many_learnings",
+      `Already offered ${MAX_SUGGESTED_PER_REQUEST} rules for this request. Combine related points into one rule, or keep only the clearest standing rules.`);
+  }
   const learnedFrom = body.from && citedDecisions(ctx, body.from);
+  if (learnedFrom) {
+    const incoming = new Set(learnedFrom.decisions.map(d => d.id));
+    const covered = forSkill.find(existing => {
+      const ids = existing.learnedFrom?.decisions.map(d => d.id) ?? [];
+      if (!ids.length) return false;
+      const overlap = ids.filter(id => incoming.has(id)).length;
+      return overlap > 0 && overlap * 2 >= Math.min(ids.length, incoming.size);
+    });
+    if (covered) {
+      throw conflict("decisions_already_covered",
+        `A rule for ${skill.name} already covers those decisions (“${clip(covered.rule, 120)}”). Don’t offer another rule from the same pattern.`);
+    }
+  }
   const learning = save(ctx, {
     id: newId("lrn"), projectId: task.projectId, rule: body.rule, said: wordsOf(task), taskId: task.id, skillId: skill.id,
     ...(learnedFrom && { learnedFrom }), ...(replaces && { replaces }), state: "suggested", createdAt: now(),
@@ -347,9 +414,11 @@ export function startDecisionCheck(ctx: Ctx, projectId: string, threadId: string
     if (!project || project.editingPaused || !enabledSkills(ctx).length) return;
     const asked = ctx.repos.tasks.get(threadId);
     if (!asked || asked.projectId !== projectId || !editsDialogue(asked.kind) || asked.createdBy.type !== "human") return;
-    const latest = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.context.threadId') = ? AND json_extract(json, '$.createdBy.type') = 'human'",
+    // The editor's own requests: a hand-off shares the thread, and runs on the model a kind of work was given to, not the chat's.
+    const latest = ctx.repos.tasks.select("project_id = ? AND json_extract(json, '$.context.threadId') = ? AND kind IN ('edit', 'note', 'revise') AND json_extract(json, '$.createdBy.type') = 'human'",
       [projectId, threadId], "created_at DESC, rowid DESC LIMIT 1")[0] ?? asked;
     if (latest.agent === "api" || threadWaitsOnEditor(ctx, projectId, threadId)) return;
+    if (assistantUnavailableForLearning(ctx, latest.agent, latest.model)) return;
     if (ctx.repos.tasks.count("kind = 'learning_check' AND state = 'queued'")) return;
     const check = createTask(ctx, {
       projectId, kind: "learning_check", agent: latest.agent, model: latest.model, fast: latest.fast,

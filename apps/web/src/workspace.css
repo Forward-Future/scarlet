@@ -131,6 +131,9 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .composer-tag-clear:disabled { opacity: .5; cursor: default; }
 .composer-tag-clear:focus-visible { outline-offset: 1px; }
 .composer-skills { position: absolute; z-index: 5; inset: auto 0 calc(100% + 6px); padding: 5px; border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-panel); box-shadow: 0 6px 20px #0005; }
+.composer-skill-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 8px 4px; }
+.composer-skill-switch { padding: 1px 6px; border: 0; border-radius: 4px; background: none; color: var(--color-muted); font-size: 11px; line-height: 16px; cursor: pointer; transition: color .12s ease, background .12s ease; }
+.composer-skill-switch:hover, .composer-skill-switch:focus-visible { color: var(--color-fg); background: var(--color-raised); }
 .composer-skill-list { overflow-y: auto; max-height: min(16rem, 32vh); }
 .composer-skill-list button { display: block; width: 100%; padding: 5px 8px; border-radius: 5px; text-align: left; }
 .composer-skills [role="option"]:is([aria-selected="true"], :hover) { background: var(--color-raised); }
@@ -163,9 +166,9 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 .composer-timestamp-overlay { position: absolute; inset: 0; overflow: hidden; color: transparent; pointer-events: none; }
 .composer-message:has(.composer-timestamp-overlay) > * { scrollbar-gutter: stable; }
 .composer-message:has(.composer-timestamp-overlay) > span { overflow: hidden; }
-.composer-timestamp { display: inline; padding: 0; border: 0; border-radius: 0; background: var(--color-bg); font: inherit; color: var(--color-muted);
+.composer-timestamp { display: inline; padding: 0; border: 0; border-radius: 0; background: var(--color-bg); font: inherit; color: var(--color-dim);
   pointer-events: auto; cursor: pointer; }
-.composer-timestamp:hover, .composer-timestamp:focus-visible { color: var(--color-fg); }
+.composer-timestamp:hover, .composer-timestamp:focus-visible { color: var(--color-fg); outline: none; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; }
 .composer-send { width: 30px; padding: 0; border-radius: 50%; }
 .composer-send svg { transform: rotate(-90deg); }
 @media (max-width: 767px) {
@@ -325,15 +328,13 @@ button.composer-aim-time:focus-visible { outline: 1px solid rgba(255, 255, 255, 
 @keyframes waveform-grow { from { transform: scaleY(.15); opacity: .35; } }
 /* A half-width tile advances exactly one repeat so the ripple loops without a jump. */
 @keyframes waveform-travel { from { mask-position: 0% center; } to { mask-position: 100% center; } }
-/* While Scarlet is at work on the video, the chat's turning ring and what Scarlet is doing sit beside the clock under
+/* While Scarlet is at work on the video, the chat's turning ring and "Scarlet is editing" sit beside the clock under
    the timeline. A press brings that request into the middle of the chat, which lights it for a moment. */
-.timeline-working { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 60%; margin: 0 auto 0 14px; padding: 2px 8px 2px 6px;
+.timeline-working { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin: 0 auto 0 14px; padding: 2px 8px 2px 6px;
   border-radius: 999px; color: #cfcac0; font: 12px/16px var(--font-sans); cursor: pointer; transition: background-color .15s ease, color .15s ease; }
 .timeline-working:hover, .timeline-working:focus-visible { background: rgba(244, 241, 233, .07); color: var(--color-fg); }
 .timeline-working .req-mark { width: 11px; height: 11px; }
 .timeline-working-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.timeline-working-text > span { color: #8a867f; }
-.timeline-working:hover .timeline-working-text > span, .timeline-working:focus-visible .timeline-working-text > span { color: #b9b5ac; }
 :is(#simple-chat, .review-rail) [data-flash] { border-radius: 8px; box-shadow: 0 0 0 6px rgba(244, 241, 233, .065), inset 0 0 0 999px rgba(244, 241, 233, .065); }
 @media (prefers-reduced-motion: no-preference) {
   :is(#simple-chat, .review-rail) [data-flash] { animation: chat-flash 1.2s ease-out forwards; }

@@ -5,8 +5,10 @@ import { ActivityEntry, Render } from "./api.js";
 import { AgentHost } from "./agents.js";
 import { Learning } from "./learnings.js";
 import { Skill } from "./skills.js";
+import { StyleGuideRecord } from "./styleGuides.js";
 import { Task, TaskEvent } from "./tasks.js";
 import { UsageTotals } from "./usage.js";
+import { YouTubeConnectionStatus, YouTubeUploadJob } from "./youtube.js";
 
 export const SpeakerProgress = z.object({
   phase: z.enum(["audio", "models", "segmenting", "identifying", "grouping", "matching"]),
@@ -34,7 +36,12 @@ export const WsEvent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("host.updated"), host: AgentHost }),
   z.object({ type: z.literal("host.quota_refresh"), force: z.boolean().optional() }),
   z.object({ type: z.literal("skill.updated"), skill: Skill }),
+  z.object({ type: z.literal("style_guide.updated"), styleGuide: StyleGuideRecord }),
+  z.object({ type: z.literal("style_guide.deleted"), styleGuideId: Id }),
   z.object({ type: z.literal("learning.updated"), projectId: Id, learning: Learning }),
+  z.object({ type: z.literal("batch_summary.updated"), projectId: Id, key: z.string(), title: z.string() }),
+  z.object({ type: z.literal("youtube.connection.updated"), status: YouTubeConnectionStatus }),
+  z.object({ type: z.literal("youtube.upload.updated"), projectId: Id, upload: YouTubeUploadJob }),
   z.object({ type: z.literal("activity.added"), projectId: Id.nullable(), entry: ActivityEntry }),
   z.object({
     type: z.literal("notification"),

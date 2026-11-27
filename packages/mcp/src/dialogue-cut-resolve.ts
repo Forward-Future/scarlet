@@ -2,7 +2,7 @@
  * Resolving word-addressed, pause-addressed, repeat-addressed, and seconds-addressed
  * dialogue cuts to timeline ranges on a version.
  */
-import { normalizeTranscriptToken, type DialogueCutKind, type RepeatOccurrence } from "@scarlet/shared";
+import { JOIN_WORD_SECONDS, normalizeTranscriptToken, type DialogueCutKind, type RepeatOccurrence } from "@scarlet/shared";
 import { clipDuration, sourceToTimeline, timelineDuration, timelineToSource, type MediaClip, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 import type { DialogueEvidence } from "./dialogue-decisions.js";
@@ -89,7 +89,13 @@ export interface DialoguePlanSources {
    * With `betweenWords`, the stretch runs word to word and is read clear of each word's own edge.
    */
   sound?(mediaId: string, range: TimeRange, betweenWords?: boolean): Promise<GapSound | undefined>;
+  /** Notes a read planning went on without, so the failure isn't lost: the MCP server logs it once. Replay leaves it out. */
+  unavailable?(what: string, err: unknown): void;
 }
+
+/** A read planning goes on without: `fallback`, with the reason noted where the sources keep such notes. */
+export const readWithout = <T>(sources: Pick<DialoguePlanSources, "unavailable">, what: string, fallback: T) =>
+  (err: unknown): T => { sources.unavailable?.(what, err); return fallback; };
 
 /** A word's estimate before alignment can sit a few hundred milliseconds early. Ask for final times this far past it. */
 export const SETTLED_MARGIN = 2;
@@ -317,7 +323,7 @@ async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afterWord: 
   // The transcript has no word here, which is not the same as nothing being said: a pause held a missed "see" and a
   // second "you can", and another the "five point five" of a "5.5" the transcript had timed at 80 ms. What sounds in
   // the range goes back to the agent, in this version's seconds as well, since that is how it would cut or keep it.
-  const held = await sources.sound?.(ref.mediaId, { start: cut.start, end: cut.end }).catch(() => undefined);
+  const held = await sources.sound?.(ref.mediaId, { start: cut.start, end: cut.end }).catch(readWithout(sources, `failed to read the sound inside a word cut on ${ref.mediaId}`, undefined));
   const spans = (runs: TimeRange[], at: (t: number) => number) => runs.map(r => `${at(r.start).toFixed(2)}–${at(r.end).toFixed(2)}`).join(", ");
   const notes = held?.runs.length ? [`This pause holds ${held.seconds.toFixed(2)} s of sound at speaking level that no word explains (${
     spans(held.runs, t => t)} s in ${ref.mediaId}, ${spans(held.runs, on)} s on version ${tl.version}).`] : [];
@@ -337,7 +343,7 @@ async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afterWord: 
       on(r.source.start).toFixed(2)}–${on(r.source.end).toFixed(2)} s on version ${tl.version})`).join(" and ")} there, in “${unwritten[0]!.context}”. ` +
     `A trim would cut through those words or leave them playing.`);
   const around = notes.length ? undefined
-    : await sources.sound?.(ref.mediaId, { start: before.end, end: after.start }, true).catch(() => undefined);
+    : await sources.sound?.(ref.mediaId, { start: before.end, end: after.start }, true).catch(readWithout(sources, `failed to read the sound around a word cut on ${ref.mediaId}`, undefined));
   const read = !unwritten.length && (notes.length || around?.runs.length) ? await readAround() : undefined;
   // A note says only that sound is there, and the agent can't hear it. Read on its own, the stretch from the word before
   // to the word after says what it is: Whisper had written “great. I'm” where the recording says “great, but it hasn't all
@@ -359,9 +365,37 @@ async function resolvePauseCut(tl: Timeline, ref: { mediaId: string; afterWord: 
     if (!sources.readKeptWords) return undefined;
     const project = await sources.project();
     const asset = project.media.find(m => m.id === ref.mediaId);
+    const stream = dialogueAudioStream(clip!) ?? (asset && dialogueAudioStream(asset)) ?? 0;
     const from = Math.max(clip!.sourceIn, before.start - HEARD_CONTEXT), to = Math.min(clip!.sourceOut, after.end + HEARD_CONTEXT);
-    const reading = await sources.readKeptWords(ref.mediaId, dialogueAudioStream(clip!) ?? (asset && dialogueAudioStream(asset)) ?? 0, from, to)
-      .catch(() => undefined);
+    let reading: TranscriptWord[] | undefined;
+    if (to - from <= JOIN_WORD_SECONDS) {
+      reading = await sources.readKeptWords(ref.mediaId, stream, from, to).catch(readWithout(sources, `failed to read the speech in a pause on ${ref.mediaId}`, undefined));
+    } else {
+      // Split pauses longer than JOIN_WORD_SECONDS into overlapping windows of at most JOIN_WORD_SECONDS each,
+      // skipping silent middle stretches and capping total reads so huge B-roll/music gaps stay fast.
+      const pad = HEARD_CONTEXT;
+      const core = JOIN_WORD_SECONDS - 2 * pad;
+      const MAX_PAUSE_READ_CHUNKS = 8;
+      const active: TimeRange[] = [before, after, ...(held?.runs ?? []), ...(around?.runs ?? [])];
+      const chunks: Array<{ cs: number; ce: number }> = [];
+      for (let cs = from; cs < to - 1e-6; cs += core) {
+        const ce = Math.min(to, cs + core);
+        if (active.some(r => r.end >= cs - pad && r.start <= ce + pad)) chunks.push({ cs, ce });
+      }
+      const merged: TranscriptWord[] = [];
+      let succeeded = 0;
+      for (const { cs, ce } of chunks.slice(0, MAX_PAUSE_READ_CHUNKS)) {
+        const wFrom = Math.max(from, cs - pad), wTo = Math.min(to, ce + pad);
+        const part = await sources.readKeptWords(ref.mediaId, stream, wFrom, wTo).catch(readWithout(sources, `failed to read the speech in a pause on ${ref.mediaId}`, undefined));
+        if (!part) continue;
+        succeeded++;
+        for (const w of part) {
+          const mid = (w.start + w.end) / 2;
+          if ((cs === from || mid >= cs) && (ce === to || mid < ce)) merged.push(w);
+        }
+      }
+      reading = succeeded ? merged.sort((a, b) => a.start - b.start) : undefined;
+    }
     if (!reading) return undefined;
     const text = reading.map(w => w.text.trim()).filter(Boolean).join(" ");
     // Both readings in source seconds, as heardOnlyVerbatim compares them. The transcript's side reaches as far as it
@@ -388,7 +422,7 @@ export async function secondsPauseHolds(tl: Timeline, range: TimeRange, sources:
     const lo = Math.max(range.start, clip.timelineIn), hi = Math.min(range.end, clip.timelineIn + clipDuration(clip));
     if (hi - lo <= 1e-6 || !project.media.some(m => m.id === clip.mediaId && (m.kind === "audio" || m.hasAudio))) continue;
     const from = timelineToSource(clip, lo), to = timelineToSource(clip, hi);
-    const words = await sources.words(clip.mediaId, to + SETTLED_MARGIN, false).catch(() => null);
+    const words = await sources.words(clip.mediaId, to + SETTLED_MARGIN, false).catch(readWithout(sources, `failed to read the words of ${clip.mediaId} beside a cut`, null));
     // A recording with no words, such as music under the talk, is not read for speech.
     if (!words?.length) continue;
     const where = (start: number, end: number) => `${sourceToTimeline(clip, start).toFixed(2)}–${sourceToTimeline(clip, end).toFixed(2)} s on version ${tl.version} (${start.toFixed(2)}–${end.toFixed(2)} s in ${clip.mediaId})`;
@@ -403,7 +437,7 @@ export async function secondsPauseHolds(tl: Timeline, range: TimeRange, sources:
     // Sound clear of the words the range reaches into at its edges.
     const start = Math.max(from, ...words.filter(w => w.start < from && w.end > from).map(w => w.end));
     const end = Math.min(to, ...words.filter(w => w.start < to && w.end > to).map(w => w.start));
-    const held = end - start > .1 ? await sources.sound?.(clip.mediaId, { start, end }).catch(() => undefined) : undefined;
+    const held = end - start > .1 ? await sources.sound?.(clip.mediaId, { start, end }).catch(readWithout(sources, `failed to read the sound of ${clip.mediaId} beside a cut`, undefined)) : undefined;
     if (held?.runs.length) found.push(`It holds ${held.seconds.toFixed(2)} s of sound at speaking level that no word explains, at ${
       held.runs.map(r => where(r.start, r.end)).join(", ")}.`);
   }

@@ -17,7 +17,7 @@ export type TaskModelType = z.infer<typeof TaskModelType>;
 
 /** The two kinds of work every editor starts with. They can be renamed, given a model or deleted like their own. */
 export const DEFAULT_TASK_MODELS: TaskModelType[] = [
-  { id: "cutting", name: "Cutting", description: "Taking out words, pauses, retakes and mistakes, and tightening the edit.", model: "same" },
+  { id: "cutting", name: "Cutting", description: "Cutting words, pauses, retakes and mistakes, and tightening the video.", model: "same" },
   { id: "motion-graphics", name: "Motion graphics", description: "Titles, lower thirds, callouts, animated text and end cards over the picture.", model: "same" },
 ];
 
@@ -39,7 +39,7 @@ export function taskModelChoice(type: Pick<TaskModelType, "model">): { agent: st
 
 /** A new type's id from its name, unlike the ids already taken. */
 export function taskModelId(name: string, taken: readonly string[]): string {
-  const base = name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "task";
+  const base = name.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "task";
   let id = base, n = 2;
   while (taken.includes(id)) id = `${base}-${n++}`;
   return id;

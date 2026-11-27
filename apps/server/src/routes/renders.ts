@@ -13,7 +13,7 @@ import { requestAttempt, requireProjectEditAttempt } from "../services/taskAttem
 import { badRequest, conflict, notFound } from "../errors.js";
 import { requestCutPlaybackFile, waitForPlayback } from "../services/playback.js";
 import { serveFile } from "../files.js";
-import { logId, throttledLog } from "../logText.js";
+import { clip, logId, throttledLog } from "../logText.js";
 import { ensureProjectHead } from "../services/timeline.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { framePriority, machineBusy, pictureDecoder, pictureLane, type PicturePriority } from "../services/pictureWork.js";
@@ -165,12 +165,14 @@ export function renderRoutes(ctx: Ctx) {
           return await extractFrame(file, Math.max(0, local + 0.5 / fps), {
             width: Math.round(width * Math.min(1, size / Math.max(width, height))), signal, fps,
           });
-        } catch {
+        } catch (error) {
           signal.throwIfAborted();
-          retried(`cached-frame/${preview.id}`, `[render] frame_fallback render=${logId(preview.id)} project=${logId(project.id)} version=${version} reason=cached_preview frame=${frame}`);
+          retried(`cached-frame/${preview.id}`, `[render] frame_fallback render=${logId(preview.id)} project=${logId(project.id)} version=${version} reason=cached_preview frame=${frame}: ${clip((error as Error)?.message ?? String(error))}`);
         }
       }
       const root = ctx.paths.media(project.id);
+      const lutRoots = [ctx.paths.styleGuidesLibrary];
+      const fontDirs = [ctx.paths.styleGuidesLibrary, ctx.paths.attachments(project.id)];
       const pictures = previewPictures(root, { signal });
       let usedProxy = false;
       const accel = ctx.settings().render.hwaccel;
@@ -179,6 +181,8 @@ export function renderRoutes(ctx: Ctx) {
       try {
         return await renderTimelineFrame(project, timeline, range, root, signal, size, {
           decoder,
+          lutRoots,
+          fontDirs,
           pictureSource: async (asset, ...args) => {
             const picture = await pictures(asset, ...args);
             if (picture) usedProxy = true;
@@ -188,7 +192,7 @@ export function renderRoutes(ctx: Ctx) {
       } catch (error) {
         if ((!usedProxy && !decoder) || signal.aborted) throw error;
         retried(`frame/${project.id}`, `[render] frame_fallback project=${logId(project.id)} version=${version} reason=decode_retry frame=${frame}`);
-        return renderTimelineFrame(project, timeline, range, root, signal, size);
+        return renderTimelineFrame(project, timeline, range, root, signal, size, { lutRoots, fontDirs });
       }
     }, sameFormat ? `"${key}"` : undefined);
   });
@@ -284,7 +288,7 @@ export function renderRoutes(ctx: Ctx) {
       const start = snapToFrame(body.range.start, fps);
       const end = snapToFrame(body.range.end, fps);
       if (start < 0 || end <= start || end > snapToFrame(timelineDuration(timeline), fps))
-        throw badRequest("invalid_export_range", "Choose at least one frame within the working edit.");
+        throw badRequest("invalid_export_range", "Choose at least one frame within the video.");
       body.range = { start, end };
     }
     if (body.owner && body.kind !== "export" && (body.kind !== "full" || body.range))

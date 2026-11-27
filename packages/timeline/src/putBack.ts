@@ -1,7 +1,9 @@
+import type { MediaAsset } from "./mediaSchema.js";
 import type { TimeRange } from "./schemaBase.js";
-import type { Clip, MediaClip, Timeline } from "./timelineSchema.js";
-import { shiftClip, straightenCrossfades } from "./ops.js";
-import { clipEnd } from "./time.js";
+import type { Clip, MediaClip, Timeline, Track } from "./timelineSchema.js";
+import { crossfadeJoins, type JoinFade } from "./joinCrossfade.js";
+import { CROSSFADE_TOL, shiftClip, straightenCrossfades, trimHead, trimTail } from "./ops.js";
+import { clipDuration, clipEnd, timelineDuration } from "./time.js";
 
 /** Everything about a clip but where it sits, what footage it plays and the fades at its ends. */
 const look = (clip: MediaClip) => JSON.stringify({ ...clip, id: "", timelineIn: 0, sourceIn: 0, sourceOut: 0,
@@ -22,8 +24,9 @@ export function putBackCut(head: Timeline, at: number, length: number, fps: numb
   const near = 0.5 / fps;
   let restored = 0;
   for (const track of tl.tracks) {
-    // A crossfade on the join goes back to the straight cut at its centre, which is where the cut is.
+    // A crossfade (or cleaned asymmetric audio fade overlap) on the join goes back to the straight cut at `at`.
     straightenCrossfades(track, at, at);
+    straightenAsymmetricJoinAudio(track, at, near);
     const ends: Clip[] = [], starts: Clip[] = [];
     for (const clip of track.clips) {
       const end = clipEnd(clip);
@@ -58,6 +61,335 @@ export function putBackCut(head: Timeline, at: number, length: number, fps: numb
   for (const m of tl.markers) {
     if (m.end !== undefined && (m.end > at + near || m.time >= at - near)) m.end += length;
     if (m.time >= at - near) m.time += length;
+  }
+  return tl;
+}
+
+/** How far each edge of an applied cut at `at` can move locally without crossing another clip or edit. */
+export interface CutAdjustBounds {
+  /** Most negative delta allowed on the cut's start edge (trimming left clip shorter), in seconds. */
+  minStartDelta: number;
+  /** Most positive delta allowed on the cut's start edge (restoring cut footage), in seconds. */
+  maxStartDelta: number;
+  /** Most negative delta allowed on the cut's end edge (restoring cut footage), in seconds. */
+  minEndDelta: number;
+  /** Most positive delta allowed on the cut's end edge (trimming right clip shorter), in seconds. */
+  maxEndDelta: number;
+}
+
+const FADE_MEET = 1e-3;
+
+interface AsymmetricJoinFade {
+  leftOverhang: number;
+  rightOverhang: number;
+  fadeOut: number;
+  fadeIn: number;
+}
+
+interface ClosingTailFade {
+  overhang: number;
+  fadeOut: number;
+}
+
+/** Find a centered audio crossfade overlapping `at` on `track`, before `straightenCrossfades` removes it. */
+function findCrossfadeAt(track: Track, at: number, near: number): number | undefined {
+  const clips = track.clips;
+  for (let i = 0; i < clips.length; i++) {
+    const left = clips[i]!;
+    if (left.timelineIn > at + FADE_MEET) break;
+    const leftEnd = clipEnd(left);
+    if (left.kind !== "media" || !left.audioFadeOut || leftEnd < at - FADE_MEET) continue;
+    for (let j = i + 1; j < clips.length && clips[j]!.timelineIn < leftEnd - FADE_MEET; j++) {
+      const right = clips[j]!;
+      const overlap = leftEnd - right.timelineIn;
+      if (right.kind !== "media" || right.timelineIn <= left.timelineIn + FADE_MEET || overlap <= FADE_MEET) continue;
+      if (Math.abs(left.audioFadeOut - overlap) > CROSSFADE_TOL || Math.abs(right.audioFadeIn - overlap) > CROSSFADE_TOL) continue;
+      const join = right.timelineIn + overlap / 2;
+      if (Math.abs(join - at) <= Math.max(0.5 / 24, near) + FADE_MEET) return overlap;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Straighten an asymmetric or one-sided audio fade overlap at cut join `at` (for example after an audio join cleanup
+ * trimmed one side back to the picture cut and shortened its fade while leaving the other side's crossfade overhang).
+ * Only touches same-media overlapping audio clips whose fade covers each side's overhang past `at`.
+ */
+function straightenAsymmetricJoinAudio(track: Track, at: number, near: number): AsymmetricJoinFade | undefined {
+  if (track.kind !== "audio") return undefined;
+  const clips = track.clips;
+  for (let i = 0; i < clips.length; i++) {
+    const left = clips[i]!;
+    if (left.timelineIn >= at - near) break;
+    const leftEnd = clipEnd(left);
+    if (left.kind !== "media" || leftEnd < at - near) continue;
+    for (let j = i + 1; j < clips.length && clips[j]!.timelineIn < leftEnd - FADE_MEET; j++) {
+      const right = clips[j]!;
+      if (right.kind !== "media" || right.mediaId !== left.mediaId || right.speed !== left.speed) continue;
+      if (right.timelineIn > at + near || clipEnd(right) <= at + near) continue;
+      const leftOverhang = Math.max(0, leftEnd - at);
+      const rightOverhang = Math.max(0, at - right.timelineIn);
+      if (leftOverhang <= near && rightOverhang <= near) continue;
+      if (leftOverhang > (left.audioFadeOut ?? 0) + CROSSFADE_TOL) continue;
+      if (rightOverhang > (right.audioFadeIn ?? 0) + CROSSFADE_TOL) continue;
+      if ((leftOverhang > near && !(left.audioFadeOut > 0)) || (rightOverhang > near && !(right.audioFadeIn > 0))) continue;
+      if (!(left.audioFadeOut > 0) && !(right.audioFadeIn > 0)) continue;
+      const saved: AsymmetricJoinFade = {
+        leftOverhang,
+        rightOverhang,
+        fadeOut: left.audioFadeOut,
+        fadeIn: right.audioFadeIn,
+      };
+      clips[i] = { ...(leftEnd > at ? trimTail(left, at) : left), audioFadeOut: 0 };
+      clips[j] = { ...(right.timelineIn < at ? trimHead(right, at) : right), audioFadeIn: 0 };
+      return saved;
+    }
+  }
+  return undefined;
+}
+
+interface JoinTrackInfo {
+  track: Track;
+  left?: MediaClip;
+  right?: MediaClip;
+  fade?: number;
+  asymFade?: AsymmetricJoinFade;
+  tailFade?: ClosingTailFade;
+}
+
+/** Inspect a timeline at cut join `at` with removed duration `length`, returning affected tracks or undefined if unsafe. */
+function inspectCutJoin(tl: Timeline, at: number, length: number, fps: number): JoinTrackInfo[] | undefined {
+  if (!(length > 0)) return;
+  const near = 0.5 / fps;
+  const duration = timelineDuration(tl);
+  const opening = at <= near;
+  const hasAnyStartingAtOrAfter = tl.tracks.some(track => track.clips.some(clip => clip.timelineIn >= at - near));
+  const closing = !opening && !hasAnyStartingAtOrAfter && duration > near && tl.tracks.every(track => {
+    const last = track.clips.at(-1);
+    if (!last) return true;
+    const end = clipEnd(last);
+    if (end <= at + near) return true;
+    return track.kind === "audio" && last.kind === "media" && last.audioFadeOut > 0 && end - at <= last.audioFadeOut + CROSSFADE_TOL;
+  });
+  const infos: JoinTrackInfo[] = [];
+  let matched = 0;
+
+  for (const track of tl.tracks) {
+    const fade = findCrossfadeAt(track, at, near);
+    straightenCrossfades(track, at, at);
+    const asymFade = fade === undefined ? straightenAsymmetricJoinAudio(track, at, near) : undefined;
+    let tailFade: ClosingTailFade | undefined;
+    if (closing && track.kind === "audio" && track.clips.length) {
+      const lastIdx = track.clips.length - 1;
+      const last = track.clips[lastIdx]!;
+      const end = clipEnd(last);
+      if (last.kind === "media" && last.audioFadeOut > 0 && end > at + near && end - at <= last.audioFadeOut + CROSSFADE_TOL) {
+        tailFade = { overhang: end - at, fadeOut: last.audioFadeOut };
+        track.clips[lastIdx] = { ...trimTail(last, at), audioFadeOut: 0 };
+      }
+    }
+    const ends: Clip[] = [], starts: Clip[] = [];
+    for (const clip of track.clips) {
+      const end = clipEnd(clip);
+      if (Math.abs(clip.timelineIn - at) <= near) starts.push(clip);
+      else if (Math.abs(end - at) <= near) ends.push(clip);
+      else if (clip.timelineIn < at && end > at) return;
+    }
+    if (ends.length > 1 || starts.length > 1) return;
+    const left = ends[0], right = starts[0];
+    if (left && right) {
+      if (left.kind !== "media" || right.kind !== "media" || left.mediaId !== right.mediaId || left.speed !== right.speed || right.transitionIn) return;
+      if (Math.abs((right.sourceIn - left.sourceOut) / left.speed - length) > 1 / fps) return;
+      matched++;
+      infos.push({ track, left, right, fade, asymFade });
+    } else if (opening && !left && right) {
+      if (right.kind !== "media" || right.transitionIn) return;
+      matched++;
+      infos.push({ track, right });
+    } else if (closing && left && !right) {
+      if (left.kind !== "media") return;
+      matched++;
+      infos.push({ track, left, tailFade });
+    } else if (left || right) {
+      // One track has an unrelated clip ending/starting at `at` with no matching cut pair.
+      infos.push({ track });
+    } else {
+      infos.push({ track });
+    }
+  }
+  if (!matched) return undefined;
+  // On an opening cut, synced multi-track recordings (e.g. screen + camera) may start slightly apart; require at least
+  // one track to hold the full removed opening while `cutAdjustBounds` clamps restoration to the shortest track's start.
+  if (opening && !infos.some(i => i.right && i.right.sourceIn / i.right.speed >= length - 1 / fps)) return undefined;
+  return infos;
+}
+
+/**
+ * Legal local edge-drag bounds for an applied cut at `at` (with removed duration `length`), or undefined when
+ * another edit spans the join or the join isn't a clean local cut (same safety contract as `putBackCut`).
+ */
+export function cutAdjustBounds(head: Timeline, at: number, length: number, fps: number, media?: readonly MediaAsset[]): CutAdjustBounds | undefined {
+  const tl = structuredClone(head);
+  const infos = inspectCutJoin(tl, at, length, fps);
+  if (!infos) return;
+  const minClip = 1 / fps;
+  const assets = media ? new Map(media.map(a => [a.id, a])) : undefined;
+  let minStartDelta = -Infinity, maxStartDelta = Infinity;
+  let minEndDelta = -Infinity, maxEndDelta = Infinity;
+  let hasLeft = false, hasRight = false;
+
+  for (const { left, right } of infos) {
+    if (left) {
+      hasLeft = true;
+      const dur = clipDuration(left);
+      const minKeep = Math.max(minClip, (left.audioFadeIn ?? 0) + (left.audioFadeOut ?? 0) + minClip, (left.videoFadeIn ?? 0) + (left.videoFadeOut ?? 0) + minClip);
+      const maxTrimLeft = Math.max(0, dur - minKeep);
+      minStartDelta = Math.max(minStartDelta, -maxTrimLeft);
+      if (right) {
+        maxStartDelta = Math.min(maxStartDelta, length);
+      } else {
+        const assetDur = assets?.get(left.mediaId)?.duration;
+        const avail = assetDur !== undefined ? Math.max(0, (assetDur - left.sourceOut) / left.speed) : length;
+        maxStartDelta = Math.min(maxStartDelta, Math.min(length, avail));
+      }
+    }
+    if (right) {
+      hasRight = true;
+      const dur = clipDuration(right);
+      const minKeep = Math.max(minClip, (right.audioFadeIn ?? 0) + (right.audioFadeOut ?? 0) + minClip, (right.videoFadeIn ?? 0) + (right.videoFadeOut ?? 0) + minClip);
+      const maxTrimRight = Math.max(0, dur - minKeep);
+      maxEndDelta = Math.min(maxEndDelta, maxTrimRight);
+      if (left) {
+        minEndDelta = Math.max(minEndDelta, -length);
+      } else {
+        minEndDelta = Math.max(minEndDelta, -Math.min(length, right.sourceIn / right.speed));
+      }
+    }
+  }
+  if (!hasLeft) { minStartDelta = 0; maxStartDelta = 0; }
+  if (!hasRight) { minEndDelta = 0; maxEndDelta = 0; }
+  if (minStartDelta > maxStartDelta + 1e-6 || minEndDelta > maxEndDelta + 1e-6) return;
+  return {
+    minStartDelta: Math.min(0, minStartDelta),
+    maxStartDelta: Math.max(0, maxStartDelta),
+    minEndDelta: Math.min(0, minEndDelta),
+    maxEndDelta: Math.max(0, maxEndDelta),
+  };
+}
+
+/**
+ * Adjust an applied cut's left and/or right edge directly on the timeline, without invoking a model.
+ * `deltaStart > 0` restores footage onto the end of the clip before the join; `deltaStart < 0` trims more off it.
+ * `deltaEnd < 0` restores footage onto the start of the clip after the join; `deltaEnd > 0` trims more off it.
+ * Pulling both edges together (remaining cut <= half a frame) puts back the whole cut, matching `putBackCut`.
+ */
+export function adjustCut(head: Timeline, at: number, length: number, deltaStart: number, deltaEnd: number, fps: number, media?: readonly MediaAsset[]): Timeline | undefined {
+  const newLength = length + deltaEnd - deltaStart;
+  const near = 0.5 / fps;
+  if (newLength <= near) {
+    // Pulled all the way to zero: restore full footage for interior, opening, or closing cuts.
+    const interior = putBackCut(head, at, length, fps);
+    if (interior) return interior;
+  }
+  const bounds = cutAdjustBounds(head, at, length, fps, media);
+  if (!bounds) return;
+  const eps = 1e-4;
+  if (deltaStart < bounds.minStartDelta - eps || deltaStart > bounds.maxStartDelta + eps) return;
+  if (deltaEnd < bounds.minEndDelta - eps || deltaEnd > bounds.maxEndDelta + eps) return;
+
+  const tl = structuredClone(head);
+  const infos = inspectCutJoin(tl, at, length, fps);
+  if (!infos) return;
+  const assets = media ? new Map(media.map(a => [a.id, a])) : undefined;
+  const shift = deltaStart - deltaEnd;
+  const newJoin = Math.max(0, at + deltaStart);
+  const fadesToReplay: JoinFade[] = [];
+
+  for (const { track, left, right, fade, asymFade, tailFade } of infos) {
+    let nextLeft: MediaClip | undefined;
+    let nextRight: MediaClip | undefined;
+    if (left) {
+      const nextSourceOut = left.sourceOut + deltaStart * left.speed;
+      if (nextSourceOut <= left.sourceIn + 1e-6) return;
+      nextLeft = { ...left, sourceOut: nextSourceOut };
+    }
+    if (right) {
+      const nextSourceIn = right.sourceIn + deltaEnd * right.speed;
+      if (nextSourceIn < -1e-6 || nextSourceIn >= right.sourceOut - 1e-6) return;
+      const keyShift = -deltaEnd;
+      nextRight = {
+        ...right,
+        timelineIn: nextLeft ? clipEnd(nextLeft) : Math.max(0, right.timelineIn + deltaStart),
+        sourceIn: Math.max(0, nextSourceIn),
+        ...(right.keyframes?.length && {
+          keyframes: right.keyframes.map(k => ({ ...k, time: k.time + keyShift })),
+        }),
+        ...(right.volumeKeyframes?.length && {
+          volumeKeyframes: right.volumeKeyframes.map(k => ({ ...k, time: k.time + keyShift })),
+        }),
+      };
+    }
+    if (left && right && fade && newLength > near && nextLeft) {
+      // Use this track's exact post-move join time so `crossfadeJoins` always matches even when the prior overlap drifted sub-ms from `at`.
+      fadesToReplay.push({ at: clipEnd(nextLeft), trackId: track.id, duration: fade });
+    } else if (left && right && asymFade && newLength > near && nextLeft && nextRight) {
+      const leftAssetDur = assets?.get(nextLeft.mediaId)?.duration;
+      const leftAvail = leftAssetDur !== undefined ? Math.max(0, (leftAssetDur - nextLeft.sourceOut) / nextLeft.speed) : asymFade.leftOverhang;
+      const leftExt = Math.min(asymFade.leftOverhang, leftAvail);
+      const nextLeftOut = nextLeft.sourceOut + leftExt * nextLeft.speed;
+      const nextLeftDur = (nextLeftOut - nextLeft.sourceIn) / nextLeft.speed;
+      const fadeOut = Math.min(asymFade.fadeOut, Math.max(0, nextLeftDur - nextLeft.audioFadeIn - 1e-4));
+      nextLeft = { ...nextLeft, sourceOut: nextLeftOut, audioFadeOut: fadeOut };
+
+      const rightAvail = Math.min(nextRight.timelineIn, nextRight.sourceIn / nextRight.speed);
+      const rightExt = Math.min(asymFade.rightOverhang, rightAvail);
+      const nextRightIn = Math.max(0, nextRight.sourceIn - rightExt * nextRight.speed);
+      const nextRightDur = (nextRight.sourceOut - nextRightIn) / nextRight.speed;
+      const fadeIn = Math.min(asymFade.fadeIn, Math.max(0, nextRightDur - nextRight.audioFadeOut - 1e-4));
+      nextRight = {
+        ...nextRight,
+        timelineIn: Math.max(0, nextRight.timelineIn - rightExt),
+        sourceIn: nextRightIn,
+        audioFadeIn: fadeIn,
+        ...(rightExt > 1e-6 && nextRight.keyframes?.length && {
+          keyframes: nextRight.keyframes.map(k => ({ ...k, time: k.time + rightExt })),
+        }),
+        ...(rightExt > 1e-6 && nextRight.volumeKeyframes?.length && {
+          volumeKeyframes: nextRight.volumeKeyframes.map(k => ({ ...k, time: k.time + rightExt })),
+        }),
+      };
+    } else if (left && !right && tailFade && newLength > near && nextLeft) {
+      const leftAssetDur = assets?.get(nextLeft.mediaId)?.duration;
+      const leftAvail = leftAssetDur !== undefined ? Math.max(0, (leftAssetDur - nextLeft.sourceOut) / nextLeft.speed) : tailFade.overhang;
+      const leftExt = Math.min(tailFade.overhang, leftAvail);
+      const nextLeftOut = nextLeft.sourceOut + leftExt * nextLeft.speed;
+      const nextLeftDur = (nextLeftOut - nextLeft.sourceIn) / nextLeft.speed;
+      nextLeft = {
+        ...nextLeft,
+        sourceOut: nextLeftOut,
+        audioFadeOut: Math.min(tailFade.fadeOut, Math.max(0, nextLeftDur - nextLeft.audioFadeIn - 1e-4)),
+      };
+    }
+    track.clips = track.clips.map(clip => {
+      if (clip === left && nextLeft) return nextLeft;
+      if (clip === right && nextRight) return nextRight;
+      if (clip.timelineIn < at - near) return clip;
+      return shiftClip(clip, shift);
+    });
+  }
+
+  for (const m of tl.markers) {
+    if (m.end !== undefined) {
+      if (m.end >= at - near) m.end = Math.max(newJoin, m.end + shift);
+      else if (deltaStart < 0 && m.end > newJoin) m.end = newJoin;
+    }
+    if (m.time >= at - near) m.time = Math.max(newJoin, m.time + shift);
+    else if (deltaStart < 0 && m.time > newJoin) m.time = newJoin;
+  }
+
+  if (fadesToReplay.length) {
+    return crossfadeJoins(tl, media ? [...media] : undefined, [], fadesToReplay[0]!.duration!, { only: fadesToReplay }).timeline;
   }
   return tl;
 }

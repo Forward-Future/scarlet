@@ -1,6 +1,6 @@
 import type { Render, Task } from "@scarlet/shared";
 import { describe, expect, it, vi } from "vitest";
-import { recordMediaAdded, recordRenderFinished, recordTaskFinished } from "./events.js";
+import { recordMediaAdded, recordRenderFinished, recordTaskFinished, recordYouTubeUploadFinished } from "./events.js";
 
 function recorder(options: { exportedBefore?: boolean } = {}) {
   const record = vi.fn();
@@ -34,6 +34,44 @@ describe("task.finished", () => {
     recordTaskFinished(ctx, task({ state: "done" }));
     recordTaskFinished(ctx, task({ state: "cancelled", error: "cancelled" }));
     for (const [, properties] of record.mock.calls) expect(properties).not.toHaveProperty("failureReason");
+  });
+
+  it("reports clean interruptions as cancelled with interrupted: true instead of failed", () => {
+    const { ctx, record } = recorder();
+    recordTaskFinished(ctx, task({
+      kind: "transcribe", agent: "api", state: "failed", interrupted: true,
+      error: "Transcription was interrupted.",
+      createdAt: "2026-11-23T10:00:00.000Z", startedAt: "2026-11-23T10:05:00.000Z", finishedAt: "2026-11-23T10:05:12.000Z",
+    }));
+    expect(record).toHaveBeenCalledWith("task.finished", {
+      kind: "transcribe", agent: "api", state: "cancelled", changeCount: 0, interrupted: true, durationMs: 12_000,
+    });
+
+    // A lost worker or timeout is still a real failure even when marked interrupted.
+    record.mockClear();
+    recordTaskFinished(ctx, task({ state: "failed", interrupted: true, lostWorker: true, error: "The agent was interrupted." }));
+    recordTaskFinished(ctx, task({ state: "failed", interrupted: true, error: "stalled: the agent wrote nothing for 10 minutes" }));
+    expect(record.mock.calls[0]![1]).toMatchObject({ state: "failed", interrupted: true, failureReason: "crashed" });
+    expect(record.mock.calls[1]![1]).toMatchObject({ state: "failed", interrupted: true, failureReason: "timeout" });
+  });
+
+  it("measures transcription duration from active work start and omits duration if ended while queued", () => {
+    const { ctx, record } = recorder();
+    // Waited 1 hour in the audio queue, ran for 25 s.
+    recordTaskFinished(ctx, task({
+      kind: "transcribe", agent: "api", state: "done",
+      createdAt: "2026-11-23T10:00:00.000Z", startedAt: "2026-11-23T11:00:00.000Z", finishedAt: "2026-11-23T11:00:25.000Z",
+    }));
+    expect(record.mock.calls[0]![1]).toMatchObject({ state: "done", durationMs: 25_000 });
+
+    // Interrupted while still queued (startedAt unset): queue wait is not reported as work duration.
+    recordTaskFinished(ctx, task({
+      kind: "transcribe", agent: "api", state: "failed", interrupted: true, error: "Transcription was interrupted.",
+      createdAt: "2026-11-23T10:00:00.000Z", startedAt: undefined, finishedAt: "2026-11-23T11:00:00.000Z",
+    }));
+    expect(record.mock.calls[1]![1]).toEqual({
+      kind: "transcribe", agent: "api", state: "cancelled", changeCount: 0, interrupted: true,
+    });
   });
 });
 
@@ -92,5 +130,27 @@ describe("media.added", () => {
       ["media.added", { kind: "audio", durationBucket: "1_10m", addedBy: "scarlet" }],
       ["media.added", { kind: "video", addedBy: "editor" }],
     ]);
+  });
+});
+
+describe("youtube.upload_finished", () => {
+  it("counts a finished upload as an export, by its outcome and never its title or video", () => {
+    const { ctx, record, recordExport } = recorder();
+    recordYouTubeUploadFinished(ctx, { state: "done", visibility: "unlisted", reusedRender: true });
+    expect(record).toHaveBeenCalledWith("youtube.upload_finished", { state: "done", visibility: "unlisted", reusedRender: true });
+    expect(recordExport).toHaveBeenCalledWith("youtube", false);
+  });
+
+  it("names a failure by the engine's code alone, and nothing else is an export", () => {
+    const { ctx, record, recordExport } = recorder();
+    recordYouTubeUploadFinished(ctx, { state: "failed", visibility: "private", reusedRender: false, failureCode: "youtube_quota_exceeded" });
+    recordYouTubeUploadFinished(ctx, { state: "failed", visibility: "private", reusedRender: false, failureCode: "Couldn't upload /Users/ed/Secret.mp4" });
+    recordYouTubeUploadFinished(ctx, { state: "cancelled", visibility: "weird", reusedRender: false });
+    expect(record.mock.calls.map(([, properties]) => properties)).toEqual([
+      { state: "failed", visibility: "private", reusedRender: false, failureCode: "youtube_quota_exceeded" },
+      { state: "failed", visibility: "private", reusedRender: false, failureCode: "other" },
+      { state: "cancelled", visibility: "other", reusedRender: false },
+    ]);
+    expect(recordExport).not.toHaveBeenCalled();
   });
 });

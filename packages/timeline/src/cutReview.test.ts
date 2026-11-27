@@ -166,12 +166,12 @@ describe("a dialogue pass's receipt", () => {
   const ops = [{ op: "rippleDelete", start: 125.9, end: 127.4 }, { op: "rippleDelete", start: 300, end: 301.75 }];
 
   it("says how much came out, and where when it was one cut", () => {
-    expect(describeDialogueRemovals([{ start: 125.9, end: 127.4 }])).toBe("Removed 1.5 s at 2:05.");
-    expect(describeDialogueRemovals([{ start: 3, end: 3.333333 }])).toBe("Removed 0.33 s at 0:03.");
-    expect(describeDialogueRemovals([{ start: 3599.5, end: 3600.5 }])).toBe("Removed 1 s at 59:59.");
-    expect(describeDialogueRemovals([{ start: 3600, end: 3601 }])).toBe("Removed 1 s at 1:00:00.");
-    expect(describeDialogueRemovals([{ start: 4503, end: 4504 }])).toBe("Removed 1 s at 1:15:03.");
-    expect(describeDialogueRemovals([{ start: 125.9, end: 127.4 }, { start: 300, end: 301.75 }])).toBe("Removed 3.25 s across 2 cuts.");
+    expect(describeDialogueRemovals([{ start: 125.9, end: 127.4 }])).toBe("Cut 1.5 s at 2:05.");
+    expect(describeDialogueRemovals([{ start: 3, end: 3.333333 }])).toBe("Cut 0.33 s at 0:03.");
+    expect(describeDialogueRemovals([{ start: 3599.5, end: 3600.5 }])).toBe("Cut 1 s at 59:59.");
+    expect(describeDialogueRemovals([{ start: 3600, end: 3601 }])).toBe("Cut 1 s at 1:00:00.");
+    expect(describeDialogueRemovals([{ start: 4503, end: 4504 }])).toBe("Cut 1 s at 1:15:03.");
+    expect(describeDialogueRemovals([{ start: 125.9, end: 127.4 }, { start: 300, end: 301.75 }])).toBe("Cut 3.25 s across 2 cuts.");
   });
 
   it("counts the footage an applied pass removed: its kept joins after review, else its own removals", () => {
@@ -189,8 +189,8 @@ describe("a dialogue pass's receipt", () => {
   });
 
   it("reads by the pass's state, and is absent for a part a later part replaced or a change that isn't a dialogue pass", () => {
-    expect(dialogueReceipt(pass({ state: "approved", ops }))).toBe("Removed 3.25 s across 2 cuts.");
-    expect(dialogueReceipt(pass({ state: "approved", ops: [ops[0]] }, "review"))).toBe("Removed 1.5 s at 2:05.");
+    expect(dialogueReceipt(pass({ state: "approved", ops }))).toBe("Cut 3.25 s across 2 cuts.");
+    expect(dialogueReceipt(pass({ state: "approved", ops: [ops[0]] }, "review"))).toBe("Cut 1.5 s at 2:05.");
     expect(dialogueReceipt(pass({ state: "approved", ops, approvedSpots: [0] }))).toBe("Applied the reviewed dialogue edit.");
     expect(dialogueReceipt(pass({ state: "approved", ops, appliedReview: { originalVersion: "v0", originalDuration: 400, duration: 400, joins: [] } })))
       .toBe("Kept all the reviewed footage.");

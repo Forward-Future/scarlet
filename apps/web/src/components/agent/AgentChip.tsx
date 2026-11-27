@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isComposing } from "../../lib/hotkeys";
 import { Link, useMatch } from "react-router-dom";
 import type { RunChoice, Task } from "@scarlet/shared";
 import { isDesktop, type HostStatus } from "../../lib/desktop";
 import { AGENT_LABEL, isConfiguredAgent, onlineAgents, useHostsStore } from "../../stores/hosts";
-import { isModelHidden, modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
+import { isChoiceHidden, modelChoices, selectVisibleModel, useModelPreferences } from "../../stores/modelPicker";
 import { ProviderIcon, type ModelScope } from "./ModelProviders";
 import { ModelRefreshButton, ModelRefreshFeedback, useModelRefresh } from "./ModelRefresh";
 import { ModelRow, ModelScopeBar, ModelSearch, scopeModels } from "./ModelSelectorParts";
@@ -51,7 +52,7 @@ export function useAgentAvailability() {
   const favorites = useModelPreferences((s) => s.favorites);
   const tuningByModel = useModelPreferences((s) => s.tuningByModel);
   const available = modelChoices(agents);
-  const choices = available.filter((m) => !isModelHidden({ hidden, shown, favorites }, m.key));
+  const choices = available.filter((m) => !isChoiceHidden({ hidden, shown, favorites }, m, available));
   const selected = selectVisibleModel(choices, pick, agents);
   const same = pick.agent === selected?.agent && pick.model === selected?.model;
   const remembered = selected ? tuningByModel[selected.key] : undefined;
@@ -181,7 +182,8 @@ export function AgentChip({ direction = "up", threadInput, variant = "chip" }: {
     // Esc closes layered menus first (gear -> search -> picker) and nothing behind the picker:
     // left to go on, the same press also cancels the dialog the picker sits in, such as a note.
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      // While an input method composes in the search, Esc is its own.
+      if (e.key !== "Escape" || isComposing(e)) return;
       e.preventDefault();
       e.stopPropagation();
       if (gearOpen) {

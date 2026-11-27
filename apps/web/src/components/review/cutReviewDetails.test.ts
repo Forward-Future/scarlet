@@ -21,8 +21,8 @@ it("maps rounded legacy labels to the original ranges, retaining both reasons at
 it("says how much the applied cuts took out as a cut's own length reads, not to the hundredth of a second", () => {
   const applied = (...removed: Array<[number, number]>) => appliedEditSummary({ description: "Dialogue pass", appliedReview: { originalVersion: "v1", originalDuration: 600, duration: 500,
     joins: removed.map(([start, end]) => ({ at: start, removed: { start, end } })) } } as Change);
-  expect(applied([5.124, 8], [12.923, 22.387])).toBe("Took out 12 s of footage in 2 cuts.");
-  expect(applied([5.124, 8])).toBe("Took out 2.9 s of footage in 1 cut.");
-  expect(applied([10, 141])).toBe("Took out 2:11 of footage in 1 cut.");
+  expect(applied([5.124, 8], [12.923, 22.387])).toBe("Cut 12 s in 2 cuts.");
+  expect(applied([5.124, 8])).toBe("Cut 2.9 s in 1 cut.");
+  expect(applied([10, 141])).toBe("Cut 2:11 in 1 cut.");
   expect(applied()).toBe("Kept all the reviewed footage.");
 });

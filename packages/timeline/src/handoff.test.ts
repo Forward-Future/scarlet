@@ -50,7 +50,7 @@ describe("FCPXML", () => {
     const tl = timelineFromKeepRanges(project.id, "cam", [{ start: 1, end: 3 }, { start: 5, end: 8 }]);
     const xml = toFcpxml(project, tl, new Map([["cam", source()]]));
     expect(xml).toContain('<fcpxml version="1.10">');
-    expect(xml).toContain('frameDuration="1001/30000s"');
+    expect(xml).toContain('<format id="r1" name="FFVideoFormat1080p2997" frameDuration="1001/30000s" width="1920" height="1080"/>');
     expect(xml).toContain('src="file:///Users/me/Edit/Media/cam.mov"');
     // Two clips on the storyline, the second right after the first.
     const clips = [...xml.matchAll(/<asset-clip [^>]*>/g)].map(m => m[0]);
@@ -177,6 +177,26 @@ describe("FCPXML", () => {
     expect(xml).toMatch(/<asset id="r\d+" name="logo.png" start="0s" duration="0s" hasVideo="1"/);
     expect(xml).toMatch(/<video ref="r\d+" lane="1" offset="[^"]+" name="Logo" duration="90\/30000s|<video ref="r\d+" lane="1" offset="[^"]+" name="Logo" duration="\d+\/\d+s"/);
     expect(xml).not.toMatch(/<asset-clip [^>]*name="Logo"/);
+  });
+
+  it("writes predefined FFVideoFormat names for standard resolutions and FFVideoFormatRateUndefined for custom ones", () => {
+    const cases: Array<{ width: number; height: number; fps: number; name: string; frameDuration: string }> = [
+      { width: 3840, height: 2160, fps: 30, name: "FFVideoFormat3840x2160p30", frameDuration: "1/30s" },
+      { width: 3840, height: 2160, fps: 24000 / 1001, name: "FFVideoFormat3840x2160p2398", frameDuration: "1001/24000s" },
+      { width: 1920, height: 1080, fps: 60000 / 1001, name: "FFVideoFormat1080p5994", frameDuration: "1001/60000s" },
+      { width: 1280, height: 720, fps: 25, name: "FFVideoFormat720p25", frameDuration: "1/25s" },
+      { width: 4096, height: 2160, fps: 24, name: "FFVideoFormat4096x2160p24", frameDuration: "1/24s" },
+      { width: 1080, height: 1920, fps: 30, name: "FFVideoFormatRateUndefined", frameDuration: "1/30s" },
+      { width: 3840, height: 2160, fps: 120, name: "FFVideoFormatRateUndefined", frameDuration: "1/120s" },
+    ];
+    for (const c of cases) {
+      const project = createProject("Format test", { width: c.width, height: c.height, fps: c.fps });
+      project.media.push({ id: "cam", kind: "video", name: "cam.mov", path: "cam.mov", duration: 10, fps: c.fps, hasAudio: true });
+      const tl = timelineFromKeepRanges(project.id, "cam", [{ start: 0, end: 5 }]);
+      const rate = exactRate(c.fps).rate;
+      const xml = toFcpxml(project, tl, new Map([["cam", source({ rate, width: c.width, height: c.height })]]));
+      expect(xml).toContain(`<format id="r1" name="${c.name}" frameDuration="${c.frameDuration}" width="${c.width}" height="${c.height}"/>`);
+    }
   });
 });
 

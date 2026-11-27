@@ -10,7 +10,7 @@ import {
 } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 
-/** The stock skill music-under-speech's dip, for each field a duckUnderSpeech step leaves out. */
+/** The dip the shipped music skill describes, for each field a duckUnderSpeech step leaves out. The step's own fields win. */
 export const DIP_DEFAULTS = { depthDb: -18, fadeDown: 0.3, fadeUp: 0.8, minGap: 2 } as const;
 
 type Duck = Extract<ProposeOp, { op: "duckUnderSpeech" }>;

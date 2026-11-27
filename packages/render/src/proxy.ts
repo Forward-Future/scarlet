@@ -7,7 +7,7 @@ import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT, type AudioTrackSelection } from "@scarlet/timeline";
 import { audioMapArgs } from "./audioTrack.js";
-import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
+import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, logRender, runFfmpeg, threadedAvcPreview } from "./exec.js";
 import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
 import { toneMapFilters } from "./hdr.js";
@@ -269,6 +269,9 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
           onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
       } finally { await rm(manifest, { force: true }); }
     } finally { await sound?.stop(); }
+    // The engine logs every finished proxy; this says only what it can't, that an earlier run's parts were reused.
+    const kept = all.length - todo.length;
+    if (kept) logRender(`[media] proxy resumed: ${kept} of ${all.length} parts kept from an earlier run, ${todo.length} encoded now`);
     opts.onProgress?.(1);
     return { output, duration: probe.duration, hasVideo, hasAudio: probe.hasAudio, encoder, warnings };
   }

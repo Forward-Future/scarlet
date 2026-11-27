@@ -270,7 +270,14 @@ pub(crate) async fn pick_destination(app: &AppHandle, title: &str, file_name: &s
         picker = picker.add_filter("WebVTT captions", &["vtt"]);
     }
     picker.save_file(move |p| { let _ = tx.send(p); });
-    rx.await.map_err(|e| e.to_string())?.map(|picked| picked.into_path().map_err(|e| e.to_string())).transpose()
+    let picked = rx.await.map_err(|e| e.to_string())?;
+    if picked.is_none() {
+        log::info!("{title}: save dialog cancelled");
+    }
+    picked.map(|picked| picked.into_path().map_err(|e| {
+        log::warn!("{title}: the chosen destination is not a local file");
+        e.to_string()
+    })).transpose()
 }
 
 #[derive(serde::Serialize)]
@@ -365,6 +372,21 @@ async fn save_engine_file(app: &AppHandle, state: &AppState, url: &str, path: &P
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// The file an export is written to before it takes the chosen name. It gets the permissions a plain create would
+/// (0644 under the usual umask), not tempfile's private 0600, so a video saved to a shared folder can be read there.
+/// The default `.tmp` prefix stays: `clear_partial` looks for it.
+fn export_temp_in(parent: &Path) -> io::Result<tempfile::NamedTempFile> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o666)).tempfile_in(parent)
+    }
+    #[cfg(not(unix))]
+    {
+        tempfile::NamedTempFile::new_in(parent)
+    }
+}
+
 pub(crate) async fn finish_video_export(app: &AppHandle, state: &AppState, destinations: &ExportDestinations, ticket: u64, url: &str) -> Result<String, String> {
     let started = std::time::Instant::now();
     let mut transfer = ExportTransfer { request: uuid::Uuid::new_v4(), stage: "destination", status: 0, bytes: 0, render: None };
@@ -373,7 +395,7 @@ pub(crate) async fn finish_video_export(app: &AppHandle, state: &AppState, desti
         let path = destinations.path_for(ticket)?;
         chosen = Some(path.clone());
         let parent = path.parent().ok_or("Unsupported save destination")?;
-        let temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| format!("Could not write to the chosen folder ({})", e.kind()))?;
+        let temp = export_temp_in(parent).map_err(|e| format!("Could not write to the chosen folder ({})", e.kind()))?;
         let partial = temp.path().to_path_buf();
         // Process inspection can start PowerShell on Windows. Claim the destination off the runtime before writing.
         transfer.stage = "claim";
@@ -453,7 +475,10 @@ pub(crate) fn write_handoff_folder(dest: &Path, files: &[HandoffFile], library: 
     }
     let staged = staging.keep();
     fs::rename(&staged, dest).map_err(|e| {
-        let _ = fs::remove_dir_all(&staged);
+        // Left behind, the hidden half-built folder would sit beside the editor's files.
+        if let Err(left) = fs::remove_dir_all(&staged) {
+            log::warn!("[export] staging-cleanup outcome=failed code={}", left.raw_os_error().unwrap_or(0));
+        }
         format!("Could not save the folder ({})", e.kind())
     })
 }
@@ -461,11 +486,13 @@ pub(crate) fn write_handoff_folder(dest: &Path, files: &[HandoffFile], library: 
 pub(crate) async fn finish_folder_export(app: &AppHandle, state: &AppState, destinations: &ExportDestinations, ticket: u64, files: Vec<HandoffFile>) -> Result<String, String> {
     let path = destinations.path_for(ticket)?;
     let (dest, library, demo) = (path.clone(), state.paths.data_dir.clone(), crate::is_demo(app));
+    let (count, started) = (files.len(), std::time::Instant::now());
     let saved = tauri::async_runtime::spawn_blocking(move || write_handoff_folder(&dest, &files, &library, demo)).await.map_err(|e| e.to_string())?;
+    let took = crate::util::human_duration(started.elapsed());
     // Never where it went: the editor typed the folder's name.
     match &saved {
-        Ok(()) => log::info!("export folder saved"),
-        Err(e) => log::warn!("export folder could not be saved: {e}"),
+        Ok(()) => log::info!("export folder saved ({count} files in {took})"),
+        Err(e) => log::warn!("export folder could not be saved after {took}: {e}"),
     }
     // A ledger error is separate from the folder's outcome, as for a video: `change` logs it.
     let _ = destinations.discard(ticket);
@@ -475,6 +502,19 @@ pub(crate) async fn finish_folder_export(app: &AppHandle, state: &AppState, dest
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exported_file_gets_the_permissions_of_a_plain_create() {
+        use std::os::unix::fs::PermissionsExt;
+        let out = tempfile::tempdir().unwrap();
+        let temp = export_temp_in(out.path()).unwrap();
+        assert!(temp.path().file_name().unwrap().to_string_lossy().starts_with(".tmp"));
+        temp.persist(out.path().join("a.mp4")).unwrap();
+        File::create(out.path().join("b.mp4")).unwrap();
+        let mode = |name: &str| fs::metadata(out.path().join(name)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode("a.mp4"), mode("b.mp4"));
+    }
 
     #[test]
     fn writes_a_handoff_folder_from_the_library_only() {

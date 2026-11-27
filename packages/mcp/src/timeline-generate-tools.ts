@@ -12,13 +12,16 @@ import {
   type Task,
 } from "@scarlet/shared";
 import {
+  applyOps,
   CaptionStyle,
   captionsFromWords,
   carriesAudio,
+  clipEnd,
   newId,
   timelineFromKeepRanges,
   Transform,
   type CaptionClip,
+  type MediaClip,
   type Timeline,
   type TimelineOp,
   type Track,
@@ -32,8 +35,10 @@ import {
   round2,
   round3,
 } from "./analysis.js";
+import type { RecordingCut } from "./brief-pictures.js";
 import { firstCutRanges } from "./first-cut-ranges.js";
-import { boxInCorner, cornerOf, CORNERS, coverOnText, framingOps, MOVE_EASES, type Box, type Corner } from "./framing.js";
+import { boxInCorner, cornerOf, CORNERS, coverOnText, framingOps, frameShown, MOVE_EASES, type Box, type Corner } from "./framing.js";
+import { moveCrossesScreenChange } from "./framing-report.js";
 import {
   editReasonInput,
   makeIntentInput,
@@ -66,7 +71,7 @@ export interface TimelineGenerateToolsDeps {
 export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
   const { tool, client, projectId, taskId, task, caps, session, errors, proposePipeline, useStagedCut } = deps;
   const { getProject, peekTimeline, baseTimeline, headTimelineOrNull, transcriptWords, edgesInSound, edgeInSoundText, planSources, edgeWaitMs } = session;
-  const { withoutUnlessPreparing } = errors;
+  const { withoutUnlessPreparing, withoutOnce, unavailableOnce } = errors;
   const { recordingAreas, propose, presetInsetOver, presetInsetText } = proposePipeline;
   const intentInput = makeIntentInput(Boolean(taskId));
 
@@ -74,7 +79,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
   let framed: Array<{ changeId: string; mediaId: string; trackId?: string; from: number; to: number }> = [];
   tool(
     "timeline_framing",
-    "Frame a recording's picture on an area of it over a stretch of the edit: a zoom in on a pane, a move from one subject to the next, a pull back out. Each framing names the area that must be seen (`show`) from a timeline second (`at`), as [left, top, right, bottom] in percent of the SOURCE picture: the units of screen_text's boxes" + (caps.images ? " and media_frame's grid" : "") + ". Scarlet places the tightest frame of the video's shape around it, so the picture always fills the video with no background beside it, and keeps the area clear of any picture laid over the recording, such as a camera inset. `within` is the area the frame may show, one window for example: the frame grows into it and goes past it only when it has to. The same `show`, `within` and inset place the same frame again, so a framing you resend unchanged stays as it was while you change others. `inset` moves the picture laid over the recording to another corner of the video from that framing on, at the size and margins it has, travelling with the frame's move; it stays there through `to` unless a later framing moves it again. `inset` as `clear` leaves the choice of corner to what is on screen: the picture's own corner when it sits on none of the frame's text there, else a corner where it sits on none, and the result says which (`inset`) or that no corner is clear (`noCornerClearOfText`). The picture moves to each frame over `over` seconds (default 1; 0 is a straight cut), eased as `ease` says (in and out by default), and holds until the next framing or `to`; a move runs on across the cuts that split the footage into clips. The first framing moves from the frame already there when the footage plays on from before it, and otherwise starts on its frame. Clips of the recording outside the stretch keep their framing. The result gives each frame as placed: `frame` in percent of the source, `zoom`, `sourcePixels` (source pixels per pixel of the video; under 1 the picture is enlarged past its own detail), `holds` seconds, `hidden` (percent of `show` that a cover or the frame's edge hides), `beyondWithin` (percent of the frame past `within`, by side) with `insideWithin` (the largest frame that stays inside it, and the percent of `show` that one hides), `covers` (other pictures over the video there, in percent of the video), `notOnPicture` when another picture fills the video there, and `text` where the recording's text has been read (screen_text reads it): the lines in `show`, their smallest and usual height in pixels of the video, any a cover sits on (`underCover`), and the corners where the cover would sit on none (`cornersClearOfText`); `textUnderCover` lists the framings that have such lines." + (caps.images ? ` With a picture of the video at each frame's settled moment, ${FRAMING_PICTURES} a call starting at \`picturesFrom\`.` : "") + " `preview` works all of this out and shows it without saving. A framing saved over a stretch this request already framed takes that edit's place in the editor's list, unless you give `timelineEdits`. For a crop with the background showing, an inset or a rotation, use timeline_propose's updateClip.",
+    "Frame a recording's picture on an area of it over a stretch of the edit: a zoom in on a pane, a move from one subject to the next, a pull back out. Each framing names the area that must be seen (`show`) from a timeline second (`at`), as [left, top, right, bottom] in percent of the SOURCE picture: the units of screen_text's boxes" + (caps.images ? " and media_frame's grid" : "") + ". Scarlet places the tightest frame of the video's shape around it, so the picture always fills the video with no background beside it, and keeps the area clear of any picture laid over the recording, such as a camera inset. `within` is the area the frame may show, one window for example: the frame grows into it and goes past it only when it has to. The same `show`, `within` and inset place the same frame again, so a framing you resend unchanged stays as it was while you change others. `inset` moves the picture laid over the recording to another corner of the video from that framing on, at the size and margins it has, travelling with the frame's move; it stays there through `to` unless a later framing moves it again. `inset` as `clear` leaves the choice of corner to what is on screen: the picture's own corner when it sits on none of the frame's text there, else a corner where it sits on none, and the result says which (`inset`) or that no corner is clear (`noCornerClearOfText`). The picture moves to each frame over `over` seconds (default 1; 0 is a straight cut), eased as `ease` says (in and out by default), and holds until the next framing or `to`; a move runs on across the cuts that split the footage into clips. The first framing moves from the frame already there when the footage plays on from before it, and otherwise starts on its frame. Clips of the recording outside the stretch keep their framing. The result gives each frame as placed: `frame` in percent of the source, `zoom`, `sourcePixels` (source pixels per pixel of the video; under 1 the picture is enlarged past its own detail), `holds` seconds, `hidden` (percent of `show` that a cover or the frame's edge hides), `beyondWithin` (percent of the frame past `within`, by side) with `insideWithin` (the largest frame that stays inside it, and the percent of `show` that one hides), `covers` (other pictures over the video there, in percent of the video), `notOnPicture` when another picture fills the video there, `screenChanged` (with `screenChangeAt`) when a move glides across a cut where the screen itself changes to something new (`over: 0` cuts straight with it; `movesAcrossScreenChange` lists those framings), and `text` where the recording's text has been read (screen_text reads it): the lines in `show`, their smallest and usual height in pixels of the video, any a cover sits on (`underCover`), and the corners where the cover would sit on none (`cornersClearOfText`); `textUnderCover` lists the framings that have such lines." + (caps.images ? ` With a picture of the video at each frame's settled moment, ${FRAMING_PICTURES} a call starting at \`picturesFrom\`.` : "") + " `preview` works all of this out and shows it without saving. A framing saved over a stretch this request already framed takes that edit's place in the editor's list, unless you give `timelineEdits`. For a crop with the background showing, an inset or a rotation, use timeline_propose's updateClip.",
     {
       intent: intentInput,
       mediaId: z.string().describe("The recording whose picture to frame"),
@@ -91,12 +96,13 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       preview: z.boolean().optional().describe("Work out the frames and show them without saving"),
       ...(caps.images && { picturesFrom: z.number().int().nonnegative().optional().describe("Index of the first framing to picture") }),
       description: z.string().min(1).default("Framed the picture on what is being shown").describe("One short sentence for the chat about what the editor will see"),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("Short plain-English group title for the edits list when this save creates several framing/zoom edits (e.g. '4 zooms on demo screens')"),
       reason: editReasonInput,
       timelineEdits: timelineEditsInput,
       noteIds: z.array(z.string()).optional(),
       fromVersion: z.string().optional().describe("Version the framing applies to. Defaults to the version you last read."),
     },
-    async ({ intent, mediaId, trackId, framings, to, preview, description, reason, timelineEdits, noteIds, fromVersion, ...rest }) => {
+    async ({ intent, mediaId, trackId, framings, to, preview, description, batchTitle, reason, timelineEdits, noteIds, fromVersion, ...rest }) => {
       const picturesFrom = (rest as { picturesFrom?: number }).picturesFrom ?? 0;
       const { project } = await getProject();
       const before = fromVersion ? await peekTimeline(fromVersion) : await baseTimeline();
@@ -110,7 +116,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       const place = () => framingOps(before, project.media, project.settings,
         framings.map((f, i) => ({ at: f.at, show: fraction(f.show), within: f.within ? fraction(f.within) : withinOnRecord[i], over: f.over, ...(f.ease && { ease: f.ease }), inset: corners[i] })), { mediaId, trackId, to });
       let plan = place();
-      const areasOnRecord = await recordingAreas(mediaId, 5).catch(() => undefined);
+      const areasOnRecord = await recordingAreas(mediaId, 5).catch(withoutOnce(`failed to read the areas viewers may see in ${mediaId}`, undefined));
       if (areasOnRecord?.done && areasOnRecord.areas.length) {
         withinOnRecord = framings.map((f, i) => {
           const at = plan.frames[i]?.sourceTime;
@@ -127,7 +133,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
           const read = await client.get<{ done: boolean; spans: Array<{ text: string; box: [number, number, number, number] }> }>(
             `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/screen-text?from=${f.sourceTime}&to=${f.sourceTime + 1}&wait=${framings[i]!.inset === "clear" ? 20 : 2}`);
           return read.done ? read.spans : undefined;
-        } catch { return undefined; }
+        } catch (err) { unavailableOnce(`failed to read the screen text of ${mediaId} for framing`, err); return undefined; }
       }));
       // `clear`: the inset's own corner when no text of the frame is under it there, else the corner it is in, else
       // another with none. Moving it moves the frame that keeps `show` clear of it, so each choice is checked again
@@ -148,6 +154,31 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         if (!moved) break;
         plan = place();
       }
+      // Check whether any gliding move runs across a screen change (recording cut or clip source jump across one).
+      const mediaRun = (() => {
+        const laid = (() => { try { return applyOps(before, plan.ops); } catch { return before; } })();
+        return laid.tracks
+          .filter(t => t.kind === "video" && !t.hidden && (!trackId || t.id === trackId))
+          .flatMap(t => t.clips.filter((c): c is MediaClip => c.kind === "media" && c.enabled !== false && c.mediaId === mediaId))
+          .sort((a, b) => a.timelineIn - b.timelineIn);
+      })();
+      const hasMoves = plan.frames.some(f => f.arrives === "move");
+      const mediaAsset = project.media.find(m => m.id === mediaId);
+      const mediaSize = { width: mediaAsset?.width || project.settings.width, height: mediaAsset?.height || project.settings.height };
+      const cuts = hasMoves && mediaRun.length ? await (async () => {
+        const srcMin = Math.max(0, Math.floor(Math.min(...mediaRun.map(c => c.sourceIn))) - 1);
+        const srcMax = Math.ceil(Math.max(...mediaRun.map(c => c.sourceOut))) + 1;
+        try {
+          const read = await client.get<{ done: boolean; cuts: RecordingCut[] }>(
+            `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/picture-cuts?from=${srcMin}&to=${srcMax}&wait=2`);
+          return read.cuts;
+        } catch (err) { unavailableOnce(`failed to read where ${mediaId} cuts for framing`, err); return undefined; }
+      })() : undefined;
+      const beforeClip = before.tracks
+        .filter(t => t.kind === "video" && !t.hidden && (!trackId || t.id === trackId))
+        .flatMap(t => t.clips.filter((c): c is MediaClip => c.kind === "media" && c.enabled !== false && c.mediaId === mediaId))
+        .find(c => c.timelineIn <= framings[0]!.at + 1e-6 && framings[0]!.at < clipEnd(c) - 1e-6);
+      const initialFrame = beforeClip ? frameShown(beforeClip, Math.max(0, framings[0]!.at - beforeClip.timelineIn), mediaSize, project.settings) : null;
       const report = plan.frames.map((f, i) => {
         const show = fraction(framings[i]!.show);
         const [, ft, , fb] = f.frame, fh = fb - ft;
@@ -158,8 +189,12 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         const under = spans?.filter(s => coverOnText(f.frame, f.covers, [s]));
         // The corners the covers could sit in with no line of the frame's text under them.
         const clear = !under?.length ? undefined : CORNERS.filter(corner => !coverOnText(f.frame, f.covers.map(c => boxInCorner(c, corner)), spans!));
+        const prevFrame = i ? plan.frames[i - 1]!.frame : initialFrame;
+        const screenHit = f.arrives === "move" && prevFrame && cuts
+          ? moveCrossesScreenChange(mediaRun, f.at, f.settles, prevFrame, f.frame, { cuts }) : undefined;
         return {
           at: f.at, arrives: f.arrives, settles: f.settles, holds: f.holds, frame: percent(f.frame), zoom: round2(f.zoom), sourcePixels: round2(f.sourcePixels),
+          ...(screenHit && { screenChanged: true as const, screenChangeAt: screenHit.at }),
           ...(f.hidden >= 0.005 && { hidden: Math.round(f.hidden * 100) }),
           ...(f.beyondWithin && { beyondWithin: Object.fromEntries(Object.entries(f.beyondWithin).map(([side, share]) => [side, Math.round(share * 100)])) }),
           ...(f.insideWithin && { insideWithin: { frame: percent(f.insideWithin.frame), hidden: Math.round(f.insideWithin.hidden * 100) } }),
@@ -176,6 +211,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
 
       const unread = plan.frames.filter((f, i) => !f.notOnPicture && !lines[i]).length;
       const covered = report.flatMap((f, i) => typeof f.text === "object" && "underCover" in f.text && f.text.underCover ? [i] : []);
+      const acrossChange = report.flatMap((f, i) => "screenChanged" in f && f.screenChanged ? [i] : []);
       // One edit for the stretch, in the model's own words, unless it listed its own. A run looks at a framing once it
       // is saved and frames the stretch again: 16 saves for 11 demos on one run (2026-11-16), each a row in the editor's
       // list. A save over a stretch an earlier one of this run framed revises that row.
@@ -185,7 +221,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         .sort((a, b) => (b.to - b.from) - (a.to - a.from));
       const edits = timelineEdits ?? (reason && stretch.end > stretch.start
         ? [{ label: description.slice(0, 180), range: stretch, reason, ...(earlier.length && { replaces: { changeId: earlier[0]!.changeId, spot: 0 } }) }] : undefined);
-      const save = (timelineEdits: typeof edits) => propose({ intent, ops: plan.ops, description, reason, noteIds, timelineEdits }, before);
+      const save = (timelineEdits: typeof edits) => propose({ intent, ops: plan.ops, description, ...(batchTitle && { batchTitle }), reason, noteIds, timelineEdits }, before);
       // An earlier framing the editor has since undone, or another request changed, is no longer this run's to revise: the framing is saved as its own edit.
       const saved = preview ? undefined : await save(edits).catch(error => {
         if (!(error instanceof ScarletApiError && error.code === "invalid_replacement") || timelineEdits) throw error;
@@ -199,8 +235,10 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       }
       const content: ToolResult["content"] = [...(saved?.content ?? []),
         { type: "text", text: JSON.stringify({ ...(preview && { preview: true, saved: false }), mediaId, clips: plan.clips, ...(plan.insetClips && { insetClips: plan.insetClips }),
-          // Named once ahead of the list: among a hundred framings, the few with text under a cover were read past.
-          ...(covered.length && { textUnderCover: covered }), video: `${project.settings.width}x${project.settings.height}`, framings: report,
+          // Named once ahead of the list: among a hundred framings, the few with text under a cover or a glide across a screen change were read past.
+          ...(covered.length && { textUnderCover: covered }),
+          ...(acrossChange.length && { movesAcrossScreenChange: acrossChange }),
+          video: `${project.settings.width}x${project.settings.height}`, framings: report,
           ...(unread && { textUnread: `The recording's text at ${unread} of these frames isn't read yet. It is being read now: a later call, or a preview, reports it.` }) }) }];
       if (caps.images && !saved?.isError) {
         const shown = plan.frames.map((f, index) => ({ f, index })).slice(picturesFrom, picturesFrom + FRAMING_PICTURES);
@@ -359,7 +397,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
 
   tool(
     "captions_generate",
-    "Generate a caption track from the transcript, mapped through the CURRENT edit: for audible clips by default (or all enabled placements of an explicitly named mediaId) the words inside its kept source range are placed at the matching timeline time; words that were cut out are dropped. Groups words into caption clips of at most `maxWords` words / `maxChars` characters with per-word timings (karaoke highlighting possible). The result gives each caption's reading rate: the median and the five fastest, in characters a second, with their timeline times. Choose a destination when caption tracks already exist. Replacing one track preserves the others. `style` is a partial CaptionStyle: fontFamily, fontSize (fraction of canvas height, e.g. 0.05), color, backgroundColor, outlineColor, outlineWidth, y (0..1 from top, 0.85 = lower third), align, maxWidth, uppercase, highlightColor.",
+    "Generate a caption track from the transcript, mapped through the CURRENT edit: for audible clips by default (or all enabled placements of an explicitly named mediaId) the words inside its kept source range are placed at the matching timeline time; words that were cut out are dropped. Groups words into caption clips of at most `maxWords` words / `maxChars` characters with per-word timings (karaoke highlighting possible). The result gives each caption's reading rate: the median and the five fastest, in characters a second, with their timeline times. Choose a destination when caption tracks already exist. Replacing one track preserves the others. When an active style guide (named with @style or the library Default) has a saved captionStyle, Scarlet applies it automatically and merges any explicit `style` fields on top. `style` is a partial CaptionStyle: fontFamily (system font or a font attached to an active style guide), fontWeight (normal, medium, semibold, bold, black), fontSize (fraction of canvas height, e.g. 0.05), color, backgroundColor, outlineColor, outlineWidth, y (0..1 from top, 0.85 = lower third), align, maxWidth, uppercase, highlightColor.",
     {
       mediaId: z.string().optional(),
       intent: intentInput,
@@ -384,6 +422,9 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         next: "Choose destination new or supply replaceTrackId. No tracks were changed." });
       const target = typeof destination === "object" ? tracks.find(t => t.id === destination.replaceTrackId) : undefined;
       if (typeof destination === "object" && !target) throw new Error("Choose a caption track on the current version.");
+      const activeGuides = (await client.activeStyleGuides?.({ projectId, taskId }).catch(withoutOnce("failed to read the active style guides for captions", { styleGuides: [] })))?.styleGuides ?? [];
+      const styledGuide = activeGuides.find(g => g.captionStyle && Object.keys(g.captionStyle).length > 0);
+      const guideStyle = styledGuide?.captionStyle;
       const sources = new Set(detail.project.media.filter(carriesAudio).map(m => m.id));
       const clips = captionSourceClips(head, id => sources.has(id), mediaId);
       const mediaIds = new Set(clips.map(c => c.mediaId));
@@ -423,12 +464,20 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         words: g.words.map((w) => ({ text: w.text, start: w.start, end: Math.min(w.end, g.end) })),
         enabled: true,
       }));
+      const mergedCaptionStyle = (() => {
+        if (!guideStyle && !target?.captionStyle && !style) return undefined;
+        // Replacing an existing track keeps its prior look unless the request explicitly named a @style or passed `style`.
+        const base = target && styledGuide?.reason !== "mentioned"
+          ? { ...guideStyle, ...target.captionStyle }
+          : { ...target?.captionStyle, ...guideStyle };
+        return { ...base, ...style };
+      })();
       const ops: TimelineOp[] = [];
       if (target) ops.push({ op: "removeTrack", trackId: target.id });
       const track: Track = {
         id: target?.id ?? newId("cap"), kind: "caption", name: trackName ?? target?.name ?? "Captions",
         muted: target?.muted ?? false, hidden: target?.hidden ?? false,
-        captionStyle: style ? { ...target?.captionStyle, ...style } : target?.captionStyle,
+        captionStyle: mergedCaptionStyle,
         clips: captionClips,
       };
       ops.push({ op: "addTrack", track, ...(target && { index: head.tracks.indexOf(target) }) });
@@ -441,13 +490,19 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       const median = sortedRates.length ? sortedRates[Math.floor(sortedRates.length / 2)]! : 0;
       const fastest = [...rates].sort((a, b) => b.cps - a.cps).slice(0, 5)
         .map(r => `${r.at.toFixed(2)} s ${r.cps.toFixed(1)}/s "${r.text.replace(/\s+/g, " ").trim()}"`);
+      const styleNote = styledGuide
+        ? `\nApplied caption style from @${styledGuide.name}${style ? " (with explicit style overrides)" : ""}.`
+        : !style && activeGuides.length
+          ? `\nActive style guide @${activeGuides[0]!.name} has no structured captionStyle yet; pass explicit \`style\` fields if its instructions define a caption look.`
+          : "";
       return {
         ...result,
         content: [
           {
             type: "text",
             text: `${captionClips.length} caption clip(s) from ${words.length} words across ${clips.length} media clip(s)${skipped.length ? `; skipped media without transcript: ${skipped.join(", ")}` : ""}.` +
-              (rates.length ? `\nReading rate in characters a second (timeline seconds): median ${median.toFixed(1)}; fastest ${fastest.join("; ")}.` : ""),
+              (rates.length ? `\nReading rate in characters a second (timeline seconds): median ${median.toFixed(1)}; fastest ${fastest.join("; ")}.` : "") +
+              styleNote,
           },
           ...result.content,
         ],

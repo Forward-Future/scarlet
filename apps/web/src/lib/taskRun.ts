@@ -324,7 +324,7 @@ export function runSummary(task: Task, change?: Change): string {
     const cuts = change.cutReasons ?? [];
     if (cuts.length) {
       const removed = cuts.reduce((sum, c) => sum + Math.max(0, c.end - c.start), 0);
-      const verb = change.state === "approved" ? "Took out" : "Suggested";
+      const verb = change.state === "approved" ? "Cut" : "Suggested";
       return `${verb} ${lengthLabel(removed)} in ${plural(cuts.length, "cut")}`;
     }
     // Several named edits are listed under the reply, so the run line only counts them.

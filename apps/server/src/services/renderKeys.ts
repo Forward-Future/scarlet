@@ -113,15 +113,17 @@ export function isVideoExport(input: Pick<Render, "kind" | "quality">): boolean 
 
 // An assembly can expire independently of its encoded picture sections.
 export function assemblyRevision(input: Pick<Render, "kind" | "quality">): string {
-  if (isVideoExport(input)) return `-mix${DELIVERY_AUDIO_REVISION}`;
-  return input.kind === "full" ? "-pts1" : "";
+  if (isVideoExport(input) || input.kind === "full" || (input.kind === "segment" && input.quality === "preview")) {
+    return `-mix${DELIVERY_AUDIO_REVISION}`;
+  }
+  return "";
 }
 
 // Old assemblies can be rebuilt against the same sources after a delivery mix or proxy clock upgrade.
 export function sameQueuedSource(previousKey: string, currentKey: string | undefined, assembly: string): boolean {
   if (!currentKey) return false;
   if (currentKey === previousKey) return true;
-  const priorAssembly = assembly.startsWith("-mix") ? previousKey.replace(/-mix3(?=-clock\d+$|$)/, "") : previousKey;
+  const priorAssembly = assembly.startsWith("-mix") ? previousKey.replace(/(?:-mix3|-pts1)(?=-clock\d+$|$)/, "") : previousKey;
   const priorSourceKey = priorAssembly.replace(/-clock2$/, "");
   return [currentKey, currentKey.replace(assembly, "")].some(key =>
     key === priorAssembly || key === priorSourceKey + `-clock${PROXY_CLOCK_REVISION}`);
@@ -304,5 +306,5 @@ export function computeRenderContentKey(
   // Playback of a newly imported recording can overlap its background hash. The source
   // path and physical stamp identify its bytes both before and after that hash arrives.
   const content = segmentKey(originals, timeline, range, format, undefined, legacyTransitions);
-  return "range-v2-" + sha256(stableStringify([input.kind, input.projectId, input.range, content, stamps, luts, pictureInputs])) + clockSuffix();
+  return "range-v2-" + sha256(stableStringify([input.kind, input.projectId, input.range, content, stamps, luts, pictureInputs])) + assemblyRevision(input) + clockSuffix();
 }

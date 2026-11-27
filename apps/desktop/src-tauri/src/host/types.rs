@@ -361,6 +361,26 @@ pub fn pretty_tool_name(name: &str) -> String {
     name.to_string()
 }
 
+/// The Scarlet tool a call through `tool_call` makes, by its bare name ("transcript_get"), with that tool's arguments.
+/// `tool_call` is how the MCP server gives a run with brief tools (Gemini, and Ollama, LM Studio and OpenRouter through
+/// Claude Code) the tools it doesn't list on their own, so read this way the run's history says what Scarlet did. None
+/// for any other call, and for a question: the server refuses one asked through `tool_call`, so it was never asked.
+pub fn tool_call_target(raw_name: &str, input: Option<&Value>) -> Option<(String, Value)> {
+    if pretty_tool_name(raw_name) != "scarlet.tool_call" {
+        return None;
+    }
+    let named = input?.get("name")?.as_str()?.trim().to_ascii_lowercase();
+    let tool = ["mcp__scarlet__", "mcp_scarlet_", "scarlet__", "scarlet.", "scarlet/", "scarlet:"]
+        .iter()
+        .find_map(|prefix| named.strip_prefix(prefix))
+        .unwrap_or(&named);
+    if tool.is_empty() || !tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') || is_question_tool(Some(tool)) {
+        return None;
+    }
+    let arguments = input?.get("arguments").cloned().unwrap_or_else(|| Value::Object(Default::default()));
+    Some((tool.to_string(), arguments))
+}
+
 /// `briefInput(input, max)`: compact JSON (or the string itself), truncated in UTF-16 units.
 pub fn brief_input(input: Option<&Value>, max: usize) -> String {
     let Some(v) = input else { return String::new() };
@@ -433,6 +453,24 @@ mod tests {
         assert_eq!(pretty_tool_name("mcp__scarlet__timeline_get"), "scarlet.timeline_get");
         assert_eq!(pretty_tool_name("scarlet__x"), "scarlet.x");
         assert_eq!(pretty_tool_name("Bash"), "Bash");
+    }
+
+    #[test]
+    fn reads_the_tool_a_call_through_tool_call_makes() {
+        let target = |name: &str, input: Value| tool_call_target(name, Some(&input));
+        let call = json!({"name":"transcript_get","arguments":{"mediaId":"m1"}});
+        for through in ["mcp__scarlet__tool_call", "mcp_scarlet_tool_call", "scarlet__tool_call", "scarlet.tool_call"] {
+            assert_eq!(target(through, call.clone()), Some(("transcript_get".into(), json!({"mediaId":"m1"}))), "{through}");
+        }
+        // The tool by any of its names, and with no arguments.
+        assert_eq!(target("mcp__scarlet__tool_call", json!({"name":" MCP__Scarlet__Timeline_Get "})), Some(("timeline_get".into(), json!({}))));
+        // Any other call, a call that names no tool, and a question, which the server refuses there.
+        assert_eq!(target("mcp__scarlet__transcript_get", call.clone()), None);
+        assert_eq!(target("mcp__other__tool_call", call), None);
+        assert_eq!(tool_call_target("mcp__scarlet__tool_call", None), None);
+        for name in [json!(""), json!("../x"), json!(7), json!("task_question"), json!("scarlet.task_question")] {
+            assert_eq!(target("mcp__scarlet__tool_call", json!({"name":name,"arguments":{}})), None, "{name}");
+        }
     }
 
     #[test]

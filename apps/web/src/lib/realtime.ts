@@ -11,6 +11,8 @@ import { reportImportCheck } from "./upload";
 import { useHostsStore } from "../stores/hosts";
 import { useProjectStore } from "../stores/project";
 import { useSkillsStore } from "../stores/skills";
+import { useStyleGuidesStore } from "../stores/styleGuides";
+import { useYouTubeStore } from "../stores/youtube";
 import { useUiStore } from "../stores/ui";
 
 let socket: WebSocket | null = null;
@@ -67,6 +69,18 @@ export function dispatchWsEvent(ev: WsEvent) {
       return;
     case "skill.updated":
       useSkillsStore.getState().apply(ev.skill);
+      return;
+    case "style_guide.updated":
+      useStyleGuidesStore.getState().apply(ev.styleGuide);
+      return;
+    case "style_guide.deleted":
+      useStyleGuidesStore.getState().removeLocal(ev.styleGuideId);
+      return;
+    case "youtube.connection.updated":
+      useYouTubeStore.getState().applyStatus(ev.status);
+      return;
+    case "youtube.upload.updated":
+      useYouTubeStore.getState().applyUpload(ev.upload);
       return;
     case "notification":
       // The window shows no list of notifications.

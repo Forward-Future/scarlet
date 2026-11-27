@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { absTime, authorLabel, clock, clockRange, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, preciseRange, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
+import { absTime, authorLabel, clock, clockRange, distinctClock, fmtBytes, initials, pct, lengthLabel, playbackClock, plural, preciseRange, relTime, removedSeconds, tokenBreakdown, tokenLabel, trashedLine } from "./format";
 
 afterEach(() => vi.useRealTimers());
 
@@ -105,6 +105,10 @@ it("counts tokens at a glance and in full", () => {
   expect(tokenLabel(999_499)).toBe("999K tokens");
   expect(tokenLabel(999_500)).toBe("1M tokens");
   expect(tokenLabel(1_240_000)).toBe("1.2M tokens");
+  // Past a billion it counts in billions, as the figures beside it in Settings → Usage do, not "1235M".
+  expect(tokenLabel(999_499_999)).toBe("999M tokens");
+  expect(tokenLabel(999_500_000)).toBe("1B tokens");
+  expect(tokenLabel(1_235_000_000)).toBe("1.2B tokens");
   const usage = { inputTokens: 1200, outputTokens: 340, cacheReadTokens: 0, cacheWriteTokens: 0 };
   expect(tokenBreakdown(usage)).toBe(`${(1200).toLocaleString()} input · 340 output`);
   expect(tokenBreakdown({ ...usage, cacheReadTokens: 50, cacheWriteTokens: 7, runs: 3 })).toBe(`${(1200).toLocaleString()} input · 340 output · 50 cache read · 7 cache write · 3 runs`);
@@ -145,4 +149,10 @@ it("keeps a share between 0 and 100 percent, counts things in the singular or pl
   expect(plural(1, "cut")).toBe("1 cut");
   expect(plural(0, "cut")).toBe("0 cuts");
   expect(plural(2, "reply", "replies")).toBe("2 replies");
+});
+
+it("says a time to the millisecond only when another falls in the same second", () => {
+  expect(distinctClock(167.12, [167.12, 200])).toBe("2:47");
+  expect(distinctClock(167.12, [167.12, 167.8])).toBe("2:47.120");
+  expect(distinctClock(167.8, [167.12, 167.8])).toBe("2:47.800");
 });

@@ -246,7 +246,8 @@ describe("MCP file tools", () => {
     }
   });
 
-  it("removes the temporary folder it made for files when the session closes, and never a folder it was given", async () => {
+  it("removes the temporary folder it made for files when the session closes, keeping only what it exported for the editor, and never a folder it was given", async () => {
+    // An export is handed to the editor by its path, to import in Resolve: it outlasts the session that wrote it.
     const c = await connect(undefined, undefined, undefined, undefined, "codex");
     const exported = await c.callTool({ name: "export_otio", arguments: { version: "v1" } }) as CallToolResult;
     expect(exported.isError).toBeFalsy();
@@ -254,8 +255,36 @@ describe("MCP file tools", () => {
     const made = dirname(dirname(path));
     expect(made.startsWith(await realpath(tmpdir()))).toBe(true);
     expect(await readFile(path, "utf8")).toContain("v1");
+    // The session's other files, such as a listening copy, still go with it.
+    await mkdir(join(made, "frames"));
+    await writeFile(join(made, "frames", "a.jpg"), "frame");
+    await writeFile(join(made, "listen.wav"), "passage");
     await c.close();
-    await vi.waitFor(async () => expect(await stat(made).then(() => true, () => false)).toBe(false));
+    const there = (file: string) => stat(file).then(() => true, () => false);
+    await vi.waitFor(async () => expect([await there(join(made, "listen.wav")), await there(join(made, "frames"))]).toEqual([false, false]));
+    expect(await readFile(path, "utf8")).toContain("v1");
+    await rm(made, { recursive: true, force: true });
+    // A session that exported nothing leaves nothing.
+    const extra = mock.state.extra;
+    mock.state.extra = async (rec, res) => {
+      if (!rec.path.includes("/web-videos")) return extra ? extra(rec, res) : false;
+      if (rec.method === "GET") { res.writeHead(200, { "content-type": "application/octet-stream" }); res.end(Buffer.from("....ftypisom part")); }
+      else { res.writeHead(201, { "content-type": "application/json" }); res.end(JSON.stringify({ video: { url: "https://www.youtube.com/watch?v=agents", title: "Agents" },
+        part: { id: "part1", from: 1, to: 2, duration: 1, width: 1920, height: 1080, size: 17 } })); }
+      return true;
+    };
+    try {
+      const run = Task.parse({ id: "tsk_edit_tmp", projectId: "prj_test", kind: "edit", agent: "claude", state: "running", instruction: "Show the demo", createdBy: { type: "human", name: "Editor" } });
+      const plain = await connect(run.id, undefined, run);
+      const part = await plain.callTool({ name: "web_video", arguments: { url: "https://www.youtube.com/watch?v=agents", from: 1, to: 2 } }) as CallToolResult;
+      expect(part.isError, textOf(part)).toBeFalsy();
+      const folder = dirname(JSON.parse(textOf(part)).path as string);
+      expect(folder.startsWith(await realpath(tmpdir()))).toBe(true);
+      await plain.close();
+      await vi.waitFor(async () => expect(await there(folder)).toBe(false));
+    } finally {
+      mock.state.extra = extra;
+    }
     // A folder the harness gave is its own: closing leaves it and what was saved there.
     const given = await mkdtemp(join(tmpdir(), "scarlet-artifact-test-"));
     try {
@@ -1833,6 +1862,77 @@ describe("timeline_at and captions_generate", () => {
       ] });
     } finally { mock.state.timeline = before; }
   });
+
+  it("applies the active style guide's captionStyle automatically and lets explicit style fields override it", async () => {
+    const before = mock.state.timeline;
+    const tl = emptyTimeline(mock.state.project.id);
+    tl.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+    mock.state.timeline = tl;
+    let activeReason: "default" | "mentioned" = "default";
+    mock.state.extra = (req, res) => {
+      if (req.path !== "/style-guides/active") return false;
+      res.end(JSON.stringify({
+        styleGuides: [{
+          id: "sg_brand",
+          name: "channel-brand",
+          description: "Bold warm captions",
+          instructions: "Use Inter bold white on dark pill.",
+          captionStyle: { fontFamily: "Inter", fontWeight: "bold", color: "#FFFFFF", highlightColor: "#F59E0B", backgroundColor: "#000000CC", y: 0.86 },
+          reason: activeReason,
+          assets: [],
+        }],
+      }));
+      return true;
+    };
+    try {
+      // 1. New track inherits default style guide captionStyle + allows explicit field override.
+      const res1 = await client.callTool({
+        name: "captions_generate",
+        arguments: { intent: "requested", style: { y: 0.8 }, reason: "Add captions matching the channel look." },
+      }) as CallToolResult;
+      expect(res1.isError, textOf(res1)).toBeFalsy();
+      expect(textOf(res1)).toContain("Applied caption style from @channel-brand (with explicit style overrides).");
+      const post1 = mock.requests.filter(r => r.method === "POST" && r.path.endsWith("/changes")).at(-1)!;
+      expect(post1.body).toMatchObject({
+        ops: [{ op: "addTrack", track: { captionStyle: { fontFamily: "Inter", fontWeight: "bold", color: "#FFFFFF", highlightColor: "#F59E0B", backgroundColor: "#000000CC", y: 0.8 } } }],
+      });
+
+      // 2. Replacing an existing track with a default guide keeps existing track style on conflict, while an explicit @mention overrides it.
+      const tlWithCap = emptyTimeline(mock.state.project.id);
+      tlWithCap.tracks[0]!.clips = [makeMediaClip("m1", 0, 6, 0)];
+      tlWithCap.tracks.push({ id: "cap_old", kind: "caption", name: "Captions", hidden: false, muted: false, clips: [], captionStyle: { color: "#00FF00", y: 0.25 } });
+      mock.state.timeline = tlWithCap;
+
+      activeReason = "default";
+      await client.callTool({
+        name: "captions_generate",
+        arguments: { intent: "requested", destination: { replaceTrackId: "cap_old" }, reason: "Refresh captions." },
+      });
+      const postDefault = mock.requests.filter(r => r.method === "POST" && r.path.endsWith("/changes")).at(-1)!;
+      expect(postDefault.body).toMatchObject({
+        ops: [
+          { op: "removeTrack", trackId: "cap_old" },
+          { op: "addTrack", track: { captionStyle: { fontFamily: "Inter", fontWeight: "bold", color: "#00FF00", y: 0.25 } } },
+        ],
+      });
+
+      activeReason = "mentioned";
+      await client.callTool({
+        name: "captions_generate",
+        arguments: { intent: "requested", destination: { replaceTrackId: "cap_old" }, reason: "Restyle with @channel-brand." },
+      });
+      const postMentioned = mock.requests.filter(r => r.method === "POST" && r.path.endsWith("/changes")).at(-1)!;
+      expect(postMentioned.body).toMatchObject({
+        ops: [
+          { op: "removeTrack", trackId: "cap_old" },
+          { op: "addTrack", track: { captionStyle: { fontFamily: "Inter", fontWeight: "bold", color: "#FFFFFF", y: 0.86 } } },
+        ],
+      });
+    } finally {
+      mock.state.timeline = before;
+      mock.state.extra = undefined;
+    }
+  });
 });
 
 describe("media_frame", () => {
@@ -2764,6 +2864,11 @@ it("reports distinct prepared picture passages and confirmed review saves during
       expect(sheet.isError).toBeFalsy();
     }
     expect(mock.state.events.filter(e => e.data?.reviewCounter === "pictures").map(e => e.data?.count)).toEqual([1, 10]);
+    // A sheet asked for more frames than it holds is answered with as many as it holds, and says so, not refused.
+    const crowded = await editor.callTool({ name: "frame_contact_sheet", arguments: { mediaId: "m1", from: 0, to: 1, count: 20 } }) as CallToolResult;
+    expect(crowded.isError).toBeFalsy();
+    expect(mock.requests.filter(r => r.path.endsWith("/contact-sheet")).at(-1)?.body).toMatchObject({ count: 12 });
+    expect((crowded.content[0] as { text: string }).text).toContain("A sheet holds 12 frames");
     const save = await editor.callTool({ name: "dialogue_review_save", arguments: { changeId: "cut", fromVersion: "v1", toVersion: "v2",
       assessments: [{ index: 0, start: 0, end: 1, verdict: "cut", reason: "The editor identified the pickup." },
         { index: 1, start: 1, end: 3, verdict: "ask", reason: "The two takes overlap." }] } });
@@ -4379,7 +4484,7 @@ it("lets a request sent from an applied edit cut outside where that edit plays, 
   const session = (id: string, context: object) => connect(id, undefined, Task.parse({ id, projectId: tl.projectId, kind: "edit", agent: "claude", state: "running",
     instruction: "Take out the sentence before this too.", context: { version: tl.version, ...context }, createdBy: { type: "human", name: "Editor" } }));
   // The message box was aimed at an applied cut, so the request says where that cut plays: its join at 10 s and a moment either side.
-  const aimed = await session("aimed-at-edit", { changeId: "prior", editIndex: 0, editNumber: 1, time: 8.5, end: 11.5 });
+  const aimed = await session("aimed-at-edit", { changeId: "prior", editIndex: 0, time: 8.5, end: 11.5 });
   // The same times as a range the editor selected on the timeline.
   const selecting = await session("selected-range", { time: 8.5, end: 11.5 });
   const sentence = { start: 3, end: 8 };
@@ -5614,8 +5719,8 @@ it("keeps a resumed or answered task in the pass the editor typed last", async (
   };
   try {
     expect(await run("resumed-local", "/tighten-pauses-here", "The exchange at 0:01.")).toContain("Supply the local timeline range for the pause edit.");
-    expect(await run("answered-local", "/first-cut-dialogue", "/tighten-pauses-here just the intro")).toContain("Supply the local timeline range for the pause edit.");
-    expect(await run("answered-full", "/tighten-pauses-here", "/first-cut-dialogue the whole thing")).toContain("preserved");
+    expect(await run("answered-local", "/dialogue-pass", "/tighten-pauses-here just the intro")).toContain("Supply the local timeline range for the pause edit.");
+    expect(await run("answered-full", "/tighten-pauses-here", "/dialogue-pass the whole thing")).toContain("preserved");
   } finally {
     Object.assign(mock.state, original);
   }

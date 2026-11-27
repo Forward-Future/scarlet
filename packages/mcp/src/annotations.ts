@@ -18,7 +18,7 @@ const READ_TOOLS = new Set<string>([
   "dialogue_scan", "dialogue_check_join", "dialogue_review_inspect",
   "change_get", "change_list", "notes_list", "render_status", "skills_list",
   "media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "change_review_cut", "source_audio", "listen",
-  "screen_text", "screen_reading", "screen_motion", "faces", "lip_sync", "graphic_get", "attachment_read",
+  "screen_text", "screen_reading", "screen_motion", "faces", "lip_sync", "multicam_analyze", "graphic_get", "attachment_read", "style_guide_get", "style_guide_preview_get",
 ]);
 
 /** A page or a video from the web: it changes nothing in the project, and what it reads is the open web. */

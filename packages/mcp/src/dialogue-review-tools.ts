@@ -65,7 +65,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
     getProject, peekTimeline, moveBase, transcriptWords, joinPages,
     measureTimeline, outgoingPausePages, planSources,
   } = session;
-  const { without, unavailableOnce } = errors;
+  const { without, unavailableOnce, withoutOnce } = errors;
   const listen = listening(caps, !!writeArtifact);
   const defaultAudio = listen?.by === "file";
   const reviewPictures = caps.images;
@@ -282,7 +282,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
       const asks = assessments.filter(a => a.verdict === "ask" && a.reason && quotesAwayFromCut(a.reason, [], a).length);
       if (asks.length) {
         const [tl, { project }] = await Promise.all([peekTimeline(fromVersion), getProject()]);
-        const words = (mediaId: string) => transcriptWords(mediaId, false).catch(() => null);
+        const words = (mediaId: string) => transcriptWords(mediaId, false).catch(withoutOnce(`failed to read the words of ${mediaId} near a call's note`, null));
         const away = (await Promise.all(asks.map(async a => {
           const near = await timelineWordsNear(tl, project, a, words, NOTE_QUOTE_REACH + 15);
           const quotes = quotesAwayFromCut(a.reason, near, a);
@@ -302,7 +302,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
       let sameWordJoins: Array<{ index: number; reason: string }> = [];
       if (toCheck.length) {
         const [tl, { project }] = await Promise.all([peekTimeline(fromVersion), getProject()]);
-        await measureTimeline(tl, toCheck.flatMap(a => [a.start, a.end])).catch(() => undefined);
+        await measureTimeline(tl, toCheck.flatMap(a => [a.start, a.end])).catch(withoutOnce("failed to measure the joins of the reviewed cuts", undefined));
         const check = dialogueJoinChecker(tl, project, joinPages());
         const joins = toCheck.map(a => ({ a, join: check({ start: a.start, end: a.end }) }));
         const clipped = joins.flatMap(({ a, join }) => join.inWord?.length ? [`Cut ${a.index} (${a.verdict}): ${join.reason}`] : []);
@@ -465,7 +465,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
         const settled = !join || join.status === "unchanged" || join.status === "snapped" || !!join.sameWord;
         // The words either side of the new join, so the move can be judged from its result without reading the passage again.
         const nearbyWords = move.keep ? undefined : dialogueJoinWords(tl, project, range, joinPages());
-        const heard = move.keep ? undefined : await cutReading(tl, project, range, mediaId => transcriptWords(mediaId, false).catch(() => null));
+        const heard = move.keep ? undefined : await cutReading(tl, project, range, mediaId => transcriptWords(mediaId, false).catch(withoutOnce(`failed to read the words of ${mediaId} beside a moved cut`, null)));
         results.push({ index: savedIndex, ...(savedIndex !== move.index && { requestedIndex: move.index }), ...range, ...(move.keep && { choice: "keep" }), ...heard, audio: join?.status === "unchanged" ? onQuietFrame : join?.reason,
           ...(join?.sameWordJoin && { sameWordJoin: join.sameWordJoin }),
           ...(nearbyWords && (nearbyWords.start.length || nearbyWords.end.length) && { nearbyWords }),

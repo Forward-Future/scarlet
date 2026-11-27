@@ -77,11 +77,11 @@ export function fmtBytes(n: number): string {
   return `${(n / 1024 ** 3).toFixed(2)} GB`;
 }
 
-/** A token count at a glance: 850 tokens, 48.2K tokens, 312K tokens, 1.2M tokens. */
+/** A token count at a glance: 850 tokens, 48.2K tokens, 312K tokens, 1.2M tokens, 1.2B tokens. */
 export function tokenLabel(n: number): string {
   if (n === 1) return "1 token";
   if (n < 1000) return `${n} tokens`;
-  const [value, unit] = n < 999_500 ? [n / 1000, "K"] : [n / 1_000_000, "M"];
+  const [value, unit] = n < 999_500 ? [n / 1000, "K"] : n < 999_500_000 ? [n / 1_000_000, "M"] : [n / 1_000_000_000, "B"];
   const shown = value >= 100 ? Math.round(value).toString() : (Math.round(value * 10) / 10).toString();
   return `${shown}${unit} tokens`;
 }
@@ -173,4 +173,13 @@ export function editRemovedLabel(edit: { beforeCut?: { removed: { start: number;
 export function playbackClock(seconds: number): string {
   const ms = Math.max(0, Math.round(seconds * 1000));
   return `${clock(Math.floor(ms / 1000))}.${String(ms % 1000).padStart(3, "0")}`;
+}
+
+/**
+ * A time as the clock says it, to the millisecond only when another of `among` falls in the same second, so two cuts
+ * named by their times never read alike: "2:47.120" and "2:47.800", and "2:47" on its own.
+ */
+export function distinctClock(seconds: number, among: readonly number[]): string {
+  const label = clock(seconds);
+  return among.some(t => Math.abs(t - seconds) > 1e-3 && clock(t) === label) ? playbackClock(seconds) : label;
 }

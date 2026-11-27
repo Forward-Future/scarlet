@@ -6,6 +6,7 @@
  * Caught on the document, so nothing needs wiring into a component and new controls are covered as they're added.
  */
 import { appLog, flushAppLog, logPath, withoutAddresses } from "./appLog";
+import { noteOnScreenError } from "./problemReportStore";
 
 const clip = (text: string, max = 70) => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -148,7 +149,10 @@ function onAlerts(records: MutationRecord[]) {
     if (said.get(el) === message) continue;
     said.set(el, message);
     const place = el.parentElement?.closest(PLACE);
-    if (message) appLog("error", "alert", { message, in: place ? placeName(place) : undefined }, { level: "warn" });
+    if (!message) continue;
+    appLog("error", "alert", { message, in: place ? placeName(place) : undefined }, { level: "warn" });
+    // A report sent later says what was on screen.
+    noteOnScreenError(message);
   }
 }
 
@@ -169,7 +173,9 @@ export function startUiLog() {
   on(document, "click", onClick);
   on(document, "dblclick", onClick);
   on(document, "contextmenu", onClick);
-  on(document, "keydown", onKey);
+  // On the window, in capture, so it hears a key before any control does: a few (the mic's Esc, marking a frame, a
+  // picker's Esc) stop the key where they catch it, which would hide it from a listener on the document.
+  on(window, "keydown", onKey);
   on(document, "submit", onSubmit);
   on(document, "change", onChange);
   on(window, "error", onResourceError);

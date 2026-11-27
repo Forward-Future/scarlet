@@ -3,7 +3,7 @@
  * generated public/sample.mp4 (20 s), a few versions (including a branch),
  * changes in every state, notes, renders, tasks, hosts, skills and settings.
  */
-import { DEFAULT_TASK_MODELS, isDialogueGuide } from "@scarlet/shared";
+import { builtInCommand, commandGuides, DEFAULT_TASK_MODELS, skillRuns } from "@scarlet/shared";
 import type {
   Learning,
   AgentHost,
@@ -12,6 +12,7 @@ import type {
   ServerSettings,
   Skill,
   SkillVersion,
+  StyleGuideRecord,
   Task,
   TaskAttachment,
   TaskEvent,
@@ -49,6 +50,7 @@ export interface MockDb {
   taskEvents: Record<string, TaskEvent[]>;
   hosts: AgentHost[];
   skills: Skill[];
+  styleGuides: StyleGuideRecord[];
   /** Files dropped on the message box, by project. */
   attachments: Record<string, TaskAttachment[]>;
   /** Rules Scarlet picked up from requests, waiting for the editor. */
@@ -611,7 +613,7 @@ export function buildDb(chatLayouts = false): MockDb {
 
   const taskEvents: Record<string, TaskEvent[]> = {
     task_running: [
-      { id: "ev1", taskId: "task_running", at: minutesAgo(1.5), type: "log", text: "Loading project context and skills (dialogue-pass, add-captions)" },
+      { id: "ev1", taskId: "task_running", at: minutesAgo(1.5), type: "log", text: "Loading project context and skills" },
       { id: "ev2", taskId: "task_running", at: minutesAgo(1.3), type: "tool", text: "transcript.get range=11.5–16 granularity=word" },
       { id: "ev3", taskId: "task_running", at: minutesAgo(1.1), type: "log", data: { kind: "editor_progress" }, text: "I found three filler words near the end of the clip." },
     ],
@@ -666,7 +668,7 @@ export function buildDb(chatLayouts = false): MockDb {
       projectId: null,
       agents: [],
       enabled: true,
-      version: frontmatter.name === "dialogue-pass" ? 2 : 1,
+      version: skillRuns({ content }).length ? 2 : 1,
       createdAt: minutesAgo(60 * 24 * 10),
       updatedAt: minutesAgo(60 * 24 * 3),
       ...extra,
@@ -684,7 +686,7 @@ export function buildDb(chatLayouts = false): MockDb {
   }
 
   // Two rules picked up from the sample's requests, so the demo shows what waits in Learnings.
-  const dialogueSkill = skills.find(isDialogueGuide);
+  const dialogueSkill = commandGuides(builtInCommand("first-cut").name, skills)[0];
   if (!dialogueSkill) throw new Error("Demo is missing its dialogue guide");
   const learnings: Learning[] = [
     { id: "lrn_pause", projectId: PRJ, rule: "Bring every pause between sentences down to about a quarter second.", said: "Tighten the pause before “three things”. A quarter second between sentences, always.",
@@ -725,6 +727,7 @@ export function buildDb(chatLayouts = false): MockDb {
     taskEvents,
     hosts,
     skills,
+    styleGuides: [],
     attachments: {},
     learnings,
     skillVersions,

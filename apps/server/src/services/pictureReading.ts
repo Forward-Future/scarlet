@@ -5,15 +5,17 @@
  * asked for are held by a pause of the project's media work.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, openSync, writeSync } from "node:fs";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, open as openFile, readFile, rm, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { fileInDirectory, probeMedia, screenFrameSize, screenFrames } from "@scarlet/render";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
-import { atomicWriteFile, rememberLast, round3 } from "../util.js";
+import { atomicWriteFile, errorMessage, rememberLast, round3 } from "../util.js";
+import { clip, throttledPerCtx } from "../logText.js";
 import { machineBusy, pictureDecoder, pictureLane } from "./pictureWork.js";
 import { previewCopyByTime } from "./previewPictures.js";
+
+const copyFailures = throttledPerCtx();
 
 export type VideoMedia = MediaAsset & { projectId: string };
 
@@ -71,10 +73,13 @@ export const r3 = round3;
 /** Mean grey of each cell of a cols × rows grid over the frame, from every `step`th pixel each way. */
 export function pictureGrid(rgb: Buffer, width: number, height: number, cols = 32, rows = 18, step = 2): Float32Array {
   const sums = new Float32Array(cols * rows), counts = new Uint32Array(cols * rows);
+  const colOf = new Int32Array(width);
+  for (let x = 0; x < width; x += step) colOf[x] = Math.min(cols - 1, Math.floor(x * cols / width));
   for (let y = 0; y < height; y += step) {
-    const row = Math.min(rows - 1, Math.floor(y * rows / height));
+    const rowBase = Math.min(rows - 1, Math.floor(y * rows / height)) * cols;
+    const rowPixel = y * width;
     for (let x = 0; x < width; x += step) {
-      const p = (y * width + x) * 3, cell = row * cols + Math.min(cols - 1, Math.floor(x * cols / width));
+      const p = (rowPixel + x) * 3, cell = rowBase + colOf[x]!;
       sums[cell] = sums[cell]! + (rgb[p]! * 3 + rgb[p + 1]! * 6 + rgb[p + 2]!) / 10;
       counts[cell] = counts[cell]! + 1;
     }
@@ -224,7 +229,11 @@ export async function withFrames<T>(ctx: Ctx, media: VideoMedia, file: string, n
   frames: { start: number; end: number; fps: number; width: number; height: number; signal: AbortSignal; batch?: number; fromCopy?: boolean; background?: boolean },
   keep: (at: number, rgb: Buffer) => boolean, use: (path: string, times: number[]) => Promise<T>): Promise<T[]> {
   const { start, end, fps, width, height, signal, batch = Infinity } = frames;
-  const copy = frames.fromCopy ? await previewCopyByTime(ctx.paths.media(media.projectId), media, height, signal).catch(() => undefined) : undefined;
+  const copy = frames.fromCopy ? await previewCopyByTime(ctx.paths.media(media.projectId), media, height, signal).catch((error: unknown) => {
+    // Asked for with each reading of the recording, so a copy that can't be looked up is logged once a minute.
+    if (!signal.aborted) copyFailures(ctx)(`${name}\0${media.id}`, `[${name}] ${media.id}: its preview copy couldn’t be looked up, the original is read: ${clip(errorMessage(error))}`);
+    return undefined;
+  }) : undefined;
   // CUDA shrinks each frame on the GPU before it comes back to memory. VideoToolbox hands back every 4K frame whole:
   // ten seconds of a 4K recording took 2.6 s that way and 0.5 s on the CPU (M-series, 2026-11-13), so it decodes an
   // original only while the machine is too busy to give the CPU's decoder its cores.
@@ -232,30 +241,33 @@ export async function withFrames<T>(ctx: Ctx, media: VideoMedia, file: string, n
   const decoder = gpu === "cuda" || (gpu === "videotoolbox" && machineBusy()) ? gpu : undefined;
   await mkdir(ctx.paths.tmp, { recursive: true });
   const handed: Array<Promise<T>> = [];
-  // Each file is closed once: after the first close the number belongs to whichever file opens next.
-  let open: { path: string; fd: number; times: number[] } | undefined;
-  const close = () => {
+  // Each file is closed once before handing it to `use`.
+  let open: { path: string; handle: FileHandle; times: number[] } | undefined;
+  const close = async () => {
     if (!open) return;
-    const { path, fd, times } = open;
+    const { path, handle, times } = open;
     open = undefined;
-    closeSync(fd);
+    await handle.close();
     const used = (times.length ? use(path, times) : Promise.resolve(undefined as T)).finally(() => rm(path, { force: true }));
     // Settled below; a failure while frames are still decoding is not left unhandled meanwhile.
     used.catch(() => {});
     handed.push(used);
   };
   let delivered = 0;
-  const onFrame = (i: number, rgb: Buffer) => {
+  const onFrame = async (i: number, rgb: Buffer) => {
     delivered = i + 1;
     const at = start + i / fps;
     if (!keep(at, rgb)) return;
     if (!open) {
       const path = join(ctx.paths.tmp, `${name}-${randomUUID()}.rgb`);
-      open = { path, fd: openSync(path, "w"), times: [] };
+      open = { path, handle: await openFile(path, "w"), times: [] };
     }
     open.times.push(at);
-    writeSync(open.fd, rgb);
-    if (open.times.length >= batch) close();
+    for (let written = 0; written < rgb.length;) {
+      const { bytesWritten } = await open.handle.write(rgb, written, rgb.length - written);
+      written += bytesWritten;
+    }
+    if (open.times.length >= batch) await close();
   };
   const onFallback = (reason: string) => ctx.log(`[${name}] ${media.id}: ${reason}`);
   // The copy's clock runs `copy.start` seconds behind the source; a frame's second stays the source's. The copy is small
@@ -275,12 +287,14 @@ export async function withFrames<T>(ctx: Ctx, media: VideoMedia, file: string, n
       }
       return fromOriginal();
     }, { signal, priority: frames.background ? "background" : false });
-    close();
+    await close();
     return await Promise.all(handed);
   } finally {
     if (open) {
-      closeSync(open.fd);
-      await rm(open.path, { force: true });
+      const leftover = open;
+      open = undefined;
+      await leftover.handle.close().catch(() => {});
+      await rm(leftover.path, { force: true });
     }
     await Promise.allSettled(handed);
   }
