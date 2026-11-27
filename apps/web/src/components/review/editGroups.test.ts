@@ -39,3 +39,29 @@ it("keeps one review identity across revisions and reordered places", () => {
   expect(originalReviewRef([revision, other])).toEqual(original);
   expect(originalReviewRef([revision])).toEqual(original);
 });
+
+it("combines contiguous B-roll edits in one continuous section into one group while keeping separate B-roll sections apart", () => {
+  const edits = [
+    edit("Wright Flyer ground", 0, { start: 149.8, end: 152.4 }, { kind: "broll", check: "Revised" }),
+    edit("Wright Flyer front", 1, { start: 152.4, end: 155.0 }, { kind: "broll" }),
+    edit("Wright Flyer flight", 2, { start: 155.0, end: 158.0 }, { kind: "broll" }),
+    edit("Return to camera", 3, { start: 158.0, end: 160.0 }, { kind: "broll" }),
+    edit("Boeing 747 liftoff", 4, { start: 186.6, end: 190.4 }, { kind: "broll", check: "Revised" }),
+    edit("747 climbs", 5, { start: 190.4, end: 198.0 }, { kind: "broll" }),
+  ];
+  const sections = [
+    { id: "broll:149800:158000", range: { start: 149.8, end: 158.0 }, clipIds: ["c1", "c2", "c3"] },
+    { id: "broll:186600:198000", range: { start: 186.6, end: 198.0 }, clipIds: ["c4", "c5"] },
+  ];
+  const grouped = editGroups(edits, sections);
+  expect(grouped.map(g => ({
+    label: g.label,
+    indices: g.members.map(m => m.i),
+    continuousBroll: !!g.continuousBroll,
+    stretch: g.stretch,
+  }))).toEqual([
+    { label: "Wright Flyer ground", indices: [0, 1, 2], continuousBroll: true, stretch: { start: 149.8, end: 158.0 } },
+    { label: "Return to camera", indices: [3], continuousBroll: false, stretch: undefined },
+    { label: "Boeing 747 liftoff", indices: [4, 5], continuousBroll: true, stretch: { start: 186.6, end: 198.0 } },
+  ]);
+});
