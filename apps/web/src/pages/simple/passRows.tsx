@@ -5,7 +5,9 @@
  * its column of edits.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
+import { continuousBrollSections, matchesEdit, REVISED_CHECK, type EditRef, type ThreadEdit } from "@scarlet/shared";
+import { useProjectStore } from "../../stores/project";
+import { useShownCut } from "../../stores/shownCut";
 import { asksEditor, editGroups, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, waitingPassRows, waitingRows } from "../../components/review/threadEditState";
 import { editKindWord, editRowWord } from "../../lib/editKind";
 import { listMoments, type Moment } from "../../lib/editMoments";
@@ -281,7 +283,7 @@ export function passEntries(f: PassFacts, { projectId, thread, edits, rejected, 
     // A call goes by its time, as on its card and in the box's tag.
     ...(pass?.calls ?? []).map((c): PassRow => {
       const callWord = c.state === "revising" ? (revisionWord(c.run, { recheck: !!c.run && isRecheck(c.run), nextQueuedId: actions.nextQueuedId }) ?? "Revising…") : undefined;
-      const tip = rail ? callRowTooltip({ summary: c.summary, reason: c.reason, tag: c.tag, length: c.length, state: c.state, version: c.version, earlier: c.earlier, word: callWord }) : undefined;
+      const tip = rail ? callRowTooltip({ summary: c.summary, reason: c.reason, tag: c.tag, length: c.length, state: c.state, version: c.version, earlier: c.earlier, word: callWord, by: modelAt(c.run) }) : undefined;
       return { key: callRowKey(c), id: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at,
         hover: { threadId: thread.id, call: c.index },
         label: c.summary, n: c.n, callIndex: c.index, num: numbers ? c.n : undefined, needs: c.state === "open", asks: c.state === "revising" && asksEditor(c.run), sentBack: c.state === "revising",
@@ -439,18 +441,21 @@ export function useThreadFacts({ projectId, thread, edits, rejected, actions }: 
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
   const adding = useAdding(thread);
+  const { timeline } = useShownCut();
+  const media = useProjectStore(s => s.current?.media);
+  const brollSections = useMemo(() => timeline ? continuousBrollSections(timeline, media) : undefined, [timeline, media]);
   const gone = rejected ?? noRejected;
   // An edit open on the timeline shows in a list: the one that's open, or one that opens with it when none is.
   const showing = actions.showing;
   const shownEdit = showing && edits.find(e => matchesEdit(showing, e));
-  // Edits of one name that overlap exactly are one edit, on one row of the list: Needs review counts the rows that wait.
-  const groups = useMemo(() => editGroups(edits), [edits]);
+  // Edits of one name that overlap exactly — and contiguous B-roll edits in one continuous section — are one row.
+  const groups = useMemo(() => editGroups(edits, brollSections), [edits, brollSections]);
   // So does one sent back whose request has stopped to ask the editor something: it is their turn again.
-  const need = useMemo(() => waitingRows(edits, { reviewed, revising }), [edits, reviewed, revising]);
+  const need = useMemo(() => waitingRows(edits, { reviewed, revising }, brollSections), [edits, reviewed, revising, brollSections]);
   // The edit open, rejected or not, by its row's first version.
   const openEdit = showing && (shownEdit ?? gone.find(e => matchesEdit(showing, e) || matchesEdit(e as ThreadEdit, showing)));
   const openId = openEdit ? editKey(openEdit.previous[0] ?? openEdit) : undefined;
-  return { reviewed, canUnkeep, revising, rejecting, adding, gone, showing, shownEdit, groups, need, openEdit, openId };
+  return { reviewed, canUnkeep, revising, rejecting, adding, gone, showing, shownEdit, groups, need, openEdit, openId, brollSections };
 }
 
 /**

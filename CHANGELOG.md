@@ -7,6 +7,10 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 27, 2026
 
 - In the beta layout, the highlight on an edit you just sent to Working now clears itself after a few seconds.
+- A continuous B-roll section made of back-to-back clips now appears as one item in the edit list and highlights the whole section on the timeline.
+- Space plays the video again right after you drag or click the edge of a cut or edit on the timeline.
+- The sound on the timeline now shows the audio track you picked in Media straight away, and stays steady while other files are added.
+- Simplified edit hover cards in the edits sidebar: dropped clip file names and repeated rationale, and combined live status and model into one short line (such as "Revising with GPT-6.2-Sol").
 
 ## November 26, 2026
 
@@ -44,6 +48,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - When something goes wrong, you can now report it in one click right where you see it: press Report beside the error, or on the screen Scarlet shows when a page breaks, and Scarlet sends it to the Scarlet team with its logs (no videos, projects, transcripts or sign-ins). Add details afterwards if you like. Help › Report a Problem… and Settings › About let you write a report yourself.
 - A page that breaks now says so with Reload and Report this problem, instead of an empty or technical error screen.
 - In the beta layout, taking a marked stretch off the timeline no longer deletes its times from the message you're writing.
+- Full screen now shows only the video: the timeline, the edit card and the drawing tools step aside, and the player's controls come back when you move the pointer.
 
 ## November 25, 2026
 

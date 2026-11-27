@@ -88,9 +88,9 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const hasTabs = reports.some(r => r.hasForYou);
   const tab: ReviewTab = tabShown(open);
 
-  // Merge all threads' entries (deduplicated across cross-thread flags) in timeline order for tracking, Working, and Done.
+  // Merge all threads' entries (deduplicated across cross-thread flags and continuous B-roll sections) in timeline order.
   const deduped = hasTabs ? dedupeDockEntries(reports.flatMap(r => r.entries)) : [];
-  const allowedKeys = new Set(deduped.map(e => e.key));
+  const dedupedByKey = new Map(deduped.map(e => [e.key, e]));
   const allEntries = hasTabs ? inListOrder(deduped, TIME_ORDER) : [];
   const inPlace = (place: RowPlace) => allEntries.filter(e => e.place === place);
   const optional = hasTabs ? inPlace("optional") : [];
@@ -99,7 +99,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
 
   // While a pass's confident edits are shown in the dock (and its list has settled), notify the workspace so the timeline shows its cuts too.
   const openPassThreadId = optionalShown
-    ? reports.find(r => r.isPass && r.listLoaded !== false && r.entries.some(e => e.place === "optional" && allowedKeys.has(e.key)))?.threadId
+    ? reports.find(r => r.isPass && r.listLoaded !== false && r.entries.some(e => dedupedByKey.get(e.key)?.place === "optional"))?.threadId
     : undefined;
   useEffect(() => {
     if (!onListOpen || !openPassThreadId) return;
@@ -129,7 +129,10 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const lowRows = optionalShown
     ? [...reports].reverse().flatMap(r =>
       inListOrder(
-        r.entries.filter(e => allowedKeys.has(e.key) && (e.place === "optional" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "optional"))),
+        r.entries.flatMap(raw => {
+          const e = dedupedByKey.get(raw.key);
+          return e && (e.place === "optional" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "optional")) ? [e] : [];
+        }),
         TIME_ORDER,
       ),
     )
@@ -349,7 +352,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
               onPointerEnter={() => store.hoverRow(entry.threadId, row.mark, row.hover)} onPointerLeave={() => store.hoverRow(entry.threadId)}>
               <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
                 aria-label={`Unkeep ${row.label}`} title={row.unkeepTip ?? "Unkeep"}
-                onClick={letGo(() => store.unkeepRow(entry.threadId, entry.key))}>Unkeep</button>
+                onClick={letGo(() => store.unkeepRow(entry.threadId, entry.key, threadIds))}>Unkeep</button>
             </span>}
             {row.nests.map(nest => nest.node)}
             {unfolded && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">

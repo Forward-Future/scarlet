@@ -12,12 +12,12 @@ it("names the files the editor attached and the project's style guide", () => {
     styleGuide: { name: "Brand guide.pdf", path: "/lib/projects/p/style-guide/Brand guide.pdf", mime: "application/pdf" },
   });
   expect(prompt).toContain(`- File the editor attached: "Inter-Bold.ttf" (font file, 293 KB), attachment att_1, at /lib/projects/p/attachments/att_1/Inter-Bold.ttf`);
-  expect(prompt).toContain(`# Style guide\n\nThe editor gave this project a style guide, "Brand guide.pdf", for captions, lower thirds, boxes, and graphics made in it.\n\nIt is in the PDF at /lib/projects/p/style-guide/Brand guide.pdf.`);
+  expect(prompt).toContain(`# Style guide\n\nThe editor gave this project a style guide, "Brand guide.pdf". Follow it closely for captions, title cards, lower thirds, callout boxes, and end cards; for custom or illustrative motion graphics (diagrams, visual explainers, animated concepts), treat it loosely as inspiration — echo its mood, typography feel, or accent touches without forcing rigid templates, fixed margins, or color ratios.\n\nIt is in the PDF at /lib/projects/p/style-guide/Brand guide.pdf.`);
 });
 
 it("gives pasted guide text in full and says nothing of graphics a project doesn't have", () => {
   expect(buildSystemPrompt({ project: { project, timeline: null }, task, skills: [], styleGuide: { name: "House style", text: "White on red.\nNo drop shadows." } }))
-    .toContain(`"House style", for captions, lower thirds, boxes, and graphics made in it.\n\nWhite on red.\nNo drop shadows.`);
+    .toContain(`"House style". Follow it closely for captions, title cards, lower thirds, callout boxes, and end cards; for custom or illustrative motion graphics (diagrams, visual explainers, animated concepts), treat it loosely as inspiration — echo its mood, typography feel, or accent touches without forcing rigid templates, fixed margins, or color ratios.\n\nWhite on red.\nNo drop shadows.`);
   const plain = buildSystemPrompt({ project: { project, timeline: null }, task, skills: [] });
   expect(plain).not.toContain("# Style guide");
   expect(plain).not.toContain("File the editor attached");
@@ -63,7 +63,10 @@ it("includes structured captionStyle and covers captions, lower thirds, boxes, a
       },
     ],
   });
-  expect(prompt).toContain("captions, lower thirds, callout boxes, motion graphics, titles, or overlays");
+  expect(prompt).toContain("Follow these rules closely for structured brand elements — captions, title cards, chapter titles, lower thirds, callout boxes, end cards");
+  expect(prompt).toContain("For custom or illustrative motion graphics (diagrams, visual explainers, animated concepts), treat the style guide loosely as inspiration");
+  expect(prompt).toContain("transparent overlay on A-cam");
+  expect(prompt).toContain("full-screen opaque graphic");
   expect(prompt).toContain("### Caption style");
   expect(prompt).toContain(`"fontWeight": "bold"`);
   expect(prompt).toContain(`"highlightColor": "#F59E0B"`);
@@ -90,6 +93,7 @@ it("instructs style_guide_edit runs to design captions, lower thirds, callout bo
     },
   });
   expect(prompt).toContain("captions, lower thirds, callout boxes, and motion graphics");
+  expect(prompt).toContain("loose inspiration for custom or illustrative motion graphics");
   expect(prompt).toContain("captionStyle");
   expect(prompt).toContain("Caption sample");
   expect(prompt).toContain("Current caption style:");

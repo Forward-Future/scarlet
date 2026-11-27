@@ -84,4 +84,5 @@ export * from "./restarts.js";
 export * from "./joinFragments.js";
 export * from "./capabilities.js";
 export * from "./editKind.js";
+export * from "./brollSections.js";
 export * from "./text.js";

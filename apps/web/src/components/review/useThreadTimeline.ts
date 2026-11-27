@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { matchesEdit, type EditRef, type Thread, type ThreadEdit } from "@scarlet/shared";
+import { continuousBrollSections, matchesEdit, type EditRef, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { errorMessage } from "../../lib/client";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { markedRangeOf, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { useProjectStore } from "../../stores/project";
-import { takeUpLatest } from "../../stores/shownCut";
+import { takeUpLatest, useShownCut } from "../../stores/shownCut";
 import { editGroups } from "./threadEditState";
 import { originalReviewRef } from "../../lib/editReviews";
 import { editMoments } from "./EditReferences";
@@ -86,7 +86,10 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
     const cue = head === change.toVersion ? editMoments(change.description, ranges).find(m => m.spot === edit.spot && m.cue)?.time : undefined;
     return { beforeVersion: original.appliedOnto ?? original.fromVersion, cue };
   }
-  const rows = useMemo(() => passFocused ? edits.map(edit => [edit]) : editGroups(edits).map(g => g.members.map(m => m.edit)), [edits, passFocused]);
+  const { timeline } = useShownCut();
+  const media = useProjectStore(s => s.current?.media);
+  const brollSections = useMemo(() => timeline ? continuousBrollSections(timeline, media) : undefined, [timeline, media]);
+  const rows = useMemo(() => passFocused ? edits.map(edit => [edit]) : editGroups(edits, brollSections).map(g => g.members.map(m => m.edit)), [edits, passFocused, brollSections]);
   // A pass's list shows its edits as moments: edits that overlap on the timeline exactly are one row, named for its
   // main edit, which is the one chosen when the moment is. One of its edits picked on its own is just that edit.
   const moments = useMemo(() => passFocused ? listMoments(edits) : undefined, [edits, passFocused]);
