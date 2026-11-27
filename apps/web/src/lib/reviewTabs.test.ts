@@ -190,3 +190,44 @@ it("with bySeen holds a low risk row by whether it was on screen, not whether it
   seen.dispose();
   shown.dispose();
 });
+
+it("preserves prior places and active lingers across a transient refetch (e.g. after an engine reject)", async () => {
+  const { ReviewLinger: BetaReviewLinger } = await import("../pages/simple/beta/reviewTabsBeta");
+  for (const Linger of [ReviewLinger, BetaReviewLinger]) {
+    const linger = new Linger();
+    linger.track([], true, false, key => key.startsWith("t1/"));
+    linger.track([
+      { key: "t1/flagged", place: "you" },
+      { key: "t1/kept", place: "you" },
+      { key: "t1/safe", place: "optional" },
+    ], true, false);
+    expect([linger.of("t1/flagged"), linger.of("t1/safe")]).toEqual([undefined, undefined]);
+
+    linger.track([
+      { key: "t1/flagged", place: "you" },
+      { key: "t1/kept", place: "done" },
+      { key: "t1/safe", place: "optional" },
+    ], true, false);
+    expect(linger.of("t1/kept")).toEqual(expect.objectContaining({ from: "you", leaving: false }));
+
+    // Engine reject bumps head -> thread t1 reloads (entries omitted, preserve returns true for t1/*).
+    linger.track([], true, false, key => key.startsWith("t1/"));
+    expect(linger.of("t1/kept")).toEqual(expect.objectContaining({ from: "you", leaving: false }));
+
+    // Refetch settles with both the flagged row and safe row replaced by rejected rows.
+    linger.track([
+      { key: "t1/rej_flagged", place: "done", was: ["t1/flagged"] },
+      { key: "t1/kept", place: "done" },
+      { key: "t1/rej_safe", place: "done", was: ["t1/safe"] },
+    ], true, false);
+    expect(linger.of("t1/rej_flagged")).toEqual(expect.objectContaining({ from: "you", leaving: false }));
+    expect(linger.of("t1/rej_safe")).toEqual(expect.objectContaining({ from: "optional", leaving: false }));
+    expect(linger.of("t1/kept")).toEqual(expect.objectContaining({ from: "you", leaving: false }));
+
+    vi.advanceTimersByTime(LINGER_MS);
+    expect([linger.of("t1/rej_flagged")?.leaving, linger.of("t1/rej_safe")?.leaving]).toEqual([true, true]);
+    vi.advanceTimersByTime(LINGER_FADE_MS);
+    expect([linger.of("t1/rej_flagged"), linger.of("t1/rej_safe")]).toEqual([undefined, undefined]);
+    linger.dispose();
+  }
+});

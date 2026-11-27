@@ -480,8 +480,8 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
 .simple-review-dock .review-tier-sep .review-head-keep { flex: none; height: 22px; padding: 0 2px; border: 0; border-radius: 5px; background: none;
   color: var(--color-muted); font: inherit; font-size: 11.5px; font-weight: 400; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; white-space: nowrap; cursor: pointer; }
 .simple-review-dock .review-tier-sep .review-head-keep:is(:hover, :focus-visible) { color: var(--color-fg); text-decoration-color: var(--color-muted); }
-.simple-review-dock .simple-pass-list > li[data-low-risk] > button:not(.is-on) { color: var(--color-muted); }
-.simple-review-dock .simple-pass-list > li[data-low-risk] > button:not(.is-on) :is(.simple-pass-time, .simple-pass-value) { color: var(--color-dim); }
+.simple-review-dock .simple-pass-list > li[data-low-risk]:not([data-lingering]) > button:not(.is-on) { color: var(--color-muted); }
+.simple-review-dock .simple-pass-list > li[data-low-risk]:not([data-lingering]) > button:not(.is-on) :is(.simple-pass-time, .simple-pass-value) { color: var(--color-dim); }
 .simple-review-dock .simple-pass-list > li[data-flash] > button { background: rgba(255, 255, 255, .07); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2); }
 /* Over Needs review's rows, one quiet line for the edits Scarlet didn't flag: a small switch and their count, which
    includes them in Needs review's list. */
@@ -1059,15 +1059,18 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 @media (prefers-reduced-motion: reduce) {
   .simple-pass-spin { animation: media-link-breathe 2.4s ease-in-out infinite !important; }
 }
-/* While a kept row lingers briefly in Needs review / Safe edits before moving to Done, light up its check mark. */
+/* While a kept or rejected row lingers briefly in Needs review / Safe edits before moving to Done, light up its mark. */
 :is(.simple-pass-list, .simple-edits) > li[data-lingering="done"] .simple-pass-tick:not(.is-rejected) {
   color: var(--color-ok);
 }
-:is(.simple-pass-list, .simple-edits) > li[data-lingering="done"] > button > :is(.simple-pass-value, .simple-edit-value) {
+:is(.simple-pass-list, .simple-edits) > li[data-lingering="done"] .simple-pass-tick.is-rejected {
+  color: var(--color-bad);
+}
+:is(.simple-pass-list, .simple-edits) > li[data-lingering="done"] > button:not(.is-rejected) > :is(.simple-pass-value, .simple-edit-value) {
   color: var(--color-muted);
 }
 @media (prefers-reduced-motion: no-preference) {
-  :is(.simple-pass-list, .simple-edits) > li[data-lingering="done"] .simple-pass-tick:not(.is-rejected) {
+  :is(.simple-pass-list, .simple-edits) > li[data-lingering="done"] .simple-pass-tick {
     animation: review-tick-in .22s cubic-bezier(.2, .9, .3, 1.3) both;
   }
   @keyframes review-tick-in { from { opacity: 0; transform: scale(.55); } to { opacity: 1; transform: none; } }
@@ -1076,7 +1079,7 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
    it took. Nothing is left of it to open, so its row doesn't light under the pointer. */
 .simple-pass-tick.is-rejected { color: var(--color-dim); }
 .simple-pass-list > li > button.is-rejected :is(.simple-pass-label, .simple-pass-time, .simple-pass-value),
-.simple-edit.is-rejected :is(.simple-edit-title, .simple-edit-value) { color: var(--color-dim); }
+.simple-edit.is-rejected :is(.simple-edit-title, .edit-row-time, .simple-edit-value) { color: var(--color-dim); }
 .edit-badge.is-rejected { border-color: var(--color-line); color: var(--color-dim); }
 .simple-pass-list > li > button:is(.is-decided, .is-rejected, :disabled) .edit-badge,
 .simple-edit.is-decided .edit-badge { border-color: var(--color-line); color: var(--color-dim); }

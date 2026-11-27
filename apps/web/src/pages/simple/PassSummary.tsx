@@ -138,7 +138,17 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     // A folded pass with nothing to review has no rows to draw unless the bottom dock renders it.
     { drawRows: hasForYou || listed || !!dock, numbers: true, backToReview: dockHasTabs || hasForYou });
   // A row that has just left Needs review for Working or Done, or Done for Working, stays a moment where it was, with its new word.
-  if (!dock && hasForYou) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })), optionalOpen && tab === "you", tab === "done");
+  if (!dock && hasForYou) {
+    const callKeys = listLoaded === false ? new Set(entries.filter(e => e.row.n > 0).map(e => e.key)) : undefined;
+    linger.track(
+      entries
+        .filter(e => e.row.n > 0 || listLoaded !== false)
+        .map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })),
+      optionalOpen && tab === "you",
+      tab === "done",
+      callKeys ? key => !callKeys.has(key) : undefined,
+    );
+  }
   const heldFrom = (from: "you" | "optional" | "done") => entries.filter(e => (from === "done" ? e.place === "working" : e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
   const inPlace = (place: RowPlace) => entries.filter(e => e.place === place);
   // Every list goes by time, as its rows lead with their times (the editor's call, 2026-11-24): low risk rows open in
@@ -322,7 +332,7 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         // Only rows leaving the list currently shown fade out: a row looked at in Working or Done meanwhile is where it belongs.
         const heldRow = linger.of(entry.key);
         const lingeringHere = !!heldRow && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
-        const lingerKind = lingeringHere ? (entry.place === "working" ? "working" : row.decided ? "done" : undefined) : undefined;
+        const lingerKind = lingeringHere ? (entry.place === "working" ? "working" : (row.decided || row.rejected || row.skipped) ? "done" : undefined) : undefined;
         const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
         const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
         const leaving = !!heldRow?.leaving && lingeringHere;
@@ -464,7 +474,14 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   // Each row's tab, with nothing to review only for the bottom dock.
   const { rowOf, placeOf, tracked } = threadRowPlaces(facts, nests, hasForYou || !!dock);
   // A row that has just left Needs review for Working or Done, or Done for Working, stays a moment where it was, with its new word.
-  if (!dock && hasForYou) linger.track(tracked, optionalOpen && tab === "you", tab === "done");
+  if (!dock && hasForYou) {
+    linger.track(
+      listLoaded === false ? [] : tracked,
+      optionalOpen && tab === "you",
+      tab === "done",
+      listLoaded === false ? () => true : undefined,
+    );
+  }
   const place = (e: Omit<ThreadEdit, "at">) => placeOf.get(rowOf.get(editKey(e)) ?? "");
   const held = (e: Omit<ThreadEdit, "at">) => {
     const at = place(e);
@@ -775,7 +792,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     const here = !!h && (tab === "you" ? h.from === "you" || h.from === "optional" : tab === h.from);
     if (!here) return undefined;
     const at = place(edit);
-    return at === "working" ? "working" : at === "done" && !edit.rejected ? "done" : undefined;
+    return at === "working" ? "working" : at === "done" ? "done" : undefined;
   };
   const rows = (label: string | undefined, only?: (e: Omit<ThreadEdit, "at">) => boolean, listKey?: string) =>
     <ThreadEdits key={listKey} projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}

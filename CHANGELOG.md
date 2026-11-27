@@ -6,6 +6,9 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 27, 2026
 
+- Gemini can now read a style guide and bring in its sound effects instead of being refused.
+- Scarlet has a new app icon: an ink-painted moth in front of a red sun.
+- Keep, Revise, and Reject now look and animate the same across Needs review and Safe edits in both workspace layouts, including keeping timestamps, popping in a red ×, and lingering cleanly through refreshes before fading to Done or Working.
 - The three-column workspace layout is now the default. Turn on "Classic workspace layout" in Settings › General to switch back to the previous two-column layout any time.
 - Voice dictation now always waits in the message box so you can review it before pressing Enter, and the "Review dictation before sending" setting has been removed.
 - In the beta layout, the highlight on an edit you just sent to Working now clears itself after a few seconds.
