@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Version numbers (`v2`, `v3`, etc.) in the edits list now appear in a subtler gray so edit titles and tags stand out more clearly.
 - Version numbers (`v2`, `v3`, etc.) in the edits list now line up cleanly in one vertical column across rows instead of shifting with each edit's title or tag width.
 - Zooms and pans on still images and other keyframed clips now glide smoothly instead of shaking or stepping between pixels.
 - In the beta layout, pressing Add on several to-dos in a row now shows one queued bubble in the chat, such as "Edit at 8:53, 9:26 +11 · Add it", instead of a bubble for each. Press its times to see each one, or its × to take them all out of the queue.
