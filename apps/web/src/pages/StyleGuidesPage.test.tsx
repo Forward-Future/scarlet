@@ -3,11 +3,12 @@ import { act, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { expect, it, vi } from "vitest";
-import type { StyleGuideRecord } from "@scarlet/shared";
+import { CreateStyleGuideRequest, type StyleGuideRecord } from "@scarlet/shared";
 import { Composer } from "../components/agent/Composer";
 import { SkillCommandInput } from "../components/agent/SkillCommandInput";
 import { SkillInstructions } from "../components/agent/SkillInstructions";
 import { ProjectSettingsDrawer } from "../components/shell/ProjectSettingsDrawer";
+import { BUILTIN_STYLE_GUIDES } from "../lib/builtinStyleGuides";
 import { api } from "../lib/client";
 import { buildDb, PRJ } from "../lib/mock/fixtures";
 import { useHostsStore } from "../stores/hosts";
@@ -397,12 +398,32 @@ it("keeps empty Style guides intro inside the box and lets editors add a built-i
     expect(el.querySelector("section > p")).toBeNull();
     expect(el.textContent).toContain("No style guides yet");
     expect(el.textContent).toContain("captions, lower thirds, callout boxes, and graphics");
-    // Built-in styles cover captions, lower thirds, callout boxes, and graphics.
+    // Built-in styles cover captions, lower thirds, callout boxes, and graphics, each with its own distinct specimen layout.
     expect(el.textContent).toContain("Built-in styles");
     expect(el.textContent).toContain("@clean-captions");
     expect(el.textContent).toContain("@editorial-lower-thirds");
     expect(el.textContent).toContain("@tech-callouts");
     expect(el.textContent).toContain("@bold-creator");
+    const variants = [...el.querySelectorAll<HTMLElement>(".style-guide-starter .style-specimen")]
+      .map(node => node.getAttribute("data-style-variant"));
+    expect(variants).toEqual(["clean", "editorial", "tech", "bold"]);
+
+    // Each built-in style validates against the API contract and defines distinct typography, transitions, sounds, and color look.
+    for (const preset of BUILTIN_STYLE_GUIDES) {
+      expect(() => CreateStyleGuideRequest.parse({
+        name: preset.name,
+        description: preset.description,
+        instructions: preset.instructions,
+        captionStyle: preset.captionStyle,
+        transitions: preset.transitions,
+        sounds: preset.sounds,
+        colorLook: preset.colorLook,
+      })).not.toThrow();
+    }
+    expect(new Set(BUILTIN_STYLE_GUIDES.map(g => g.captionStyle.fontFamily)).size).toBe(BUILTIN_STYLE_GUIDES.length);
+    expect(new Set(BUILTIN_STYLE_GUIDES.map(g => g.transitions[0]?.type)).size).toBe(BUILTIN_STYLE_GUIDES.length);
+    expect(new Set(BUILTIN_STYLE_GUIDES.map(g => g.sounds[0]?.builtInId)).size).toBe(BUILTIN_STYLE_GUIDES.length);
+    expect(new Set(BUILTIN_STYLE_GUIDES.map(g => g.colorLook.name)).size).toBe(BUILTIN_STYLE_GUIDES.length);
 
     const starterBtn = [...el.querySelectorAll<HTMLButtonElement>(".style-guide-starter")]
       .find(b => b.textContent?.includes("@clean-captions"))!;
@@ -410,6 +431,9 @@ it("keeps empty Style guides intro inside the box and lets editors add a built-i
     expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
       name: "clean-captions",
       captionStyle: expect.objectContaining({ fontFamily: "Inter", fontWeight: "semibold" }),
+      transitions: [expect.objectContaining({ type: "dissolve", isDefault: true })],
+      sounds: [expect.objectContaining({ source: "builtin", builtInId: "airy-slide" })],
+      colorLook: expect.objectContaining({ name: "Neutral Studio" }),
     }));
     expect(el.textContent).toContain("Opened Builtin Editor");
   } finally {
