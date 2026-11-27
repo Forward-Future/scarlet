@@ -120,7 +120,10 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     };
   }, [project, current.timeline]);
   const invalid = !hasCut || !duration || invalidRange || sampleOnly || timelineBehind || noCaptionTrack || noCaptionsInRange;
-  const size = targetHeight ? `${Math.round(width * targetHeight / height / 2) * 2} × ${targetHeight}` : "Project size";
+  // Rounded as the render rounds it (to whole pixels, then to even), so the size shown is the file's.
+  const widthForHeight = (h: number) => Math.round(Math.round(width * h / height) / 2) * 2;
+  const shortSide = Math.min(width, height);
+  const size = targetHeight ? `${widthForHeight(targetHeight)} × ${targetHeight}` : "Project size";
   const submit = () => {
     if (busy || invalid) return;
     const video: ExportFile["video"] = { kind: custom ? "export" : "full", quality: quality === "best" ? "delivery" : quality };
@@ -221,7 +224,10 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
             <Field label="Resolution" htmlFor="export-resolution">
               <PreferenceSelect id="export-resolution" value={targetHeight} onChange={setTargetHeight} options={[
                 { value: 0, label: `Project · ${width} × ${height}` },
-                ...[2160, 1080, 720, 480].filter(h => h < height).map(h => ({ value: h, label: `${Math.round(width * h / height / 2) * 2} × ${h}` })),
+                ...[2160, 1080, 720, 480].filter(s => s < shortSide).map(s => {
+                  const value = Math.round(height * s / shortSide / 2) * 2;
+                  return { value, label: `${widthForHeight(value)} × ${value}` };
+                }),
               ]} />
             </Field>
             <Field label="Quality" htmlFor="export-quality" hint={level.hint}>
