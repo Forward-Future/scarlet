@@ -96,7 +96,9 @@ const plannedWithout = <T>(sources: DialoguePlanSources, what: string, fallback:
 export async function planDialogueBatch(req: DialoguePlanRequest, sources: DialoguePlanSources): Promise<{ plan: DialoguePlan; setAside?: { cuts: number[]; disputedEdges: DisputedEdge[] } }> {
   const plan = await planDialogueCuts(req, sources);
   if (plan.outcome !== "needsRevision") return { plan };
-  const disputed = new Set<number>(), edges = [...plan.disputedEdges];
+  // Cuts the caller set aside before planning stay aside, and are the caller's to report.
+  const given = req.setAside ?? new Set<number>();
+  const disputed = new Set<number>(given), edges = [...plan.disputedEdges];
   let rest: DialoguePlan | undefined = plan;
   for (let round = 0; round < 3 && rest?.outcome === "needsRevision"; round++) {
     const named: number[] = rest.disputedEdges.flatMap(d => d.cuts).filter(i => !disputed.has(i));
@@ -105,7 +107,7 @@ export async function planDialogueBatch(req: DialoguePlanRequest, sources: Dialo
     rest = named.length && req.cuts.some((c, i) => !disputed.has(i) && c.decision !== "keep" && c.picture !== "protect")
       ? await planDialogueCuts({ ...req, setAside: disputed }, sources).catch(plannedWithout(sources, "failed to plan the batch with its disputed cuts set aside", undefined)) : undefined;
   }
-  return rest?.outcome === "ready" ? { plan: rest, setAside: { cuts: [...disputed].sort((a, b) => a - b), disputedEdges: edges } } : { plan };
+  return rest?.outcome === "ready" ? { plan: rest, setAside: { cuts: [...disputed].filter(i => !given.has(i)).sort((a, b) => a - b), disputedEdges: edges } } : { plan };
 }
 
 /** Phase 1: resolve every cut input into timeline seconds, enforce scope and non-overlap, and check opt-in quotes. */

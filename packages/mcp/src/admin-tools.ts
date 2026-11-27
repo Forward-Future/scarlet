@@ -2,6 +2,7 @@ import { basename, join } from "node:path";
 import { z } from "zod/v3";
 import {
   apiPathId,
+  DEFAULT_RESULT_CHARS,
   isProjectEditTask,
   QuestionChoices,
   skillEditTarget,
@@ -27,12 +28,15 @@ export interface ChangeAndAssetToolsDeps {
   projectId: string;
   task?: Task;
   author: Author;
-  caps: Pick<AgentCapabilities, "shell">;
+  caps: Pick<AgentCapabilities, "shell" | "resultChars">;
   authoring: Task["context"] | undefined;
   artifactDir(): Promise<string> | string;
   localPausesMode(): Promise<boolean>;
   readApprovedExample(changeId: string): Promise<Change>;
 }
+
+/** Changes still waiting on someone: change_list lists them with the request's own thread. */
+const PENDING_CHANGE_STATES: ReadonlySet<string> = new Set(["proposed", "rendering", "ready", "revising"]);
 
 /** Registers changes, notes, renders, and asset_add (immediately preceding registerGraphics). */
 export function registerChangeAndAssetTools(deps: ChangeAndAssetToolsDeps) {
@@ -62,12 +66,33 @@ export function registerChangeAndAssetTools(deps: ChangeAndAssetToolsDeps) {
 
   tool(
     "change_list",
-    "List changes of the project, optionally filtered by state (proposed, rendering, ready, approved, rejected, revising, failed).",
-    { state: z.string().optional() },
-    async ({ state }) => {
+    "List the project's changes, newest first, one line each: id, state and intent, from→to versions, author and description. In a request it lists the changes of this request's thread and every change still pending (proposed, rendering, ready, revising); all lists every change in the project. state filters by state (proposed, rendering, ready, approved, rejected, revising, failed). A list too long for one result says how many more there are and the offset that reads them.",
+    { state: z.string().optional(),
+      all: z.boolean().optional().describe("List every change in the project, not only this request's thread and pending changes"),
+      offset: z.number().int().nonnegative().optional().describe("Skip this many of the listed changes, newest first") },
+    async ({ state, all, offset = 0 }) => {
       const { changes } = await client.changes(projectId, state);
-      const lines = changes.map((c: Change) => `${c.id} [${c.state}${c.intent ? ` ${c.intent}` : ""}] ${c.fromVersion}→${c.toVersion} ${c.author.name}: ${c.description}`);
-      return text(`${changes.length} change(s)${state ? ` in state ${state}` : ""}:\n${lines.join("\n")}`);
+      // A project gathers every request's changes, and a pass reads its own thread and what is waiting: the whole list
+      // ran to 71.6K characters on an eval project, of which a model with a 9K result saw only the start and the end.
+      const thread = task && (task.context.threadId ?? task.id);
+      const own = (c: Change) => !task || c.threadId === thread || c.taskId === task.id || task.changeIds.includes(c.id) || PENDING_CHANGE_STATES.has(c.state);
+      const listed = all ? changes : changes.filter(own);
+      const scope = all || !task ? "" : " in this request's thread or pending";
+      const maxChars = caps.resultChars ?? DEFAULT_RESULT_CHARS;
+      const lines: string[] = [];
+      let used = 300, next = offset;
+      for (; next < listed.length; next++) {
+        const c = listed[next]!;
+        const line = `${c.id} [${c.state}${c.intent ? ` ${c.intent}` : ""}] ${c.fromVersion}→${c.toVersion} ${c.author.name}: ${c.description}`;
+        if (lines.length && used + line.length + 1 > maxChars) break;
+        lines.push(line);
+        used += line.length + 1;
+      }
+      const more = listed.length - next, others = changes.length - listed.length;
+      const shown = offset || more ? `, ${lines.length ? `${offset + 1}–${next}` : "none"} shown` : "";
+      return text(`${listed.length} change(s)${state ? ` in state ${state}` : ""}${scope}${shown}:\n${lines.join("\n")}` +
+        (more ? `\n${more} more: call change_list with offset ${next}.` : "") +
+        (others ? `\n${others} other change(s) in the project: all lists them.` : ""));
     },
   );
 

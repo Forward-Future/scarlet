@@ -5725,3 +5725,110 @@ it("keeps a resumed or answered task in the pass the editor typed last", async (
     Object.assign(mock.state, original);
   }
 });
+
+describe("dialogue_apply_cuts receipts and lost batches", () => {
+  const pauseWords = [{ text: "Watch.", start: 10.4, end: 11 }, { text: "this", start: 12, end: 12.3 }, { text: "now.", start: 14.6, end: 15.2 }];
+  async function setup(saved: object) {
+    const original = { extra: mock.state.extra, waveform: mock.state.waveform, timeline: mock.state.timeline, transcripts: mock.state.transcripts };
+    const tl = emptyTimeline(mock.state.project.id);
+    tl.version = "before-receipt";
+    tl.tracks[0]!.clips = [makeMediaClip("m1", 10, 20, 0)];
+    mock.state.timeline = tl;
+    mock.state.transcripts = { m1: { id: "t1", mediaId: "m1", segments: [{ id: "s", text: "Watch. this now.", words: pauseWords, start: 10.4, end: 15.2 }] } };
+    mock.state.waveform = (mediaId, from, to, points) => {
+      const rms = Array.from({ length: points }, (_, i) => pauseWords.some(w => w.start <= from + (i + .5) * (to - from) / points && from + (i + .5) * (to - from) / points < w.end) ? .1 : .001);
+      return { mediaId, from, to, peaks: rms, rms };
+    };
+    const sent: unknown[] = [];
+    mock.state.extra = (req, res) => {
+      if (!req.path.endsWith("/dialogue-cuts")) return false;
+      sent.push(req.body);
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ...saved, head: tl.version }));
+      return true;
+    };
+    return { tl, sent, restore: () => Object.assign(mock.state, original) };
+  }
+  const pause = { kind: "pause", decision: "cut", reason: "Trim the wait.", summary: "Trim the pause after “Watch”" };
+
+  it("names saved edits by summary and range, and says why cuts moved onto frames once", async () => {
+    const summary = "Trim the pause after “Watch”";
+    const { tl, restore } = await setup({ changes: [{ id: "chg_r", state: "approved", fromVersion: "before-receipt", toVersion: "before-receipt", description: "Cut 0.6 s.", intent: "requested",
+      timelineEdits: [{ label: summary, summary, reason: "Trim the wait.", range: { start: 1.20033333333333, end: 1.20033333333333 } }] }],
+    onFrames: { cuts: 1, largestShift: 0.012, why: "Cuts are saved on whole frames at 29.97 fps, rounded inward and never past the timeline's end; timelineEdits has the saved ranges." } });
+    const editor = await connect("task_receipt");
+    try {
+      const apply = async () => {
+        const r = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Trimmed a pause.", cuts: [{ ...pause, start: 1.2, end: 1.8 }] } }) as CallToolResult;
+        expect(r.isError, textOf(r)).toBeFalsy();
+        return firstJson(r);
+      };
+      const first = await apply();
+      expect(first.changes[0].timelineEdits).toEqual([{ summary, range: { start: 1.2, end: 1.2 } }]);
+      expect(first.onFrames.why).toContain("whole frames");
+      const second = await apply();
+      expect(second.onFrames).toEqual({ cuts: 1, largestShift: 0.012 });
+    } finally {
+      restore();
+      await editor.close();
+    }
+  });
+
+  it("sets aside a retake whose repeat pair this version's check doesn't list, and saves the rest", async () => {
+    const { tl, sent, restore } = await setup({ changes: [] });
+    const editor = await connect("task_unpaired");
+    try {
+      const retake = { kind: "retake", decision: "cut", reason: "Earlier take.", summary: "Cut the earlier take", removeRepeat: { id: "rep_gone", occurrence: "first" } };
+      const r = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Trimmed a pause.",
+        cuts: [{ ...pause, start: 1.2, end: 1.8 }, retake] } }) as CallToolResult;
+      expect(r.isError, textOf(r)).toBeFalsy();
+      const receipt = firstJson(r);
+      expect(receipt.notSaved).toMatchObject({ cuts: [1] });
+      expect(receipt.notSaved.next).toContain("doesn't list the pair cuts 1 name");
+      expect(sent).toHaveLength(1);
+      expect((sent[0] as { cuts: unknown[] }).cuts).toHaveLength(1);
+      // On its own it is refused, as before.
+      const alone = await editor.callTool({ name: "dialogue_apply_cuts", arguments: { version: tl.version, description: "Cut the take.", cuts: [retake] } }) as CallToolResult;
+      expect(alone.isError).toBe(true);
+      expect(textOf(alone)).toContain("Read dialogue_check_repeats on this version");
+      expect(sent).toHaveLength(1);
+    } finally {
+      restore();
+      await editor.close();
+    }
+  });
+});
+
+describe("change_list", () => {
+  it("lists this request's thread and what is pending, newest first, within one result", async () => {
+    const original = mock.state.changes;
+    const change = (id: string, state: string, extra: object = {}) => ({ id, projectId: "prj_test", state, fromVersion: "v0", toVersion: "v1",
+      author: { type: "agent", id: "claude", name: "claude" }, description: `Change ${id} ${"x".repeat(500)}`, ...extra });
+    mock.state.changes = [
+      change("chg_mine", "approved", { taskId: "task_list" }),
+      change("chg_thread", "approved", { threadId: "thr_1" }),
+      change("chg_pending", "ready", { taskId: "task_other" }),
+      ...Array.from({ length: 80 }, (_, i) => change(`chg_old${i}`, "approved", { taskId: "task_other" })),
+    ] as unknown as typeof original;
+    const task = { id: "task_list", projectId: "prj_test", changeIds: [], context: { threadId: "thr_1" } } as unknown as Task;
+    const session = await connect("task_list", undefined, task);
+    try {
+      const listed = textOf(await session.callTool({ name: "change_list", arguments: {} }) as CallToolResult);
+      expect(listed).toMatch(/^3 change\(s\) in this request's thread or pending:/);
+      expect(listed).toContain("chg_mine");
+      expect(listed).toContain("chg_thread");
+      expect(listed).toContain("chg_pending");
+      expect(listed).not.toContain("chg_old0");
+      expect(listed).toContain("80 other change(s) in the project: all lists them.");
+      const all = textOf(await session.callTool({ name: "change_list", arguments: { all: true } }) as CallToolResult);
+      expect(all.length).toBeLessThanOrEqual(agentCapabilities("claude").resultChars!);
+      const more = /(\d+) more: call change_list with offset (\d+)\./.exec(all);
+      expect(more).not.toBeNull();
+      const next = textOf(await session.callTool({ name: "change_list", arguments: { all: true, offset: Number(more![2]) } }) as CallToolResult);
+      expect(next).toContain(`, ${Number(more![2]) + 1}–`);
+    } finally {
+      mock.state.changes = original;
+      await session.close();
+    }
+  });
+});
