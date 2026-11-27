@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
-import { isAddRequest, isRejectRequest, matchesEdit, threadEditList, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
+import { brollSectionForEdit, isAddRequest, isRejectRequest, matchesEdit, stretchesContiguous, threadEditList, type BrollSection, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
+import type { TimeRange } from "@scarlet/timeline";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { reviewKey, useKeptEdits } from "../../lib/keptEdits";
 import { samePlace } from "../../lib/editMoments";
@@ -216,8 +217,8 @@ type WaitsOn<T> = { reviewed(edit: T): boolean; revising(edit: T): { state: Task
  * the request is folded. A flagged edit waits until it is kept or sent back, and again while the request it was sent
  * back with has stopped to ask the editor something. An edit made in several places is one row.
  */
-export function waitingRows<T extends ListedEdit>(edits: readonly T[], { reviewed, revising }: WaitsOn<T>): number {
-  return editGroups(edits).filter(group => group.members.some(({ edit }) => asksEditor(revising(edit)) || (!!edit.check && !reviewed(edit) && !revising(edit)))).length;
+export function waitingRows<T extends ListedEdit>(edits: readonly T[], { reviewed, revising }: WaitsOn<T>, brollSections?: readonly BrollSection[] | null): number {
+  return editGroups(edits, brollSections).filter(group => group.members.some(({ edit }) => asksEditor(revising(edit)) || (!!edit.check && !reviewed(edit) && !revising(edit)))).length;
 }
 
 /**
@@ -231,19 +232,68 @@ export function waitingPassRows<T extends ListedEdit>(calls: readonly { state: s
 }
 
 /**
- * The distinct edits in a list. Edits only combine into one row when they share a label and overlap on the timeline
- * exactly. Cuts, flagged edits, and spots marked for the editor always stay one row each.
+ * The distinct edits in a list. Edits combine into one row when they share a label and overlap on the timeline
+ * exactly, or when contiguous B-roll edits belong to one continuous B-roll section. Cuts, non-B-roll flagged edits,
+ * and spots marked for the editor always stay one row each.
  */
-export function editGroups<T extends ListedEdit>(edits: readonly T[]): { label: string; members: { edit: T; i: number }[] }[] {
-  const groups: { label: string; members: { edit: T; i: number }[] }[] = [];
+export function editGroups<T extends ListedEdit>(
+  edits: readonly T[],
+  brollSections?: readonly BrollSection[] | null,
+): { label: string; members: { edit: T; i: number }[]; continuousBroll?: boolean; stretch?: TimeRange }[] {
+  type Group = { label: string; members: { edit: T; i: number }[]; brollSectionId?: string; isBroll?: boolean; stretch?: TimeRange };
+  const groups: Group[] = [];
+  const isContinuousBroll = (edit: T) => !edit.beforeCut && !edit.marker && !edit.rejected && edit.kind === "broll";
   edits.forEach((edit, i) => {
+    if (isContinuousBroll(edit)) {
+      const section = brollSections ? brollSectionForEdit(brollSections, edit.range) : undefined;
+      const canMerge = brollSections ? !!section : edit.range.end > edit.range.start;
+      if (canMerge) {
+        const matching: Group[] = [];
+        for (const g of groups) {
+          if (!g.isBroll) continue;
+          const matches = brollSections
+            ? g.brollSectionId === section!.id
+            : g.members.some(m => stretchesContiguous(m.edit.range, edit.range));
+          if (matches) matching.push(g);
+        }
+        if (matching.length) {
+          const target = matching[0]!;
+          for (let k = 1; k < matching.length; k++) {
+            const extra = matching[k]!;
+            target.members.push(...extra.members);
+            const idx = groups.indexOf(extra);
+            if (idx >= 0) groups.splice(idx, 1);
+          }
+          target.members.push({ edit, i });
+          target.members.sort((a, b) => a.i - b.i);
+          target.stretch = {
+            start: Math.min(...target.members.map(m => m.edit.range.start)),
+            end: Math.max(...target.members.map(m => m.edit.range.end)),
+          };
+          return;
+        }
+        groups.push({
+          label: edit.label,
+          members: [{ edit, i }],
+          brollSectionId: section?.id,
+          isBroll: true,
+          stretch: edit.range,
+        });
+        return;
+      }
+    }
     const alone = !!edit.beforeCut || !!edit.check || !!edit.marker;
     const group = alone ? undefined : groups.findLast(g => {
+      if (g.isBroll) return false;
       const first = g.members[0]!.edit;
       return !first.beforeCut && !first.check && !first.marker && first.label === edit.label && samePlace(first, edit);
     });
     if (group) { group.members.push({ edit, i }); return; }
     groups.push({ label: edit.label, members: [{ edit, i }] });
   });
-  return groups;
+  return groups.map(({ label, members, isBroll, stretch }) => ({
+    label,
+    members,
+    ...(isBroll && members.length > 1 ? { continuousBroll: true, stretch } : {}),
+  }));
 }

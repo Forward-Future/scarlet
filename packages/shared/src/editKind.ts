@@ -171,6 +171,7 @@ function insertedGaps(ops: Op[], baseVideo: string | undefined, before: Timeline
 /** Each op's facet, and where it lands on the finished cut when that can be told. */
 function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
   const laid = laidFiles(media);
+  const mediaById = new Map(media?.map(m => [m.id, m]));
   const ops = (change.ops ?? []) as Op[];
   const beforeClip = clipFinder(before, ops.length > 1);
   const afterClip = before === after ? beforeClip : clipFinder(after, ops.length > 1);
@@ -225,11 +226,14 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         const patch = op.patch && typeof op.patch === "object" ? op.patch as Record<string, unknown> : {};
         const found = afterClip(op.clipId) ?? beforeClip(op.clipId);
         const at = range(found?.clip);
-        const isGraphicOverlay = !!found && found.track.id !== baseVideo && laid(found.clip) === "graphic";
+        const overKind = found && found.track.id !== baseVideo ? laid(found.clip) : undefined;
+        const isGraphicOverlay = overKind === "graphic";
+        const isBrollOverlay = overKind === "broll";
+        const isBrollStill = isBrollOverlay && found?.clip.kind === "media" && mediaById.get(found.clip.mediaId)?.kind === "image";
         const keys = Object.keys(patch).filter(k => !NEUTRAL_KEYS.has(k));
         if (!keys.length) {
           const retimed = Object.keys(patch).some(k => k === "sourceIn" || k === "sourceOut" || k === "timelineIn" || k === "timelineOut");
-          return [{ facet: isGraphicOverlay && retimed ? "graphic" as const : "neutral", range: at }];
+          return [{ facet: retimed ? (isGraphicOverlay ? "graphic" as const : isBrollOverlay ? "broll" as const : "neutral") : "neutral", range: at }];
         }
         return keys.flatMap((key): Placed | Placed[] => {
           // A split edit is at its join, between where the picture cuts and where the sound now does: one for each end.
@@ -237,8 +241,9 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
             ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range })) : [{ facet: "split" as const, range: at }];
           if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
           if (key === "volumeKeyframes") return { facet: dips(patch.volumeKeyframes) ? "dip" as const : "audio" as const, range: at };
-          // Repositioning or animating a graphic Scarlet laid over the picture is still a graphic edit, not a camera reframe.
-          if (FRAMING_KEYS.has(key)) return { facet: isGraphicOverlay ? "graphic" as const : framingFacet(patch, key), range: at };
+          // Repositioning or animating a graphic Scarlet laid over the picture is still a graphic edit,
+          // and Ken Burns motion keyframes on a B-roll still photo are still a B-roll edit, not a camera zoom.
+          if (FRAMING_KEYS.has(key)) return { facet: isGraphicOverlay ? "graphic" as const : isBrollStill && key === "keyframes" ? "broll" as const : framingFacet(patch, key), range: at };
           if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
           if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at };
           if (key === "mediaId" && found && found.track.id !== baseVideo) {
@@ -267,8 +272,9 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
       }
       case "moveClip": {
         const found = afterClip(op.clipId) ?? beforeClip(op.clipId);
-        if (found && found.track.id !== baseVideo && laid(found.clip) === "graphic") {
-          return [{ facet: "graphic" as const, range: range(found.clip) }];
+        if (found && found.track.id !== baseVideo) {
+          const over = laid(found.clip);
+          if (over === "graphic" || over === "broll") return [{ facet: over, range: range(found.clip) }];
         }
         return [{ facet: "neutral" }];
       }

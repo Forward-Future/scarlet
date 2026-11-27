@@ -1,5 +1,7 @@
 import { createContext, useContext, useSyncExternalStore } from "react";
-import type { ThreadEdit } from "@scarlet/shared";
+import { BROLL_CONTIGUOUS_GAP, matchesEdit, stretchesContiguous, type EditKind, type EditRef, type ThreadEdit } from "@scarlet/shared";
+import type { TimeRange } from "@scarlet/timeline";
+import { editKey } from "../../lib/editMoments";
 import { inListOrder, rowBeside, rowsOfTab, tabShown, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
 import type { HoveredReviewRow, Nest, OpenList } from "./types";
 
@@ -52,6 +54,16 @@ export interface DockRow {
   owns?: boolean;
   /** All edits represented by this row (a grouped multi-place edit or moment), for Keep confident. */
   edits?: readonly Omit<ThreadEdit, "at">[];
+  /** Specific edit kind for continuous B-roll grouping across requests. */
+  editKind?: EditKind;
+  /** Working-cut timeline stretch of this row (union across all shots when continuous B-roll). */
+  stretch?: TimeRange;
+  /** Active continuous B-roll section ID on the current timeline (`null` when checked and no active B-roll plays here). */
+  brollSectionId?: string | null;
+  /** True when multiple contiguous B-roll edits combined into one continuous section row. */
+  continuousBroll?: boolean;
+  /** Additional threads' edits folded into this row when continuous B-roll spans multiple requests. */
+  extraThreadEdits?: readonly { threadId: string; edits: readonly Omit<ThreadEdit, "at">[]; unkeep?: () => void }[];
   /** 1-based position in its thread's edits list, for action logging when stepping with ↑ / ↓. */
   editOrder?: { index: number; of: number };
   nests: readonly Nest[];
@@ -107,7 +119,9 @@ function sameRow(a: DockRow, b: DockRow): boolean {
     && a.forYou === b.forYou && a.busy === b.busy && a.pending === b.pending && a.needs === b.needs
     && a.asks === b.asks && a.decided === b.decided && a.version === b.version && a.fresh === b.fresh
     && a.title === b.title && a.ariaLabel === b.ariaLabel && a.on === b.on && !!a.open === !!b.open
-    && !!a.unkeep === !!b.unkeep && a.unkeepTip === b.unkeepTip && a.spent === b.spent;
+    && !!a.unkeep === !!b.unkeep && a.unkeepTip === b.unkeepTip && a.spent === b.spent
+    && a.editKind === b.editKind && a.brollSectionId === b.brollSectionId && !!a.continuousBroll === !!b.continuousBroll
+    && a.stretch?.start === b.stretch?.start && a.stretch?.end === b.stretch?.end;
 }
 
 function sameEntry(a: DockEntry, b: DockEntry): boolean {
@@ -138,9 +152,91 @@ function entryEditId(entry: DockEntry): string | undefined {
   return e ? `${e.changeId}:${e.spot}` : undefined;
 }
 
+function isContinuousBrollDockEntry(entry: DockEntry): boolean {
+  const { row } = entry;
+  return !entry.members?.length && row.callIndex === undefined && !row.rejected && !row.skipped
+    && row.editKind === "broll" && row.brollSectionId !== null && !!row.stretch && row.stretch.end > row.stretch.start;
+}
+
+function sameContinuousBrollDock(a: DockEntry, b: DockEntry): boolean {
+  if (!isContinuousBrollDockEntry(a) || !isContinuousBrollDockEntry(b)) return false;
+  if (a.row.brollSectionId && b.row.brollSectionId) return a.row.brollSectionId === b.row.brollSectionId;
+  if (a.row.brollSectionId || b.row.brollSectionId) return false;
+  return stretchesContiguous(a.row.stretch, b.row.stretch, BROLL_CONTIGUOUS_GAP);
+}
+
+function synthesizeBrollDockGroup(group: readonly DockEntry[]): DockEntry {
+  if (group.length === 1) return group[0]!;
+  const asks = group.filter(e => e.row.asks);
+  const needs = group.filter(e => e.row.needs);
+  const pending = group.filter(e => e.row.pending);
+  const pool = asks.length ? asks : needs.length ? needs : pending.length ? pending : group;
+  const lead = [...pool].sort((a, b) => a.at - b.at)[0]!;
+  const unionStretch: TimeRange = {
+    start: Math.min(...group.map(e => e.row.stretch!.start)),
+    end: Math.max(...group.map(e => e.row.stretch!.end)),
+  };
+  const place: RowPlace = group.some(e => e.place === "you" || e.row.needs || e.row.asks) ? "you"
+    : group.some(e => e.place === "working" || e.row.pending) ? "working"
+    : group.every(e => e.place === "done" || e.row.decided) ? "done"
+    : "optional";
+  const decided = place === "done" && group.every(e => e.row.decided);
+  const decision = decided ? "Kept" : undefined;
+  const byThread = new Map<string, { edits: Omit<ThreadEdit, "at">[]; unkeep?: () => void }>();
+  for (const entry of group) {
+    const edits = entry.row.edits?.length ? entry.row.edits : entry.row.edit ? [entry.row.edit] : [];
+    const cur = byThread.get(entry.threadId) ?? { edits: [], unkeep: entry.row.unkeep };
+    for (const e of edits) {
+      if (!cur.edits.some(x => editKey(x) === editKey(e))) cur.edits.push(e);
+    }
+    if (!cur.unkeep && entry.row.unkeep) cur.unkeep = entry.row.unkeep;
+    byThread.set(entry.threadId, cur);
+  }
+  const leadEdits = byThread.get(lead.threadId)?.edits ?? [];
+  const extraThreadEdits = [...byThread.entries()]
+    .filter(([tid]) => tid !== lead.threadId)
+    .map(([threadId, data]) => ({ threadId, edits: data.edits, ...(data.unkeep && { unkeep: data.unkeep }) }));
+  const unkeeps = group.map(e => e.row.unkeep).filter((fn): fn is () => void => !!fn);
+  const unkeep = decided && unkeeps.length > 0 ? () => { for (const fn of unkeeps) fn(); } : undefined;
+  const was = [...new Set(group.flatMap(e => [e.key, ...(e.row.was ?? [])]).filter(k => k !== lead.key))];
+  return {
+    ...lead,
+    place,
+    at: unionStretch.start,
+    row: {
+      ...lead.row,
+      was: was.length ? was : lead.row.was,
+      at: unionStretch.start,
+      displayAt: unionStretch.start,
+      mark: unionStretch.start,
+      stretch: unionStretch,
+      continuousBroll: true,
+      editKind: "broll",
+      value: place === "done" ? (decision ?? "Kept") : "B-roll",
+      decision,
+      word: group.find(e => e.row.asks)?.row.word ?? group.find(e => e.row.pending)?.row.word ?? lead.row.word,
+      needs: group.some(e => e.row.needs),
+      asks: group.some(e => e.row.asks),
+      pending: group.some(e => e.row.pending),
+      busy: group.some(e => e.row.busy),
+      revised: !group.some(e => e.row.pending) && group.some(e => e.row.revised),
+      decided,
+      forYou: group.some(e => e.row.forYou),
+      version: Math.max(...group.map(e => e.row.version)),
+      fresh: group.some(e => e.row.fresh),
+      on: group.some(e => e.row.on),
+      edits: leadEdits,
+      ...(extraThreadEdits.length > 0 && { extraThreadEdits }),
+      unkeep,
+      nests: group.flatMap(e => e.row.nests),
+    },
+  };
+}
+
 /**
  * When a later request flags an edit made by an earlier request (`elsewhere: true`), both threads report that
  * `(changeId, spot)`. Keep a single entry across the merged dock, preferring active review states over `optional`.
+ * Also collapses contiguous B-roll entries that belong to one continuous B-roll section into a single line item.
  */
 export function dedupeDockEntries(entries: readonly DockEntry[]): DockEntry[] {
   const best = new Map<string, DockEntry>();
@@ -155,10 +251,34 @@ export function dedupeDockEntries(entries: readonly DockEntry[]): DockEntry[] {
       best.set(id, entry);
     }
   }
-  return entries.filter(entry => {
+  const unique = entries.filter(entry => {
     const id = entryEditId(entry);
     return !id || best.get(id) === entry;
   });
+  const groups: DockEntry[][] = [];
+  for (const entry of unique) {
+    if (!isContinuousBrollDockEntry(entry)) {
+      groups.push([entry]);
+      continue;
+    }
+    const matching: DockEntry[][] = [];
+    for (const g of groups) {
+      if (g.some(prev => sameContinuousBrollDock(prev, entry))) matching.push(g);
+    }
+    if (matching.length) {
+      const target = matching[0]!;
+      for (let k = 1; k < matching.length; k++) {
+        const extra = matching[k]!;
+        target.push(...extra);
+        const idx = groups.indexOf(extra);
+        if (idx >= 0) groups.splice(idx, 1);
+      }
+      target.push(entry);
+    } else {
+      groups.push([entry]);
+    }
+  }
+  return groups.map(synthesizeBrollDockGroup);
 }
 
 /**
@@ -263,7 +383,11 @@ export class ReviewDockStore {
     this.reports.get(threadId)?.entries.find(e => e.key === entryKey)?.members?.find(m => m.key === memberKey)?.open?.();
   }
 
-  unkeepRow(threadId: string, entryKey: string) {
+  unkeepRow(threadId: string, entryKey: string, threadIds?: readonly string[]) {
+    if (threadIds) {
+      const merged = this.allEntries(threadIds).find(e => e.key === entryKey);
+      if (merged?.row.unkeep) { merged.row.unkeep(); return; }
+    }
     this.reports.get(threadId)?.entries.find(e => e.key === entryKey)?.row.unkeep?.();
   }
 
@@ -297,6 +421,20 @@ export class ReviewDockStore {
     return inListOrder(raw, { numbers: false });
   }
 
+  /** Find the merged dock entry containing a specific thread edit (including multi-thread continuous B-roll sections). */
+  findForEdit(threadIds: readonly string[], threadId: string, ref: EditRef): DockEntry | undefined {
+    for (const entry of this.allEntries(threadIds)) {
+      if (entry.threadId === threadId) {
+        if (entry.row.edit && matchesEdit(entry.row.edit, ref)) return entry;
+        if (entry.row.edits?.some(e => matchesEdit(e, ref))) return entry;
+      }
+      if (entry.row.extraThreadEdits?.some(part => part.threadId === threadId && part.edits.some(e => matchesEdit(e, ref)))) {
+        return entry;
+      }
+    }
+    return undefined;
+  }
+
   /**
    * Priority-ordered Needs review entries: flagged/waiting rows first (timeline order), followed by
    * confident/unflagged rows when `showAll` is true (newest request first, timeline order within each request).
@@ -304,14 +442,20 @@ export class ReviewDockStore {
   priorityForYou(threadIds: readonly string[], showAll: boolean): DockEntry[] {
     const ordered = this.orderedReports(threadIds);
     const deduped = dedupeDockEntries(ordered.flatMap(r => r.entries));
-    const allowed = new Set(deduped.map(e => e.key));
+    const dedupedByKey = new Map(deduped.map(e => [e.key, e]));
     const waiting = inListOrder(
       deduped.filter(e => e.place === "you"),
       { numbers: false },
     );
     if (!showAll) return waiting;
     const confident = [...ordered].reverse().flatMap(r =>
-      inListOrder(r.entries.filter(e => e.place === "optional" && allowed.has(e.key)), { numbers: false }),
+      inListOrder(
+        r.entries.flatMap(e => {
+          const merged = dedupedByKey.get(e.key);
+          return merged && merged.place === "optional" ? [merged] : [];
+        }),
+        { numbers: false },
+      ),
     );
     return [...waiting, ...confident];
   }
@@ -319,18 +463,30 @@ export class ReviewDockStore {
   /** All confident (unflagged, undecided) edits grouped by thread, for Keep confident + Undo. */
   confidentEdits(threadIds: readonly string[]): Array<{ threadId: string; refs: Omit<ThreadEdit, "at">[] }> {
     const ordered = this.orderedReports(threadIds);
-    const allowed = new Set(dedupeDockEntries(ordered.flatMap(r => r.entries)).map(e => e.key));
-    const out: Array<{ threadId: string; refs: Omit<ThreadEdit, "at">[] }> = [];
-    for (const rep of [...ordered].reverse()) {
-      const refs: Omit<ThreadEdit, "at">[] = [];
-      for (const entry of rep.entries) {
-        if (entry.place !== "optional" || !allowed.has(entry.key)) continue;
-        if (entry.row.edits?.length) refs.push(...entry.row.edits);
-        else if (entry.members?.length) {
-          for (const m of entry.members) if (m.edit) refs.push(m.edit);
-        } else if (entry.row.edit) refs.push(entry.row.edit);
+    const deduped = dedupeDockEntries(ordered.flatMap(r => r.entries));
+    const byThread = new Map<string, Omit<ThreadEdit, "at">[]>();
+    const addRefs = (tid: string, items: readonly Omit<ThreadEdit, "at">[]) => {
+      const list = byThread.get(tid) ?? [];
+      for (const e of items) {
+        if (!list.some(x => editKey(x) === editKey(e))) list.push(e);
       }
-      if (refs.length) out.push({ threadId: rep.threadId, refs });
+      if (list.length) byThread.set(tid, list);
+    };
+    for (const entry of deduped) {
+      if (entry.place !== "optional") continue;
+      if (entry.row.edits?.length) addRefs(entry.threadId, entry.row.edits);
+      else if (entry.members?.length) addRefs(entry.threadId, entry.members.flatMap(m => m.edit ? [m.edit] : []));
+      else if (entry.row.edit) addRefs(entry.threadId, [entry.row.edit]);
+      for (const extra of entry.row.extraThreadEdits ?? []) addRefs(extra.threadId, extra.edits);
+    }
+    const order = [...ordered].reverse().map(r => r.threadId);
+    const out: Array<{ threadId: string; refs: Omit<ThreadEdit, "at">[] }> = [];
+    for (const tid of order) {
+      const refs = byThread.get(tid);
+      if (refs?.length) out.push({ threadId: tid, refs });
+    }
+    for (const [tid, refs] of byThread) {
+      if (!order.includes(tid) && refs.length) out.push({ threadId: tid, refs });
     }
     return out;
   }
