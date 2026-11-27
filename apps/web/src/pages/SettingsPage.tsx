@@ -21,6 +21,7 @@ import { ShortcutsSettings } from "../components/shell/ShortcutsSettings";
 import { TaskModelsSettings } from "../components/shell/TaskModelsSettings";
 import { DesktopAgents, DesktopDiagnostics, ExportLogs } from "../components/shell/DesktopSettings";
 import { FfmpegSetupCard } from "../components/shell/FfmpegSetup";
+import { YouTubeSettings } from "../components/shell/YouTubeSettings";
 import { EditingToolsSettings } from "../components/shell/EditingToolsSettings";
 import { useUiStore } from "../stores/ui";
 import { ErrorState, Field, Icon, InlineError, Loading, Modal, PageHeading, SectionTitle, Spinner, Toggle } from "../components/ui/primitives";
@@ -360,6 +361,7 @@ export function SettingsPage() {
           <>
             <DesktopAgents />
             <FfmpegSetupCard />
+            <YouTubeSettings />
             <ServerSettingsForm section="general" />
             <CheckInSettings />
             <TalkingToYouSettings />

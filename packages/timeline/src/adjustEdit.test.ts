@@ -160,6 +160,44 @@ describe("editAdjustBounds and adjustEdit", () => {
     expect(dialogue.clips[1]!.timelineIn).toBeCloseTo(3.5, 5);
   });
 
+  it("adjusts multi-clip overlay and B-roll runs split across dialogue cuts on both outer edges", () => {
+    const tl = baseTimeline([
+      { id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [mc("v_a", "m_main", 0, 6, 0), mc("v_b", "m_main", 8, 20, 6)] },
+      { id: "v2", kind: "video", name: "Screen", muted: false, hidden: false, clips: [
+        mc("screen_1", "m_broll", 2, 4, 4), // 4..6 (2 s before available)
+        mc("screen_2", "m_broll", 5, 8, 6), // 6..9 (2 s after available)
+      ] },
+      { id: "v3", kind: "video", name: "Inset", muted: false, hidden: false, clips: [
+        mc("inset_1", "m_main", 4, 6, 4),
+        mc("inset_2", "m_main", 8, 11, 6),
+      ] },
+    ]);
+    const bounds = editAdjustBounds(tl, { start: 4, end: 9 }, FPS, assets, { kind: "broll", clipIds: ["screen_1", "screen_2", "inset_1", "inset_2"] })!;
+    expect(bounds.mode).toBe("overlay");
+    expect(bounds.canRemove).toBe(false);
+    expect(bounds.minStart).toBeCloseTo(2, 5);
+    expect(bounds.maxStart).toBeCloseTo(6 - 1 / FPS, 5);
+    expect(bounds.minEnd).toBeCloseTo(6 + 1 / FPS, 5);
+    expect(bounds.maxEnd).toBeCloseTo(11, 5);
+
+    // Drag start edge earlier by 1 s: moves only the first clip on each overlay track, leaving interior join intact.
+    const movedStart = adjustEdit(tl, { start: 4, end: 9 }, { start: 3, end: 9 }, FPS, assets, { kind: "broll", clipIds: ["screen_1", "screen_2", "inset_1", "inset_2"] })!;
+    expect(movedStart.range).toEqual({ start: 3, end: 9 });
+    expect(movedStart.timeline.tracks[1]!.clips.map(c => c.kind === "media" && [c.timelineIn, c.sourceIn, c.sourceOut]))
+      .toEqual([[3, 1, 4], [6, 5, 8]]);
+    expect(movedStart.timeline.tracks[2]!.clips.map(c => c.kind === "media" && [c.timelineIn, c.sourceIn, c.sourceOut]))
+      .toEqual([[3, 3, 6], [6, 8, 11]]);
+
+    // A second drag on the end edge still matches both overlay tracks even when `clipIds` only lists the clips from drag #1.
+    const firstDragClipIds = movedStart.ops.flatMap(op => op.op === "updateClip" ? [op.clipId] : []);
+    const movedEnd = adjustEdit(movedStart.timeline, { start: 3, end: 9 }, { start: 3, end: 10.5 }, FPS, assets, { kind: "broll", clipIds: firstDragClipIds })!;
+    expect(movedEnd.range).toEqual({ start: 3, end: 10.5 });
+    expect(movedEnd.timeline.tracks[1]!.clips.map(c => c.kind === "media" && [c.timelineIn, c.sourceIn, c.sourceOut]))
+      .toEqual([[3, 1, 4], [6, 5, 9.5]]);
+    expect(movedEnd.timeline.tracks[2]!.clips.map(c => c.kind === "media" && [c.timelineIn, c.sourceIn, c.sourceOut]))
+      .toEqual([[3, 3, 6], [6, 8, 12.5]]);
+  });
+
   it("refuses disallowed kinds like speed, insert, or transition", () => {
     const tl = baseTimeline([
       { id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [mc("v_full", "m_main", 0, 20, 0)] },

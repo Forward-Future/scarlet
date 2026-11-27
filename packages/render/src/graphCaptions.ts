@@ -95,7 +95,7 @@ export async function buildCaptionDrawtexts(opts: CaptionDrawOptions): Promise<s
       await fs.writeFile(textFile, wrapText(text, maxChars), "utf8");
 
       const o: string[] = [];
-      const font = resolveFontFile(style.fontFamily, fontOpts, NEEDS_WIDE_FONT.test(text));
+      const font = resolveFontFile(style.fontFamily, fontOpts, NEEDS_WIDE_FONT.test(text), style.fontWeight);
       // drawtext draws in one font and in one colour: an emoji comes out as a box or blank in the export.
       if (/\p{Extended_Pictographic}/u.test(text)) warn("a caption has emoji, which exported captions draw as boxes or leave out");
       if (font) {
@@ -103,7 +103,10 @@ export async function buildCaptionDrawtexts(opts: CaptionDrawOptions): Promise<s
         if (!font.exact) warn(`font "${style.fontFamily}" not found; using ${path.basename(font.file)}`);
       } else {
         const family = /^[\p{L}\p{N} _.-]+$/u.test(style.fontFamily) ? style.fontFamily : "sans-serif";
-        o.push(`font='${family}'`);
+        const weightStyle = style.fontWeight && style.fontWeight !== "normal"
+          ? `:style=${style.fontWeight === "semibold" ? "SemiBold" : style.fontWeight.charAt(0).toUpperCase() + style.fontWeight.slice(1)}`
+          : "";
+        o.push(`font='${family}${weightStyle}'`);
         warn(`no font file found for "${style.fontFamily}"; relying on fontconfig`);
       }
       o.push(`textfile=${escapeFilterPath(textFile)}`, "expansion=none");

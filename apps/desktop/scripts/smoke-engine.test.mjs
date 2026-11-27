@@ -94,8 +94,11 @@ for (const windows of [false, true]) {
 
 test("the stock skills it expects are the ones in skills/, named by their frontmatter", async (t) => {
   const { stockExampleNames, stockSkillNames } = await import("./stock-skills.mjs");
-  assert.deepEqual(stockSkillNames(), ["add-captions", "b-roll", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "music-under-speech", "punch-in", "speed-through-waits", "split-edits"]);
-  assert.deepEqual(stockExampleNames(), ["matt-talking-head"]);
+  // Which skills ship is the skills/ folder's business: adding, renaming or removing one changes no code or test.
+  const names = stockSkillNames();
+  assert.ok(names.length > 0);
+  assert.equal(new Set(names).size, names.length);
+  assert.ok(stockExampleNames().every(name => names.includes(name)));
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "scarlet-skills-test-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const [folder, text] of [["b-folder", "---\nname: \"zoom-in\"\n---\n"], ["a-folder", "no frontmatter"], ["notes", null],

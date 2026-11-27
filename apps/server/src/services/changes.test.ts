@@ -192,10 +192,10 @@ it("projects only the named change's thread on edit-flags by changeId and preser
     version: c4Rev.toVersion,
   });
 
-  // Elsewhere/flagged change and its revision from the flagging thread both resolve to their own threads.
+  // Cross-thread revision: old replaced changeId is superseded (404), and its replacement resolves in the revising thread.
   const elsewhereOrig = await postFlag({ changeId: c3.id, spot: 0, check: "Flag orig again" });
-  expect(elsewhereOrig.status).toBe(201);
-  expect(await elsewhereOrig.json()).toMatchObject({ flagged: { changeId: c3.id, spot: 0, label: "Lower hum", request: "Lower hum" } });
+  expect(elsewhereOrig.status).toBe(404);
+  expect(await elsewhereOrig.json()).toMatchObject({ error: { code: "not_found" } });
   const elsewhereRev = await postFlag({ changeId: c4Rev.id, spot: 0, check: "Flag elsewhere rev" });
   expect(elsewhereRev.status).toBe(201);
   expect(await elsewhereRev.json()).toMatchObject({ flagged: { changeId: c4Rev.id, spot: 0, label: "Lower hum more", request: "Audit edits" } });

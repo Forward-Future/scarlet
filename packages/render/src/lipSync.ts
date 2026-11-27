@@ -5,7 +5,7 @@
  * evidence for the model: whether a shift is worth correcting is its call.
  */
 import type { TimeRange } from "@scarlet/timeline";
-import { FFMPEG_QUIET_ARGS, SOURCE_AUDIO_CLOCK, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_QUIET_ARGS, SOURCE_AUDIO_CLOCK, logReason, logRender, resolveFfmpeg, runCapture } from "./exec.js";
 import { rangeInput } from "./mediaInput.js";
 import { audioMapArgs, type HeardAudio } from "./audioTrack.js";
 
@@ -125,6 +125,7 @@ export async function lipSyncStretch(file: string, range: TimeRange, opts: {
   catch (error) {
     opts.signal?.throwIfAborted();
     if (!opts.decoder) throw error;
+    logRender(() => `[media] lip-sync: the ${opts.decoder} decoder couldn't read the mouth, so it was read on the CPU: ${logReason(error)}`, `lip-sync-decoder:${opts.decoder}`);
     motion = await mouthMotion(file, range, { ...opts, decoder: undefined });
   }
   const loudness = await frameLoudness(file, range, { fps: opts.fps, frames: motion.length, audio: opts.audio, signal: opts.signal });

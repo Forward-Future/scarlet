@@ -224,8 +224,16 @@ fn child_env_with(home: &Path, wait_for_login_path: bool) -> HashMap<String, Str
     env.insert(key, path);
     env.remove("CLAUDECODE");
     env.remove("CLAUDE_CODE_ENTRYPOINT");
+    // The agent CLIs' own usage metrics and error reports to their makers stay off, whatever Scarlet's own setting
+    // (Claude Code reads these two; Gemini gets --disable-telemetry and Codex analytics.enabled=false).
+    for (name, value) in CLI_TELEMETRY_OFF {
+        env.insert(name.into(), value.into());
+    }
     env
 }
+
+/// Environment that turns off the agent CLIs' own usage metrics and error reports. See docs/telemetry.md.
+pub const CLI_TELEMETRY_OFF: [(&str, &str); 2] = [("DISABLE_TELEMETRY", "1"), ("DISABLE_ERROR_REPORTING", "1")];
 
 #[cfg(target_os = "macos")]
 static LOGIN_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
@@ -351,13 +359,19 @@ pub async fn kill_tree(pid: u32) {
         cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
         hide_console(&mut cmd);
         cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-        let _ = cmd.status().await;
+        // A nonzero exit only says the tree had already ended. Not starting at all leaves it running.
+        if let Err(e) = cmd.status().await {
+            log::warn!("could not run taskkill to stop process {pid}: {e}");
+        }
     }
     #[cfg(not(windows))]
     {
         async fn signal(sig: &str, pid: u32) {
             let quiet = || std::process::Stdio::null();
-            let _ = tokio::process::Command::new("kill").args([sig, "--", &format!("-{pid}")]).stderr(quiet()).status().await;
+            // A nonzero exit only says nothing was left to signal. Not starting at all leaves the process running.
+            if let Err(e) = tokio::process::Command::new("kill").args([sig, "--", &format!("-{pid}")]).stderr(quiet()).status().await {
+                log::warn!("could not run kill {sig} for process group {pid}: {e}");
+            }
             let _ = tokio::process::Command::new("kill").args([sig, &pid.to_string()]).stderr(quiet()).status().await;
         }
         signal("-TERM", pid).await;
@@ -424,6 +438,21 @@ pub fn human_duration(d: std::time::Duration) -> String {
         (h, 0, _) => format!("{h}h"),
         (h, m, _) => format!("{h}h {m}m"),
     }
+}
+
+/// Log an event the window didn't get. Status events repeat, so each event name is logged at most once a minute.
+pub fn note_emit<T>(event: &str, result: Result<T, impl std::fmt::Display>) {
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{Duration, Instant};
+    let Err(error) = result else { return };
+    static LAST: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+    let mut last = LAST.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let now = Instant::now();
+    if last.get(event).is_some_and(|at| now.duration_since(*at) < Duration::from_secs(60)) {
+        return;
+    }
+    last.insert(event.to_string(), now);
+    log::warn!("could not send {event} to the window: {error}");
 }
 
 /// The last few lines a CLI wrote to stderr, on one log line.
@@ -496,6 +525,16 @@ pub(crate) mod test_log {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logs_an_event_the_window_did_not_get() {
+        test_log::capture();
+        note_emit("test://delivered", Ok::<(), &str>(()));
+        assert!(test_log::find(&["test://delivered"]).is_none());
+        note_emit("test://lost", Err::<(), _>("window gone"));
+        let (level, _) = test_log::find(&["could not send test://lost to the window: window gone"]).expect("the lost event was not logged");
+        assert_eq!(level, log::Level::Warn);
+    }
 
     #[test]
     fn slices_count_utf16_units() {
@@ -637,6 +676,10 @@ mod tests {
         let env = child_env(home.path());
         // This test may itself run inside Claude Code, which sets both.
         assert!(!env.contains_key("CLAUDECODE") && !env.contains_key("CLAUDE_CODE_ENTRYPOINT"));
+        // The agent CLIs never report usage or errors to their makers from inside Scarlet.
+        for (name, value) in CLI_TELEMETRY_OFF {
+            assert_eq!(env.get(name).map(String::as_str), Some(value), "{name}");
+        }
         // One PATH, under the name the system used, holding what was inherited and the install folders.
         let names: Vec<&String> = env.keys().filter(|k| k.eq_ignore_ascii_case("PATH")).collect();
         assert_eq!(names.len(), 1);

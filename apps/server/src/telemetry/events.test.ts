@@ -1,6 +1,6 @@
 import type { Render, Task } from "@scarlet/shared";
 import { describe, expect, it, vi } from "vitest";
-import { recordMediaAdded, recordRenderFinished, recordTaskFinished } from "./events.js";
+import { recordMediaAdded, recordRenderFinished, recordTaskFinished, recordYouTubeUploadFinished } from "./events.js";
 
 function recorder(options: { exportedBefore?: boolean } = {}) {
   const record = vi.fn();
@@ -130,5 +130,27 @@ describe("media.added", () => {
       ["media.added", { kind: "audio", durationBucket: "1_10m", addedBy: "scarlet" }],
       ["media.added", { kind: "video", addedBy: "editor" }],
     ]);
+  });
+});
+
+describe("youtube.upload_finished", () => {
+  it("counts a finished upload as an export, by its outcome and never its title or video", () => {
+    const { ctx, record, recordExport } = recorder();
+    recordYouTubeUploadFinished(ctx, { state: "done", visibility: "unlisted", reusedRender: true });
+    expect(record).toHaveBeenCalledWith("youtube.upload_finished", { state: "done", visibility: "unlisted", reusedRender: true });
+    expect(recordExport).toHaveBeenCalledWith("youtube", false);
+  });
+
+  it("names a failure by the engine's code alone, and nothing else is an export", () => {
+    const { ctx, record, recordExport } = recorder();
+    recordYouTubeUploadFinished(ctx, { state: "failed", visibility: "private", reusedRender: false, failureCode: "youtube_quota_exceeded" });
+    recordYouTubeUploadFinished(ctx, { state: "failed", visibility: "private", reusedRender: false, failureCode: "Couldn't upload /Users/ed/Secret.mp4" });
+    recordYouTubeUploadFinished(ctx, { state: "cancelled", visibility: "weird", reusedRender: false });
+    expect(record.mock.calls.map(([, properties]) => properties)).toEqual([
+      { state: "failed", visibility: "private", reusedRender: false, failureCode: "youtube_quota_exceeded" },
+      { state: "failed", visibility: "private", reusedRender: false, failureCode: "other" },
+      { state: "cancelled", visibility: "other", reusedRender: false },
+    ]);
+    expect(recordExport).not.toHaveBeenCalled();
   });
 });

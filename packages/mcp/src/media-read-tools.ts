@@ -274,7 +274,7 @@ export function registerMediaReadTools(deps: MediaReadToolsDeps) {
         showWords(r.mediaId, words);
       }));
       const wanted = find.split(/\s+/).map(normalizeTranscriptToken).filter(Boolean).join(" ");
-      const timeline = await session.headTimelineOrNull().catch(() => null);
+      const timeline = await session.headTimelineOrNull().catch(withoutOnce("failed to read the timeline to count the captions that still read it", null));
       const captions = (timeline?.tracks ?? []).flatMap(t => t.clips).filter(c => c.kind === "caption" &&
         ` ${c.text.split(/\s+/).map(normalizeTranscriptToken).filter(Boolean).join(" ")} `.includes(` ${wanted} `)).length;
       const total = changed.reduce((n, r) => n + ("count" in r ? r.count : 0), 0);
@@ -397,7 +397,7 @@ export function registerMediaReadTools(deps: MediaReadToolsDeps) {
    */
   async function onScreen(project: Awaited<ReturnType<typeof getProject>>["project"], referenceId: string, secondaryId: string, fit: Parameters<typeof secondaryAtReference>[0]) {
     try {
-      const counted = await Promise.all([referenceId, secondaryId].map(async id => ({ id, words: await transcriptWords(id, false).catch(() => null) ?? [] })));
+      const counted = await Promise.all([referenceId, secondaryId].map(async id => ({ id, words: await transcriptWords(id, false).catch(withoutOnce(`failed to read the words of ${id} for audio_sync`, null)) ?? [] })));
       const [speech, other] = counted[1]!.words.length > counted[0]!.words.length ? [counted[1]!, counted[0]!] : [counted[0]!, counted[1]!];
       const picture = project.media.find(m => m.id === other.id);
       if (!speech.words.length || picture?.kind !== "video" || !picture.duration) return {};

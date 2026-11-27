@@ -8,7 +8,7 @@ import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { ScarletClient } from "@scarlet/shared";
+import { builtInCommand, commandGuides, ScarletClient } from "@scarlet/shared";
 
 if (process.platform !== "darwin" || process.argv[2] !== "--live-codex") {
   console.error("Run on macOS with node apps/server/scripts/bench-first-cut.mjs --live-codex [local-model-directory].");
@@ -94,8 +94,8 @@ try {
     return codex && current.media.some(m => !m.status || m.status === "ready");
   }, 30000);
   const { skills } = await api.skills({ projectId: project.id, agent: "codex" });
-  const skill = skills.find(s => s.name === "dialogue-pass");
-  if (!skill) throw new Error("Missing built-in dialogue-pass skill.");
+  const skill = commandGuides(builtInCommand("first-cut").name, skills)[0];
+  if (!skill) throw new Error("No enabled skill guides the dialogue pass.");
   const { task } = await api.createTask(project.id, {
     agent: "codex", kind: "edit", context: { message: "Make first cut", skillIds: [skill.id] },
     instruction: "Make a first cut from this project’s footage and send it to me for review. This is a quick basil planting lesson. Keep the useful instructions and cut obvious retakes and long pauses.",

@@ -9,6 +9,7 @@ const media = [
   { id: "med_broll", name: "city-skyline.mp4" },
   { id: "med_gfx", name: "opus-title.mov" },
   { id: "med_demo", name: "screen-demo.mp4" },
+  { id: "med_riemann", name: "Riemann’s 1859 paper and the primes.mov" },
 ];
 
 const timeline = {
@@ -73,7 +74,7 @@ describe("editRowTooltip", () => {
     expect(cutRemovedSeconds(edit({ kind: "cut", range: { start: 253, end: 253 } }), change({ ops: [{ op: "rippleDelete", start: 253, end: 254.8 }] }))).toBeCloseTo(1.8);
   });
 
-  it("shows plain-English details without redundant timestamps across edit kinds", () => {
+  it("shows concise plain-English details without clip filenames or redundant timestamps across edit kinds", () => {
     expect(editRowTooltip(edit({ label: "Punch in on keynote", kind: "zoom" }), {
       change: change({ ops: [{ op: "updateClip", clipId: "clp_main", patch: { transform: { scale: 1.4 } } }] }),
       timeline, media,
@@ -105,7 +106,7 @@ describe("editRowTooltip", () => {
       timeline, media,
     })).toEqual({
       tip: "Lower music bed",
-      meta: "Audio · Warm bed quieter (−6 dB)",
+      meta: "Audio · quieter (−6 dB)",
     });
 
     expect(editRowTooltip(edit({ label: "Duck music under speech", kind: "dip", range: { start: 0, end: 16 } }), {
@@ -121,14 +122,14 @@ describe("editRowTooltip", () => {
         }],
       }),
       timeline, media,
-    }).meta).toContain("Music dip · Warm bed lowered to");
+    }).meta).toContain("Music dip · lowered to");
 
     expect(editRowTooltip(edit({ label: "Clean room noise", kind: "voice", range: { start: 0, end: 16 } }), {
       change: change({ ops: [{ op: "updateClip", clipId: "clp_main", patch: { effects: [{ type: "voiceCleanup", params: { mix: 0.6 }, enabled: true }] } }] }),
       timeline, media,
     })).toEqual({
       tip: "Clean room noise",
-      meta: "Voice cleanup on Interview (60%)",
+      meta: "Voice cleanup (60%)",
     });
 
     expect(editRowTooltip(edit({ label: "Speed up setup", kind: "speed" }), {
@@ -162,26 +163,34 @@ describe("editRowTooltip", () => {
       meta: "Caption: “Welcome back” · 2.2 s",
     });
 
+    // Skip duplicating the caption quote when the title already includes it.
+    expect(editRowTooltip(edit({ label: "Added caption “Welcome back”", kind: "text", range: { start: 0.2, end: 2.4 } }), {
+      timeline, media,
+    })).toEqual({
+      tip: "Added caption “Welcome back”",
+      meta: "Caption · 2.2 s",
+    });
+
     expect(editRowTooltip(edit({ label: "Add skyline cutaway", kind: "broll" }), {
       change: change({ ops: [{ op: "addClip", trackId: "trk_v2", clip: { id: "c1", kind: "media", mediaId: "med_broll", timelineIn: 10, sourceIn: 0, sourceOut: 4, speed: 1 } }] }),
       timeline, media,
     })).toEqual({
       tip: "Add skyline cutaway",
-      meta: "B-roll · city-skyline · 4.0 s",
+      meta: "B-roll · 4.0 s",
     });
 
     expect(editRowTooltip(edit({ label: "Hold Opus title", kind: "graphic", range: { start: 2, end: 5 } }), {
       timeline, media,
     })).toEqual({
       tip: "Hold Opus title",
-      meta: "Graphic · opus-title · 3.0 s",
+      meta: "Graphic · 3.0 s",
     });
 
     expect(editRowTooltip(edit({ label: "Insert screen recording", kind: "insert", range: { start: 20, end: 24 } }), {
       timeline, media,
     })).toEqual({
       tip: "Insert screen recording",
-      meta: "Inserted screen-demo · +4.0 s",
+      meta: "Insert · +4.0 s",
     });
 
     expect(editRowTooltip(edit({ label: "Restored laugh", kind: "restore", range: { start: 10, end: 12.4 } }))).toEqual({
@@ -190,7 +199,43 @@ describe("editRowTooltip", () => {
     });
   });
 
-  it("infers clip details from the timeline on full-timeline saves without ops", () => {
+  it("omits duplicate clip filenames and stale rationale on revising overlays while naming the active model cleanly", () => {
+    const revisingOverlay = editRowTooltip(edit({
+      label: "Added Riemann’s portrait and 1859, then brought in the primes as you named them.",
+      summary: "Added Riemann’s portrait and 1859, then brought in the primes as you named them.",
+      reason: "The portrait introduces Riemann and the row gives viewers examples as you explain his idea.",
+      kind: "overlay",
+      range: { start: 2, end: 14 },
+    }), {
+      change: change({
+        ops: [{ op: "addClip", trackId: "trk_v2", clip: { id: "c_r", kind: "media", mediaId: "med_riemann", timelineIn: 2, sourceIn: 0, sourceOut: 12, speed: 1 } }],
+      }),
+      timeline,
+      media,
+      status: "Revising…",
+      by: "GPT-6.2-Sol",
+    });
+    expect(revisingOverlay).toEqual({
+      tip: "Added Riemann’s portrait and 1859, then brought in the primes as you named them.",
+      meta: "Overlay · 12 s · Revising with GPT-6.2-Sol",
+    });
+
+    // Handed-off task model names keep their separator intact.
+    const handedOff = editRowTooltip(edit({
+      label: "Added Riemann’s portrait",
+      kind: "overlay",
+      range: { start: 2, end: 14 },
+    }), {
+      status: "Revising…",
+      by: "Motion graphics · Gemini 3 Pro",
+    });
+    expect(handedOff).toEqual({
+      tip: "Added Riemann’s portrait",
+      meta: "Overlay · 12 s · Revising… · Motion graphics · Gemini 3 Pro",
+    });
+  });
+
+  it("infers clip details from the timeline on full-timeline saves without ops or filenames", () => {
     expect(editRowTooltip(edit({ label: "captions", kind: "other", range: { start: 0.2, end: 2.4 } }), { timeline, media })).toEqual({
       tip: "captions",
       meta: "Caption: “Welcome back” · 2.2 s",
@@ -201,11 +246,11 @@ describe("editRowTooltip", () => {
     });
     expect(editRowTooltip(edit({ label: "music bed", range: { start: 0, end: 16 } }), { timeline, media })).toEqual({
       tip: "music bed",
-      meta: "Audio · Warm bed quieter (−14 dB)",
+      meta: "Audio · quieter (−14 dB)",
     });
   });
 
-  it("shows check cues, Scarlet's reason when distinct from summary, markers, statuses, and rejected rows", () => {
+  it("keeps actionable check cues and to-dos while omitting general rationale when kept or revising", () => {
     expect(editRowTooltip(edit({
       label: "Tightened transition",
       summary: "Tightened transition",
@@ -220,7 +265,20 @@ describe("editRowTooltip", () => {
       detail: "Listen for the breath at the join.",
     });
 
-    // Once kept, shows Scarlet's reason instead of the waiting check cue, plus Kept status.
+    // While revising or once kept, old check cues and general rationale stay off the hover tooltip.
+    expect(editRowTooltip(edit({
+      label: "Tightened transition",
+      summary: "Tightened transition",
+      reason: "Removed the 1.2 s breath before the next topic.",
+      check: "Listen for the breath at the join.",
+      kind: "cut",
+      range: { start: 40, end: 40 },
+      beforeCut: { version: "v1", removed: { start: 40, end: 41.2 } },
+    }), { status: "Revising…", by: "GPT-6.2-Sol" })).toEqual({
+      tip: "Tightened transition",
+      meta: "Cut · −1.2 s · Revising with GPT-6.2-Sol",
+    });
+
     expect(editRowTooltip(edit({
       label: "Tightened transition",
       summary: "Tightened transition",
@@ -232,7 +290,6 @@ describe("editRowTooltip", () => {
     }), { status: "Kept" })).toEqual({
       tip: "Tightened transition",
       meta: "Cut · −1.2 s · Kept",
-      detail: "Removed the 1.2 s breath before the next topic.",
     });
 
     expect(editRowTooltip(edit({ label: "Need cutaway shot", marker: true, todo: "Drop in product B-roll from Alex.", range: { start: 30, end: 30 } }))).toEqual({
@@ -247,7 +304,7 @@ describe("editRowTooltip", () => {
     });
   });
 
-  it("formats staged pass calls, decided calls, and moments cleanly", () => {
+  it("formats staged pass calls, decided calls, and moments without duplicating the title", () => {
     expect(callRowTooltip({
       summary: "Trimmed pause before pricing",
       reason: "1.8 s of dead air before the price reveal.",
@@ -259,6 +316,20 @@ describe("editRowTooltip", () => {
       tip: "Trimmed pause before pricing",
       meta: "Cut · −1.8 s",
       detail: "1.8 s of dead air before the price reveal.",
+    });
+
+    expect(callRowTooltip({
+      summary: "Trimmed pause before pricing",
+      reason: "1.8 s of dead air before the price reveal.",
+      tag: "Cut",
+      length: 1.8,
+      state: "revising",
+      version: 1,
+      word: "Revising…",
+      by: "GPT-6.2-Sol",
+    })).toEqual({
+      tip: "Trimmed pause before pricing",
+      meta: "Cut · −1.8 s · Revising with GPT-6.2-Sol",
     });
 
     expect(callRowTooltip({
@@ -277,7 +348,6 @@ describe("editRowTooltip", () => {
     expect(decidedCallRowTooltip({ label: "Aside about weather", note: "Skipped by editor.", length: 3.2, approved: false })).toEqual({
       tip: "Aside about weather",
       meta: "Rejected cut · 3.2 s",
-      detail: "Skipped by editor.",
     });
 
     expect(momentRowTooltip(
@@ -287,7 +357,7 @@ describe("editRowTooltip", () => {
     )).toEqual({
       tip: "Trimmed pause",
       meta: "2 edits · −1.2 s, Zoom",
-      detail: "Trimmed pause\nPunch in",
+      detail: "Punch in",
     });
   });
 });

@@ -8,7 +8,8 @@ import type { AgentUsage } from "@scarlet/shared";
 import { windowsAclShell } from "../private-files.js";
 import { runClaude } from "./claude.js";
 import { codexHomeDir, runCodex } from "./codex.js";
-import { runGemini } from "./gemini.js";
+import { reportSteps, runGemini } from "./gemini.js";
+import { cacheMiss, stepsReport } from "./geminiTranscript.js";
 import { runAgent, runnerFor } from "./index.js";
 import type { RunAgentFn, RunAgentOptions, RunnerEvent } from "./types.js";
 
@@ -399,17 +400,20 @@ describe("runClaude", { timeout: 20_000 }, () => {
     }
   });
 
-  it("fails a run whose Scarlet MCP server failed to start, and stops the CLI instead of letting it write without tools", async () => {
-    const mcpFailed = "Scarlet's MCP server failed to start, so Claude Code had no editing tools.";
-    // Recorded from claude 2.1.325: the server failed, and Claude answered without tools and called it a success.
-    const failed = '{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-4-1","mcp_servers":[{"name":"scarlet","status":"failed","source":"dynamic"}]}';
-    const success = '{"type":"result","subtype":"success","is_error":false,"result":"I can\'t reach the project\'s tools."}';
+  const mcpFailed = "Scarlet's MCP server failed to start, so Claude Code had no editing tools.";
+  // Recorded from claude 2.1.325: the server failed, and Claude answered without tools and called it a success.
+  const failed = '{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-4-1","mcp_servers":[{"name":"scarlet","status":"failed","source":"dynamic"}]}';
+  const success = '{"type":"result","subtype":"success","is_error":false,"result":"I can\'t reach the project\'s tools."}';
+
+  it("fails a run whose Scarlet MCP server failed to start, even when the CLI reports success", async () => {
     const { result, events } = await run(runClaude, { lines: [failed, success] });
     expect(result).toMatchObject({ ok: false, error: mcpFailed, summary: "I can't reach the project's tools.", exitCode: 0, sessionId: "s1" });
     expect(result).not.toHaveProperty("aborted");
     expect(result.resumeFailed).toBeUndefined();
     expect(events[1]).toMatchObject({ type: "error", text: "Scarlet MCP server status: failed" });
+  });
 
+  it("stops the CLI when its Scarlet MCP server failed to start instead of letting it write without tools", async () => {
     // Nothing useful can follow, so the CLI is stopped instead of left to write for minutes.
     const started = Date.now();
     const stopped = await run(runClaude, { lines: [failed, claudeText("m1", "Writing it all out.")], sleep: 30 });
@@ -417,25 +421,29 @@ describe("runClaude", { timeout: 20_000 }, () => {
     expect(stopped.result).toMatchObject({ ok: false, error: mcpFailed });
     expect(stopped.result).not.toHaveProperty("aborted");
     expect(stopped.result).not.toHaveProperty("timedOut");
+  });
 
-    // The server's failure is the cause, whatever the CLI made of it afterwards.
+  it("reports the Scarlet MCP server failure as the cause, whatever the CLI made of it afterwards", async () => {
     expect((await run(runClaude, { lines: [failed, '{"type":"result","subtype":"error_max_turns","is_error":true,"result":"Ran out of turns."}'] })).result.error).toBe(mcpFailed);
     expect((await run(runClaude, { lines: [failed], code: 3 })).result.error).toBe(mcpFailed);
+  });
 
-    // A resumed session is the same.
+  it("fails a resumed session whose Scarlet MCP server failed to start without reporting resumeFailed", async () => {
     const resumed = await run(runClaude, { lines: [failed, success] }, { resumeSession: "s1" });
     expect(resumed.result).toMatchObject({ ok: false, error: mcpFailed, sessionId: "s1" });
     expect(resumed.result.resumeFailed).toBeUndefined();
+  });
 
-    // A question it posted is still a question, and a cancel is still a cancel.
+  it("keeps a posted question or a host cancellation even when the Scarlet MCP server failed to start", async () => {
     expect((await run(runClaude, { lines: [failed, ...claudeQuestion], sleep: 30 })).result).toMatchObject({ ok: true, question: "Keep the cold open?", questionPosted: true });
     // The cancel lands just after the first line, before the stop, once the stand-in has started its sleep: a group
     // kill sent while the shell is still forking can miss the new process, which then holds the output open.
     const controller = new AbortController();
     const cancelled = await run(runClaude, { lines: [failed], sleep: 30 }, { signal: controller.signal, onEvent: () => setTimeout(() => controller.abort(), 100) });
     expect(cancelled.result).toMatchObject({ ok: false, error: "cancelled", aborted: true });
+  });
 
-    // Only a failed server fails the run: one still starting, or not listed at all, keeps today's result.
+  it("only fails the run for a failed Scarlet MCP server, not one that is connected, pending, or omitted", async () => {
     const noChange = '{"type":"result","subtype":"success","is_error":false,"result":"Nothing to change."}';
     for (const status of ["connected", "pending", undefined]) {
       const init = JSON.stringify({ type: "system", subtype: "init", session_id: "s1", mcp_servers: status ? [{ name: "scarlet", status }] : [] });
@@ -997,6 +1005,9 @@ describe("runGemini", { timeout: 20_000 }, () => {
         { model: "gemini-4-neon", inputTokens: 1600, outputTokens: 100, cacheReadTokens: 3000, cacheWriteTokens: 0, reasoningTokens: 70 },
       ]);
       expect(first.result.usage).toEqual(live.at(-1));
+      // Each step is kept: the run says how many there were and its peak context, and here the cache held every step.
+      expect(first.events.filter(e => e.data?.kind === "usage_steps")).toEqual([
+        { type: "log", text: "", data: { kind: "usage_steps", steps: 3, peakContext: 2400, misses: [], missedTokens: 0 } }]);
 
       // Resuming the same session skips earlier claims' lines in transcript.jsonl.
       const resumedLive: AgentUsage[] = [];
@@ -1030,6 +1041,27 @@ describe("runGemini", { timeout: 20_000 }, () => {
     } finally {
       await rm(fakeHome, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Gemini steps", () => {
+  it("flags a step that read far less from the cache than the step before sent, and reports steps and peak context", () => {
+    const step = (n: number, input: number, cacheRead: number, output = 500) => ({ step: n, input, cacheRead, cacheWrite: 0, output });
+    // The cache holds the whole of the request before, so a step normally reads what the one before it sent.
+    const steps = [step(1, 26_000, 0), step(2, 2_000, 26_000), step(3, 3_000, 28_000), step(4, 120_000, 0), step(5, 1_000, 120_000), step(6, 1_000, 112_000)];
+    expect(cacheMiss(steps[0]!, steps[1]!)).toBeUndefined();
+    expect(cacheMiss(steps[2]!, steps[3]!)).toEqual({ step: 4, context: 31_000, cached: 0, missed: 31_000 });
+    // A shortfall under a quarter of the context is a trimmed prompt, not a miss.
+    expect(cacheMiss(steps[4]!, steps[5]!)).toBeUndefined();
+    const report = stepsReport(steps)!;
+    expect(report).toEqual({ steps: 6, peakContext: 121_000, misses: [{ step: 4, context: 31_000, cached: 0, missed: 31_000 }], missedTokens: 31_000 });
+    expect(stepsReport([])).toBeUndefined();
+    const events: RunnerEvent[] = [], lines: string[] = [];
+    reportSteps(report, ev => events.push(ev), line => lines.push(line));
+    expect(events).toEqual([{ type: "log", text: "", data: { kind: "usage_steps", ...report } }]);
+    expect(lines).toEqual(["6 steps, peak context 121000 tokens, 1 cache miss (31000 tokens sent again uncached)"]);
+    reportSteps(undefined, ev => events.push(ev), line => lines.push(line));
+    expect(events).toHaveLength(1);
   });
 });
 

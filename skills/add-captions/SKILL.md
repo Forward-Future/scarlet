@@ -1,12 +1,19 @@
 ---
 name: add-captions
-description: Caption the current edit using the project style and short, readable lines.
+description: Caption the current edit using the active style guide and short, readable lines.
 category: Picture and graphics
 ---
 
 # Caption the edit
 
-Caption the speech that is still in the edit, so a viewer with the sound off follows every line without rereading. The brief and the picture decide the wording, placement and style.
+Caption the speech that is still in the edit, so a viewer with the sound off follows every line without rereading. The brief, the active style guide, and the picture decide the wording, placement and style.
+
+## The look
+
+- When a style guide is provided (the editor's default style, an `@style` mentioned in chat or a skill, or the project's guide), follow it as written for captions: its font family (or attached font file path), font weight, size, text color, accent/highlight color, box/background, outline, uppercase choice, and position. Pass those in `captions_generate`'s `style` (or `timeline_propose`'s `captionStyle`). Where the guide is silent, stay in the spirit of its palette and typography rather than inventing an unrelated look.
+- With no style guide, keep captions clean and legible over the footage: one plain sans-serif, high contrast, with a subtle outline or dark backing box whenever the picture behind them is bright or busy.
+
+## Wording and pacing
 
 Caption what is said, as it is said. Correct what the transcript misheard, above all names, products and numbers, and leave the speaker's grammar alone. A filler the edit kept can stay out of the caption when it carries no meaning.
 

@@ -28,6 +28,7 @@ import { createAudioOption, crossfadeFrames, cutRow } from "./mcp-schema.js";
 import type { MediaSession } from "./media-session.js";
 import type { RevisionTracker, SessionErrorHelpers } from "./media-state.js";
 import { resolveOutgoingPause } from "./outgoing-pause.js";
+import { thousandthsText } from "./dialogue-receipt.js";
 import type { PerceptionApi } from "./propose-pipeline.js";
 import { Lanes, ReviewInspections, urgencyRank, type InspectionRequest } from "./review-prep.js";
 import { describeError, json, noteEvidenceMiss, unavailable, type ToolRegistrar, type ToolResult } from "./tool-result.js";
@@ -65,7 +66,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
     getProject, peekTimeline, moveBase, transcriptWords, joinPages,
     measureTimeline, outgoingPausePages, planSources,
   } = session;
-  const { without, unavailableOnce } = errors;
+  const { without, unavailableOnce, withoutOnce } = errors;
   const listen = listening(caps, !!writeArtifact);
   const defaultAudio = listen?.by === "file";
   const reviewPictures = caps.images;
@@ -179,7 +180,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
   }
 
   tool("dialogue_review_inspect",
-    "Inspect a staged dialogue cut in its original passage and preview. For each cut returns its first-pass reason, and held: what Scarlet measured when it held the cut, what its join plays and what keeping it plays. It also returns the words around it as [start, end, text, speaker or isolated input], original microphone levels (dBFS), voice activity, and timeline_join_audit's reading of the join or why the cut has none. The surviving speech is checked for a doubled word across the join or at the start or end of its kept take. partialWordRepeat identifies a cut-off word beside a whole occurrence in the saved audio, including faded handles. One call returns up to four consecutive cuts (count). Scarlet prepares the next ones while you read." +
+    "Inspect a staged dialogue cut in its original passage and preview. For each cut returns its first-pass reason, and held: what Scarlet measured when it held the cut, what its join plays and what keeping it plays. It also returns the words around it as [start, end, text, speaker or isolated input], original microphone levels (dBFS), voice activity, and timeline_join_audit's reading of the join or why the cut has none. The surviving speech is checked for a doubled word across the join or at the start or end of its kept take. partialWordRepeat identifies a cut-off word beside a whole occurrence in the saved audio, including faded handles. Seconds are given to the millisecond. One call returns up to four consecutive cuts (count), fewer when they would not fit in one result, and names the index to continue from. Scarlet prepares the next ones while you read." +
     (reviewPictures ? " Includes synchronized screen and camera sheets and before/after frames for narrowed cuts. A longer removal shows an overview and windows for closer inspection. wholePicture returns activity sheets across all of them." : "") +
     (listen ? (listen.by === "file"
       ? " Writes WAV files of the original passage and the rendered Before/After join to your task folder. Open the After WAV with your file viewer and hear how the cut plays before you decide: levels can't tell how a same-word join or a tight cut sounds."
@@ -225,6 +226,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
         parts.reduce((n, part) => n + (part.type === "text" ? part.text.length : 0), 0);
       const content: ToolResult["content"] = [];
       const delivered: number[] = [];
+      const closer: number[] = [];
       let textChars = 0;
       for (const { i, req, job } of jobs) {
         const result = await job;
@@ -236,7 +238,9 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
         const footer: ToolResult["content"][number] = { type: "text", text: JSON.stringify({ complete: inspected, additionalActivityWindows: windows,
           ...(windows.length ? { closerLook: whole ? `dialogue_review_inspect with index ${i} and wholePicture true returns them in one result.`
             : `This removal needs ${result.wholeSheets} activity sheets. Use frame_contact_sheet_batch for a closer look.` } : {}) }) };
-        const cutChars = textLen(result.content) + footer.text.length;
+        // Times to the millisecond: read to 17 digits they made one cut's inspection over 13K characters (2026-11-26).
+        const parts = result.content.map(part => part.type === "text" ? { ...part, text: thousandthsText(part.text) } : part);
+        const cutChars = textLen(parts) + footer.text.length;
         // Always deliver at least one cut; leave deferred cuts cached warm in ReviewInspections for the next call.
         if (delivered.length > 0 && textChars + cutChars + reserve > maxChars) break;
         reviews.consume(change, req, job);
@@ -244,12 +248,13 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
         if (edit && inspected) revision.readPassage(edit.version, edit.range);
         const key = JSON.stringify([changeId, change.fromVersion, change.toVersion, i]);
         if (inspected) inspections.add(key); else inspections.delete(key);
-        content.push(...result.content, footer);
+        content.push(...parts, footer);
         textChars += cutChars;
         delivered.push(i);
         // If the agent looks closer, the whole picture is ready. It waits behind the cuts the agent reads next.
-        if (windows.length && whole && !wholePicture) void reviews.prepare(change, { index: i, audio, wholePicture: true }, "later").catch(() => undefined);
+        if (windows.length && whole && !wholePicture) closer.push(i);
       }
+      for (const i of closer) void reviews.prepare(change, { index: i, audio, wholePicture: true }, "later").catch(() => undefined);
       const deliveredEnd = index + delivered.length;
       const version = JSON.stringify([changeId, change.fromVersion, change.toVersion]);
       const seen = lookedAt.get(version) ?? new Set<number>();
@@ -282,7 +287,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
       const asks = assessments.filter(a => a.verdict === "ask" && a.reason && quotesAwayFromCut(a.reason, [], a).length);
       if (asks.length) {
         const [tl, { project }] = await Promise.all([peekTimeline(fromVersion), getProject()]);
-        const words = (mediaId: string) => transcriptWords(mediaId, false).catch(() => null);
+        const words = (mediaId: string) => transcriptWords(mediaId, false).catch(withoutOnce(`failed to read the words of ${mediaId} near a call's note`, null));
         const away = (await Promise.all(asks.map(async a => {
           const near = await timelineWordsNear(tl, project, a, words, NOTE_QUOTE_REACH + 15);
           const quotes = quotesAwayFromCut(a.reason, near, a);
@@ -302,7 +307,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
       let sameWordJoins: Array<{ index: number; reason: string }> = [];
       if (toCheck.length) {
         const [tl, { project }] = await Promise.all([peekTimeline(fromVersion), getProject()]);
-        await measureTimeline(tl, toCheck.flatMap(a => [a.start, a.end])).catch(() => undefined);
+        await measureTimeline(tl, toCheck.flatMap(a => [a.start, a.end])).catch(withoutOnce("failed to measure the joins of the reviewed cuts", undefined));
         const check = dialogueJoinChecker(tl, project, joinPages());
         const joins = toCheck.map(a => ({ a, join: check({ start: a.start, end: a.end }) }));
         const clipped = joins.flatMap(({ a, join }) => join.inWord?.length ? [`Cut ${a.index} (${a.verdict}): ${join.reason}`] : []);
@@ -465,7 +470,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
         const settled = !join || join.status === "unchanged" || join.status === "snapped" || !!join.sameWord;
         // The words either side of the new join, so the move can be judged from its result without reading the passage again.
         const nearbyWords = move.keep ? undefined : dialogueJoinWords(tl, project, range, joinPages());
-        const heard = move.keep ? undefined : await cutReading(tl, project, range, mediaId => transcriptWords(mediaId, false).catch(() => null));
+        const heard = move.keep ? undefined : await cutReading(tl, project, range, mediaId => transcriptWords(mediaId, false).catch(withoutOnce(`failed to read the words of ${mediaId} beside a moved cut`, null)));
         results.push({ index: savedIndex, ...(savedIndex !== move.index && { requestedIndex: move.index }), ...range, ...(move.keep && { choice: "keep" }), ...heard, audio: join?.status === "unchanged" ? onQuietFrame : join?.reason,
           ...(join?.sameWordJoin && { sameWordJoin: join.sameWordJoin }),
           ...(nearbyWords && (nearbyWords.start.length || nearbyWords.end.length) && { nearbyWords }),

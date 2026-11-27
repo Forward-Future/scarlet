@@ -9,6 +9,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { speechActivityOf } from "@scarlet/render";
 import { newId, type TranscriptSegment } from "@scarlet/timeline";
+import { clip } from "../logText.js";
 import { extractWav } from "../render/ffmpeg.js";
 import { SAMPLE_RATE } from "./ctcAlign.js";
 import { spokenText } from "./index.js";
@@ -54,7 +55,9 @@ export function isSilenceHallucination(text: string): boolean {
   return /^(?:subtitles|captions|translated|transcribed) by\b/.test(normalized);
 }
 
-async function totalVoiceSeconds(wavPath: string, signal?: AbortSignal): Promise<number | undefined> {
+const reason = (error: unknown) => clip(error instanceof Error ? error.message : String(error));
+
+async function totalVoiceSeconds(wavPath: string, signal?: AbortSignal, log?: (message: string) => void): Promise<number | undefined> {
   const wav = await openWav(wavPath);
   try {
     if (wav.samples === 0) return 0;
@@ -97,7 +100,8 @@ async function totalVoiceSeconds(wavPath: string, signal?: AbortSignal): Promise
       for (const span of spans) voiceSeconds += span.end - span.start;
     }
     return voiceSeconds;
-  } catch {
+  } catch (error) {
+    if (!signal?.aborted) log?.(`[transcribe] dictation: couldn't detect voice, so loudness alone decides: ${reason(error)}`);
     return undefined;
   } finally {
     await wav.close();
@@ -114,7 +118,10 @@ export async function filterDictationText(input: {
   tmpDir: string;
   signal?: AbortSignal;
   wavPath?: string;
+  /** Where a dictation left empty, and checks that couldn't run, go. Never its words. The engine's log is its console. */
+  log?: (message: string) => void;
 }): Promise<string> {
+  const log = input.log ?? ((message: string) => console.log(message));
   const initial = spokenText(input.segments);
   if (!initial) return "";
 
@@ -126,10 +133,14 @@ export async function filterDictationText(input: {
       await extractWav(input.audioPath, scratch, { signal: input.signal });
       wav = scratch;
       ownedWav = true;
-    } catch {
+    } catch (error) {
       // If ffmpeg isn't available or fails, check whether the input itself is already a readable 16 kHz mono WAV;
       // unreadable fixture blobs in mocked tests fall back to text-only filtering.
-      if (input.audioPath.toLowerCase().endsWith(".wav") && existsSync(input.audioPath)) wav = input.audioPath;
+      const usable = input.audioPath.toLowerCase().endsWith(".wav") && existsSync(input.audioPath);
+      if (!input.signal?.aborted) {
+        log(`[transcribe] dictation: couldn't decode the recording, ${usable ? "so it is read as it is" : "so its words are kept unchecked"}: ${reason(error)}`);
+      }
+      if (usable) wav = input.audioPath;
       else return initial;
     }
   }
@@ -138,25 +149,40 @@ export async function filterDictationText(input: {
     let levels: Awaited<ReturnType<typeof wavLevels>>;
     try {
       levels = await wavLevels(wav, input.signal);
-    } catch {
+    } catch (error) {
+      if (!input.signal?.aborted) log(`[transcribe] dictation: couldn't measure the recording's loudness, so its words are kept unchecked: ${reason(error)}`);
       return initial;
     }
-    if (!levels.rms.length) return "";
+    if (!levels.rms.length) {
+      log("[transcribe] dictation: the recording held no audio, so it is left empty");
+      return "";
+    }
 
     let peak = 0;
     for (let i = 0; i < levels.rms.length; i++) {
       if (levels.rms[i]! > peak) peak = levels.rms[i]!;
     }
     const peakDb = 20 * Math.log10(Math.max(peak, 1e-10));
-    if (peakDb < UNHEARD_DBFS) return "";
+    const loudest = `loudest ${peakDb.toFixed(0)} dBFS`;
+    if (peakDb < UNHEARD_DBFS) {
+      log(`[transcribe] dictation: heard nothing (${loudest}), so it is left empty`);
+      return "";
+    }
 
-    const { segments } = withoutUnheardSegments(input.segments, levels);
+    const { segments, dropped } = withoutUnheardSegments(input.segments, levels);
     const text = spokenText(segments);
-    if (!text) return "";
+    if (!text) {
+      log(`[transcribe] dictation: every line was over silence (${loudest}), so it is left empty`);
+      return "";
+    }
+    if (dropped.length) log(`[transcribe] dictation: left out ${dropped.length} of ${input.segments.length} lines written over silence`);
 
-    const voiceSeconds = await totalVoiceSeconds(wav, input.signal);
+    const voiceSeconds = await totalVoiceSeconds(wav, input.signal, log);
     if (voiceSeconds !== undefined && voiceSeconds < MIN_VOICE_SECONDS) {
-      if (peakDb < QUIET_ROOM_DBFS || isSilenceHallucination(text)) return "";
+      if (peakDb < QUIET_ROOM_DBFS || isSilenceHallucination(text)) {
+        log(`[transcribe] dictation: no voice detected (${loudest}), so it is left empty`);
+        return "";
+      }
     }
     return text;
   } finally {

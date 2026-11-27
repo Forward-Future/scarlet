@@ -113,12 +113,13 @@ export function flagEdit(ctx: Ctx, projectId: string, task: Task, body: FlagEdit
     location = { version, range: { start: Math.min(body.range.start, duration), end: Math.min(body.range.end, duration) } };
   }
   const threads = ctx.repos.projects.threads(projectId);
+  const projectChanges = threads.flatMap(t => t.changes);
   // Every applied edit on the working cut, as its own request lists it, so a revision is flagged and not what it replaced.
   // When the call names changeId, only that change's own thread can contain it, so skip projecting every other request.
   const scope = threads.filter(t => t.changes.some(c => c.state === "approved" && (body.changeId === undefined || c.id === body.changeId)));
   const links = scope.length ? ctx.repos.versions.links(projectId) : [];
   const edits = scope.flatMap(thread =>
-    threadTimeline({ ...thread, flagged: undefined }, head, links, read, project.settings.fps, project.media).filter(e => !e.elsewhere).map(edit => ({ edit, thread })));
+    threadTimeline({ ...thread, flagged: undefined }, head, links, read, project.settings.fps, project.media, projectChanges).filter(e => !e.elsewhere).map(edit => ({ edit, thread })));
   const named = (e: { edit: ThreadEdit; thread: { title: string } }): FlaggedEdit => ({ changeId: e.edit.changeId, spot: e.edit.spot,
     label: e.edit.label, request: e.thread.title, range: e.edit.range, ...(e.edit.at !== undefined && { at: e.edit.at }) });
   let found: (typeof edits)[number] | undefined;

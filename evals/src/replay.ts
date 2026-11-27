@@ -15,7 +15,7 @@ import { dialogueGate, dialogueScanPage, planDialogueBatch, resolveCutRange, typ
 import type { GateLine } from "../../packages/mcp/src/dialogue-plan-types.ts";
 import { gapSound, speakingLevel, type GapLevels } from "../../packages/mcp/src/gap-sound.ts";
 import { cutAnchorOn } from "../../packages/shared/src/cutScope.ts";
-import { taskDialogueOperation } from "../../packages/shared/src/skillCommands.ts";
+import { skillCommands, taskDialogueOperation } from "../../packages/shared/src/skillCommands.ts";
 import { frameAligned, type Project, type TranscriptWord } from "../../packages/timeline/src/index.ts";
 import { cli, isMain, main } from "./args.ts";
 import { loadCase, type LoadedCase } from "./case.ts";
@@ -117,6 +117,12 @@ export interface ReplayOptions {
   dropQuotes?: boolean;
 }
 
+/** Skills Scarlet renamed (skills/retired.json): an older case's commands are read under the names they go by now. */
+const RENAMED: Record<string, { to: string }> = existsSync(join(REPO_ROOT, "skills", "retired.json"))
+  ? (readJson(join(REPO_ROOT, "skills", "retired.json")) as { renamed?: Record<string, { to: string }> }).renamed ?? {} : {};
+const currentCommands = (text: string) => skillCommands(text).reduceRight((said, { name, start, end }) =>
+  Object.hasOwn(RENAMED, name) ? `${said.slice(0, start)}/${RENAMED[name]!.to}${said.slice(end)}` : said, text);
+
 export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): Promise<ReplayResult> {
   const origin = await artifactsFromCase(loaded, { partial: true });
   const plan = opts.plan ?? origin.plan;
@@ -126,7 +132,9 @@ export async function replayCase(loaded: LoadedCase, opts: ReplayOptions = {}): 
   const media: MediaInfo[] = loaded.file.media;
   const project = { id: loaded.file.projectId, name: "eval", settings: { fps: loaded.file.fps }, media } as unknown as Project;
   const context = origin.task.context;
-  const localPauses = taskDialogueOperation(origin.task, origin.events.filter(e => e.type === "answer").map(e => e.text)) === "local-pauses";
+  const asked = { ...origin.task, instruction: currentCommands(origin.task.instruction),
+    context: { ...context, ...(context.message !== undefined && { message: currentCommands(context.message) }) } };
+  const localPauses = taskDialogueOperation(asked, origin.events.filter(e => e.type === "answer").map(e => currentCommands(e.text))) === "local-pauses";
   const anchorVersion = context.dialogueRange?.version ?? (!context.mediaId && context.time !== undefined ? context.version : undefined);
   const needsMapping = anchorVersion && anchorVersion !== "head" && anchorVersion !== tl.version;
   const originalTimeline = needsMapping ? loaded.timeline(anchorVersion) : undefined;

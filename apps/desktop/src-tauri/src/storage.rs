@@ -133,8 +133,16 @@ fn measure_projects(data: &Path, projects: Vec<ProjectFiles>) -> io::Result<Hash
 #[tauri::command]
 pub async fn measure_project_storage(state: State<'_, AppState>, projects: Vec<ProjectFiles>) -> Result<HashMap<String,Size>, String> {
     let data = state.paths.data_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || measure_projects(&data, projects))
-        .await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
+    let started = std::time::Instant::now();
+    let measured = tauri::async_runtime::spawn_blocking(move || measure_projects(&data, projects))
+        .await.map_err(|e| e.to_string())?.map_err(|e| e.to_string());
+    let took = crate::util::human_duration(started.elapsed());
+    match &measured {
+        Ok(sizes) => log::info!("storage: measured {} project(s), {} files, {} bytes in {took}",
+            sizes.len(), sizes.values().map(|s| s.files).sum::<u64>(), sizes.values().map(|s| s.bytes).sum::<u64>()),
+        Err(e) => log::warn!("storage: measuring projects failed after {took}: {e}"),
+    }
+    measured
 }
 
 #[derive(Deserialize, Serialize)]
@@ -178,7 +186,10 @@ fn registered_in(registry: &Path) -> io::Result<Vec<DeveloperStorage>> {
 
 #[tauri::command]
 pub async fn developer_storage() -> Result<Vec<DeveloperStorage>, String> {
-    tauri::async_runtime::spawn_blocking(registered_storage).await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(registered_storage).await.map_err(|e| e.to_string())?.map_err(|e| {
+        log::warn!("storage: measuring developer caches failed: {e}");
+        e.to_string()
+    })
 }
 
 #[cfg(test)]

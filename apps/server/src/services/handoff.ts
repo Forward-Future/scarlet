@@ -13,6 +13,7 @@ import {
 import type { HandoffFile } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
 import { badRequest } from "../errors.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import { ffmpeg, ffprobe } from "../render/ffmpeg.js";
 import { safeFileName } from "./fileName.js";
 
@@ -29,7 +30,7 @@ interface ProbedStream {
 }
 
 /** What another app needs to know about a file that Scarlet's own record leaves out: its timecode and its sound. */
-async function probeForHandoff(file: string, signal?: AbortSignal) {
+async function probeForHandoff(file: string, signal?: AbortSignal, unreadable?: (reason: string) => void) {
   try {
     const out = await ffprobe(["-print_format", "json", "-show_format", "-show_streams", file], { signal });
     const json = JSON.parse(out.toString("utf8")) as { format?: { tags?: Record<string, string> }; streams?: ProbedStream[] };
@@ -39,8 +40,9 @@ async function probeForHandoff(file: string, signal?: AbortSignal) {
     const timecode = streams.find(s => s.codec_type === "data" && s.tags?.timecode)?.tags?.timecode ?? video?.tags?.timecode ??
       json.format?.tags?.timecode;
     return { timecode, audioStreams: audio.length, channels: audio[0]?.channels, sampleRate: Number(audio[0]?.sample_rate) || undefined };
-  } catch {
+  } catch (error) {
     // A file ffprobe can't read still goes in the folder; it starts at zero.
+    unreadable?.((error as Error)?.message ?? String(error));
     return { audioStreams: undefined, channels: undefined, sampleRate: undefined, timecode: undefined };
   }
 }
@@ -65,6 +67,8 @@ export interface Handoff {
  */
 export async function buildHandoff(ctx: Ctx, project: Project, timeline: Timeline, folder: string, signal?: AbortSignal): Promise<Handoff> {
   if (!isAbsolute(folder)) throw badRequest("handoff_folder", "Choose where to save the folder.");
+  const started = Date.now();
+  let unreadable = 0, stillsMade = 0;
   const base = safeFileName(folder.split(/[\\/]/).filter(Boolean).pop() || project.name).trim() || "Scarlet";
   const assets = usedMedia(project, timeline);
   const colors = [...new Set(timeline.tracks.flatMap(track => track.clips.flatMap(clip => clip.kind === "color" && parseColor(clip.color) ? [clip.color] : [])))];
@@ -82,7 +86,10 @@ export async function buildHandoff(ctx: Ctx, project: Project, timeline: Timelin
     const size = await stat(file).then(s => s.size, () => undefined);
     if (size === undefined) throw badRequest("handoff_media_missing", `“${asset.name}” isn't in the project's media any more.`);
     mediaBytes += size;
-    const probed = await probeForHandoff(file, signal);
+    const probed = await probeForHandoff(file, signal, reason => {
+      unreadable++;
+      ctx.log(`[export] hand-off of ${logId(project.id)}: ffprobe couldn’t read ${logId(asset.id)}, so it starts at zero: ${clip(reason)}`);
+    });
     const rate = asset.kind === "video" || asset.kind === "graphic" ? exactRate(asset.fps ?? project.settings.fps).rate : undefined;
     const tcRate = rate ?? exactRate(project.settings.fps).rate;
     const frames = probed.timecode ? timecodeFrames(probed.timecode, tcRate) : undefined;
@@ -108,6 +115,7 @@ export async function buildHandoff(ctx: Ctx, project: Project, timeline: Timelin
     const size = await stat(still).then(s => s.size, async () => {
       await mkdir(join(ctx.paths.tmp, "handoff"), { recursive: true });
       const png = await solidPng(color, width, height, signal);
+      stillsMade++;
       const staged = `${still}.${randomUUID()}.part`;
       try {
         await writeFile(staged, png);
@@ -135,5 +143,8 @@ export async function buildHandoff(ctx: Ctx, project: Project, timeline: Timelin
     projectName: project.name, timelineFiles: { fcpxml, otio }, captionFiles,
     losses: handoffLosses(project, timeline, sources), warnings: handoffRateWarnings(project, timeline, sources),
   }) });
+  ctx.log(`[export] hand-off of ${logId(project.id)} ready in ${humanDuration(Date.now() - started)}: ${assets.length} footage ${assets.length === 1 ? "file" : "files"}`
+    + ` (${(mediaBytes / 1e6).toFixed(1)} MB), ${colors.length} colour ${colors.length === 1 ? "still" : "stills"} (${stillsMade} made, ${colors.length - stillsMade} reused),`
+    + ` ${captions.length} caption ${captions.length === 1 ? "file" : "files"}${unreadable ? `, ${unreadable} ffprobe couldn’t read` : ""}`);
   return { files, mediaBytes };
 }

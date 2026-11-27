@@ -4,8 +4,8 @@
  * provides context (timestamps, clip ids, notes, the change being revised)
  * and includes the applicable skills verbatim.
  */
-import { CHECK_IN_SHARE, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type StyleGuideRecord, type Task } from "@scarlet/shared";
-import type { Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
+import { BUILT_IN_STYLE_SOUNDS, CHECK_IN_SHARE, modelDisplayName, taskDialogueOperation, agentCapabilities, changeEdits, namedTimelineEdits, skillExtends, type AgentCapabilities, type CheckIn, type PictureMark, type Skill, type StyleGuideColorLook, type StyleGuideRecord, type StyleGuideSound, type StyleGuideTransition, type Task } from "@scarlet/shared";
+import type { CaptionStyle, Change, Note, Project, Timeline, TimelineDiff } from "@scarlet/timeline";
 import { clipById, describeDiff, formatTimecode } from "@scarlet/timeline";
 import { summarizeProject } from "./analysis.js";
 
@@ -109,8 +109,12 @@ export interface PromptContext {
     name: string;
     description: string;
     instructions: string;
+    captionStyle?: Partial<CaptionStyle>;
     reason: "mentioned" | "default";
     assets: Array<{ id: string; name: string; size: number; mime?: string; path: string }>;
+    transitions?: StyleGuideTransition[];
+    sounds?: Array<StyleGuideSound & { volumeLinear: number }>;
+    colorLook?: StyleGuideColorLook & { lutFile?: string; lutPath?: string };
   }>;
   /** The kinds of work the editor gave other models in Task models, signed in now: the request hands them off (`hand_off`). */
   taskModels?: Array<{ name: string; description?: string; by: { agent: string; model?: string; label?: string } }>;
@@ -123,12 +127,34 @@ function fileSize(bytes: number) {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-const FILE_KINDS: Array<[RegExp, string]> = [[/pdf/, "PDF"], [/^image\//, "image"], [/^font\/|ttf|otf|woff/, "font file"], [/^text\/|json/, "text"]];
+const FILE_KINDS: Array<[RegExp, string]> = [
+  [/pdf/, "PDF"],
+  [/^image\//, "image"],
+  [/^font\/|ttf|otf|woff/, "font file"],
+  [/^audio\/|\.(?:wav|mp3|m4a|aac|ogg|flac)$/i, "audio file"],
+  [/\.(?:cube|3dl)$/i, "LUT file"],
+  [/^text\/|json/, "text"],
+];
 const fileKind = (mime: string | undefined, name: string) => FILE_KINDS.find(([test]) => test.test(mime ?? "") || test.test(name.toLowerCase()))?.[1] ?? "file";
+
+function formatColorAdjustments(a: StyleGuideColorLook["adjustments"]): string {
+  const entries: string[] = [];
+  if (a.exposure) entries.push(`exposure: ${a.exposure}`);
+  if (a.contrast !== 1) entries.push(`contrast: ${a.contrast}`);
+  if (a.saturation !== 1) entries.push(`saturation: ${a.saturation}`);
+  if (a.warmth) entries.push(`warmth: ${a.warmth}`);
+  if (a.tint) entries.push(`tint: ${a.tint}`);
+  if (a.shadows) entries.push(`shadows: ${a.shadows}`);
+  if (a.highlights) entries.push(`highlights: ${a.highlights}`);
+  if (a.blacks) entries.push(`blacks: ${a.blacks}`);
+  if (a.whites) entries.push(`whites: ${a.whites}`);
+  if (a.gamma !== 1) entries.push(`gamma: ${a.gamma}`);
+  return entries.length ? entries.join(", ") : "neutral (defaults)";
+}
 
 /** The project's style guide, as the editor gave it. */
 function styleGuideSection(guide: NonNullable<PromptContext["styleGuide"]>): string {
-  const lines = [`# Style guide\n\nThe editor gave this project a style guide, "${guide.name}", for every graphic made in it.`];
+  const lines = [`# Style guide\n\nThe editor gave this project a style guide, "${guide.name}". Follow it closely for captions, title cards, lower thirds, callout boxes, and end cards; for custom or illustrative motion graphics (diagrams, visual explainers, animated concepts), treat it loosely as inspiration — echo its mood, typography feel, or accent touches without forcing rigid templates, fixed margins, or color ratios.`];
   if (guide.path) lines.push(`It is in the ${fileKind(guide.mime, guide.path)} at ${guide.path}.`);
   if (guide.text?.trim()) lines.push(guide.path ? `What they wrote with it:\n\n${guide.text.trim()}` : guide.text.trim());
   return lines.join("\n\n");
@@ -143,20 +169,80 @@ function libraryStyleGuidesSection(guides: NonNullable<PromptContext["librarySty
     const lines = [`## @${g.name}`, why];
     if (g.description.trim()) lines.push(`Summary: ${g.description.trim()}`);
     if (g.instructions.trim()) lines.push("", g.instructions.trim());
+    if (g.captionStyle && Object.keys(g.captionStyle).length) {
+      lines.push(
+        "",
+        "### Caption style",
+        "`captions_generate` applies these caption defaults automatically for this style guide; override individual fields in `style` only when this request asks for something different:",
+        "```json",
+        JSON.stringify(g.captionStyle, null, 2),
+        "```",
+      );
+    }
+    if (g.transitions?.length) {
+      const soundName = (soundId?: string) => {
+        if (!soundId) return undefined;
+        const fromGuide = g.sounds?.find(s => s.id === soundId);
+        if (fromGuide) return `${fromGuide.name} (soundId="${fromGuide.id}")`;
+        const slug = soundId.startsWith("builtin:") ? soundId.slice("builtin:".length) : soundId;
+        const built = BUILT_IN_STYLE_SOUNDS.find(b => b.id === slug);
+        return built ? `${built.name} (builtInId="${built.id}")` : soundId;
+      };
+      lines.push(
+        "",
+        "### Preferred transitions",
+        "Apply these with `timeline_transition`. When a transition has a paired sound, import it with `style_guide_sound_import` and place it on an audio track centred on the join at the sound's configured level.",
+        ...g.transitions.map(t => {
+          const dir = (t.type === "push" || t.type === "slide" || t.type === "whip") ? ` ${t.direction}` : "";
+          const col = t.type === "dip" && t.color ? ` through ${t.color}` : "";
+          const paired = soundName(t.soundId);
+          const bits = [
+            `${t.name}${t.isDefault ? " [Default]" : ""}: ${t.type}${dir}${col}, ${t.duration} s`,
+            ...(paired ? [`paired sound: ${paired}`] : []),
+            ...(t.usageRule ? [`when: ${t.usageRule}`] : []),
+          ];
+          return `- ${bits.join(" · ")}`;
+        }),
+      );
+    }
+    if (g.sounds?.length) {
+      lines.push(
+        "",
+        "### Sound effects (SFX)",
+        `Import a sound into this project with \`style_guide_sound_import(styleGuideId="${g.id}", soundId="...")\` and place the returned mediaId on an audio track with \`timeline_propose\` (\`addClip\`, using the returned linear \`volume\`).`,
+        ...g.sounds.map(s => {
+          const dur = s.duration ? `, ${s.duration.toFixed(2)} s` : "";
+          const rule = s.usageRule ? ` · when: ${s.usageRule}` : "";
+          return `- "${s.name}" (soundId="${s.id}", ${s.volumeDb} dB / volume ${s.volumeLinear}${dur}${rule})`;
+        }),
+      );
+    }
+    if (g.colorLook) {
+      const cl = g.colorLook;
+      lines.push(
+        "",
+        "### Camera color look",
+        "Apply to camera clips via `timeline_propose` (`updateClip` with `effects`: `color` for adjustments and `lut` with `{file}` for an attached look file).",
+      );
+      if (cl.name) lines.push(`- Look name: ${cl.name}`);
+      if (cl.notes) lines.push(`- Notes: ${cl.notes}`);
+      lines.push(`- Adjustments: ${formatColorAdjustments(cl.adjustments)}`);
+      if (cl.lutFile) lines.push(`- LUT file: "${cl.lutName ?? cl.lutFile}" -> use effect \`{ "type": "lut", "params": { "file": "${cl.lutFile}" } }\``);
+    }
     if (g.assets.length) {
       lines.push(
         "",
         "### Style guide files",
-        "Link fonts and images directly by their absolute path in `graphic_render` (Scarlet copies them into the graphic). Inspect images, PDFs or text with `attachment_read(styleGuideId, assetId)`.",
+        "Link fonts and images directly by their absolute path in `graphic_render` (Scarlet copies them into the graphic). Attached font files also resolve automatically when named in `captions_generate` / `CaptionStyle.fontFamily`. Inspect images, PDFs or text with `attachment_read(styleGuideId, assetId)`.",
         ...g.assets.map(a => `- "${a.name}" (${fileKind(a.mime, a.name)}, ${fileSize(a.size)}), styleGuideId="${g.id}", assetId="${a.id}", at ${a.path}`),
       );
     }
     return lines.join("\n");
   });
-  return `# Style guides\n\nFollow these visual style rules whenever you create or revise motion graphics, titles, callouts, or overlays.\n\n${blocks.join("\n\n---\n\n")}`;
+  return `# Style guides\n\nFollow these rules closely for structured brand elements — captions, title cards, chapter titles, lower thirds, callout boxes, end cards, transitions, sound effects, and camera color grades. For custom or illustrative motion graphics (diagrams, visual explainers, animated concepts), treat the style guide loosely as inspiration rather than a strict spec: echo its overall mood, typography feel, or accent touches so the graphic belongs in the video, but let the concept drive the composition, colors, illustration, and motion instead of forcing rigid templates, fixed margins, color ratios, or opaque full-screen panels when a transparent overlay on A-cam fits better.\n\n${blocks.join("\n\n---\n\n")}`;
 }
 
-/** Prompt for designing or updating a library style guide in chat (with attached files and live 16:9 preview). */
+/** Prompt for designing or updating a library style guide in chat (with attached files and live Tabbed Stage). */
 function buildStyleGuideEditPrompt(ctx: PromptContext, edit: NonNullable<PromptContext["editStyleGuide"]>): string {
   const { guide, assets, attachedIds, hasPreview, earlier } = edit;
   const attachedSet = new Set(attachedIds ?? []);
@@ -165,25 +251,62 @@ function buildStyleGuideEditPrompt(ctx: PromptContext, edit: NonNullable<PromptC
   const formatAsset = (a: (typeof assets)[number]) =>
     `- "${a.name}" (${fileKind(a.mime, a.name)}, ${fileSize(a.size)}), styleGuideId="${guide.id}", assetId="${a.id}", at ${a.path}`;
 
+  const starterSfxList = BUILT_IN_STYLE_SOUNDS
+    .map(s => `  - \`${s.id}\` ("${s.name}", ${s.duration} s, default ${s.defaultVolumeDb} dB — ${s.defaultUsageRule})`)
+    .join("\n");
+
+  const transitions = guide.transitions ?? [];
+  const sounds = guide.sounds ?? [];
+  const currentTransitions = transitions.length
+    ? transitions.map(t => `- id="${t.id}" "${t.name}": ${t.type} ${t.duration}s ${t.direction}${t.color ? ` ${t.color}` : ""}${t.soundId ? ` sound=${t.soundId}` : ""}${t.isDefault ? " [default]" : ""}${t.usageRule ? ` — ${t.usageRule}` : ""}`).join("\n")
+    : "(none yet)";
+  const currentSounds = sounds.length
+    ? sounds.map(s => `- id="${s.id}" "${s.name}": ${s.source === "builtin" ? `builtin:${s.builtInId}` : `asset:${s.assetId}`}, ${s.volumeDb} dB${s.duration ? `, ${s.duration.toFixed(2)}s` : ""}${s.usageRule ? ` — ${s.usageRule}` : ""}`).join("\n")
+    : "(none yet)";
+  const currentColorLook = guide.colorLook
+    ? [
+        guide.colorLook.name ? `Name: ${guide.colorLook.name}` : null,
+        guide.colorLook.notes ? `Notes: ${guide.colorLook.notes}` : null,
+        `Adjustments: ${formatColorAdjustments(guide.colorLook.adjustments)}`,
+        guide.colorLook.lutAssetId ? `LUT: ${guide.colorLook.lutName ?? guide.colorLook.lutAssetId} (assetId="${guide.colorLook.lutAssetId}")` : null,
+      ].filter(Boolean).join("\n")
+    : "(none yet)";
+
   const sections: string[] = [
     `# You are designing a reusable style guide in Scarlet
 
-The editor is building a visual style guide named \`@${guide.name}\` for their motion graphics (chapter titles, lower thirds, stat callouts, end cards). They see only this chat and the live 16:9 visual preview beside it — never raw rules text — so the preview is how they judge your work.
+The editor is building a unified look-and-feel style guide named \`@${guide.name}\` with four tabs beside this chat:
+1. **Graphics** — captions, lower thirds, callout boxes, and motion graphics (chapter titles, stat callouts, end cards) shown as a live 16:9 preview sheet.
+2. **Transitions** — preferred clip transitions (\`dissolve\`, \`dip\`, \`push\`, \`slide\`, \`whip\`), duration, direction, usage rule, and optional paired sound effect.
+3. **Sounds** — built-in starter SFX or custom uploaded audio files (\`.wav\`, \`.mp3\`, \`.m4a\`) with default dB level and usage rule.
+4. **Color look** — reusable camera color adjustments (\`exposure\`, \`contrast\`, \`saturation\`, \`warmth\`, \`tint\`, \`shadows\`, \`highlights\`, \`blacks\`, \`whites\`, \`gamma\`) and/or an attached \`.cube\`/\`.3dl\` LUT file.
 
 ## How to work
 
-- When the editor attached files to their message, inspect images, SVGs, PDFs or text files with \`attachment_read(styleGuideId="${guide.id}", assetId="...")\`. Use the editor's words to know which files are brand assets to embed (logos, fonts) vs visual references to match (screenshots, inspiration). If they attached files without a message, inspect each file and apply it to the style guide.
+- When the editor attached files to their message:
+  - Inspect images, SVGs, PDFs, or text/config files (\`.md\`, \`.txt\`, \`.json\`, \`.yaml\`, \`.yml\`, \`.toml\`) with \`attachment_read(styleGuideId="${guide.id}", assetId="...")\`. Use the editor's words to know which files are brand assets to embed (logos, fonts) vs visual references or settings documents to apply.
+  - When a dropped document defines multiple sections of the style guide (graphics rules, transitions, sound effects, and/or camera color/lighting look), extract EVERY section it defines and save them together via \`style_guide_update\` (mapping built-in starter SFX by slug/name where appropriate), and call \`style_guide_preview_render\` whenever graphics/visual rules are included.
+  - Custom audio files (\`.wav\`, \`.mp3\`, \`.m4a\`, \`.aac\`, \`.ogg\`, \`.flac\`) can be saved into \`sounds\` with \`source: "asset"\` and their \`assetId\`, a sensible \`volumeDb\` (e.g. \`-14\`), and a clear \`usageRule\`, and optionally paired to transitions via \`soundId\`.
+  - Look files (\`.cube\`, \`.3dl\`) can be saved into \`colorLook\` using \`lutAssetId\` and \`lutName\`.
+- Built-in starter sound effects available to add to \`sounds\` (\`source: "builtin"\`, \`builtInId\`) or pair directly on a transition (\`soundId: "builtin:<slug>"\` or a saved sound's \`id\`):
+${starterSfxList}
 - Link attached fonts in \`@font-face\` and attached logos/images in \`<img>\` using their exact absolute disk \`path\` listed below.
-- ${hasPreview ? "This style guide already has a preview. Call `style_guide_preview_get` first so you preserve what the editor already likes and change only what they asked for." : "This style guide has no preview yet."}
-- Save a concise 1-line \`description\` (plain words summarizing the look, e.g. "Warm ivory, terracotta accents, geometric sans") and thorough \`instructions\` with \`style_guide_update\`. Include exact hex colors, typography + font file paths, layout rhythm, spacing, contrast rules, motion feel, and how each brand asset should be used so future motion graphics match consistently.
-- Always call \`style_guide_preview_render\` to render a crisp 1920×1080 (16:9) visual style sheet showing the look in action (for example: a Chapter Title, a Stat Callout, and a Lower Third arranged cleanly on a solid dark or brand-appropriate canvas so every element is immediately legible at thumbnail and full size). If \`missingFonts\` is returned, switch to an installed font from \`installedFonts\` or ask the editor with \`task_question\` if they requested a custom font.
+- ${hasPreview ? "This style guide already has a Graphics preview. Call `style_guide_preview_get` before changing the visual sheet so you preserve what the editor already likes." : "This style guide has no Graphics preview yet."}
+- Save updates with \`style_guide_update\`. You can update any combination of \`description\`, \`instructions\`, \`captionStyle\`, \`transitions\`, \`sounds\`, and \`colorLook\`; omitted sections stay as they are. When updating \`transitions\` or \`sounds\`, include existing items you want to keep alongside your changes (give each item a short stable \`id\` like \`tr_push\` or \`sfx_whoosh\`). When designing or updating graphics/captions, also populate \`captionStyle\` (fontFamily, fontWeight, fontSize, color, backgroundColor, outlineColor, outlineWidth, highlightColor, y, align, maxWidth, uppercase) so \`captions_generate\` automatically matches this style guide.
+- Keep exact layout, sizing, color-ratio, and template rules scoped to recurring brand pieces (captions, title cards, chapter titles, lower thirds, callout boxes, end cards). Frame palette, typography, and art direction as loose inspiration for custom or illustrative motion graphics rather than rigid templates.
+- Call \`style_guide_preview_render\` whenever you create or change the Graphics visual look (or when there is no preview yet) to render a crisp 1920×1080 (16:9) visual style sheet showing the look in action (Chapter Title, Callout Box, Lower Third, and Caption sample). If the editor only asked to adjust transitions, sounds, or the camera color look, \`style_guide_update\` alone updates those tabs immediately.
+- If \`missingFonts\` is returned by \`style_guide_preview_render\`, switch to an installed font from \`installedFonts\` or ask the editor with \`task_question\` if they requested a custom font.
 - \`task_question\` pauses and asks the editor when a key creative decision truly needs their input.
 
-End with one or two short, plain sentences telling the editor what you created or updated — no jargon, no tool names, no hex dumps unless they asked.`,
+End with one or two short, plain sentences telling the editor what you created or updated — no jargon, no tool names, no raw dumps unless they asked.`,
     [
       `# Style guide: @${guide.name}`,
       `Description: ${guide.description.trim() || "(none yet)"}`,
-      `Current rules:\n${guide.instructions.trim() || "(none yet)"}`,
+      `Current graphics rules:\n${guide.instructions.trim() || "(none yet)"}`,
+      ...(guide.captionStyle && Object.keys(guide.captionStyle).length ? [`Current caption style:\n${JSON.stringify(guide.captionStyle, null, 2)}`] : []),
+      `Current transitions:\n${currentTransitions}`,
+      `Current sounds:\n${currentSounds}`,
+      `Current color look:\n${currentColorLook}`,
       ...(newFiles.length ? ["Files attached to this message:\n" + newFiles.map(formatAsset).join("\n")] : []),
       ...(existingFiles.length ? ["Earlier files on this style guide:\n" + existingFiles.map(formatAsset).join("\n")] : []),
     ].join("\n\n"),
@@ -202,7 +325,7 @@ function talkingToYouSection(words: string): string {
   return `# How the editor wants you to write to them\n\nThe editor wrote this in Scarlet's settings for everything you write to them: what you say you will do, your updates, the reason on each edit, your questions and your closing sentences. It is about how you say things; where Scarlet shows your words and how long they can be, above, still holds.\n\n${words.trim()}`;
 }
 
-const modelName = (by: { agent: string; model?: string; label?: string }) => by.label ?? (by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent);
+const modelName = modelDisplayName;
 
 /** The kinds of work the editor gave other models (Task models), for the request that hands them off. */
 function taskModelsSection(types: NonNullable<PromptContext["taskModels"]>): string {
@@ -243,7 +366,7 @@ The editor sets the brief. You decide what context to inspect, which tools to us
 - Use requested intent for authorized edits, suggestion for optional or preview-only changes, and alternative for competing options. Check the returned state when reporting what applied. When Scarlet adjusts a submitted edit, such as moving an edge onto measured silence, the result lists each adjustment with its evidence. Name each individual changed spot in \`timelineEdits\` with its exact range and a spot-specific label (each punch-in, zoom, or crop gets its own entry — never one umbrella range across untouched footage), and keep unrelated multi-spot passes in separate saves. When a save makes several related edits of the same kind (cuts, graphics, zooms, reframes, B-roll, audio fixes, transitions, etc.), pass \`batchTitle\` with a short plain-English title summarizing the group together (e.g. "3 model title cards", "4 zooms on demo screens", "2 cuts: false start & tangent"). A revision can link to its prior change and spot with \`replaces\` and to feedback with \`noteIds\`.
 - \`task_log\` can show the current activity, a finding, or both. Attach a saved change ID and spot to the exact phrase the editor can select to see the change. \`task_question\` hands a decision to the editor and pauses the task; the answer comes back as your next message.
 - Scarlet renders project media. \`render_request\` supports a short range or an explicitly requested full delivery.
-- A motion graphic is an HTML/CSS page Scarlet draws into a video with alpha (\`graphic_render\`). It goes over the picture on a track of its own with \`timeline_propose\`, as an edit like any other. A project has one style guide, saved with \`style_guide_save\` when the editor gives you one.
+- A motion graphic is an HTML/CSS page Scarlet draws into a video with alpha (\`graphic_render\`). It goes over the picture on a track of its own with \`timeline_propose\`, as an edit like any other. Choose deliberately between a transparent overlay on A-cam (for lower thirds, key stats, short callouts, simple 2–3 item lists, or moments where seeing the speaker carries the line — keeping their face and silhouette clear, and smoothly reframing A-cam if it needs room beside them) and a full-screen opaque graphic (for chapter/title cards, end cards, or complex animated diagrams, simulations, and visual explainers that genuinely need the whole frame). A project has one style guide, saved with \`style_guide_save\` when the editor gives you one.
 
 ## Writing for the editor
 

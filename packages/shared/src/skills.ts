@@ -7,7 +7,7 @@ export const SkillSlug = z.string().regex(/^[a-z0-9][a-z0-9-]*$/);
 
 export const Skill = z.object({
   id: Id,
-  /** Folder name, e.g. "dialogue-pass". */
+  /** Folder name, which is also its command. Code never looks a skill up by a name of its own choosing. */
   name: SkillSlug,
   description: z.string(),
   /** Full SKILL.md contents including frontmatter. */

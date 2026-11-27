@@ -101,3 +101,20 @@ it("gives a still picture's one frame at any time a clip of it is on the timelin
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+it.runIf(process.platform === "darwin")("gives the same JPEG, byte for byte, from VideoToolbox as from the CPU", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "scarlet-frame-"));
+  try {
+    const file = join(dir, "moving.mp4");
+    // Moving detail, B-frames and a keyframe every 2 s, so a frame between keyframes decodes from others.
+    await runCapture(resolveFfmpeg(), ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1280x720:r=30:d=4",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "60", "-bf", "2", "-threads", "1", file]);
+    for (const t of [0.5, 1.37, 3.9]) {
+      const cpu = await extractFrame(file, t, { width: 640, fps: 30 });
+      const fallbacks: string[] = [];
+      const gpu = await extractFrame(file, t, { width: 640, fps: 30, decoder: "videotoolbox", onFallback: reason => fallbacks.push(reason) });
+      expect(fallbacks).toEqual([]);
+      expect(gpu.equals(cpu)).toBe(true);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

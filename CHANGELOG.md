@@ -4,15 +4,60 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 27, 2026
+
+- The sound on the timeline now shows the audio track you picked in Media straight away, and stays steady while other files are added.
+- Simplified edit hover cards in the edits sidebar: dropped clip file names and repeated rationale, and combined live status and model into one short line (such as "Revising with GPT-6.2-Sol").
+
 ## November 26, 2026
 
+- A first cut with Gemini costs about a fifth less: Scarlet reads each stretch of the recording in fewer steps, and its tool instructions and replies are shorter.
+
+- Jumping around the timeline shows the picture and starts playing sooner, and the editor stays quick while Scarlet works.
+- While Scarlet looks through frames of a long video, or prepares one after import, the frames you scrub to on a Mac come up sooner.
+- Version numbers (`v2`, `v3`, etc.) in the edits list now appear in a subtler gray so edit titles and tags stand out more clearly.
+- Version numbers (`v2`, `v3`, etc.) in the edits list now line up cleanly in one vertical column across rows instead of shifting with each edit's title or tag width.
+- Zooms and pans on still images and other keyframed clips now glide smoothly instead of shaking or stepping between pixels.
+- In the beta layout, pressing Add on several to-dos in a row now shows one queued bubble in the chat, such as "Edit at 8:53, 9:26 +11 · Add it", instead of a bubble for each. Press its times to see each one, or its × to take them all out of the queue.
+- Keeping or sending an edit to Scarlet from Needs review or Safe edits now shows a green check mark or turning spinner right on its row before it moves to Working or Done.
+- Updating existing B-roll To-dos or other edits from a follow-up request now replaces the earlier rows in Needs review instead of listing old and new versions side by side.
+- In the beta layout, your message bubbles in the chat now always show your full text instead of cutting off after two lines.
+- Hovering an added sound in the edits list now reads "Added Warm bed (−6 dB)" instead of "Added Warm bed, quieter (−6 dB)".
+- Dragging the edge of a voice edit on its own audio track now gives the time to or takes it from the sound beside it, instead of refusing or leaving a silent gap.
+- A style guide saved from a graphic now lists fonts whose names are in quotes, such as "Brand Serif", instead of an empty line.
+- Built-in style guide sounds now play correctly when only their ending is asked for.
+- Accented names in Settings › Models › Task models keep their letters together, so "Étalonnage" no longer becomes "e-talonnage".
+- Pressing A quickly on several to-dos now adds every one: the card moves to the next to-do at the press, and one that couldn't be sent comes back with the reason.
+- In the beta layout, the Working and Done headings in the edits column now stay pinned in view while their lists scroll.
+- Style guides now also keep transitions, sound effects and a camera color look, each on its own tab beside Graphics: replay a transition between two sample shots, play sound effects or add them from a built-in starter library with a mix level and a note on when to use them, and describe a color look in chat or drop a .cube or .3dl look file. Scarlet follows them when it edits.
+- Drop a .json style file on Settings › Style guides or on a style guide, or use Import file, to load all its settings at once. Export on a style guide saves them all as a .style.json file. Other files, such as a .md, .yaml, .pdf or .cube, open in the style guide's chat for Scarlet to read.
+- A new Color matching skill evens out exposure, white balance and contrast across cameras, or applies your style guide's color look across the edit.
+- A new Multi-camera editing skill lets Scarlet line up several cameras and separate microphones, work out which camera shows each speaker, and switch between angles at a natural pace for podcasts and interviews.
+- Turning off Send usage reports now also forgets this computer's anonymous ID, and Claude Code and Codex no longer send their own usage data while Scarlet runs them.
+- Rejecting an edit now moves straight to the next edit in line instead of staying on the rejected card.
+- Taking back a rejected edit with ⌘Z now simply brings the edit back, without an extra "Undo · Rejected" line in the chat or a second row for it.
+- After an export, the Export window still offers the folder for Resolve, Final Cut or Premiere, and Back from it.
+- Saving only captions or a timeline file no longer marks the video as exported.
+- Music and other files with no speech no longer get made-up words like "Thank you." in their transcript.
+- Connect your YouTube channel in Settings › General, then open Export › Publish to YouTube to upload finished cuts with final-cut chapter timestamps straight to YouTube Studio (starting as a Private draft by default).
+- Style guides now cover captions alongside lower thirds, callout boxes, and graphics — including custom fonts, weights, and built-in starter presets in Settings › Style guides — and are easier to reach from the `/` and `@` pickers and Project settings.
+- Fixed timeline edge dragging on crossfaded cuts, cleaned audio joins, synced multi-camera opening and closing cuts, and multi-clip B-roll or overlay edits so their handles always appear and save cleanly.
 - When something goes wrong, you can now report it in one click right where you see it: press Report beside the error, or on the screen Scarlet shows when a page breaks, and Scarlet sends it to the Scarlet team with its logs (no videos, projects, transcripts or sign-ins). Add details afterwards if you like. Help › Report a Problem… and Settings › About let you write a report yourself.
 - A page that breaks now says so with Reload and Report this problem, instead of an empty or technical error screen.
 - In the beta layout, taking a marked stretch off the timeline no longer deletes its times from the message you're writing.
-- The sound on the timeline now shows the audio track you picked in Media straight away, and stays steady while other files are added.
+- Full screen now shows only the video: the timeline, the edit card and the drawing tools step aside, and the player's controls come back when you move the pointer.
 
 ## November 25, 2026
 
+- The Show → link after a request's summary in the chat is gone; its edits are in Needs review.
+- In the beta layout, Safe edits now start folded under their heading. Press it to open them; opening one of them from the timeline, the chat or the arrows opens it too.
+- Keep N safe edits now sits on the Safe edits divider in Needs review, right above the edits it keeps, instead of in the heading.
+- In the beta layout, "Scarlet is editing" under the timeline no longer has a Pause button beside it.
+- Opening a project no longer briefly shows edits that were undone or replaced before its list of edits settles.
+- Pausing the video now puts playback back to normal speed, so it doesn't start fast again when you play on.
+- L now switches between normal speed and a fast speed you choose in the player's playback speed menu (1.5× unless you pick 1.25×, 1.75× or 2×), instead of stepping up a little each press.
+- Requests no longer fail on an older Claude Code that doesn't know some of the options Scarlet starts it with: Scarlet tries again without them.
+- Downloading the Whisper model for local transcription now tries again after a dropped or stalled connection, and on Windows waits out antivirus briefly locking the file, instead of failing.
 - In the beta layout, an edit you send back to Scarlet to revise no longer shows a "Scarlet is revising this" card above the timeline; as in the default layout, its card comes back once the new version is ready.
 - In the beta layout, keeping, rejecting, or revising an edit now keeps its row briefly in place with its new status before smoothly fading and moving it to Working or Done.
 - In the beta layout, the chat and the Needs review column now start at the same width (until you drag either one).

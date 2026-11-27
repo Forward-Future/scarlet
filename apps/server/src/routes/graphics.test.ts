@@ -183,7 +183,7 @@ describe("the style guide", () => {
     let detail = await (await api("GET", `/projects/${project.id}`)).json() as { project: Project };
     expect(detail.project.styleGuide).toMatchObject({ name: "House style", text: "Titles in Inter Bold, white on #111." });
     const task = createTask(workspace.ctx, { projectId: project.id, kind: "edit", agent: "claude", instruction: "add a title", createdBy: { type: "human", name: "Ed" } });
-    expect(await prompt(task)).toContain("# Style guide\n\nThe editor gave this project a style guide, \"House style\", for every graphic made in it.\n\nTitles in Inter Bold, white on #111.");
+    expect(await prompt(task)).toContain("# Style guide\n\nThe editor gave this project a style guide, \"House style\". Follow it closely for captions, title cards, lower thirds, callout boxes, and end cards; for custom or illustrative motion graphics (diagrams, visual explainers, animated concepts), treat it loosely as inspiration — echo its mood, typography feel, or accent touches without forcing rigid templates, fixed margins, or color ratios.\n\nTitles in Inter Bold, white on #111.");
 
     // A file replaces the pasted guide: it is copied out of its attachment and the agent is told where it is.
     const pdf = await attach("Brand.pdf", "%PDF-1.4 fixture", "application/pdf");
@@ -193,7 +193,7 @@ describe("the style guide", () => {
     expect(detail.project.styleGuide?.text).toBeUndefined();
     const file = join(workspace.ctx.paths.project(project.id), "style-guide", "Brand.pdf");
     expect(readFileSync(file, "utf8")).toBe("%PDF-1.4 fixture");
-    expect(await prompt(task)).toContain(`"Brand.pdf", for every graphic made in it.\n\nIt is in the PDF at ${file}.`);
+    expect(await prompt(task)).toContain(`"Brand.pdf". Follow it closely for captions, title cards, lower thirds, callout boxes, and end cards; for custom or illustrative motion graphics (diagrams, visual explainers, animated concepts), treat it loosely as inspiration — echo its mood, typography feel, or accent touches without forcing rigid templates, fixed margins, or color ratios.\n\nIt is in the PDF at ${file}.`);
 
     // The list of projects stays light.
     const list = await (await api("GET", "/projects")).json() as { projects: Array<Record<string, unknown>> };

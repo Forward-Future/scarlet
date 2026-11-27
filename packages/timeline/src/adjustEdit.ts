@@ -224,7 +224,7 @@ function findDipMatch(head: Timeline, range: TimeRange, fps: number, clipIds?: r
 }
 
 interface OverlayMatch {
-  items: { track: Track; clip: Clip }[];
+  items: { track: Track; clips: Clip[] }[];
   bounds: EditAdjustBounds;
 }
 
@@ -232,25 +232,43 @@ function findOverlayMatch(head: Timeline, range: TimeRange, fps: number, media?:
   const near = 1.5 / fps;
   const baseVideo = head.tracks.find(t => t.kind === "video")?.id;
   const preferred = opts?.clipIds?.length ? new Set(opts.clipIds) : undefined;
-  const allMatches: { track: Track; clip: Clip }[] = [];
+  const allMatches: { track: Track; clips: Clip[] }[] = [];
   for (const track of head.tracks) {
     if (track.id === baseVideo) continue;
-    for (const clip of track.clips) {
-      if (clip.kind === "media" && clip.splitEdit) continue;
-      if (Math.abs(clip.timelineIn - range.start) <= near && Math.abs(clipEnd(clip) - range.end) <= near) {
-        allMatches.push({ track, clip });
+    const sorted = [...track.clips].sort((a, b) => a.timelineIn - b.timelineIn);
+    for (let startIdx = 0; startIdx < sorted.length; startIdx++) {
+      const first = sorted[startIdx]!;
+      if (first.kind === "media" && first.splitEdit) continue;
+      if (Math.abs(first.timelineIn - range.start) > near) continue;
+      const run: Clip[] = [];
+      let matched = false;
+      for (let i = startIdx; i < sorted.length; i++) {
+        const c = sorted[i]!;
+        if (c.kind === "media" && c.splitEdit) break;
+        if (run.length > 0 && Math.abs(c.timelineIn - clipEnd(run.at(-1)!)) > near) break;
+        run.push(c);
+        const end = clipEnd(c);
+        if (Math.abs(end - range.end) <= near) {
+          matched = true;
+          break;
+        }
+        if (end > range.end + near) break;
+      }
+      if (matched && run.length) {
+        allMatches.push({ track, clips: run });
+        break;
       }
     }
   }
   if (!allMatches.length) return undefined;
-  let items = preferred ? allMatches.filter(m => preferred.has(m.clip.id)) : [];
+  let items = preferred ? allMatches.filter(m => m.clips.some(c => preferred.has(c.id))) : [];
   if (!items.length) {
-    if (opts?.kind === "text") items = allMatches.filter(m => m.track.kind === "caption" || m.clip.kind === "caption");
+    if (opts?.kind === "text") items = allMatches.filter(m => m.track.kind === "caption" || m.clips.every(c => c.kind === "caption"));
     else if (opts?.kind === "audio" || opts?.kind === "voice") items = allMatches.filter(m => m.track.kind === "audio");
     else if (opts?.kind === "broll" || opts?.kind === "graphic" || opts?.kind === "overlay") {
       const visuals = allMatches.filter(m => m.track.kind === "video");
-      const visualMedia = new Set(visuals.flatMap(v => v.clip.kind === "media" ? [v.clip.mediaId] : []));
-      const pairedAudio = allMatches.filter(m => m.track.kind === "audio" && m.clip.kind === "media" && visualMedia.has(m.clip.mediaId));
+      const visualMedia = new Set(visuals.flatMap(v => v.clips.flatMap(c => c.kind === "media" ? [c.mediaId] : [])));
+      const pairedAudio = allMatches.filter(m => m.track.kind === "audio" && m.clips.some(c => c.kind === "media" && visualMedia.has(c.mediaId)));
       items = visuals.length ? [...visuals, ...pairedAudio] : allMatches;
     }
     if (!items.length) items = allMatches;
@@ -258,38 +276,56 @@ function findOverlayMatch(head: Timeline, range: TimeRange, fps: number, media?:
 
   const assets = new Map((media ?? []).map(a => [a.id, a]));
   const totalDur = Math.max(timelineDuration(head), range.end);
+  const minClip = 1 / fps;
   let minStart = 0;
+  let maxStart = range.end;
+  let minEnd = range.start;
   let maxEnd = totalDur;
+  const allSingle = items.every(item => item.clips.length === 1);
 
-  for (const { track, clip } of items) {
+  for (const { track, clips } of items) {
+    const first = clips[0]!;
+    const last = clips.at(-1)!;
     const sorted = [...track.clips].sort((a, b) => a.timelineIn - b.timelineIn);
-    const idx = sorted.findIndex(c => c.id === clip.id);
-    const prevEnd = idx > 0 ? clipEnd(sorted[idx - 1]!) : 0;
-    const nextStart = idx >= 0 && idx + 1 < sorted.length ? sorted[idx + 1]!.timelineIn : totalDur;
-    if (clip.kind === "caption" || clip.kind === "color") {
+    const firstIdx = sorted.findIndex(c => c.id === first.id);
+    const lastIdx = sorted.findIndex(c => c.id === last.id);
+    const prevEnd = firstIdx > 0 ? clipEnd(sorted[firstIdx - 1]!) : 0;
+    const nextStart = lastIdx >= 0 && lastIdx + 1 < sorted.length ? sorted[lastIdx + 1]!.timelineIn : totalDur;
+    if (first.kind === "caption" || first.kind === "color") {
       minStart = Math.max(minStart, prevEnd);
-      maxEnd = Math.min(maxEnd, nextStart);
     } else {
-      const asset = assets.get(clip.mediaId);
+      const asset = assets.get(first.mediaId);
       if (asset?.kind === "image") {
         minStart = Math.max(minStart, prevEnd);
+      } else {
+        const earlier = first.sourceIn / first.speed;
+        minStart = Math.max(minStart, prevEnd, first.timelineIn - earlier);
+      }
+    }
+    if (last.kind === "caption" || last.kind === "color") {
+      maxEnd = Math.min(maxEnd, nextStart);
+    } else {
+      const asset = assets.get(last.mediaId);
+      if (asset?.kind === "image") {
         maxEnd = Math.min(maxEnd, nextStart);
       } else {
-        const earlier = clip.sourceIn / clip.speed;
-        const later = asset?.duration !== undefined ? Math.max(0, (asset.duration - clip.sourceOut) / clip.speed) : 0;
-        minStart = Math.max(minStart, prevEnd, clip.timelineIn - earlier);
-        maxEnd = Math.min(maxEnd, nextStart, clipEnd(clip) + later);
+        const later = asset?.duration !== undefined ? Math.max(0, (asset.duration - last.sourceOut) / last.speed) : 0;
+        maxEnd = Math.min(maxEnd, nextStart, clipEnd(last) + later);
       }
+    }
+    if (clips.length > 1) {
+      maxStart = Math.min(maxStart, Math.max(range.start, clipEnd(first) - minClip));
+      minEnd = Math.max(minEnd, Math.min(range.end, last.timelineIn + minClip));
     }
   }
 
   const bounds: EditAdjustBounds = {
     mode: "overlay",
     minStart: Math.min(minStart, range.start),
-    maxStart: range.end,
-    minEnd: range.start,
+    maxStart: Math.max(maxStart, range.start),
+    minEnd: Math.min(minEnd, range.end),
     maxEnd: Math.max(maxEnd, range.end),
-    canRemove: true,
+    canRemove: allSingle,
   };
   return { items, bounds };
 }
@@ -394,6 +430,12 @@ function resolveEditTarget(head: Timeline, range: TimeRange, fps: number, media?
     const dip = findDipMatch(head, range, fps, opts.clipIds);
     return dip && hasAnyMovement(dip.bounds, range, fps) ? { kind: "dip" as const, match: dip } : undefined;
   }
+  // A voice or audio edit split out of continuous sound on an audio track rolls into its neighbours, as on the main
+  // video; an overlay match there would always win (a lone clip can always move) and leave a gap instead.
+  if (opts?.kind === "audio" || opts?.kind === "voice") {
+    const audioRoll = findRollMatch(head, range, fps, opts);
+    if (audioRoll?.track.kind === "audio" && hasAnyMovement(audioRoll.bounds, range, fps)) return { kind: "roll" as const, match: audioRoll };
+  }
   const overlay = findOverlayMatch(head, range, fps, media, opts);
   if (overlay && hasAnyMovement(overlay.bounds, range, fps)) return { kind: "overlay" as const, match: overlay };
   const roll = findRollMatch(head, range, fps, opts);
@@ -494,38 +536,60 @@ export function adjustEdit(head: Timeline, range: TimeRange, nextRange: TimeRang
   if (target.kind === "overlay") {
     const { items } = target.match;
     if (pullsToZero) {
-      const ops: TimelineOp[] = items.map(({ clip }) => ({ op: "removeClip", clipId: clip.id }));
+      if (!bounds.canRemove) return undefined;
+      const ops: TimelineOp[] = items.flatMap(({ clips }) => clips.map(clip => ({ op: "removeClip" as const, clipId: clip.id })));
       const timeline = applyOps(head, ops);
       return { timeline, ops, range: { start: nextStart, end: nextStart }, removed: true };
     }
-    const newDur = nextEnd - nextStart;
     const ops: TimelineOp[] = [];
-    for (const { clip } of items) {
+    const updateOverlayClip = (clip: Clip, clipStart: number, clipOut: number): TimelineOp | undefined => {
+      const newDur = clipOut - clipStart;
+      if (newDur <= EPS) return undefined;
       if (clip.kind === "caption" || clip.kind === "color") {
-        ops.push({ op: "updateClip", clipId: clip.id, patch: { timelineIn: nextStart, timelineOut: nextEnd } });
+        return { op: "updateClip", clipId: clip.id, patch: { timelineIn: clipStart, timelineOut: clipOut } };
+      }
+      const asset = assets.get(clip.mediaId);
+      const isImage = asset?.kind === "image";
+      const clipDeltaStart = clipStart - clip.timelineIn;
+      const clipDeltaEnd = clipOut - clipEnd(clip);
+      const nextSourceIn = isImage ? clip.sourceIn : Math.max(0, clip.sourceIn + clipDeltaStart * clip.speed);
+      const nextSourceOut = isImage ? clip.sourceIn + newDur * clip.speed : clip.sourceOut + clipDeltaEnd * clip.speed;
+      if (nextSourceOut <= nextSourceIn + EPS) return undefined;
+      const patch: Record<string, unknown> = {
+        timelineIn: clipStart,
+        sourceIn: nextSourceIn,
+        sourceOut: nextSourceOut,
+        ...clampFades(clip, newDur),
+        ...(clip.keyframes?.length && Math.abs(clipDeltaStart) > EPS && {
+          keyframes: clip.keyframes.map(k => ({ ...k, time: k.time - clipDeltaStart })),
+        }),
+        ...(clip.volumeKeyframes?.length && Math.abs(clipDeltaStart) > EPS && {
+          volumeKeyframes: clip.volumeKeyframes.map(k => ({ ...k, time: k.time - clipDeltaStart })),
+        }),
+      };
+      return { op: "updateClip", clipId: clip.id, patch };
+    };
+    for (const { clips } of items) {
+      if (clips.length === 1) {
+        const op = updateOverlayClip(clips[0]!, nextStart, nextEnd);
+        if (!op) return undefined;
+        ops.push(op);
       } else {
-        const asset = assets.get(clip.mediaId);
-        const isImage = asset?.kind === "image";
-        const clipDeltaStart = nextStart - clip.timelineIn;
-        const clipDeltaEnd = nextEnd - clipEnd(clip);
-        const nextSourceIn = isImage ? clip.sourceIn : Math.max(0, clip.sourceIn + clipDeltaStart * clip.speed);
-        const nextSourceOut = isImage ? clip.sourceIn + newDur * clip.speed : clip.sourceOut + clipDeltaEnd * clip.speed;
-        if (nextSourceOut <= nextSourceIn + EPS) return undefined;
-        const patch: Record<string, unknown> = {
-          timelineIn: nextStart,
-          sourceIn: nextSourceIn,
-          sourceOut: nextSourceOut,
-          ...clampFades(clip, newDur),
-          ...(clip.keyframes?.length && Math.abs(clipDeltaStart) > EPS && {
-            keyframes: clip.keyframes.map(k => ({ ...k, time: k.time - clipDeltaStart })),
-          }),
-          ...(clip.volumeKeyframes?.length && Math.abs(clipDeltaStart) > EPS && {
-            volumeKeyframes: clip.volumeKeyframes.map(k => ({ ...k, time: k.time - clipDeltaStart })),
-          }),
-        };
-        ops.push({ op: "updateClip", clipId: clip.id, patch });
+        const first = clips[0]!;
+        const last = clips.at(-1)!;
+        if (Math.abs(deltaStart) >= half) {
+          const op = updateOverlayClip(first, nextStart, clipEnd(first));
+          if (!op) return undefined;
+          ops.push(op);
+        }
+        if (Math.abs(deltaEnd) >= half) {
+          const op = updateOverlayClip(last, last.timelineIn, nextEnd);
+          if (!op) return undefined;
+          ops.push(op);
+        }
       }
     }
+    if (!ops.length) return undefined;
     const timeline = applyOps(head, ops);
     return { timeline, ops, range: { start: nextStart, end: nextEnd } };
   }

@@ -327,3 +327,57 @@ it("adjusts a non-cut caption edit directly, preserves its kind in threadTimelin
   expect(rej.rejects).toBe(true);
   expect(ctx.repos.versions.get(project.id, removed.head!)!.timeline.tracks.find(t => t.id === "c1")!.clips).toHaveLength(0);
 });
+
+it("keeps unmoved non-frame-aligned cut edges intact, handles sub-ms video overlaps and picture-sync offsets, and preserves crossfades in proposeChange", async () => {
+  const { proposeChange } = await import("./changes/propose.js");
+  const { ctx } = app;
+  const user = localUser(ctx);
+  const fps = 29.970037204161414;
+  ctx.repos.projects.update(project.id, { settings: { ...project.settings, fps } });
+  ctx.repos.projects.putMedia(project.id, { id: "camera", name: "interview.mov", kind: "video", path: "camera.mov", duration: 60.12, hasAudio: true }, "ready");
+  const before = storeVersion(ctx, project.id, timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 60.12 }]), { parent: null });
+  const branch = ctx.repos.projects.get(project.id)!.branch ?? "main";
+
+  // 1. Closing cut whose recording end (60.12 s) is not an exact frame multiple: dragging start keeps end untouched.
+  const closedTl = timelineFromKeepRanges(project.id, "camera", [{ start: 0, end: 50 }]);
+  const closed = storeVersion(ctx, project.id, closedTl, { parent: before.version, changeId: "chg_close" });
+  ctx.repos.projects.update(project.id, { head: closed.version });
+  const closeTarget = { changeId: "chg_close", spot: 0, label: "Cut outro", range: { start: 50, end: 50 }, at: 50, before: { version: before.version, removed: { start: 50, end: 60.12 } } };
+  const { project: afterClose } = adjustAppliedCut(ctx, user, project.id, "thr_close", closeTarget, { start: 51, end: 60.12 }, closed.version, branch);
+  expect(ctx.repos.versions.get(project.id, afterClose.head!)!.timeline.tracks[0]!.clips[0]).toMatchObject({ sourceOut: expect.closeTo(51, 1) });
+
+  // 2. Interior cut with a sub-ms video overlap AND a 0.16 s whole-track picture-sync offset relative to `before`.
+  const syncedTl = timelineFromKeepRanges(project.id, "camera", [{ start: 0.16, end: 10.16 }, { start: 20.16, end: 40.16 }]);
+  // Introduce a 0.3 ms micro-overlap between the two video clips (as seen in real timelines).
+  syncedTl.tracks[0]!.clips[1]!.timelineIn = 10 - 0.0003;
+  const synced = storeVersion(ctx, project.id, syncedTl, { parent: before.version, changeId: "chg_sync" });
+  ctx.repos.projects.update(project.id, { head: synced.version });
+  const syncTarget = { changeId: "chg_sync", spot: 0, label: "Cut middle", range: { start: 10, end: 10 }, at: 10 - 0.0003, before: { version: before.version, removed: { start: 10, end: 20 } } };
+  const { project: afterSync } = adjustAppliedCut(ctx, user, project.id, "thr_sync", syncTarget, { start: 10, end: 19 }, synced.version, branch);
+  expect(ctx.repos.versions.get(project.id, afterSync.head!)!.timeline.tracks[0]!.clips[1]).toMatchObject({ sourceIn: expect.closeTo(19.16, 1) });
+
+  // 3. Rearranged cut that mapped to 0:00 while its `before` removal starts at 42 s is refused safely.
+  const badOpenTarget = { changeId: "chg_sync", spot: 1, label: "Rearranged", range: { start: 0, end: 0 }, at: 0, before: { version: before.version, removed: { start: 42, end: 45 } } };
+  expect(() => adjustAppliedCut(ctx, user, project.id, "thr_sync", badOpenTarget, { start: 42, end: 44 }, afterSync.head!, branch)).toThrow(/adjusted directly/);
+
+  // 4. proposeChange does not independently frame-snap audio clips that carry crossfade durations.
+  const fade = 2 / fps;
+  const half = fade / 2;
+  const headNow = ctx.repos.versions.get(project.id, afterSync.head!)!.timeline;
+  const joinAt = 10;
+  const srcOutL = 10.16 + half;
+  const srcInR = 19.16 - half;
+  const res = proposeChange(ctx, user, project.id, {
+    fromVersion: headNow.version,
+    description: "Add two-frame dialogue crossfade",
+    autoApprove: true,
+    ops: [
+      { op: "addClip", trackId: "a1", clip: { id: "a_l", kind: "media", mediaId: "camera", timelineIn: 0, sourceIn: 0.16, sourceOut: srcOutL, speed: 1, opacity: 1, volume: 1, audioFadeIn: 0, audioFadeOut: fade, videoFadeIn: 0, videoFadeOut: 0, effects: [], enabled: true } },
+      { op: "addClip", trackId: "a1", clip: { id: "a_r", kind: "media", mediaId: "camera", timelineIn: joinAt - half, sourceIn: srcInR, sourceOut: 40.16, speed: 1, opacity: 1, volume: 1, audioFadeIn: fade, audioFadeOut: 0, videoFadeIn: 0, videoFadeOut: 0, effects: [], enabled: true } },
+    ],
+  });
+  const savedA1 = ctx.repos.versions.get(project.id, res.change.toVersion)!.timeline.tracks.find(t => t.id === "a1")!;
+  const [al, ar] = savedA1.clips;
+  expect(al!.kind === "media" && al.sourceOut).toBe(srcOutL);
+  expect(ar!.kind === "media" && [ar.timelineIn, ar.sourceIn]).toEqual([joinAt - half, srcInR]);
+});

@@ -1,5 +1,5 @@
 import { fullRenderContext } from "@scarlet/shared";
-import { exportCounting, useExports } from "../../lib/exportJobs";
+import { exportCounting, useExports, videoExport } from "../../lib/exportJobs";
 import { fileBaseName, pct } from "../../lib/format";
 import { useProjectStore } from "../../stores/project";
 import { ProgressLine } from "../ui/ProgressLine";
@@ -31,7 +31,8 @@ function useExportStatus(): { status?: string; file?: string; running?: boolean;
     const progress = exportCounting(job) ? job.progress : undefined;
     return { status: progress === undefined ? "Exporting" : `Exporting ${pct(progress)}`, running: true, busy: true, progress };
   }
-  return job?.phase === "done" && job.context === context ? { status: "Exported", file: fileBaseName(job.path) } : {};
+  const video = videoExport(job);
+  return video && video.context === context ? { status: "Exported", file: fileBaseName(video.path) } : {};
 }
 
 /**
