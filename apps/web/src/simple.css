@@ -270,10 +270,10 @@
 .simple-edit-title { grid-column: 2; display: flex; align-items: baseline; min-width: 0; overflow-wrap: anywhere; }
 .simple-edit-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .simple-edit.is-on .simple-edit-words { white-space: normal; }
-.simple-edit-value { grid-column: 3; }
+.simple-edit-value { grid-column: -2 / -1; justify-self: end; }
 /* Sent back or come back revised, a row ends on that word (Revising…, Up next, Revised), where its amount was: one
    word a row, on the row's own line. Amber once it is back and waits on the editor. */
-.simple-edit-check, .simple-pass-check { grid-column: 3; font-size: 12px; color: var(--color-warn); white-space: nowrap; }
+.simple-edit-check, .simple-pass-check { grid-column: -2 / -1; justify-self: end; font-size: 12px; color: var(--color-warn); white-space: nowrap; }
 .simple-edit-check.is-kept, .simple-pass-check.is-kept { color: var(--color-muted); }
 /* The edit's number; amber while it asks for a look. Kept: filled, widened to a pill with a check beside the number. */
 .edit-badge { justify-self: start; display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 1.2px solid var(--color-muted);
@@ -283,10 +283,14 @@
   border-color: var(--color-fg); background: var(--color-fg); color: var(--color-bg); }
 .edit-badge.is-kept svg { stroke-width: 2.6; }
 /* Which version a revised edit or call is on ("v2"): plain small text, as a row's figure is. The same after a row's
-   words in either kind of list, where a call's row ends in it, and before the note on a call's card, where hovering it
-   shows the earlier version and the note that sent it back. */
+   words in either kind of list, aligned into one vertical column against the shared right-hand tag column, and before
+   the note on a call's card, where hovering it shows the earlier version and the note that sent it back. */
 .edit-version { flex: none; font-size: 12px; color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-:is(.simple-pass-label, .simple-edit-title) > .edit-version { margin-left: 7px; }
+:is(.simple-pass-label, .simple-edit-title) > .edit-version { margin-left: 7px; order: 1; }
+:is(.simple-pass-label, .simple-edit-title):has(> .edit-version) { display: flex; align-items: baseline; justify-self: stretch; min-width: 0; }
+:is(.simple-pass-label, .simple-edit-title):has(> .edit-version) > :is(.simple-pass-words, .simple-edit-words) { flex: 1 1 auto; }
+:is(.simple-pass-label, .simple-edit-title):has(> .edit-version):has(> .simple-pass-more) > :is(.simple-pass-words, .simple-edit-words) { flex: 0 1 auto; }
+:is(.simple-pass-label, .simple-edit-title):has(> .edit-version) > .simple-pass-more { margin-right: auto; }
 
 .simple-action { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 12.5px; }
 .simple-action.is-done { color: var(--color-dim); }
@@ -507,18 +511,22 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
   .simple-pass-list > li.is-leaving, .simple-edits > li.is-leaving { transition: none; }
 }
 .simple-pass-ok { color: var(--color-ok); }
-/* Keep offscreen rows' absolute screen-reader labels in the list's scroll area. */
-.simple-pass-list { position: relative; max-height: 320px; overflow-y: auto; margin: 0 4px 4px; border-top: 1px solid var(--color-line); }
+/* Keep offscreen rows' absolute screen-reader labels in the list's scroll area. Share the time, label, and tag tracks
+   across every row via subgrid (46px/60px accounts for the button's 8px left padding) so version numbers align cleanly. */
+.simple-pass-list { position: relative; display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; column-gap: 8px; align-content: start; max-height: 320px; overflow-y: auto; margin: 0 4px 4px; border-top: 1px solid var(--color-line); }
+/* Past an hour a time is two characters longer ("1:02:07" against "12:34"). Every row of that list takes the wider
+   column, so a time never runs into its words, amber tint and all, and the words keep one edge down the list. */
+.simple-pass-list.has-hours { grid-template-columns: 60px minmax(0, 1fr) auto; }
+.simple-pass-list > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.simple-pass-list > li > * { grid-column: 1 / -1; }
+.simple-pass-list > li.review-tier-sep { display: block; grid-column: 1 / -1; contain: inline-size; }
 /* One row for every list of edits in the chat: a pass's calls, every edit of a pass, any other request's edits. Its
    type, its box and what the pointer does to it are the same. Only what leads a row differs: a time, or a number. */
 .simple-pass-list > li > button, .simple-edit { padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--color-fg); font: inherit; font-size: 12.5px;
   text-align: left; cursor: pointer; scroll-margin-block: 24px; }
 .simple-pass-list > li > button:hover:not(:disabled), .simple-edit:hover { background: rgba(255, 255, 255, .04); }
 .simple-pass-list > li > button.is-on, .simple-edit.is-on { background: var(--color-raised); }
-.simple-pass-list > li > button { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; width: 100%; }
-/* Past an hour a time is two characters longer ("1:02:07" against "12:34"). Every row of that list takes the wider
-   column, so a time never runs into its words, amber tint and all, and the words keep one edge down the list. */
-.simple-pass-list.has-hours > li > button { grid-template-columns: 52px minmax(0, 1fr) auto; }
+.simple-pass-list > li > button { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: baseline; width: 100%; }
 .simple-pass-list > li > button:disabled { cursor: default; color: var(--color-muted); }
 /* A row fills the list from edge to edge, so the ring that says the keyboard is on it sits inside the row. */
 .simple-pass-list > li > button:focus-visible { outline-offset: -2px; }
@@ -529,7 +537,7 @@ button.learn-decision-time:focus-visible, .learn-from:focus-visible { outline: 2
   color: var(--color-warn); font-weight: 600; }
 .simple-pass-time > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* What a row ends in: how much came out, what the edit did, or where it stands. */
-.simple-pass-value, .simple-edit-value { font-size: 12px; color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.simple-pass-value, .simple-edit-value { grid-column: -2 / -1; justify-self: end; font-size: 12px; color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* Where a card's cut or edit stands among the ones still waiting: "Cut 2", "1 of 3". */
 .edit-card-count { flex: none; font-size: 12px; color: var(--color-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
@@ -762,7 +770,7 @@ button.edit-passage-cut:hover, button.edit-passage-cut[aria-expanded="true"] { b
 .simple-pass-list > li:last-child > .subunit { margin-bottom: 3px; }
 /* In the edits' grid it spans every column. Its own width counts for nothing there, or its words would widen the
    column of amounts and push the titles into wrapping. */
-.simple-edits > li > .subunit { justify-self: stretch; contain: inline-size; }
+:is(.simple-pass-list, .simple-edits) > li > .subunit { justify-self: stretch; contain: inline-size; }
 .subunit-msg { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .subunit-msg .simple-who { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* The editor's words are the bright line under the row, and what Scarlet says about the request is quieter, so the
@@ -992,9 +1000,10 @@ button.req-summary:hover > span { text-decoration: underline; text-decoration-co
 .simple-pass-more:hover, .simple-pass-more[aria-expanded="true"] { color: var(--color-muted); text-decoration: underline; text-underline-offset: 3px; }
 /* The moment's own edits, under its row: no times, since they all play in its stretch, their words in line with the
    moment's, and a rule at their left as a request under its row has. */
-.simple-pass-list.is-moment, .req .simple-pass-list.is-moment { max-height: none; overflow: visible; margin: 0 0 2px 46px; padding-left: 4px; border-top: 0; border-left: 1px solid var(--color-line); }
+.simple-pass-list.is-moment, .req .simple-pass-list.is-moment { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-content: start; max-height: none; overflow: visible; margin: 0 0 2px 46px; padding-left: 4px; border-top: 0; border-left: 1px solid var(--color-line); contain: inline-size; }
 .req .simple-pass-list.has-hours .simple-pass-list.is-moment { margin-left: 60px; }
-.simple-pass-list.is-moment > li > button { grid-template-columns: minmax(0, 1fr) auto; }
+.simple-pass-list.is-moment > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.simple-pass-list.is-moment > li > button { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
 .simple-pass-list > li > button.is-decided :is(.simple-pass-label, .simple-pass-time, .simple-pass-value),
 .simple-edit.is-decided :is(.simple-edit-title, .simple-edit-value) { color: var(--color-dim); }
 /* Hovering or focusing a kept row reveals Unkeep in place of Kept on the row's right edge. */

@@ -154,7 +154,12 @@
   font: inherit; font-size: 11.5px; font-weight: 400; text-decoration: underline; text-decoration-color: var(--color-dim); text-underline-offset: 3px; white-space: nowrap; cursor: pointer; }
 [data-new-layout] .review-head-keep:is(:hover, :focus-visible) { color: var(--color-fg); text-decoration-color: var(--color-muted); }
 [data-new-layout] .review-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; }
-[data-new-layout] .review-rail-list { padding: 8px 12px 12px; }
+[data-new-layout] .review-rail-list { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; column-gap: 8px; align-content: start; padding: 8px 12px 12px; }
+[data-new-layout] .review-rail-list:has(.has-hours) { grid-template-columns: 60px minmax(0, 1fr) auto; }
+[data-new-layout] .review-rail-list > * { grid-column: 1 / -1; }
+[data-new-layout] .review-rail-list > .review-tier-sep,
+[data-new-layout] .review-rail-list > .simple-review-empty { contain: inline-size; }
+[data-new-layout] .review-rail-list > .review-low-body:not([hidden]) { display: grid; grid-template-columns: subgrid; }
 [data-new-layout] .review-slot { display: contents; }
 [data-new-layout] .review-rail :is(.simple-edits, .simple-pass-list) > li[data-flash] > button { background: rgba(255, 255, 255, .07); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2); }
 [data-new-layout] .review-tier-sep { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; margin: 10px 6px 5px; padding-top: 8px;
@@ -176,11 +181,13 @@
 [data-new-layout] .review-low-body :is(.simple-pass-value, .simple-edit-value, .simple-pass-time, .simple-pass-check, .simple-edit-check, .edit-version, .edit-row-time) { color: var(--color-dim); }
 [data-new-layout] .edit-row-time { flex: none; justify-self: start; min-width: 30px; font-size: 11.5px; line-height: 17px; font-family: var(--font-mono, monospace); font-variant-numeric: tabular-nums; color: var(--color-dim); }
 [data-new-layout] .edit-row-time.is-need { color: var(--color-warn); }
-[data-new-layout] .review-rail .simple-pass-list.simple-edits { display: block; }
-[data-new-layout] .review-rail .simple-pass-list.simple-edits > li { display: block; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; column-gap: 8px; align-content: start; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits.has-hours { grid-template-columns: 60px minmax(0, 1fr) auto; }
+[data-new-layout] .review-rail-list .simple-pass-list.simple-edits { grid-template-columns: subgrid; grid-column: 1 / -1; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits > li { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits > li > * { grid-column: 1 / -1; }
 [data-new-layout] .review-rail .simple-edits > li > button,
-[data-new-layout] .review-rail .simple-pass-list.simple-edits > li > button { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; width: 100%; margin: 0; }
-[data-new-layout] .review-rail .simple-pass-list.simple-edits.has-hours > li > button { grid-template-columns: 52px minmax(0, 1fr) auto; }
+[data-new-layout] .review-rail .simple-pass-list.simple-edits > li > button { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; width: 100%; margin: 0; }
 [data-new-layout] .review-rail .simple-pass-list.simple-edits > li > .simple-pass-list.is-moment { margin-left: 46px; }
 [data-new-layout] .review-rail .simple-pass-list.simple-edits.has-hours > li > .simple-pass-list.is-moment { margin-left: 60px; }
 [data-new-layout] .review-rail :is(.simple-edits, .simple-pass-list) > li:has(> button.is-asking) > .subunit { display: none; }
@@ -212,6 +219,9 @@
 [data-new-layout] .edit-card-step-count { padding: 0 4px; color: var(--color-fg); font-weight: 500; white-space: nowrap; }
 [data-new-layout] .review-rail :is(.simple-edit, .simple-edit.is-on, .simple-pass-list > li > button, .simple-pass-list > li > button.is-on) :is(.simple-edit-words, .simple-pass-words) {
   display: block; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+[data-new-layout] .review-rail :is(.simple-edit-title, .simple-pass-label):has(> .edit-version):not(:has(> .simple-pass-more)) > :is(.simple-edit-words, .simple-pass-words) {
+  flex: 1 1 auto;
 }
 [data-new-layout] .review-rail-tip {
   position: fixed; z-index: 40; display: flex; flex-direction: column; gap: 3px;
