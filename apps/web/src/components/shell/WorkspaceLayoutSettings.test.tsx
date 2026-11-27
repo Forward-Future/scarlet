@@ -1667,6 +1667,152 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(keepSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps single-edit revisions visible in chronological order in the beta chat with target headers while queued, working, and done", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const ownerChange = db.changes.find(c => c.id === "chg_approved_2")!;
+    const ownerThreadId = ownerChange.threadId ?? ownerChange.taskId ?? ownerChange.id;
+    const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    const laterChange = {
+      ...ownerChange,
+      id: "chg_rev_v2",
+      taskId: "task_rev_done",
+      threadId: ownerThreadId,
+      description: "Made the graphic slower so each step lands on cue.",
+      createdAt: ago(3),
+      updatedAt: ago(3),
+    };
+    const laterWholeTask = Task.parse({
+      id: "task_later_whole",
+      projectId: PRJ,
+      kind: "edit",
+      agent: "claude",
+      instruction: "Keep B-roll stills to three seconds each.",
+      state: "done",
+      summary: "Shortened every archival still to three seconds.",
+      createdBy: { type: "human", name: "Editor" },
+      changeIds: [],
+      createdAt: ago(6),
+      startedAt: ago(5.9),
+      finishedAt: ago(5),
+    });
+    const doneRevTask = Task.parse({
+      id: "task_rev_done",
+      projectId: PRJ,
+      kind: "edit",
+      agent: "claude",
+      instruction: "Slow down the chain animation so each step lands with my words",
+      state: "done",
+      reply: "Slowed the graphic so each step enters on your spoken cue.",
+      createdBy: { type: "human", name: "Editor" },
+      changeIds: ["chg_rev_v2"],
+      context: { changeId: ownerChange.id, editIndex: 1, threadId: ownerThreadId, message: "Slow down the chain animation so each step lands with my words" },
+      createdAt: ago(4),
+      startedAt: ago(3.9),
+      finishedAt: ago(3),
+    });
+    const workingRevTask = Task.parse({
+      id: "task_rev_working",
+      projectId: PRJ,
+      kind: "edit",
+      agent: "claude",
+      instruction: "Hold the final frame half a second longer",
+      state: "running",
+      createdBy: { type: "human", name: "Editor" },
+      changeIds: [],
+      context: { changeId: "chg_rev_v2", editIndex: 0, threadId: ownerThreadId, message: "Hold the final frame half a second longer" },
+      createdAt: ago(2),
+      startedAt: ago(1.9),
+    });
+    const queuedRevTask = Task.parse({
+      id: "task_rev_queued",
+      projectId: PRJ,
+      kind: "edit",
+      agent: "claude",
+      instruction: "Lower the music bed slightly under the intro",
+      state: "queued",
+      createdBy: { type: "human", name: "Editor" },
+      changeIds: [],
+      context: { changeId: ownerChange.id, editIndex: 0, threadId: ownerThreadId, message: "Lower the music bed slightly under the intro" },
+      createdAt: ago(1),
+    });
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: [...db.changes, laterChange],
+      notes: db.notes,
+      renders: db.renders,
+      tasks: [...db.tasks.filter(t => t.state !== "waiting_for_user" && t.state !== "running"), laterWholeTask, doneRevTask, workingRevTask, queuedRevTask],
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === ownerThreadId ? [
+        { changeId: ownerChange.id, spot: 0, label: "Quiet music bed", kind: "audio" as const, range: { start: 0, end: 10 }, previous: [] },
+        { changeId: "chg_rev_v2", spot: 0, label: "From separate tools to a long chain", kind: "graphic" as const, range: { start: 381, end: 389 }, previous: [{ changeId: ownerChange.id, spot: 1 }], check: "Check timing." },
+      ] : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // Both finished and running single-edit revisions stay visible in the chat (not hidden in the rail),
+    // ordered chronologically AFTER the later whole-video message.
+    const chatUnits = [...container.querySelectorAll<HTMLElement>(".simple-chat [data-run]")];
+    const runIds = chatUnits.map(el => el.dataset.run);
+    expect(runIds.indexOf("task_later_whole")).toBeGreaterThanOrEqual(0);
+    expect(runIds.indexOf("task_rev_done")).toBeGreaterThan(runIds.indexOf("task_later_whole"));
+    expect(runIds.indexOf("task_rev_working")).toBeGreaterThan(runIds.indexOf("task_rev_done"));
+
+    // Finished revision bubble shows its clear target header (action, time, edit title, v2) + full text + Scarlet's reply.
+    const doneUnit = container.querySelector<HTMLElement>('.simple-chat [data-run="task_rev_done"]')!;
+    expect(doneUnit.querySelector(".rev-target-action")?.textContent).toBe("Revising graphic");
+    expect(doneUnit.querySelector(".rev-target-time")?.textContent).toBe("6:21");
+    expect(doneUnit.querySelector(".rev-target-title")?.textContent).toBe("From separate tools to a long chain");
+    expect(doneUnit.querySelector(".rev-target-ver")?.textContent).toBe("v2");
+    expect(doneUnit.querySelector(".rev-body")?.textContent).toContain("Slow down the chain animation so each step lands with my words");
+    expect(doneUnit.textContent).toContain("Slowed the graphic so each step enters on your spoken cue.");
+
+    // Working revision bubble shows v3 + full text right in the chat, while the middle rail still lists it under Working.
+    const workingUnit = container.querySelector<HTMLElement>('.simple-chat [data-run="task_rev_working"]')!;
+    expect(workingUnit.querySelector(".rev-target-action")?.textContent).toBe("Revising graphic");
+    expect(workingUnit.querySelector(".rev-target-ver")?.textContent).toBe("v3");
+    expect(workingUnit.querySelector(".rev-body")?.textContent).toContain("Hold the final frame half a second longer");
+    const workingRowTexts = [...container.querySelectorAll('.review-sec-body[aria-label="Working"] button.simple-edit')].map(el => el.textContent ?? "");
+    expect(workingRowTexts.some(t => t.includes("From separate tools to a long chain"))).toBe(true);
+    expect(workingRowTexts.some(t => t.includes("Quiet music bed"))).toBe(true);
+
+    // Queued single-edit revision also carries the rich target header in QueueInChat.
+    const queuedBubble = container.querySelector<HTMLElement>(".queue-bubble.is-revision")!;
+    expect(queuedBubble).not.toBeNull();
+    expect(queuedBubble.querySelector(".rev-target-action")?.textContent).toBe("Revising audio");
+    expect(queuedBubble.querySelector(".rev-target-title")?.textContent).toBe("Quiet music bed");
+    expect(queuedBubble.querySelector(".rev-body")?.textContent).toContain("Lower the music bed slightly under the intro");
+
+    // Clicking the revision header opens that edit on the timeline and shows Revising + v2 in the composer aim bar.
+    await act(async () => doneUnit.querySelector<HTMLButtonElement>("button.rev-target")!.click());
+    await act(async () => {});
+    expect(container.querySelector(".composer-aim-badge")?.textContent).toContain("Revising");
+    expect(container.querySelector(".composer-aim-words")?.textContent).toBe("From separate tools to a long chain");
+    expect(container.querySelector(".composer-aim-rowcopy .edit-version")?.textContent).toBe("v2");
+  });
+
   it("auto-clears the Working row highlight after a few seconds when an edit is sent there, unless clicked or being typed", async () => {
     const db = buildDb();
     const project = db.projects.find(p => p.id === PRJ)!;

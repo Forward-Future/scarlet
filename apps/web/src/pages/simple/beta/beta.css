@@ -2,18 +2,24 @@
    the default two-column design and SkillEditorPage remain completely untouched when the beta toggle is off. */
 
 /* Workspace composer additions (single-line row-named aim line, timestamp chips, question panel over the box). */
+[data-new-layout] .composer-aim-line:has(.composer-aim-badge) { border-color: rgba(255, 255, 255, .14); border-left: 2px solid rgba(255, 255, 255, .28); background: rgba(255, 255, 255, .045); }
+[data-new-layout] .composer-aim-line:has(.composer-aim-badge):has(.is-need) { border-left-color: rgba(237, 194, 133, .65); }
 [data-new-layout] .composer-aim-name { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
-[data-new-layout] .composer-aim-wrap { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+[data-new-layout] .composer-aim-wrap { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; }
+[data-new-layout] .composer-aim-badge { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500; color: var(--color-muted); white-space: nowrap; }
 [data-new-layout] .composer-aim-row { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
 [data-new-layout] .composer-aim-row:empty { display: none; }
-[data-new-layout] .composer-aim-rowcopy { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+[data-new-layout] .composer-aim-rowcopy { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+[data-new-layout] .composer-aim-rowcopy > .edit-row-time { min-width: 0; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, .07); font-size: 11px; line-height: 15px; color: var(--color-muted); }
+[data-new-layout] .composer-aim-rowcopy > .edit-row-time.is-need { background: color-mix(in srgb, var(--color-warn) 16%, transparent); color: var(--color-warn); font-weight: 600; }
+[data-new-layout] .composer-aim-rowcopy > .edit-version { flex: none; padding: 0 5px; border-radius: 999px; background: rgba(255, 255, 255, .08); font-size: 10.5px; font-weight: 500; line-height: 16px; color: var(--color-muted); opacity: 1; }
 /* Keep the amber timestamp pill unclipped inside .composer-aim-name's overflow: hidden box (list rows use negative margins to align digits). */
 [data-new-layout] .composer-aim-row .simple-pass-time { flex: none; white-space: nowrap; }
 [data-new-layout] .composer-aim-row .simple-pass-time.is-need { margin: 0; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row:not(:empty)) .composer-aim-plain { display: none; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row:empty) .composer-aim-row-time { display: none; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row .edit-row-time),
-[data-new-layout] .composer-aim-wrap:has(.composer-aim-row .simple-pass-time) { gap: 0; }
+[data-new-layout] .composer-aim-wrap:has(.composer-aim-row .simple-pass-time) { gap: 7px; }
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row .edit-row-time) .composer-aim-row-time,
 [data-new-layout] .composer-aim-wrap:has(.composer-aim-row .simple-pass-time) .composer-aim-row-time { display: none; }
 [data-new-layout] .composer-aim-row-time { flex: none; margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--color-dim); font-variant-numeric: tabular-nums; }
@@ -81,11 +87,48 @@
 [data-new-layout] .req-say.is-yours { --bubble: #2a2a2a; }
 [data-new-layout] .unit-bubble { position: relative; display: flex; max-width: 86%; min-width: 0; padding: 7px 12px; border-radius: 12px; background: var(--bubble); }
 [data-new-layout] .unit > .unit-msg .unit-bubble > p,
-[data-new-layout] .simple-pin .unit > .unit-msg .unit-bubble > p { display: block; -webkit-line-clamp: unset; overflow: visible; color: var(--color-fg); }
+[data-new-layout] .simple-pin .unit > .unit-msg .unit-bubble > p,
+[data-new-layout] .unit > .unit-msg .unit-bubble .rev-body > p,
+[data-new-layout] .simple-pin .unit > .unit-msg .unit-bubble .rev-body > p { display: block; -webkit-line-clamp: unset; overflow: visible; color: var(--color-fg); }
+
+/* Chronological single-edit revision slots & revision bubble headers in the beta chat. */
+[data-new-layout] .simple-revision-slot { display: flex; flex-direction: column; gap: 12px; }
+[data-new-layout] .simple-revision-slot:empty { display: none; }
+[data-new-layout] .unit-bubble.is-revision,
+[data-new-layout] .queue-bubble.is-revision { flex-direction: column; padding: 0; border: 1px solid rgba(255, 255, 255, .11); background: #262626; }
+[data-new-layout] .unit-bubble.is-revision { min-width: min(86%, 220px); max-width: 86%; }
+[data-new-layout] .queue-bubble.is-revision { display: flex; min-width: min(100%, 220px); max-width: 100%; }
+[data-new-layout] .unit-bubble.is-revision.is-active-target { border-color: rgba(255, 255, 255, .26); }
+[data-new-layout] .unit > .unit-msg.is-markable:hover .unit-bubble.is-revision { background: #292929; }
+[data-new-layout] .rev-target { display: flex; flex-direction: column; gap: 3px; width: 100%; min-width: 0; margin: 0; padding: 7px 11px 7px 10px; border: 0;
+  border-radius: 11px 11px 0 0; border-bottom: 1px solid rgba(255, 255, 255, .08); border-left: 2px solid rgba(255, 255, 255, .22);
+  background: rgba(0, 0, 0, .24); color: inherit; font: inherit; text-align: left; }
+[data-new-layout] .rev-target:has(.rev-target-time.is-need) { border-left-color: rgba(237, 194, 133, .65); }
+[data-new-layout] .rev-target.is-link { cursor: pointer; transition: background .12s ease; }
+[data-new-layout] .rev-target.is-link:is(:hover, :focus-visible) { background: rgba(255, 255, 255, .06); }
+[data-new-layout] .rev-target.is-link:focus-visible { outline: 2px solid var(--color-muted); outline-offset: -2px; }
+[data-new-layout] .rev-target.is-active { background: rgba(255, 255, 255, .07); }
+[data-new-layout] .rev-target-kicker { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 11px; line-height: 1.3; color: var(--color-dim); }
+[data-new-layout] .rev-target-kicker svg { flex: none; opacity: .85; }
+[data-new-layout] .rev-target-action { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-new-layout] .rev-target-ver { flex: none; margin-left: auto; padding: 0 5px; border-radius: 999px; background: rgba(255, 255, 255, .08);
+  font-size: 10.5px; font-weight: 500; line-height: 16px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+[data-new-layout] .rev-target-edit { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12px; line-height: 1.35; }
+[data-new-layout] .rev-target-time { flex: none; padding: 1px 5px; border-radius: 4px; background: rgba(255, 255, 255, .07);
+  font: 11px var(--font-mono, monospace); font-variant-numeric: tabular-nums; color: var(--color-muted); }
+[data-new-layout] .rev-target-time.is-need { background: color-mix(in srgb, var(--color-warn) 16%, transparent); color: var(--color-warn); font-weight: 600; }
+[data-new-layout] .rev-target-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-fg); font-weight: 500; }
+[data-new-layout] .rev-target-go { flex: none; display: inline-grid; place-items: center; color: var(--color-dim); opacity: .65; transition: opacity .12s ease, transform .12s ease; }
+[data-new-layout] .rev-target.is-link:is(:hover, :focus-visible) .rev-target-go { opacity: 1; color: var(--color-fg); transform: translateX(1px); }
+[data-new-layout] .rev-body { display: block; margin: 0; padding: 8px 12px 9px; font-size: 13px; line-height: 1.45; color: var(--color-fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  [data-new-layout] .rev-target.is-link,
+  [data-new-layout] .rev-target-go { transition: none; }
+}
 [data-new-layout] .unit-meta { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; max-width: 100%; }
 [data-new-layout] .unit-meta:not(:has(> :not(.unit-state:empty, .run-tokens.is-quiet))) { display: none; }
 [data-new-layout] .unit > .unit-msg.is-markable:hover { background: none; }
-[data-new-layout] .unit > .unit-msg.is-markable:hover .unit-bubble { background: #313131; }
+[data-new-layout] .unit > .unit-msg.is-markable:hover .unit-bubble:not(.is-revision) { background: #313131; }
 [data-new-layout] .unit:has(.simple-review-tab-count) > .unit-msg > .unit-meta > .unit-state:has(> .unit-dot) { display: none; }
 [data-new-layout] .unit-answer { flex: none; align-self: center; line-height: 19px; white-space: nowrap; }
 [data-new-layout] .unit-bubble > .run-tokens.is-quiet { top: 0; bottom: 0; right: 0; }
@@ -244,7 +287,7 @@
 [data-new-layout] .review-rail .subunit { margin-left: 8px; }
 
 /* One-row in-line revision style everywhere inside the beta layout. */
-[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)):not([data-lingering="working"]) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }
+[data-new-layout] :is(.simple-edits, .simple-pass-list) > li:is(:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)), [data-working="busy"]):not([data-lingering="working"]) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li[data-lingering="working"]:is(:hover, :focus-within):has(> .subunit .unit-actions) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { opacity: 0; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit { position: relative; margin-top: 0; margin-bottom: 6px; border-left-color: transparent; }
 [data-new-layout] :is(.simple-edits, .simple-pass-list) > li:has(> .subunit > .req[data-state="working"]):not(:has(> .subunit .is-auto)) > .subunit > .subunit-msg > p {

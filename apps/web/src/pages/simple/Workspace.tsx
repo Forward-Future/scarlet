@@ -4,10 +4,10 @@ import { useShallow } from "zustand/react/shallow";
 import { useSearchParams } from "react-router-dom";
 import { ChatRail } from "../../components/shell/ChatRail";
 import { appliedReviewChange, timelineDuration, type Change, type CutAssessment, type TimeRange } from "@scarlet/timeline";
-import { isAsideTask, fullRenderContext, isProjectEditTask, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
+import { isAddRequest, isAsideTask, fullRenderContext, isProjectEditTask, isRejectRequest, matchesEdit, queueOrder, queueWaits, requestText, threadEditList, type EditRef, type LearningDecision, type Task, type ThreadEdit } from "@scarlet/shared";
 import { useReviewed, useRevising } from "../../components/review/threadEditState";
-import { QueueTray, useRewordingHold, type QueuedRequest } from "../../components/chat/QueueTray";
-import { QueueInChat } from "../../components/chat/QueueInChat";
+import { QueueTray, useRewordingHold } from "../../components/chat/QueueTray";
+import { QueueInChat, type QueuedRequest } from "../../components/chat/QueueInChat";
 import { recordEditReview, recordEditReviews } from "../../lib/editReviews";
 import { forgetCalls, recordUndo, undoLast, type CallStep } from "../../lib/undo";
 import { editKey, keepEdits, notYetKept } from "../../lib/keptEdits";
@@ -42,9 +42,9 @@ import { cutChange } from "../../lib/appliedCutPlayback";
 import { cutViewBase } from "../../lib/cutViewBase";
 import { usePlayerStore } from "../../stores/player";
 import type { JoinClock } from "../../lib/joinClock";
-import { buildThreads, firstCutDeliveries, isRedo, revisionTarget, stagedCuts, type Thread } from "../../lib/threads";
+import { buildThreads, firstCutDeliveries, isRecheck, isRedo, revisionTarget, stagedCuts, type Thread } from "../../lib/threads";
 import { runIsActive } from "../../lib/taskRun";
-import { lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, threadRuns, waitingToStart } from "../../lib/requestRuns";
+import { aboutOne, lastAttempt, laterAttempts, notesStillAsked, redoWords, requestRoots, stagingTask, takenFromQueue, threadRuns, waitingToStart } from "../../lib/requestRuns";
 import { callRevisions, decidedPassCalls, isOpenPass, keepGoesTo, noRevisions, openPass, passForYouOrder, passRevision, reviewCalls, revisedFrom, revisionCut, savedChoices,
   type Call, type CutChoice, type PassForYouItem } from "../../lib/passCalls";
 import { callNow, carriedCall, carryingVersions, revisedCall } from "../../lib/carriedCuts";
@@ -72,6 +72,8 @@ import { ReviewDockContext, ReviewDockStore, stepInDock, type DockEntry } from "
 import { TimelineWorking } from "../../components/review/TimelineWorking";
 import { Turn } from "./Turn";
 import { Turn as TurnBeta } from "./beta/TurnBeta";
+import { ChatSlotContext, ChatSlotStore } from "./beta/chatSlots";
+import { fallbackRevisionTitle, revisionActionLabel, type RevisionTargetInfo } from "./beta/RevisionTargetHeader";
 import { useCallListen } from "./useCallListen";
 import { useAppliedCut, type AppliedCutSide, type StagedCall } from "./useAppliedCut";
 import { useCutAdjust } from "./useCutAdjust";
@@ -213,6 +215,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   // The new layout's column of edits beside the chat is one unified list per section for the whole video (`rail`).
   // Working, at the column's foot, is open until the editor folds it, so what Scarlet has is in view; Done opens on a press.
   const [rail] = useState(() => new RailStore());
+  const [chatSlots] = useState(() => new ChatSlotStore());
   useEffect(() => () => rail.dispose(), [rail]);
   const railProject = useRef(current.id);
   useEffect(() => {
@@ -2318,8 +2321,36 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   // Keep the newest message in view as replies arrive, unless the editor scrolled up to read.
   const chat = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
-  const lastActivity = ordered.at(-1)?.updatedAt;
+  const lastActivity = ordered.length
+    ? ordered.reduce((latest, t) => parseTimestamp(t.updatedAt) > parseTimestamp(latest) ? t.updatedAt : latest, ordered[0]!.updatedAt)
+    : undefined;
   useChatAutoFollow(chat, follow, ordered.length, lastActivity, current.tasks.length);
+
+  // In the beta layout, single-edit revisions stay visible in the chat in chronological order rather than being hidden
+  // under older threads or rail rows. Interleave threads and revision slots by creation time so each revision lands
+  // right where the editor sent it.
+  const chatFeed = useMemo(() => {
+    if (!beta) return [] as const;
+    type FeedItem = { kind: "thread"; thread: Thread; index: number; at: number }
+      | { kind: "revision"; runId: string; at: number };
+    const items: FeedItem[] = [];
+    ordered.forEach((thread, index) => {
+      items.push({ kind: "thread", thread, index, at: parseTimestamp(thread.createdAt) });
+      const runs = threadRuns(thread);
+      if (!runs.length) return;
+      const firstCuts = firstCutDeliveries(thread);
+      const waitingPass = openPass(thread, tasks);
+      const owner = runs.find(r => r.attempts.some(t => firstCuts.has(t.id)))
+        ?? (waitingPass ? runs.find(r => !aboutOne(r) && r.attempts.some(t => t.id === waitingPass.taskId)) ?? runs.find(r => !aboutOne(r)) : undefined)
+        ?? runs.find(r => !aboutOne(r));
+      for (const run of runs) {
+        if (run !== owner && aboutOne(run) && !isRecheck(run.task)) {
+          items.push({ kind: "revision", runId: run.root, at: parseTimestamp(run.attempts[0]?.createdAt ?? run.task.createdAt) });
+        }
+      }
+    });
+    return items.sort((a, b) => a.at - b.at);
+  }, [beta, ordered, tasks]);
 
   // The open edit's card sits right on top of the timeline, above the passage it cut, so watching the join and deciding
   // happen in one place. It is one row: how many still wait, Scarlet's note as a small caption, then the controls. Its
@@ -2972,9 +3003,66 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   const queued = useMemo(() => queueOrder(tasks, changes).filter(t => waitingToStart(t) && rootOf(t) === t.id), [tasks, changes, rootOf]);
   const queuedItems = useMemo((): QueuedRequest[] => queued.map(t => {
     const target = targetName(t.context);
-    return { id: t.id, text: isRedo(t) ? redoWords(t, tasks, changes) : requestText(t), target: cutName(t.context) ?? (target && tagOf(target)),
-      fixed: t.createdBy.type !== "human" };
-  }), [queued, tasks, changes, threadEdits, threadTimeline.rejected, threads, pass, allCalls, passEditNo, callNo, footage]); // eslint-disable-line react-hooks/exhaustive-deps
+    const shortTag = cutName(t.context) ?? (target && tagOf(target));
+    const isSingle = beta && t.createdBy.type === "human" && (t.context.cutIndex !== undefined || t.context.editIndex !== undefined || !!t.context.changeId);
+    const revTarget: RevisionTargetInfo | undefined = isSingle ? (() => {
+      const { changeId, cutIndex, editIndex } = t.context;
+      const tThread = threads.find(th => th.id === t.context.threadId || th.tasks.some(x => x.id === t.id));
+      if (pass && cutIndex !== undefined) {
+        const idx = callNow(pass, { changeId, cutIndex }, passThread?.changes ?? [], changes, tasks, footage);
+        const call = idx !== undefined ? allCalls.find(a => a.index === idx) : undefined;
+        const passCall = idx !== undefined ? actions.pass?.calls.find(c => c.index === idx) : undefined;
+        if (call) {
+          const at = listedAt.get(call.index) ?? call.start;
+          return {
+            action: revisionActionLabel(t, undefined, true),
+            time: clockLabel(at),
+            title: call.summary || call.reason || "Cut",
+            version: !isAddRequest(t) && !isRejectRequest(t) ? (passCall?.version ?? 1) + 1 : undefined,
+            needsReview: passCall ? passCall.state === "open" : true,
+            active: !!listening && listening.changeId === pass.id && listening.index === call.index,
+            onOpen: () => actions.pass?.openCall(call.index),
+            onHover: on => lightMark(on ? at : undefined, on && passThread ? { threadId: passThread.id, call: call.index } : undefined),
+          };
+        }
+      }
+      if (changeId && editIndex !== undefined) {
+        const ownPool = tThread && focusThread?.id === tThread.id && threadEdits.length ? threadEdits
+          : tThread && rail.info(tThread.id)?.edits?.length ? rail.info(tThread.id)!.edits!
+          : tThread ? threadEditList(tThread, media) : [];
+        let edit = ownPool.find(e => matchesEdit(e, { changeId, spot: editIndex }));
+        let ownerThread = tThread;
+        if (!edit) {
+          for (const th of threads) {
+            const found = rail.info(th.id)?.edits?.find(e => matchesEdit(e, { changeId, spot: editIndex }));
+            if (found) { edit = found; ownerThread = th; break; }
+          }
+        }
+        if (edit && ownerThread) {
+          const at = (edit as ThreadEdit).at ?? edit.range.start;
+          const active = !!reviewingEdit && matchesEdit(reviewingEdit, edit);
+          return {
+            action: revisionActionLabel(t, edit, false),
+            time: clockLabel(at),
+            title: (edit.reason && edit.summary) || edit.label,
+            version: !isAddRequest(t) && !isRejectRequest(t) ? edit.previous.length + 2 : undefined,
+            needsReview: !!edit.check,
+            active,
+            onOpen: () => openEdit(ownerThread!, edit!),
+            onHover: on => lightMark(on ? at : undefined, on ? { threadId: ownerThread!.id, editKey: editKey(edit!) } : undefined),
+          };
+        }
+      }
+      const fallback = fallbackRevisionTitle(t, shortTag);
+      return {
+        action: revisionActionLabel(t, undefined, cutIndex !== undefined),
+        time: fallback.time,
+        title: fallback.title,
+      };
+    })() : undefined;
+    return { id: t.id, text: isRedo(t) ? redoWords(t, tasks, changes) : requestText(t), target: shortTag,
+      ...(revTarget && { revisionTarget: revTarget }), fixed: t.createdBy.type !== "human" };
+  }), [beta, queued, tasks, changes, threadEdits, threadTimeline.rejected, threads, pass, passThread, allCalls, passEditNo, callNo, footage, focusThread?.id, rail, railVersion, media, listening, reviewingEdit]); // eslint-disable-line react-hooks/exhaustive-deps
   const queueHint = !editingPaused && queued[0] ? waitHint(queued[0]) : undefined;
   const queueWaitsOn = !editingPaused && queued[0] ? waitsOnEditor(queued[0]) : undefined;
   const nextQueuedId = !editingPaused && queued[0] && !queueWaitsOn ? queued[0].id : undefined;
@@ -3274,16 +3362,17 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
               {current.reviewStatus === "loading" ? <Loading label="Loading edits…" />
                 : current.reviewStatus === "error" ? <p className="simple-error" role="alert">{current.reviewError}{" "}
                   <button type="button" className="simple-link" onClick={() => void useProjectStore.getState().load(current.id)}>Retry</button></p>
-                : ordered.length ? ordered.map((thread, i) => beta
-                  ? <TurnBeta key={thread.id} projectId={current.id} thread={thread} threadOrder={i} actions={chatActions}
-                    pinned={compact ? pinned : undefined} pinHost={compact ? pinHost : null} list={listOf(thread.id)}
+                : ordered.length ? (beta ? chatFeed.map(item => item.kind === "thread"
+                  ? <TurnBeta key={item.thread.id} projectId={current.id} thread={item.thread} threadOrder={item.index} actions={chatActions}
+                    pinned={compact ? pinned : undefined} pinHost={compact ? pinHost : null} list={listOf(item.thread.id)}
                     askingRowKey={askedInfo?.rowKey}
-                    reportReviewMarkers={showOtherFlags && thread.id !== focusThread?.id && thread.id !== passThread?.id
+                    reportReviewMarkers={showOtherFlags && item.thread.id !== focusThread?.id && item.thread.id !== passThread?.id
                       ? reportReviewMarkers : undefined} />
-                  : <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
+                  : <div key={`rev:${item.runId}`} className="simple-revision-slot" ref={chatSlots.ref(item.runId)} />)
+                : ordered.map((thread, i) => <Turn key={thread.id} projectId={current.id} thread={thread} actions={chatActions}
                     list={listOf(thread.id)} laterRequests={ordered.length - 1 - i}
                     reportReviewMarkers={(showOtherFlags || showEvery) && thread.id !== focusThread?.id && thread.id !== passThread?.id
-                      ? reportReviewMarkers : undefined} reportEvery={showEvery} />)
+                      ? reportReviewMarkers : undefined} reportEvery={showEvery} />))
                 : !media.length ? <p className="simple-empty">Drop footage here, then say what you want.</p>
                 : caching && <p className="simple-empty" role="status">You can start editing while the video caches.</p>}
               {/* A new timeline that keeps failing to read is said after the conversation, which stays where it is. */}
@@ -3352,9 +3441,9 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     {panel === "export" && <ExportSheet hasCut={hasCut} onClose={() => setPanel(null)} />}
   </>;
   return beta
-    ? <ReviewRailContext.Provider value={rail}><AimHostContext.Provider value={aimHost}><EditHoverContext.Provider value={hoveredEdit}>
+    ? <ReviewRailContext.Provider value={rail}><ChatSlotContext.Provider value={chatSlots}><AimHostContext.Provider value={aimHost}><EditHoverContext.Provider value={hoveredEdit}>
       {page}
-    </EditHoverContext.Provider></AimHostContext.Provider></ReviewRailContext.Provider>
+    </EditHoverContext.Provider></AimHostContext.Provider></ChatSlotContext.Provider></ReviewRailContext.Provider>
     : <ReviewDockContext.Provider value={dock}><EditHoverContext.Provider value={hoveredEdit}>
       {page}
     </EditHoverContext.Provider></ReviewDockContext.Provider>;
