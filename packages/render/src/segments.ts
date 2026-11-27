@@ -249,7 +249,7 @@ export async function renderPlaybackSegment(project: Project, timeline: Timeline
   const [part] = segmentTimelines(transitions.timeline, [range]);
   const seg = segmentInfo(project, part!, range, cacheDir, { quality, height: size.height, encoder, allowProxy: !!opts.pictureSource }, opts.mediaRoot, media, transitions, opts.lutRoots);
   seg.cached = await fileHasContent(seg.file);
-  warnings.push(...await fillSegment(project, part!, seg, { ...opts, transitions, videoEncoder, quality, pictureOnly: false }));
+  warnings.push(...await fillSegment(project, part!, seg, { ...opts, transitions, videoEncoder, quality, pictureOnly: false, editorWaiting: true }));
   // Decode AAC with its MP4 priming edit intact. FLAC has no encoder delay, so
   // appending the next fragment neither drops nor repeats audio at the join.
   const samples = sampleCount(range.start, range.end, project.settings.sampleRate);

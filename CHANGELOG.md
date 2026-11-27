@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Jumping around the timeline shows the picture and starts playing sooner, and the editor stays quick while Scarlet works.
+- While Scarlet looks through frames of a long video, or prepares one after import, the frames you scrub to on a Mac come up sooner.
 - Version numbers (`v2`, `v3`, etc.) in the edits list now appear in a subtler gray so edit titles and tags stand out more clearly.
 - Version numbers (`v2`, `v3`, etc.) in the edits list now line up cleanly in one vertical column across rows instead of shifting with each edit's title or tag width.
 - Zooms and pans on still images and other keyframed clips now glide smoothly instead of shaking or stepping between pixels.

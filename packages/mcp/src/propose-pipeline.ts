@@ -269,9 +269,14 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
     let metCut: MetCut[] = [];
     let metRecordingCut: MetRecordingCut[] = [];
     let early: Awaited<ReturnType<typeof cutsRead>> | undefined;
+    // The ops laid on the base for the checks below, and the request they were laid for: an edit that moved no edge
+    // onto a cut is the same request after them, and laying its ops again cost as long as the checks on a long edit.
+    let askedFor: typeof body | undefined, askedMade: Timeline | undefined;
     if (author.type === "agent" && before && (body.timeline || body.ops)) {
       const asked = body.timeline ?? (() => { try { return applyOps(before, body.ops!); } catch { return undefined; } })();
       if (asked) {
+        askedFor = body;
+        askedMade = asked;
         const had = new Set(before.tracks.flatMap(t => t.clips.map(c => c.id)));
         const named = new Set((body.ops ?? []).flatMap(op => op.op === "addClip" && op.clip.id ? [op.clip.id] : []));
         const { project } = await getProject();
@@ -294,7 +299,8 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
       }
     }
     // The summary leaves the saved timeline out, so the edit is laid on its base here, once, for the checks before and after saving.
-    const made = body.timeline ?? (body.ops && before ? (() => { try { return applyOps(before, body.ops!); } catch { return undefined; } })() : undefined);
+    const made = body.timeline ?? (body.ops && before ? body === askedFor && askedMade ? askedMade
+      : (() => { try { return applyOps(before, body.ops!); } catch { return undefined; } })() : undefined);
     if (author.type === "agent" && made) await insideShowAreas(before, made);
     const req: ProposeChangeRequest = {
       ...body,

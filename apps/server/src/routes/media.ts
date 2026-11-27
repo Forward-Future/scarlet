@@ -23,7 +23,7 @@ import { transcriptReader } from "../services/transcriptReader.js";
 import { otherInputReader } from "../services/otherInput.js";
 import { afterAudioTrackChange } from "../services/audioTrackChange.js";
 import { sourceCacheStatuses, sourcePreviews } from "../services/sourcePreviews.js";
-import { framePriority, pictureDecoder, pictureLane } from "../services/pictureWork.js";
+import { frameDecoder, frameGoesToGpu, framePriority, pictureLane } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { expandMediaPaths } from "../services/folderMedia.js";
 import { ingestMedia, removeUnreadableMedia, writeHashedFile } from "../services/ingest.js";
@@ -258,11 +258,13 @@ export function mediaRoutes(ctx: Ctx) {
     const project = requireProjectHeader(ctx, c.req.param("id"));
     const { path } = await jsonBody(c, z.object({ path: z.string() }));
     if (!isAbsolute(path) || !(await stat(path).catch(() => null))?.isFile()) throw notFound("source file");
-    const hdr = (await ctx.render.probeMedia(path, c.req.raw.signal).catch(error => {
+    const probed = await ctx.render.probeMedia(path, c.req.raw.signal).catch(error => {
       if (!c.req.raw.signal.aborted) ctx.log(`[media] import_frame project=${logId(project.id)}: couldn't read the original's colour, showing it without HDR tone mapping: ${clip((error as Error)?.message ?? String(error))}`);
       return undefined;
-    }))?.color?.hdr;
-    const jpeg = await ctx.render.extractFrame(path, 0, { width: 960, signal: c.req.raw.signal, hdr });
+    });
+    // An MP4 camera original's index is read as the frame route reads it: the same picture, without scanning the file first.
+    const indexedMp4 = !!probed?.previewClock && hasIndexedAvc({ kind: probed.kind, hasAlpha: probed.hasAlpha, originalPlaybackType: probed.originalPlaybackType });
+    const jpeg = await ctx.render.extractFrame(path, 0, { width: 960, signal: c.req.raw.signal, hdr: probed?.color?.hdr, indexedMp4, fps: probed?.fps });
     return new Response(new Uint8Array(jpeg), { headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-store" } });
   });
 
@@ -574,14 +576,20 @@ export function mediaRoutes(ctx: Ctx) {
       }
       // The agent's frames read the movie's index too: the same picture, a third sooner on a long recording.
       const indexedMp4 = !!media.previewClock && hasIndexedAvc(media);
-      // The original decodes on an NVIDIA GPU when there is one.
-      const decoder = await pictureDecoder(ctx.settings().render.hwaccel) === "cuda" ? "cuda" as const : undefined;
+      // The original decodes on an NVIDIA GPU when there is one, and an agent's video frame on a Mac's while the editor looks.
+      const decoder = await frameDecoder(ctx.settings().render.hwaccel, priority, pictureLane(ctx), cpuOnly);
       return ctx.render.extractFrame(file, t, { width: w, signal, indexedMp4, decoder, area, grid, fps: media.fps, hdr, still });
     };
+    // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.
+    const priority = framePriority(c.req.query("priority"));
+    // The editor is looking at a source's pictures: background work yields meanwhile (editorFirst.ts), as for a cut's.
+    if (priority === true) editorFirst.touch();
+    // An HDR frame is tone-mapped on the CPU, and a still has no video to hand to a Mac's media engine.
+    const cpuOnly = !!hdr || still;
+    // An agent's frame that goes to the GPU while the editor looks may run past the lane's slots then.
+    const gpu = await frameGoesToGpu(ctx.settings().render.hwaccel, priority, cpuOnly);
     try {
-      // Frames share the engine’s picture lane with contact sheets. The editor’s own requests go first, then the timeline’s.
-      const priority = framePriority(c.req.query("priority"));
-      const jpeg = await frames.get(key, signal => ctx.track(pictureLane(ctx).run(() => frame(signal), { priority, signal }), media.projectId), {
+      const jpeg = await frames.get(key, signal => ctx.track(pictureLane(ctx).run(() => frame(signal), { priority, signal, gpu }), media.projectId), {
         priority, signal: c.req.raw.signal,
       });
       return new Response(new Uint8Array(jpeg), { headers: { "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=3600" } });

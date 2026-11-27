@@ -22,8 +22,10 @@ export interface FrameOptions {
    * Decode and scale on an NVIDIA GPU, then bring back only the small frame. On a 4K recording a frame took 1.1-1.6 s
    * and 0.9 s of CPU this way, against 1.5-2.4 s and 7 s on the CPU. Falls back to the CPU when the driver can't,
    * and uses the CPU from the start for a file whose frames need turning (`storedAsShown`).
+   * "videotoolbox" decodes on a Mac's media engine and filters on the CPU: the same JPEG, byte for byte, with almost
+   * none of the CPU, so a frame nobody is watching for leaves the cores to the editor's. Falls back to the CPU too.
    */
-  decoder?: "cuda";
+  decoder?: "cuda" | "videotoolbox";
   /** The file's HDR transfer (`MediaAsset.color.hdr`): the frame is tone-mapped to SDR, as every picture made from it is. */
   hdr?: HdrTransfer;
   /** Hears why the frame came the slower way: the GPU could not decode it, or the movie's index could not be used. */
@@ -105,7 +107,7 @@ async function frameFrom(file: string, tSeconds: number, opts: FrameOptions): Pr
   const picture = gpu ? `scale_cuda=${width}:-2:interp_algo=bicubic:format=yuv420p,hwdownload,format=yuv420p` : `${crop}scale=${width}:${height}${toneMap}${grid}`;
   const input = [
     ...FFMPEG_BASE_ARGS,
-    ...(gpu ? CUDA_FRAMES_INPUT : []),
+    ...(gpu ? CUDA_FRAMES_INPUT : opts.decoder === "videotoolbox" && !still ? ["-hwaccel", "videotoolbox"] : []),
     ...(opts.indexedMp4 && !still ? INDEXED_MP4_INPUT : []),
   ];
   /**
@@ -177,7 +179,7 @@ export async function renderTimelineFrame(project: Project, timeline: Timeline, 
   const { width, height } = project.settings;
   const scale = Math.min(1, maxDimension / Math.max(width, height));
   const graph = await buildFilterGraph(project, timeline, range, {
-    pictureSource: inputs?.pictureSource, decoder: inputs?.decoder, fontDirs: inputs?.fontDirs, lutRoots: inputs?.lutRoots, mediaRoot, signal, width: width * scale, height: height * scale, singleFrame: true, indexedInputs: true,
+    pictureSource: inputs?.pictureSource, decoder: inputs?.decoder, fontDirs: inputs?.fontDirs, lutRoots: inputs?.lutRoots, mediaRoot, signal, width: width * scale, height: height * scale, singleFrame: true, indexedInputs: true, rowThreads: true,
   });
   try {
     return await withStreamInfoFallback(graph.args, signal, async inputArgs => {

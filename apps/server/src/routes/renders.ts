@@ -16,7 +16,7 @@ import { serveFile } from "../files.js";
 import { clip, logId, throttledLog } from "../logText.js";
 import { ensureProjectHead } from "../services/timeline.js";
 import { AnalysisCache } from "../services/analysisCache.js";
-import { framePriority, pictureDecoder, pictureLane, type PicturePriority } from "../services/pictureWork.js";
+import { framePriority, machineBusy, pictureDecoder, pictureLane, type PicturePriority } from "../services/pictureWork.js";
 import { previewPictures } from "../services/previewPictures.js";
 import { jsonBody, numberParam, requireProject, requireProjectHeader, requireScoped } from "./util.js";
 import { measuredLoudness, type Loudness } from "../render/loudness.js";
@@ -176,7 +176,8 @@ export function renderRoutes(ctx: Ctx) {
       const pictures = previewPictures(root, { signal });
       let usedProxy = false;
       const accel = ctx.settings().render.hwaccel;
-      const decoder = timelinePreviewDecoder(accel, await pictureDecoder(accel));
+      // The editor waits on this picture: the CPU decodes it while the machine has room (`timelinePreviewDecoder`).
+      const decoder = timelinePreviewDecoder(accel, await pictureDecoder(accel), !machineBusy());
       try {
         return await renderTimelineFrame(project, timeline, range, root, signal, size, {
           decoder,

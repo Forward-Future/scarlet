@@ -420,8 +420,11 @@ export function smoothTransformStages(
   return { prepare, animate };
 }
 
-/** crop → scale (contain-fit × scale) → round corners → rotate, as filter strings. */
-export function transformChain(tf: AnimatedTransform, W: number, H: number): string[] {
+/**
+ * crop → scale (contain-fit × scale) → round corners → rotate, as filter strings.
+ * With `round`, a layer known to be opaque at its corners' step, of one size throughout, works out its corners once.
+ */
+export function transformChain(tf: AnimatedTransform, W: number, H: number, round?: { opaque: boolean; name: () => string }): string[] {
   const { base } = tf;
   const chain: string[] = [];
   if (base.cropLeft || base.cropRight || base.cropTop || base.cropBottom) {
@@ -439,7 +442,16 @@ export function transformChain(tf: AnimatedTransform, W: number, H: number): str
     `scale=w='max(2,trunc(iw*${fit}*${s}/2)*2)':h='max(2,trunc(ih*${fit}*${s}/2)*2)'${eval_}:flags=bicubic`,
   );
   chain.push("format=yuva420p");
-  if (base.cornerRadius) chain.push(roundedCornersFilter(base.cornerRadius));
+  if (base.cornerRadius) {
+    const corners = roundedCornersFilter(base.cornerRadius);
+    if (round?.opaque && !tf.scale) {
+      // Every frame of an opaque layer of one size gets the same alpha, so it is drawn on the first frame alone and
+      // laid on each (alphamerge repeats its last mask). geq on every frame took a tenth of a 4K picture-in-picture
+      // section's render; the pixels are the same.
+      const name = round.name();
+      chain.push(`split[${name}a][${name}b];[${name}b]trim=end_frame=1,${corners},alphaextract[${name}m];[${name}a][${name}m]alphamerge`);
+    } else chain.push(corners);
+  }
   if (base.rotation) {
     const a = `${fnum(base.rotation)}*PI/180`;
     chain.push(`rotate=a=${a}:ow='rotw(${a})':oh='roth(${a})':c=none`);

@@ -18,9 +18,9 @@ import { transcriptLanguage } from "./transcriptReader.js";
 import { sourceEnergyReader } from "./sourceEnergy.js";
 import { otherInputReader } from "./otherInput.js";
 import { otherVoiceTurns } from "./otherVoiceTurns.js";
-import { appendTaskEvent, editsDialogue } from "./tasks.js";
+import { appendTaskEvent, editsDialogue, hasTranscript } from "./tasks.js";
 import { AnalysisCache } from "./analysisCache.js";
-import { askFor, audioLane, whisperLane, type AudioWork } from "./audioWork.js";
+import { askFor, audioLane, pageWhisperLane, whisperLane, type AudioWork } from "./audioWork.js";
 import { emissionStore, emissionStorePaths, recordingWav } from "./recordingAudio.js";
 import { VERBATIM_PROMPT as verbatim } from "../transcribe/saidWords.js";
 import { handOver, SEAM_CONTEXT, segmentsWithin } from "../transcribe/seams.js";
@@ -244,7 +244,10 @@ export function dialogueDetector(ctx: Ctx) {
     const work: AudioWork = { mediaId: media.id, kind: "page" };
     const lane = audioLane(ctx);
     const local = provider.name !== "openai";
-    const whisper = local ? whisperLane(ctx, provider.separateWhisperLane) : undefined;
+    // Once the recording has its words, a page a pass asked for reads its minute beside the transcript's reread
+    // (pageWhisperLane). Before then it waits for the transcript's Whisper, as a page read ahead of any pass always
+    // does: read beside it, the first page came no sooner, and the words 2 to 3 s later.
+    const whisper = local ? (edit && hasTranscript(ctx, media.id) ? pageWhisperLane : whisperLane)(ctx, provider.separateWhisperLane) : undefined;
     const inLane = <T>(job: () => Promise<T>) => lane.run(work, signal, job);
     const inWhisperLane = <T>(job: () => Promise<T>) => whisper ? whisper.run(work, signal, job) : job();
     const analyzed = ctx.track((keptSide ? keptWindows : acousticWindows).get(key, async () => {

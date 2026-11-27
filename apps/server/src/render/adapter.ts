@@ -84,7 +84,7 @@ export interface RenderAdapter {
   extractWaveformFull(path: string, duration: number, pointsPerSecond: number, onProgress?: (fraction: number) => void, signal?: AbortSignal,
     audio?: { audioTrack?: MediaAsset["audioTrack"]; audioStreamCount?: number }): Promise<BinaryWaveformCache | WaveformData>;
   waveformFromCache(cache: WaveformCache, from: number, to: number, points: number): WaveformData;
-  extractFrame(path: string, t: number, opts: { width: number; signal?: AbortSignal; indexedMp4?: boolean; decoder?: "cuda"; fps?: number;
+  extractFrame(path: string, t: number, opts: { width: number; signal?: AbortSignal; indexedMp4?: boolean; decoder?: "cuda" | "videotoolbox"; fps?: number;
     /** The file's HDR transfer: the frame is tone-mapped to SDR. The fallback adapter leaves it as decoded. */
     hdr?: "hlg" | "pq";
     /** True when the asset is known to be a still image regardless of filename extension. */
