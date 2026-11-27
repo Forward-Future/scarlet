@@ -50,6 +50,7 @@ export const ProposeChangeRequest = z.object({
   ops: z.array(TimelineOp).optional(),
   timeline: WritableTimeline.optional(),
   description: z.string().min(1),
+  batchTitle: Change.shape.batchTitle,
   reason: Change.shape.reason,
   noteIds: z.array(Id).optional(),
   taskId: Id.optional(),
@@ -77,7 +78,7 @@ export interface JoinCrossfades {
   plain: Array<{ version: string; at: number; reason: string }>;
 }
 
-export const DialogueCutsRequest = ProposeChangeRequest.pick({ description: true, taskId: true, author: true, noteIds: true }).extend({
+export const DialogueCutsRequest = ProposeChangeRequest.pick({ description: true, batchTitle: true, taskId: true, author: true, noteIds: true }).extend({
   fromVersion: Id,
   /** Centered audio overlap in project frames at new joins. Omitted or zero gives a straight cut. */
   crossfadeFrames: CrossfadeFrames.optional(),
@@ -191,6 +192,34 @@ export const UnkeepEditsRequest = z.object({
 export type UnkeepEditsRequest = z.infer<typeof UnkeepEditsRequest>;
 /** An edit the editor kept, as a run of its request hears of it. */
 export interface KeptEdit { changeId: string; spot: number; label: string; check?: string; at: string; place?: { version: string; range: TimeRange } }
+
+/** One collapsed group of similar edits sent to the server for an AI-generated summary title. */
+export const BatchSummaryItem = z.object({
+  key: z.string().min(1).max(120),
+  kind: z.string().max(40).optional(),
+  isDialoguePass: z.boolean().optional(),
+  count: z.number().int().min(2).max(10000),
+  removedSeconds: z.number().finite().nonnegative().optional(),
+  request: z.string().max(400).optional(),
+  descriptions: z.array(z.string().max(300)).max(8).optional(),
+  breakdown: z.record(z.string().max(40), z.number().int().positive()).optional(),
+  samples: z.array(z.object({
+    label: z.string().max(200),
+    reason: z.string().max(240).optional(),
+  })).max(20),
+});
+export type BatchSummaryItem = z.infer<typeof BatchSummaryItem>;
+
+export const BatchSummariesRequest = z.object({
+  batches: z.array(BatchSummaryItem).min(1).max(20),
+});
+export type BatchSummariesRequest = z.infer<typeof BatchSummariesRequest>;
+
+export const BatchSummariesResponse = z.object({
+  summaries: z.record(z.string(), z.string()),
+  pending: z.array(z.string()),
+});
+export type BatchSummariesResponse = z.infer<typeof BatchSummariesResponse>;
 
 // ---------------------------------------------------------------------------
 // Notes

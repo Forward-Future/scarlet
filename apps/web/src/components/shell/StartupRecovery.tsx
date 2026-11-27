@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { desktop, isDesktop } from "../../lib/desktop";
-import { exportLogsAndReport, openProblemReport, PUBLIC_REPORT_NOTICE } from "../../lib/reportProblem";
+import { appLog, errorName } from "../../lib/appLog";
+import { desktop } from "../../lib/desktop";
+import { ReportLink } from "./ReportLink";
 
 export function StartupRecovery({ title, detail, showLogs = false }: { title: string; detail: string; showLogs?: boolean }) {
   const [feedback, setFeedback] = useState("");
-  const [reporting, setReporting] = useState(false);
 
   async function openLogs() {
     try {
@@ -20,25 +20,9 @@ export function StartupRecovery({ title, detail, showLogs = false }: { title: st
     try {
       await navigator.clipboard.writeText(`${title}\n${detail}`);
       setFeedback("Diagnostics copied.");
-    } catch {
-      setFeedback("Select the error message above and copy it manually.");
-    }
-  }
-
-  async function reportProblem() {
-    setReporting(true);
-    setFeedback("");
-    try {
-      if (showLogs && isDesktop()) {
-        const result = await exportLogsAndReport({ summary: title, detail });
-        if (result) setFeedback("Saved log zip and opened the report page. Drag the zip into the issue.");
-      } else {
-        await openProblemReport({ summary: title, detail });
-      }
     } catch (error) {
-      setFeedback(`Couldn’t open the report page. ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setReporting(false);
+      appLog("error", "clipboard", { what: "diagnostics", name: errorName(error) }, { level: "warn" });
+      setFeedback("Select the error message above and copy it manually.");
     }
   }
 
@@ -48,13 +32,10 @@ export function StartupRecovery({ title, detail, showLogs = false }: { title: st
         <h1 className="text-lg font-semibold">{title}</h1>
         <p role="status" className="text-muted whitespace-pre-wrap break-words select-text">{detail}</p>
         <div className="flex flex-wrap gap-2">
-          <button className="btn-primary" disabled={reporting} onClick={() => void reportProblem()}>
-            {reporting ? "Preparing…" : "Report a problem"}
-          </button>
+          <ReportLink className="btn-primary" label="Report a problem" about={`${title}: ${detail}`} />
           {showLogs && <button className="btn-ghost" onClick={openLogs}>Open logs</button>}
           <button className="btn-ghost" onClick={copyDiagnostics}>Copy diagnostics</button>
         </div>
-        <p className="text-[12px] text-muted" data-testid="public-report-notice">{PUBLIC_REPORT_NOTICE}</p>
         {feedback && <p role="status" className="text-muted">{feedback}</p>}
       </section>
     </main>

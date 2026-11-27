@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThreadEdit } from "@scarlet/shared";
-import { RailStore, type RailRow } from "./railStore";
+import { LINGER_FADE_MS, LINGER_MS } from "./beta/reviewTabsBeta";
+import { ARRIVE_MS, RailStore, type RailRow } from "./railStore";
 
 function makeEdit(changeId: string, spot: number, label: string, start: number, end: number, extra: Partial<Omit<ThreadEdit, "at">> = {}): Omit<ThreadEdit, "at"> {
   return { changeId, spot, label, range: { start, end }, previous: [], ...extra };
@@ -12,7 +13,7 @@ function makeRow(over: Partial<RailRow> & Pick<RailRow, "key" | "threadId" | "th
     displayAt: over.at,
     rawLabel: over.label,
     stretch: edit.range,
-    combinable: true,
+    combinable: over.editKind !== "cut",
     needs: over.place === "you",
     asks: false,
     isAskingCurrent: false,
@@ -119,8 +120,8 @@ describe("RailStore", () => {
     const view = store.view();
     expect(view.optional).toBe(4);
     expect(view.sections.low.map(r => [r.label, r.batch?.map(b => b.label)])).toEqual([
-      ["New title at 1:30", ["New title at 1:30", "New title at 3:00"]],
-      ["Old cut at 0:05", ["Old cut at 0:05", "Old cut at 0:20"]],
+      ["2 Graphics: New title at 1:30, New title at 3:00", ["New title at 1:30", "New title at 3:00"]],
+      ["2 Cuts: Old cut at 0:05, Old cut at 0:20", ["Old cut at 0:05", "Old cut at 0:20"]],
     ]);
   });
 
@@ -150,10 +151,10 @@ describe("RailStore", () => {
 
     const view = store.view();
     expect(view.optional).toBe(2);
-    // Both distinct combined graphics belong to t_hold and collapse into one +1 Graphic batch row.
+    // Both distinct combined graphics belong to t_hold and collapse into one expanded "2 Graphics: …" batch row.
     expect(view.sections.low).toHaveLength(1);
     const batchRow = view.sections.low[0]!;
-    expect(batchRow.label).toBe("Held the Opus 5.5 title two seconds longer.");
+    expect(batchRow.label).toBe("2 Graphics: Opus 5.5 title, Muse Ember title");
     expect(batchRow.value).toBe("Graphic");
     expect(batchRow.members).toHaveLength(6);
     expect(batchRow.batch?.map(r => [r.label, r.value, r.at, r.members.length])).toEqual([
@@ -178,12 +179,12 @@ describe("RailStore", () => {
         // Working: never batched.
         makeRow({ key: "w/0", threadId: "t1", threadOrder: 0, at: 30, label: "Revising gfx 1", place: "working", editKind: "graphic", value: "Graphic" }),
         makeRow({ key: "w/1", threadId: "t1", threadOrder: 0, at: 40, label: "Revising gfx 2", place: "working", editKind: "graphic", value: "Graphic" }),
-        // Safe edits: 3 graphics collapse into 1 (+2), while 1 v2 graphic stays its own row.
+        // Safe edits: 3 graphics collapse into 1 "3 Graphics" row, while 1 v2 graphic stays its own row.
         makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 50, label: "Opus title", place: "optional", editKind: "graphic", value: "Graphic" }),
         makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 70, label: "Fable title", place: "optional", editKind: "graphic", value: "Graphic" }),
         makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 90, label: "Haiku title", place: "optional", editKind: "graphic", value: "Graphic" }),
         makeRow({ key: "s/3", threadId: "t1", threadOrder: 0, at: 60, label: "Revised title", place: "optional", editKind: "graphic", value: "Graphic", version: 2 }),
-        // Done: 2 kept cuts collapse into 1 (+1), while rejected, marker, and v2 stay individual.
+        // Done: 2 kept cuts collapse into 1 "2 Cuts" row, while rejected, marker, and v2 stay individual.
         makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 100, label: "Cut silence 1", place: "done", editKind: "cut", value: "Kept", decision: "Kept" }),
         makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 120, label: "Cut silence 2", place: "done", editKind: "cut", value: "Kept", decision: "Kept" }),
         makeRow({ key: "d/2", threadId: "t1", threadOrder: 0, at: 110, label: "Rejected cut", place: "done", editKind: "cut", value: "Rejected", decision: "Rejected", decided: false, rejected: true }),
@@ -201,36 +202,185 @@ describe("RailStore", () => {
     // Safe edits: total count = 4, rendered rows = 2 (1 batch of 3 + 1 v2 row).
     expect(view.optional).toBe(4);
     expect(view.sections.low.map(r => [r.label, r.batch?.length ?? 1, r.version])).toEqual([
-      ["Opus title", 3, 0],
+      ["3 Graphics: Opus title, Fable title, Haiku title", 3, 0],
       ["Revised title", 1, 2],
     ]);
-    expect(view.sections.low[0]!.tipMeta).toBe("3 graphics");
-    expect(view.sections.low[0]!.tipDetail).toBeUndefined();
+    expect(view.sections.low[0]!.tipText).toBe("3 Graphics");
+    expect(view.sections.low[0]!.tipMeta).toBeUndefined();
+    expect(view.sections.low[0]!.tipDetail).toBe("Opus title\nFable title\nHaiku title");
 
     // Done: total count = 5, rendered rows = 4 (1 batch of 2 + 1 rejected + 1 marker + 1 v2).
     expect(view.done).toBe(5);
     expect(view.sections.done.map(r => [r.label, r.batch?.length ?? 1, r.rejected, !!r.isMarker, r.unkeepTip])).toEqual([
-      ["Cut silence 1", 2, false, false, "Unkeep all 2"],
+      ["2 Cuts: silence 1, silence 2", 2, false, false, "Unkeep all 2"],
       ["Rejected cut", 1, true, false, undefined],
       ["Add B-roll marker", 1, false, true, undefined],
       ["Kept v2 cut", 1, false, false, undefined],
     ]);
-    expect(view.sections.done[0]!.tipMeta).toBe("2 kept cuts");
-    expect(view.sections.done[0]!.tipDetail).toBeUndefined();
+    expect(view.sections.done[0]!.tipText).toBe("2 Cuts");
+    expect(view.sections.done[0]!.tipMeta).toBe("Kept");
+    expect(view.sections.done[0]!.tipDetail).toBe("Cut silence 1\nCut silence 2");
   });
 
-  it("sums removed seconds into grouped cut batch tooltips without a click-to-review hint", () => {
+  it("names dialogue pass cut batches with cut length or cut kind and shows sample items in tooltips", () => {
     const store = new RailStore();
-    store.report("t1", {
-      you: 0, optional: 2, working: 0, done: 0, threadOrder: 0,
+    store.report("t_pass", {
+      you: 0, optional: 4, working: 0, done: 0, threadOrder: 0,
       rows: [
-        makeRow({ key: "c/0", threadId: "t1", threadOrder: 0, at: 4, label: "Cut false start", place: "optional", editKind: "cut", removedSeconds: 1.5 }),
-        makeRow({ key: "c/1", threadId: "t1", threadOrder: 0, at: 14, label: "Cut tangent", place: "optional", editKind: "cut", removedSeconds: 2.0 }),
+        makeRow({ key: "p/0", threadId: "t_pass", threadOrder: 0, at: 11, label: "Cut “I can only compare this…”", place: "optional", editKind: "cut", isDialoguePass: true, removedSeconds: 1.5 }),
+        makeRow({ key: "p/1", threadId: "t_pass", threadOrder: 0, at: 24, label: "Cut “um, wait”", place: "optional", editKind: "cut", isDialoguePass: true, removedSeconds: 2.0 }),
+        makeRow({ key: "p/2", threadId: "t_pass", threadOrder: 0, at: 40, label: "Cut “so basically”", place: "optional", editKind: "cut", isDialoguePass: true, removedSeconds: 1.0 }),
+        makeRow({ key: "p/3", threadId: "t_pass", threadOrder: 0, at: 55, label: "Cut “like I said”", place: "optional", editKind: "cut", isDialoguePass: true, removedSeconds: 0.5 }),
       ],
     });
-    const row = store.view().sections.low[0]!;
-    expect(row.tipMeta).toBe("2 cuts · −3.5 s removed");
-    expect(row.tipDetail).toBeUndefined();
+    store.report("t_pauses", {
+      you: 0, optional: 3, working: 0, done: 0, threadOrder: 1,
+      rows: [
+        makeRow({ key: "q/0", threadId: "t_pauses", threadOrder: 1, at: 5, label: "Shortened a pause", place: "optional", editKind: "cut", isDialoguePass: true, removedSeconds: 1.5 }),
+        makeRow({ key: "q/1", threadId: "t_pauses", threadOrder: 1, at: 15, label: "Shortened a pause", place: "optional", editKind: "cut", isDialoguePass: true, removedSeconds: 1.5 }),
+        makeRow({ key: "q/2", threadId: "t_pauses", threadOrder: 1, at: 25, label: "Shortened a pause", place: "optional", editKind: "cut", isDialoguePass: true, removedSeconds: 1.5 }),
+      ],
+    });
+    const [pauseRow, row] = store.view().sections.low;
+    expect(pauseRow!.label).toBe("3 Pause Cuts · −4.5 s");
+    expect(pauseRow!.tipText).toBe("3 Pause Cuts");
+    expect(row!.label).toBe("4 Dialogue Cuts · −5.0 s");
+    expect(row!.tipText).toBe("4 Dialogue Cuts");
+    expect(row!.tipMeta).toBe("Cut · −5.0 s");
+    expect(row!.tipDetail).toBe("Cut “I can only compare this…”\nCut “um, wait”\nand 2 more");
+  });
+
+  it("expands cut batch names from item labels, shared change descriptions, or cut length", () => {
+    const store = new RailStore();
+    store.report("t_named", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 0,
+      rows: [
+        makeRow({ key: "c/0", threadId: "t_named", threadOrder: 0, at: 4, label: "Cut false start", place: "optional", editKind: "cut", removedSeconds: 1.5 }),
+        makeRow({ key: "c/1", threadId: "t_named", threadOrder: 0, at: 14, label: "Cut tangent", place: "optional", editKind: "cut", removedSeconds: 2.0 }),
+      ],
+    });
+    store.report("t_desc", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 1,
+      rows: [
+        makeRow({ key: "d/0", threadId: "t_desc", threadOrder: 1, at: 0, label: "Cut", place: "optional", editKind: "cut", batchContext: "Cut the false start and the tangent at 14 s" }),
+        makeRow({ key: "d/1", threadId: "t_desc", threadOrder: 1, at: 14, label: "Cut", place: "optional", editKind: "cut", batchContext: "Cut the false start and the tangent at 14 s" }),
+      ],
+    });
+    store.report("t_bare", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 2,
+      rows: [
+        makeRow({ key: "b/0", threadId: "t_bare", threadOrder: 2, at: 2, label: "Cut", place: "optional", editKind: "cut", removedSeconds: 1.5 }),
+        makeRow({ key: "b/1", threadId: "t_bare", threadOrder: 2, at: 9, label: "Cut", place: "optional", editKind: "cut", removedSeconds: 2.0 }),
+      ],
+    });
+    const [bareRow, descRow, namedRow] = store.view().sections.low;
+    expect(namedRow!.label).toBe("2 Cuts: false start, tangent");
+    expect(namedRow!.tipText).toBe("2 Cuts");
+    expect(namedRow!.tipMeta).toBe("Cut · −3.5 s");
+    expect(namedRow!.tipDetail).toBe("Cut false start\nCut tangent");
+
+    expect(descRow!.label).toBe("2 Cuts: the false start and the tangent at 14 s");
+    expect(descRow!.tipText).toBe("2 Cuts");
+    expect(descRow!.tipDetail).toBe("Cut the false start and the tangent at 14 s");
+
+    expect(bareRow!.label).toBe("2 Cuts · −3.5 s");
+    expect(bareRow!.tipText).toBe("2 Cuts");
+    expect(bareRow!.tipMeta).toBe("Cut · −3.5 s");
+    expect(bareRow!.tipDetail).toBeUndefined();
+  });
+
+  it("prefers AI-generated batch summaries over authored batchTitle over fallback labels, and delays AI input while working", () => {
+    const store = new RailStore();
+    store.report("t_authored", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 0,
+      rows: [
+        makeRow({ key: "a/0", threadId: "t_authored", threadOrder: 0, at: 5, label: "Opus title", place: "optional", editKind: "graphic", batchTitle: "2 model title cards" }),
+        makeRow({ key: "a/1", threadId: "t_authored", threadOrder: 0, at: 20, label: "Sonnet title", place: "optional", editKind: "graphic", batchTitle: "2 model title cards" }),
+      ],
+    });
+    store.report("t_working", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 1,
+      rows: [
+        makeRow({ key: "w/0", threadId: "t_working", threadOrder: 1, at: 10, label: "Cut false start", place: "optional", editKind: "cut", threadWorking: true }),
+        makeRow({ key: "w/1", threadId: "t_working", threadOrder: 1, at: 30, label: "Cut tangent", place: "optional", editKind: "cut", threadWorking: true }),
+      ],
+    });
+    store.report("t_settled", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 2,
+      rows: [
+        makeRow({ key: "s/0", threadId: "t_settled", threadOrder: 2, at: 2, label: "Cut false start", place: "optional", editKind: "cut", removedSeconds: 1.5, requestText: "Tighten the opening" }),
+        makeRow({ key: "s/1", threadId: "t_settled", threadOrder: 2, at: 14, label: "Cut tangent", place: "optional", editKind: "cut", removedSeconds: 2.0, requestText: "Tighten the opening" }),
+      ],
+    });
+
+    const [settled, working, authored] = store.view().sections.low;
+    // Authored Change.batchTitle shows right away without needing an extra AI call.
+    expect(authored!.label).toBe("2 model title cards");
+    expect(authored!.batchSummaryInput).toBeUndefined();
+    // Working thread waits until finished before emitting batchSummaryInput.
+    expect(working!.batchSummaryInput).toBeUndefined();
+    // Settled batch without batchTitle emits batchSummaryInput and upgrades live when setBatchSummaries supplies an AI title.
+    expect(settled!.label).toBe("2 Cuts: false start, tangent");
+    expect(settled!.batchSummaryInput?.request).toBe("Tighten the opening");
+    const key = settled!.batchSummaryKey!;
+    const heard = vi.fn();
+    store.subscribe(heard);
+    store.setBatchSummaries({ [key]: "2 cuts: false start & tangent" });
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(store.view().sections.low[0]!.label).toBe("2 cuts: false start & tangent");
+    expect(store.view().sections.low[0]!.batchSummaryInput).toBeUndefined();
+    // Same summaries map does not notify listeners again.
+    store.setBatchSummaries({ [key]: "2 cuts: false start & tangent" });
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests and applies AI summaries for any non-cut batch kind (zooms, graphics, B-roll, audio, general edits)", () => {
+    const store = new RailStore();
+    store.report("t_zooms", {
+      you: 0, optional: 3, working: 0, done: 0, threadOrder: 0,
+      rows: [
+        makeRow({ key: "z/0", threadId: "t_zooms", threadOrder: 0, at: 10, label: "Zoom on terminal", place: "optional", editKind: "zoom", requestText: "Punch in on the demos" }),
+        makeRow({ key: "z/1", threadId: "t_zooms", threadOrder: 0, at: 40, label: "Zoom on browser", place: "optional", editKind: "zoom", requestText: "Punch in on the demos" }),
+        makeRow({ key: "z/2", threadId: "t_zooms", threadOrder: 0, at: 80, label: "Zoom on results", place: "optional", editKind: "zoom", requestText: "Punch in on the demos" }),
+      ],
+    });
+    store.report("t_broll", {
+      you: 0, optional: 0, working: 0, done: 2, threadOrder: 1,
+      rows: [
+        makeRow({ key: "b/0", threadId: "t_broll", threadOrder: 1, at: 15, label: "Keyboard closeup", place: "done", editKind: "broll", decision: "Kept" }),
+        makeRow({ key: "b/1", threadId: "t_broll", threadOrder: 1, at: 55, label: "Studio wide shot", place: "done", editKind: "broll", decision: "Kept" }),
+      ],
+    });
+    store.report("t_other", {
+      you: 0, optional: 2, working: 0, done: 0, threadOrder: 2,
+      rows: [
+        makeRow({ key: "chg_mix/0", threadId: "t_other", threadOrder: 2, at: 5, label: "Warm intro grade", place: "optional", editKind: "other" }),
+        makeRow({ key: "chg_mix/1", threadId: "t_other", threadOrder: 2, at: 95, label: "Warm outro grade", place: "optional", editKind: "other" }),
+      ],
+    });
+
+    const initial = store.view();
+    const otherRow = initial.sections.low[0]!;
+    const zoomRow = initial.sections.low[1]!;
+    const brollRow = initial.sections.done[0]!;
+    expect(zoomRow.batchSummaryInput?.kind).toBe("zoom");
+    expect(zoomRow.batchSummaryInput?.count).toBe(3);
+    expect(brollRow.batchSummaryInput?.kind).toBe("broll");
+    expect(otherRow.batchSummaryInput?.kind).toBeUndefined();
+    expect(otherRow.batchSummaryInput?.count).toBe(2);
+
+    store.setBatchSummaries({
+      [zoomRow.batchSummaryKey!]: "3 zooms on demo screens",
+      [brollRow.batchSummaryKey!]: "2 B-roll studio cutaways",
+      [otherRow.batchSummaryKey!]: "2 warm color grades",
+    });
+    const updated = store.view();
+    expect(updated.sections.low[0]!.label).toBe("2 warm color grades");
+    expect(updated.sections.low[0]!.tipMeta).toBe("2 Edits");
+    expect(updated.sections.low[1]!.label).toBe("3 zooms on demo screens");
+    expect(updated.sections.low[1]!.tipMeta).toBe("3 Zooms");
+    expect(updated.sections.done[0]!.label).toBe("2 B-roll studio cutaways");
+    expect(updated.sections.done[0]!.tipMeta).toBe("2 B-roll Shots · Kept");
   });
 
   it("keeps a combined row in Low risk when an older request was kept but a follow-up request has not been kept yet", () => {
@@ -282,5 +432,344 @@ describe("RailStore", () => {
     store.view().sections.low[0]!.open!();
     expect(firstOpen).not.toHaveBeenCalled();
     expect(secondOpen).toHaveBeenCalledTimes(1);
+  });
+
+  describe("lingering transitions", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("holds kept and revised rows in place without duplicating them in Done or Working, then fades and moves them over", () => {
+      vi.useFakeTimers();
+      const store = new RailStore();
+      store.report("t1", {
+        you: 2, optional: 0, working: 0, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "c/0", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged cut", place: "you" }),
+          makeRow({ key: "c/1", threadId: "t1", threadOrder: 0, at: 15, label: "Flagged graphic", place: "you" }),
+        ],
+      });
+
+      // Keep c/0 -> Done, revise c/1 -> Working.
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 1, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "c/0", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged cut", place: "done", value: "Kept", decision: "Kept" }),
+          makeRow({ key: "c/1", threadId: "t1", threadOrder: 0, at: 15, label: "Flagged graphic", place: "working", word: "Revising…", busy: true }),
+        ],
+      });
+
+      // Logical sections updated at once; display sections keep both rows in Needs review without duplicating them in Working/Done.
+      let v = store.view();
+      expect([v.need, v.working, v.done]).toEqual([0, 1, 1]);
+      expect(v.display.sections.you.map(r => [r.label, r.decision ?? r.word, !!r.leaving])).toEqual([
+        ["Flagged cut", "Kept", false],
+        ["Flagged graphic", "Revising…", false],
+      ]);
+      expect(v.display.sections.working).toHaveLength(0);
+      expect(v.display.sections.done).toHaveLength(0);
+      expect([v.display.working, v.display.done]).toEqual([0, 0]);
+
+      // After LINGER_MS both enter their fade-out phase.
+      vi.advanceTimersByTime(LINGER_MS);
+      v = store.view();
+      expect(v.display.sections.you.map(r => r.leaving)).toEqual([true, true]);
+      expect([v.display.working, v.display.done]).toEqual([0, 0]);
+
+      // After LINGER_FADE_MS both leave Needs review and arrive cleanly in Working and Done with arriving flag.
+      vi.advanceTimersByTime(LINGER_FADE_MS);
+      v = store.view();
+      expect(v.display.sections.you).toHaveLength(0);
+      expect(v.display.sections.working.map(r => [r.label, !!r.arriving])).toEqual([["Flagged graphic", true]]);
+      expect(v.display.sections.done.map(r => [r.label, !!r.arriving])).toEqual([["Flagged cut", true]]);
+      expect([v.display.working, v.display.done]).toEqual([1, 1]);
+
+      // After ARRIVE_MS the arriving flag clears.
+      vi.advanceTimersByTime(ARRIVE_MS);
+      v = store.view();
+      expect(v.display.sections.working[0]!.arriving).toBeFalsy();
+      expect(v.display.sections.done[0]!.arriving).toBeFalsy();
+      store.dispose();
+    });
+
+    it("keeps a Done -> Working revision lingering in Done only when Done is expanded, and resets timer when queued work becomes busy", () => {
+      vi.useFakeTimers();
+      const store = new RailStore();
+      store.setDoneOpen(true);
+      store.report("t1", {
+        you: 0, optional: 0, working: 0, done: 2, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 5, label: "Kept A", place: "done", value: "Kept", decision: "Kept" }),
+          makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 15, label: "Kept B", place: "done", value: "Kept", decision: "Kept" }),
+        ],
+      });
+
+      // Revise d/0 while queued (busy: false) -> lingers in Done, not duplicated in Working.
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 1, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 5, label: "Kept A", place: "working", word: "Up next", busy: false }),
+          makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 15, label: "Kept B", place: "done", value: "Kept", decision: "Kept" }),
+        ],
+      });
+      expect(store.view().display.sections.done.map(r => r.label)).toEqual(["Kept A", "Kept B"]);
+      expect(store.view().display.working).toBe(0);
+
+      // 1.5s later Scarlet starts working (busy: true) -> linger timer restarts so editor sees active work for a full window.
+      vi.advanceTimersByTime(1500);
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 1, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 5, label: "Kept A", place: "working", word: "Revising…", busy: true }),
+          makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 15, label: "Kept B", place: "done", value: "Kept", decision: "Kept" }),
+        ],
+      });
+      vi.advanceTimersByTime(1500);
+      expect(store.view().display.sections.done.find(r => r.label === "Kept A")?.leaving).toBe(false);
+
+      vi.advanceTimersByTime(LINGER_MS - 1500 + LINGER_FADE_MS);
+      expect(store.view().display.sections.done.map(r => r.label)).toEqual(["Kept B"]);
+      expect(store.view().display.sections.working.map(r => r.label)).toEqual(["Kept A"]);
+
+      // When Done is closed, revising d/1 moves straight to Working without lingering unseen in Done.
+      store.setDoneOpen(false);
+      store.report("t1", {
+        you: 0, optional: 0, working: 2, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "d/0", threadId: "t1", threadOrder: 0, at: 5, label: "Kept A", place: "working", word: "Revising…", busy: true }),
+          makeRow({ key: "d/1", threadId: "t1", threadOrder: 0, at: 15, label: "Kept B", place: "working", word: "Revising…", busy: true }),
+        ],
+      });
+      expect(store.view().display.sections.done).toHaveLength(0);
+      expect(store.view().display.sections.working.map(r => r.label)).toEqual(["Kept A", "Kept B"]);
+      store.dispose();
+    });
+
+    it("preserves the same batch key when keeping a safe batch together while unfolded, splits out a revised edit, and skips lingering while Safe edits is folded", () => {
+      vi.useFakeTimers();
+      const store = new RailStore();
+      store.report("t1", {
+        you: 0, optional: 3, working: 0, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "optional", editKind: "graphic", value: "Graphic" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "optional", editKind: "graphic", value: "Graphic" }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "optional", editKind: "graphic", value: "Graphic" }),
+        ],
+      });
+      // Safe edits starts folded -> unfolding marks rows visible so subsequent actions linger cleanly.
+      store.setLowOpen(true);
+      const initialKey = store.view().display.sections.low[0]!.key;
+
+      // Revise just s/1 out of the batch -> s/0+s/2 remain a 2-graphic batch, s/1 lingers as its own Revising row in Safe edits.
+      store.report("t1", {
+        you: 0, optional: 2, working: 1, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "optional", editKind: "graphic", value: "Graphic" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "working", editKind: "graphic", word: "Revising…", busy: true }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "optional", editKind: "graphic", value: "Graphic" }),
+        ],
+      });
+      expect(store.view().display.sections.low.map(r => [r.label, r.batch?.length ?? 1, r.word ?? r.value])).toEqual([
+        ["2 Graphics: Gfx 1, Gfx 3", 2, "Graphic"],
+        ["Gfx 2", 1, "Revising…"],
+      ]);
+      expect(store.view().display.working).toBe(0);
+      vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS);
+      expect(store.view().display.working).toBe(1);
+
+      // Keep the remaining batch together -> preserves the exact batch key in Safe edits while lingering as Kept.
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 2, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "done", editKind: "graphic", value: "Kept", decision: "Kept" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "working", editKind: "graphic", word: "Revising…", busy: true }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "done", editKind: "graphic", value: "Kept", decision: "Kept" }),
+        ],
+      });
+      const keptBatch = store.view().display.sections.low[0]!;
+      expect(keptBatch.key).toBe(initialKey);
+      expect(keptBatch.decision).toBe("Kept");
+      expect(keptBatch.batch).toHaveLength(2);
+      expect(store.view().display.done).toBe(0);
+
+      // ⌘Z undo returns both to Safe edits immediately without waiting for the timer.
+      store.report("t1", {
+        you: 0, optional: 2, working: 1, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "optional", editKind: "graphic", value: "Graphic" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "working", editKind: "graphic", word: "Revising…", busy: true }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "optional", editKind: "graphic", value: "Graphic" }),
+        ],
+      });
+      expect(store.view().display.sections.low[0]!.decided).toBe(false);
+      expect(store.view().display.sections.low[0]!.leaving).toBeFalsy();
+
+      // Folding Safe edits and keeping them moves them straight to Done without lingering unseen.
+      store.setLowOpen(false);
+      store.report("t1", {
+        you: 0, optional: 0, working: 1, done: 2, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "s/0", threadId: "t1", threadOrder: 0, at: 10, label: "Gfx 1", place: "done", editKind: "graphic", value: "Kept", decision: "Kept" }),
+          makeRow({ key: "s/1", threadId: "t1", threadOrder: 0, at: 20, label: "Gfx 2", place: "working", editKind: "graphic", word: "Revising…", busy: true }),
+          makeRow({ key: "s/2", threadId: "t1", threadOrder: 0, at: 30, label: "Gfx 3", place: "done", editKind: "graphic", value: "Kept", decision: "Kept" }),
+        ],
+      });
+      expect(store.view().display.sections.low).toHaveLength(0);
+      expect(store.view().display.done).toBe(2);
+      store.dispose();
+    });
+
+    it("preserves lingers across a transient listLoaded=false refetch when rejecting flagged and safe edits", () => {
+      vi.useFakeTimers();
+      const store = new RailStore();
+      store.setLowOpen(true);
+      store.report("t1", {
+        you: 2, optional: 1, working: 0, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "f/keep", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged keep", place: "you", needs: true }),
+          makeRow({ key: "f/rej", threadId: "t1", threadOrder: 0, at: 10, label: "Flagged reject", place: "you", needs: true }),
+          makeRow({ key: "s/rej", threadId: "t1", threadOrder: 0, at: 15, label: "Safe reject", place: "optional" }),
+        ],
+      });
+      // Keep the first flagged edit so it begins lingering.
+      store.report("t1", {
+        you: 1, optional: 1, working: 0, done: 1, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "f/keep", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged keep", place: "done", decided: true, decision: "Kept" }),
+          makeRow({ key: "f/rej", threadId: "t1", threadOrder: 0, at: 10, label: "Flagged reject", place: "you", needs: true }),
+          makeRow({ key: "s/rej", threadId: "t1", threadOrder: 0, at: 15, label: "Safe reject", place: "optional" }),
+        ],
+      });
+      expect(store.view().display.sections.you.map(r => r.label)).toEqual(["Flagged keep", "Flagged reject"]);
+
+      // Transient head bump while /thread-edits refetches after rejecting flagged + safe edits.
+      store.report("t1", {
+        you: 1, optional: 1, working: 0, done: 1, threadOrder: 0, listLoaded: false,
+        rows: [
+          makeRow({ key: "f/keep", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged keep", place: "done", decided: true, decision: "Kept" }),
+          makeRow({ key: "f/rej", threadId: "t1", threadOrder: 0, at: 10, label: "Flagged reject", place: "you", needs: true }),
+          makeRow({ key: "s/rej", threadId: "t1", threadOrder: 0, at: 15, label: "Safe reject", place: "optional" }),
+        ],
+      });
+
+      // Refetch settles with both rejected rows carrying `was` back to their original keys.
+      store.report("t1", {
+        you: 0, optional: 0, working: 0, done: 3, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "f/keep", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged keep", place: "done", decided: true, decision: "Kept" }),
+          makeRow({ key: "r/f", was: ["f/rej"], threadId: "t1", threadOrder: 0, at: 10, label: "Flagged reject", place: "done", decided: true, rejected: true, decision: "Rejected" }),
+          makeRow({ key: "r/s", was: ["s/rej"], threadId: "t1", threadOrder: 0, at: 15, label: "Safe reject", place: "done", decided: true, rejected: true, decision: "Rejected" }),
+        ],
+      });
+      expect(store.view().display.sections.you.map(r => [r.label, r.lingerFrom])).toEqual([
+        ["Flagged keep", "you"],
+        ["Flagged reject", "you"],
+      ]);
+      expect(store.view().display.sections.low.map(r => [r.label, r.lingerFrom])).toEqual([
+        ["Safe reject", "optional"],
+      ]);
+      expect(store.view().display.done).toBe(0);
+
+      vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS);
+      expect(store.view().display.sections.you).toHaveLength(0);
+      expect(store.view().display.sections.low).toHaveLength(0);
+      expect(store.view().display.done).toBe(3);
+      store.dispose();
+    });
+  });
+
+  describe("continuous B-roll sections", () => {
+    it("combines contiguous same-request and cross-request B-roll rows (including multiple flagged shots) into one line item", () => {
+      const store = new RailStore();
+      // Thread 0: flagged opening 747 clip (3:06..3:10)
+      store.report("t1", {
+        you: 1, optional: 0, working: 0, done: 0, threadOrder: 0,
+        rows: [makeRow({
+          key: "c1/0", threadId: "t1", threadOrder: 0, at: 186.62, label: "Added a Boeing 747 taking off.",
+          place: "you", editKind: "broll", value: "B-roll", version: 2,
+          stretch: { start: 186.62, end: 190.42 }, overlayClipIds: ["clip_747_1"], brollSectionId: "broll:186620:204053",
+        })],
+      });
+      // Thread 1: flagged middle 747 clip (3:10..3:18) + safe end clip
+      store.report("t2", {
+        you: 1, optional: 1, working: 0, done: 0, threadOrder: 1,
+        rows: [
+          makeRow({
+            key: "c2/0", threadId: "t2", threadOrder: 1, at: 190.42, label: "747 climbs into the sky",
+            place: "you", editKind: "broll", value: "B-roll", version: 2,
+            stretch: { start: 190.42, end: 197.96 }, overlayClipIds: ["clip_747_2"], brollSectionId: "broll:186620:204053",
+          }),
+          makeRow({
+            key: "c2/1", threadId: "t2", threadOrder: 1, at: 197.96, label: "Inside the 747 cockpit",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 197.96, end: 204.05 }, overlayClipIds: ["clip_747_3"], brollSectionId: "broll:186620:204053",
+          }),
+        ],
+      });
+      // Thread 2: three more contiguous safe shots at the tail + one separate B-roll removal right after the section ends (`brollSectionId: null`).
+      store.report("t3", {
+        you: 0, optional: 4, working: 0, done: 0, threadOrder: 2,
+        rows: [
+          makeRow({
+            key: "c3/0", threadId: "t3", threadOrder: 2, at: 197.96, label: "747 analog flight deck",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 197.96, end: 200.0 }, overlayClipIds: ["clip_747_4"], brollSectionId: "broll:186620:204053",
+          }),
+          makeRow({
+            key: "c3/1", threadId: "t3", threadOrder: 2, at: 200.0, label: "747 cockpit panel",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 200.0, end: 202.04 }, overlayClipIds: ["clip_747_3"], brollSectionId: "broll:186620:204053",
+          }),
+          makeRow({
+            key: "c3/2", threadId: "t3", threadOrder: 2, at: 202.04, label: "747 flight crew",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 202.04, end: 204.05 }, overlayClipIds: ["clip_747_5"], brollSectionId: "broll:186620:204053",
+          }),
+          makeRow({
+            key: "c3/3", threadId: "t3", threadOrder: 2, at: 204.05, label: "Original return to you",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 204.05, end: 206.0 }, brollSectionId: null,
+          }),
+        ],
+      });
+
+      const view = store.view();
+      // All 6 contiguous 747 shots collapse into ONE Needs review line item at 3:06 spanning 186.62..204.05.
+      expect(view.need).toBe(1);
+      expect(view.sections.you).toHaveLength(1);
+      const brollRow = view.sections.you[0]!;
+      expect(brollRow.label).toBe("Added a Boeing 747 taking off.");
+      expect(brollRow.at).toBeCloseTo(186.62, 2);
+      expect(brollRow.displayAt).toBeCloseTo(186.62, 2);
+      expect(brollRow.stretch).toEqual({ start: 186.62, end: 204.05 });
+      expect(brollRow.continuousBroll).toBe(true);
+      expect(brollRow.value).toBe("B-roll");
+      expect(brollRow.version).toBe(2);
+      expect(brollRow.members).toHaveLength(6);
+      expect(brollRow.threadIds).toEqual(["t1", "t2", "t3"]);
+      // The B-roll removal right after the section (where camera returned) stays separate in Safe edits.
+      expect(view.optional).toBe(1);
+      expect(view.sections.low[0]!.label).toBe("Original return to you");
+    });
+
+    it("merges contiguous B-roll transitively when a middle shot bridges two earlier shots, and keeps gapped sections apart", () => {
+      const store = new RailStore();
+      store.report("t1", {
+        you: 0, optional: 3, working: 0, done: 0, threadOrder: 0,
+        rows: [
+          makeRow({ key: "a/0", threadId: "t1", threadOrder: 0, at: 10, label: "Shot A", place: "optional", editKind: "broll", value: "B-roll", stretch: { start: 10, end: 13 } }),
+          makeRow({ key: "a/1", threadId: "t1", threadOrder: 0, at: 16, label: "Shot C", place: "optional", editKind: "broll", value: "B-roll", stretch: { start: 16, end: 19 } }),
+          makeRow({ key: "a/2", threadId: "t1", threadOrder: 0, at: 13, label: "Shot B", place: "optional", editKind: "broll", value: "B-roll", stretch: { start: 13, end: 16 } }),
+        ],
+      });
+      const view = store.view();
+      // One continuous section (10..19) renders as one plain line item, NOT a +3 batch.
+      expect(view.optional).toBe(1);
+      expect(view.sections.low).toHaveLength(1);
+      expect(view.sections.low[0]!.batch).toBeUndefined();
+      expect(view.sections.low[0]!.continuousBroll).toBe(true);
+      expect(view.sections.low[0]!.stretch).toEqual({ start: 10, end: 19 });
+      expect(view.sections.low[0]!.members).toHaveLength(3);
+    });
   });
 });

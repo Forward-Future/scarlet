@@ -51,7 +51,7 @@ const dockListKey = (projectId: string) => `scarlet.reviewDock.v1:${projectId}`;
 export function savedDockList(projectId: string): OpenList {
   try {
     const saved = JSON.parse(localStorage.getItem(dockListKey(projectId)) ?? "null") as unknown;
-    return isOpenList(saved) ? saved : undefined;
+    return saved === "need" ? undefined : isOpenList(saved) ? saved : undefined;
   } catch {
     return undefined;
   }

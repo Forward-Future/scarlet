@@ -1,11 +1,22 @@
 /**
- * The motion-graphics tools: drawing a graphic from a web page, the project's style
+ * The motion graphics tools: drawing a graphic from a web page, the project's style
  * guide and the files the editor attached. Scarlet draws the page (packages/render/src/graphic.ts); these tools carry
  * the page and its files there and report what the drawing measured.
  */
 import { basename, dirname, join } from "node:path";
 import { z } from "zod/v3";
-import { styleGuideEditTarget, TaskStyleGuideDraft, type AgentCapabilities, type AgentId, type ScarletClient, type Task } from "@scarlet/shared";
+import {
+  BUILT_IN_STYLE_SOUNDS,
+  dbToLinearGain,
+  ImportStyleGuideSoundRequest,
+  styleGuideEditTarget,
+  TaskStyleGuideDraft,
+  type AgentCapabilities,
+  type AgentId,
+  type ScarletClient,
+  type StyleGuideRecord,
+  type Task,
+} from "@scarlet/shared";
 import type { Author } from "@scarlet/timeline";
 import { round3 } from "./analysis.js";
 import { errorText, json, type ToolRegistrar, type ToolResult } from "./tool-result.js";
@@ -61,7 +72,7 @@ export function registerGraphics(deps: GraphicsDeps) {
 
   tool(
     "graphic_render",
-    `Draw a motion graphic from a web page and add it to the project's media as a graphic with alpha, to place over the picture with timeline_propose (addClip of the returned mediaId on a video track above the footage; its clip can be shorter than the graphic). Send the page as html: a complete HTML document drawn at the project's size (or width/height) on a transparent background, so use viewport units or the frame's pixels. Time: CSS animations, transitions and Web Animations are paused and set to each frame's time, SVG animations too; a page that keeps its own clock defines window.scarletSeek(seconds), called before each frame, which may return a promise. Fonts load from @font-face rules or installed fonts. Link fonts and pictures by absolute path or file URL (an attachment's path works)${deps.caps.files ? " or, with path, by a path relative to the page" : ""}; Scarlet keeps them with the graphic. Scarlet keeps the page with the graphic too: to revise one, read it with graphic_get, change it and render again with basedOn, which carries its files over, then point the clip at the new mediaId (updateClip). Returns the mediaId, the page's path, the box the graphic covers at a few moments (fractions of the frame, left/top/right/bottom), errors the page raised and files it couldn't load${deps.caps.images ? ", and pictures of those moments over the edit at checkAt" : ""}. A page whose text asks for a font that isn't installed or loaded is not added: missingFonts names each, and installedFonts lists common families this machine has. When the editor named the font, in their words or the style guide, ask them with task_question whether they will add its file or which installed font to use; never substitute it yourself. A font only you chose: pick an installed one and render again.`,
+    `Draw a motion graphic from a web page and add it to the project's media as a graphic with alpha, to place over the picture with timeline_propose (addClip of the returned mediaId on a video track above the footage; its clip can be shorter than the graphic). Send the page as html: a complete HTML document drawn at the project's size (or width/height) — keep the background transparent for overlays over A-cam footage, or use an opaque background for full-screen graphics — using viewport units or the frame's pixels. Time: CSS animations, transitions and Web Animations are paused and set to each frame's time, SVG animations too; a page that keeps its own clock defines window.scarletSeek(seconds), called before each frame, which may return a promise. Fonts load from @font-face rules or installed fonts. Link fonts and pictures by absolute path or file URL (an attachment's path works)${deps.caps.files ? " or, with path, by a path relative to the page" : ""}; Scarlet keeps them with the graphic. Scarlet keeps the page with the graphic too: to revise one, read it with graphic_get, change it and render again with basedOn, which carries its files over, then point the clip at the new mediaId (updateClip). Returns the mediaId, the page's path, the box the graphic covers at a few moments (fractions of the frame, left/top/right/bottom), errors the page raised and files it couldn't load${deps.caps.images ? ", and pictures of those moments over the edit at checkAt" : ""}. A page whose text asks for a font that isn't installed or loaded is not added: missingFonts names each, and installedFonts lists common families this machine has. When the editor named the font, in their words or the style guide, ask them with task_question whether they will add its file or which installed font to use; never substitute it yourself. A font only you chose: pick an installed one and render again.`,
     {
       html: z.string().min(1).max(500_000).optional().describe("The page, a complete HTML document"),
       ...(deps.caps.files ? { path: z.string().optional().describe("Or an HTML file in the task artifact directory") } : {}),
@@ -193,6 +204,86 @@ export function registerGraphics(deps: GraphicsDeps) {
   );
 
   tool(
+    "style_guide_get",
+    "Read the editor's library style guides (visual graphics rules, preferred transitions, sound effects with mix levels, and saved camera color look / LUT) plus the built-in starter sound effects catalog. Pass styleGuideId or name (without @) to inspect one guide in full, or omit both to list all guides and starter sounds.",
+    {
+      styleGuideId: z.string().optional().describe("Style guide id to read in full"),
+      name: z.string().optional().describe("Style guide slug (with or without leading @) to read in full"),
+    },
+    async ({ styleGuideId, name }) => {
+      const formatGuide = (g: StyleGuideRecord) => {
+        const lutAsset = g.colorLook?.lutAssetId ? g.assets.find(a => a.id === g.colorLook!.lutAssetId) : undefined;
+        return {
+          id: g.id,
+          name: g.name,
+          description: g.description,
+          isDefault: g.isDefault,
+          instructions: g.instructions,
+          transitions: g.transitions,
+          sounds: g.sounds.map(s => ({ ...s, volume: dbToLinearGain(s.volumeDb) })),
+          ...(g.colorLook && {
+            colorLook: {
+              ...g.colorLook,
+              ...(lutAsset && { lutFile: `${g.id}/assets/${lutAsset.id}/${lutAsset.name}` }),
+            },
+          }),
+          assets: g.assets,
+        };
+      };
+      if (styleGuideId) {
+        const { styleGuide } = await client.styleGuide(styleGuideId);
+        return json({ styleGuide: formatGuide(styleGuide), builtInSounds: BUILT_IN_STYLE_SOUNDS.map(({ waveform: _w, ...s }) => s) });
+      }
+      const { styleGuides } = await client.styleGuides();
+      if (name) {
+        const needle = name.replace(/^@+/, "").toLowerCase();
+        const found = styleGuides.find(g => g.name.toLowerCase() === needle);
+        if (!found) return errorText(`No style guide named "@${needle}" was found.`);
+        return json({ styleGuide: formatGuide(found), builtInSounds: BUILT_IN_STYLE_SOUNDS.map(({ waveform: _w, ...s }) => s) });
+      }
+      return json({
+        styleGuides: styleGuides.map(g => ({
+          id: g.id,
+          name: g.name,
+          description: g.description,
+          isDefault: g.isDefault,
+          transitionsCount: g.transitions.length,
+          soundsCount: g.sounds.length,
+          hasColorLook: Boolean(g.colorLook),
+        })),
+        builtInSounds: BUILT_IN_STYLE_SOUNDS.map(({ waveform: _w, ...s }) => s),
+      });
+    },
+  );
+
+  tool(
+    "style_guide_sound_import",
+    "Import a sound effect from a style guide (either a saved sound entry or attached audio asset) or a built-in starter sound (soft-whoosh, subtle-pop, airy-slide, subtle-riser, clean-chime, crisp-tick) into this project's media library so it can be placed on an audio track with timeline_propose (addClip). Deduplicates automatically if the same sound is already in the project. Returns mediaId, duration, volumeDb, linear volume (ready for addClip.volume), and usageRule.",
+    {
+      styleGuideId: z.string().optional().describe("Style guide id owning the sound or audio asset"),
+      soundId: z.string().optional().describe("Sound entry id from the style guide's sounds list (or builtin:<slug>)"),
+      builtInId: z.string().optional().describe("Built-in starter sound slug (soft-whoosh, subtle-pop, airy-slide, subtle-riser, clean-chime, crisp-tick)"),
+      assetId: z.string().optional().describe("Custom audio asset id attached to styleGuideId"),
+    },
+    async (args) => {
+      const normalized = args.soundId?.startsWith("builtin:") && !args.builtInId
+        ? { ...args, builtInId: args.soundId.slice("builtin:".length), soundId: undefined }
+        : args;
+      const parsed = ImportStyleGuideSoundRequest.safeParse(normalized);
+      if (!parsed.success) return errorText("Provide builtInId, or styleGuideId with soundId or assetId.");
+      const res = await client.importStyleGuideSound(deps.projectId, parsed.data);
+      return json({
+        mediaId: res.media.id,
+        name: res.name,
+        duration: res.duration ?? res.media.duration,
+        volumeDb: res.volumeDb,
+        volume: res.volume,
+        usageRule: res.usageRule,
+      });
+    },
+  );
+
+  tool(
     "attachment_read",
     `Read a file the editor attached to a request in this project (attachmentId), a file attached to a library style guide (styleGuideId + assetId), or with styleGuide the project's style guide. Text comes back as text; ${deps.caps.images ? "a picture comes back as the picture, and a PDF as pictures of its pages (pages, up to 8 a call; default the first 6) with pageCount when the file says it" : "a picture or a PDF comes back as its name, size and path only"}. A font file comes back as its path, for an @font-face rule.`,
     {
@@ -234,16 +325,31 @@ export function registerGraphics(deps: GraphicsDeps) {
     const taskId = deps.task.id;
     tool(
       "style_guide_update",
-      "Save the updated one-line description and visual style rules (instructions) for this style guide. Include the complete rules that should stay as well as what changed.",
+      "Save updates to this style guide: its one-line description, visual graphics rules (instructions), optional structured captionStyle, preferred transitions (with optional paired soundId), sound effects (built-in starters or attached audio assets with volumeDb and usageRule), and/or saved camera colorLook (adjustments and/or attached .cube/.3dl lutAssetId). Omitted sections stay as they are; pass colorLook: null to clear the saved color look.",
       TaskStyleGuideDraft.shape,
-      async ({ description, instructions }) => {
+      async ({ description, instructions, captionStyle, transitions, sounds, colorLook }) => {
+        if (description === undefined && instructions === undefined && captionStyle === undefined && transitions === undefined && sounds === undefined && colorLook === undefined) {
+          return errorText("Provide at least one field to update (description, instructions, captionStyle, transitions, sounds, or colorLook).");
+        }
         const { styleGuide } = await client.saveTaskStyleGuideEdit(deps.projectId, taskId, {
           styleGuideId: editingGuide.styleGuideId,
           hostId: editingGuide.hostId,
           ...(description !== undefined && { description }),
-          instructions,
+          ...(instructions !== undefined && { instructions }),
+          ...(captionStyle !== undefined && { captionStyle }),
+          ...(transitions !== undefined && { transitions }),
+          ...(sounds !== undefined && { sounds }),
+          ...(colorLook !== undefined && { colorLook }),
         });
-        return json({ styleGuideId: styleGuide.id, name: styleGuide.name, description: styleGuide.description });
+        return json({
+          styleGuideId: styleGuide.id,
+          name: styleGuide.name,
+          description: styleGuide.description,
+          ...(styleGuide.captionStyle && { captionStyle: styleGuide.captionStyle }),
+          transitionsCount: styleGuide.transitions.length,
+          soundsCount: styleGuide.sounds.length,
+          hasColorLook: Boolean(styleGuide.colorLook),
+        });
       },
     );
 

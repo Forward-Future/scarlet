@@ -1,12 +1,15 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { ThreadEdit } from "@scarlet/shared";
+import type { BatchSummaryItem, ThreadEdit } from "@scarlet/shared";
 import { AimRow } from "../../components/review/AimRow";
 import { EditVersion, RejectedMark } from "../../components/review/ThreadEdits";
 import { ChatRail } from "../../components/shell/ChatRail";
 import { Icon } from "../../components/ui/primitives";
+import { api } from "../../lib/client";
 import { clock as clockLabel } from "../../lib/format";
 import { editKey, unkeepEdits } from "../../lib/keptEdits";
 import { recordUndo } from "../../lib/undo";
+import { useArrivingRows, useLeavingRows } from "./lowRiskFold";
+import { useProjectStore } from "../../stores/project";
 import type { RailSection, RailStore, UnifiedRailRow } from "./railStore";
 import { letGo, type HoveredReviewRow } from "./types";
 
@@ -17,8 +20,11 @@ import { letGo, type HoveredReviewRow } from "./types";
  */
 /** The narrowest the edits column can be dragged to while keeping times, words, and amounts legible. */
 export const REVIEW_RAIL_MIN = 220;
-/** Default width of the edits column before the user drags its right divider. */
-const reviewRailWidth = (available: number) => available <= 1100 ? 232 : Math.max(260, Math.min(320, available * 0.22));
+/**
+ * Default width of the chat and of the edits column before the user drags either divider: the two start equal,
+ * sharing the room the chat and the column used to take together, never under the chat's 320px.
+ */
+export const sideRailWidth = (available: number) => Math.round(Math.max(320, Math.min(400, available * 0.27)));
 /** What Keep safe edits says it does, on hover and to screen readers. */
 const doneLabel = (count: number) => count === 1 ? "Keep the safe edit" : `Keep all ${count} safe edits`;
 
@@ -63,42 +69,86 @@ function tooltipFor(row: HTMLButtonElement): RowTooltip | null {
   };
 }
 
-export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onFilter, selected, onDoneLow, onHover, flashedThreadId, compact = false, reserve = 0 }: {
+export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow, onHover, compact = false, reserve = 0 }: {
   projectId: string;
   store: RailStore;
   open: { working: boolean; done: boolean; low?: boolean };
   onOpen(section: "working" | "done" | "low", open: boolean): void;
-  /** Priority list filter: All unreviewed edits (flagged pinned on top + confident below) or Needs you only. */
-  filter?: "all" | "need";
-  onFilter?(next: "all" | "need"): void;
   /** What is open on the card, so its row is kept in view. */
   selected?: string;
   /** Keep all confident edits at once. */
   onDoneLow?(): void;
   /** Light the timeline's marker while hovering a row. */
   onHover?(time?: number, target?: HoveredReviewRow): void;
-  /** Thread whose rows briefly flash after clicking Show → in chat. */
-  flashedThreadId?: string;
   compact?: boolean;
   /** Extra horizontal room to keep free beyond the player's minimum (e.g. an open Transcript column). */
   reserve?: number;
 }) {
   useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
+  store.setLowOpen(!!open.low);
+  store.setDoneOpen(open.done);
+  const batchSummaries = useProjectStore(s => s.current?.id === projectId ? s.current.batchSummaries : undefined);
+  const paused = useProjectStore(s => s.current?.id === projectId ? !!s.current.project.editingPaused : false);
+  useEffect(() => {
+    store.setBatchSummaries(batchSummaries);
+  }, [store, batchSummaries]);
   const host = useRef<HTMLElement>(null);
+  useLeavingRows(host);
+  useArrivingRows(host);
   const tipEl = useRef<HTMLDivElement>(null);
   const tipId = useId();
   const [tip, setTip] = useState<RowTooltip | null>(null);
   const [tipLeft, setTipLeft] = useState<number | null>(null);
+  const requestedSummaries = useRef<{ projectId: string; keys: Set<string> }>({ projectId, keys: new Set() });
+  if (requestedSummaries.current.projectId !== projectId) {
+    requestedSummaries.current = { projectId, keys: new Set() };
+  }
   const view = store.view();
-  const { need, forYouRows, optional, working, done, pastHour, sections } = view;
+  const { need, optional, pastHour, display } = view;
+  const sections = display.sections;
+  const working = display.working;
+  const done = display.done;
   const total = need + optional;
-  const nothing = need + forYouRows + optional + working + done === 0;
-  const effectiveFilter: "all" | "need" = need > 0 && optional > 0 ? filter : "all";
-  const showConfident = optional > 0 && effectiveFilter === "all";
-  // The row of the cut or edit that's open stays in view as Keep, ↑ ↓, or filtering reveals it.
+  const hasYouRows = sections.you.length > 0;
+  const showConfident = optional > 0 || sections.low.length > 0;
+  // Safe edits start folded under their heading; a press on it (or opening one of them) unfolds them.
+  const lowShown = showConfident && !!open.low;
+  const sepLeaving = showConfident && optional === 0 && sections.low.every(r => !!r.leaving);
+  const nothing = need + sections.you.length + optional + sections.low.length + working + done === 0;
+
+  // Ask the engine for AI-generated titles for any settled collapsed batches that don't have one cached yet.
+  const unsummarized: BatchSummaryItem[] = [];
+  const seenKeys = new Set<string>();
+  for (const row of [...view.sections.low, ...view.sections.done]) {
+    const input = row.batchSummaryInput;
+    if (!input || seenKeys.has(input.key) || batchSummaries?.[input.key] || requestedSummaries.current.keys.has(input.key)) continue;
+    seenKeys.add(input.key);
+    unsummarized.push(input);
+  }
+  const unsummarizedKey = unsummarized.map(b => b.key).join("|");
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
+    if (!unsummarized.length || typeof api.summarizeBatches !== "function") return;
+    const batch = unsummarized.slice(0, 20);
+    const timer = window.setTimeout(() => {
+      for (const item of batch) requestedSummaries.current.keys.add(item.key);
+      void api.summarizeBatches(projectId, { batches: batch }).then(res => {
+        if (!mounted.current || !res?.summaries) return;
+        useProjectStore.getState().mergeBatchSummaries(projectId, res.summaries);
+      }).catch(() => {});
+    }, 120);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [projectId, unsummarizedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The row of the cut or edit that's open stays in view as Keep or ↑ ↓ reveals it.
   useEffect(() => {
     if (selected) host.current?.querySelector('[aria-current="true"]')?.scrollIntoView?.({ block: "nearest" });
-  }, [selected, effectiveFilter, open.working, open.done]);
+  }, [selected, open.working, open.done, open.low]);
 
   // Show Scarlet's own dark floating tooltip with the full line on hover or keyboard focus of any edit row.
   useEffect(() => {
@@ -184,7 +234,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
   // Never leave a floating tooltip orphaned if its row unmounts (e.g. via K shortcut or live update).
   useEffect(() => {
     setTip(cur => (cur && (nothing || !cur.row.isConnected) ? null : cur));
-  }, [nothing, need, optional, working, done, effectiveFilter, open.working, open.done]);
+  }, [nothing, need, optional, working, done, open.working, open.done, open.low]);
 
   // Tie aria-describedby to the hovered/focused row while the tooltip is open, and clamp its horizontal edge in view.
   useLayoutEffect(() => {
@@ -233,13 +283,24 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
     const rows = sections[key];
     if (!rows.length) return null;
     const listClass = pastHour ? "simple-pass-list simple-edits has-hours" : "simple-pass-list simple-edits";
+    const freshRow = (rowKey: string) => {
+      const latest = store.view();
+      return latest.display.findByKey(rowKey) ?? latest.findByKey(rowKey);
+    };
     return <ol className={listClass} aria-label={SECTION_LABELS[key]}>
       {rows.map(row => {
         const batchCount = row.batch && row.batch.length > 1 ? row.batch.length : 0;
         const activeRow = row.batch?.find(r => r.on) ?? row;
-        const canUnkeepRow = key === "done" && !row.rejected && !row.skipped && !row.isMarker
+        const leaving = !!row.leaving;
+        const arriving = !!row.arriving;
+        const lingerKind = row.lingerFrom
+          ? (row.place === "working" ? "working" : (row.decided || row.rejected || row.skipped) ? "done" : undefined)
+          : undefined;
+        const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
+        const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
+        const canUnkeepRow = key === "done" && !leaving && !row.pending && !row.rejected && !row.skipped && !row.isMarker
           && (!!row.unkeepCall || row.members.some(m => m.canUnkeep));
-        const value = key === "done" ? (row.decision ?? row.value) : row.value;
+        const value = row.decision ?? row.value;
         const rowTime = clockLabel(row.displayAt);
         const needTime = row.needs || row.asks;
         const lead = <span className={needTime ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
@@ -251,36 +312,40 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
         const unkeepTip = row.unkeepTip ?? "Move back to Needs review";
         const statusWord = row.word;
         const ariaLabel = row.ariaLabel ?? (batchCount > 1
-          ? `${rowTime}: ${row.label}, plus ${batchCount - 1} more${row.decided ? ", kept" : ""}`
+          ? `${rowTime}: ${row.label}${row.decided ? ", kept" : ""}`
           : moment
           ? `${rowTime} ${row.label}, ${moment.more.replace("+ ", "and ")}`
           : row.rejected ? `${rowTime} ${row.label}, rejected`
           : `${rowTime}: ${row.label}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : row.decided ? (row.isMarker ? ", done" : ", kept") : needTime ? ", needs you" : ""}`);
-        const flashed = !!flashedThreadId && row.threadIds.includes(flashedThreadId);
-        return <li key={row.key} className={canUnkeepRow ? "has-unkeep" : undefined} data-flash={flashed ? "" : undefined}>
+        const itemClass = [leaving && "is-leaving", arriving && "is-arriving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined;
+        return <li key={row.key} className={itemClass}
+          data-lingering={lingerKind}
+          data-working={workingState}
+          data-paused={workingState === "pending" && paused ? "" : undefined}>
           <button type="button"
             className={["simple-edit", row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", row.isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ")}
             aria-current={row.on || undefined}
             data-log-control={row.logControl}
             data-log-label={batchCount > 1 ? "Edit group" : row.logLabel}
+            data-batch-count={batchCount > 1 ? batchCount : undefined}
             disabled={!row.open}
             data-row-tip={tipText}
             data-row-meta={tipMeta}
             data-row-detail={tipDetail}
             aria-label={ariaLabel}
-            onClick={letGo(() => store.view().findByKey(row.key)?.open?.())}
+            onClick={letGo(() => freshRow(row.key)?.open?.())}
             onPointerEnter={() => onHover?.(row.mark, row.hover)}
             onPointerLeave={() => onHover?.()}>
             {lead}
             <span className="simple-pass-label">
               {(row.rejected || row.skipped) && <RejectedMark />}
               {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+              {spinning && <span className="simple-pass-spin" aria-hidden="true" />}
               <span className="simple-pass-words simple-edit-words">{row.label}</span>
-              {batchCount > 1 && <span className="edit-batch-plus" aria-hidden="true">+{batchCount - 1}</span>}
               {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
               {row.fresh && <small className="edit-version is-new">New</small>}
               {moment && <span className="simple-pass-more" aria-expanded={moment.unfolded} title={moment.unfolded ? "Hide its edits" : "Show its edits"}
-                onClick={e => { e.stopPropagation(); store.view().findByKey(row.key)?.moment?.toggle(); }}>{moment.more}</span>}
+                onClick={e => { e.stopPropagation(); freshRow(row.key)?.moment?.toggle(); }}>{moment.more}</span>}
             </span>
             {!statusWord && value && <span className={row.busy ? "simple-edit-value simple-pass-value working-text" : "simple-edit-value simple-pass-value"} title={row.spent}>{value}</span>}
             {statusWord && <span className={`simple-edit-check simple-pass-check${row.revised || row.asks ? "" : " is-kept"}${row.busy ? " working-text" : ""}`} title={row.spent}>{statusWord}</span>}
@@ -288,21 +353,22 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
           {canUnkeepRow && <span className="simple-row-unkeep"
             onPointerEnter={() => onHover?.(row.mark, row.hover)} onPointerLeave={() => onHover?.()}>
             <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
-              aria-label={batchCount > 1 ? `Unkeep all ${batchCount} edits` : `Unkeep ${row.label}`} title={unkeepTip}
-              onClick={letGo(() => { const fresh = store.view().findByKey(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
+              aria-label={`Unkeep ${row.label}`} title={unkeepTip}
+              onClick={letGo(() => { const fresh = freshRow(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
           </span>}
-          <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span></AimRow>
+          <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span>{activeRow.version > 0 && <EditVersion n={activeRow.version} />}</AimRow>
           {row.nests.map(nest => nest.node)}
           {moment?.unfolded && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
-            {moment.subRows.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}>
+            {moment.subRows.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined} data-working={m.busy && !m.asks ? "busy" : undefined}>
               <button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
                 data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open}
                 data-row-tip={m.label} data-row-meta={m.tipMeta}
                 data-row-detail={m.tipDetail ?? (m.title && m.title !== m.label ? m.title : undefined)}
-                onClick={letGo(() => { const fresh = store.view().findByKey(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.open?.(); })}
+                onClick={letGo(() => { const fresh = freshRow(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.open?.(); })}
                 onPointerEnter={() => onHover?.(m.mark, m.hover)} onPointerLeave={() => onHover?.()}>
                 <span className="simple-pass-label">
                   {m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+                  {m.busy && !m.asks && <span className="simple-pass-spin" aria-hidden="true" />}
                   <span className="simple-pass-words simple-edit-words">{m.label}</span>
                   {m.version > 0 && <EditVersion n={m.version} hover={m.spent} />}
                 </span>
@@ -313,7 +379,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
                 onPointerEnter={() => onHover?.(m.mark, m.hover)} onPointerLeave={() => onHover?.()}>
                 <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
                   aria-label={`Unkeep ${m.label}`} title={m.unkeepTip ?? "Unkeep"}
-                  onClick={letGo(() => { const fresh = store.view().findByKey(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.unkeep?.(); })}>Unkeep</button>
+                  onClick={letGo(() => { const fresh = freshRow(row.key)?.moment?.subRows.find(s => s.key === m.key); fresh?.unkeep?.(); })}>Unkeep</button>
               </span>}
               {m.nests?.map(nest => nest.node)}
             </li>)}
@@ -334,7 +400,7 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
   };
 
   return <ChatRail compact={compact} railRef={host} id="simple-review-rail" className="review-rail" label="Edit lists"
-    side="left" resizes="edits" storageKey="scarlet.simpleReviewWidth" initialWidth={reviewRailWidth}
+    side="left" resizes="edits" storageKey="scarlet.simpleReviewWidth" initialWidth={sideRailWidth}
     minWidth={REVIEW_RAIL_MIN} beside="simple-chat" reserve={reserve}>
     <header className="review-rail-head">
       <h2>
@@ -345,21 +411,22 @@ export function ReviewRail({ projectId, store, open, onOpen, filter = "all", onF
             ? <span className="review-rail-count" title={`${need} ${need === 1 ? "needs" : "need"} you`}>{need}</span>
             : <span className="review-rail-total">{optional}</span>)}
       </h2>
-      {onDoneLow && optional > 0 && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
     </header>
-    {need > 0 && optional > 0 && onFilter && <div className="review-filter-bar" role="group" aria-label="Filter edits">
-      <button type="button" className="review-filter-chip" aria-pressed={effectiveFilter === "all"}
-        onClick={letGo(() => onFilter("all"))}>All {total}</button>
-      <button type="button" className="review-filter-chip is-warn" aria-pressed={effectiveFilter === "need"}
-        onClick={letGo(() => onFilter("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
-    </div>}
     <div className="review-rail-scroll">
       <div className="review-rail-list" role="group" aria-label="Needs review">
         {renderSectionList("you")}
-        {showConfident && (need > 0 || forYouRows > 0) && <div className="review-tier-sep" role="presentation"><span>Safe edits ({optional})</span></div>}
-        <div className="review-low-body" role="group" aria-label="Safe edits" hidden={!showConfident}>{renderSectionList("low")}</div>
-        {forYouRows === 0 && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
+        {showConfident && <div className={[
+          "review-tier-sep",
+          need === 0 && !hasYouRows && "is-first",
+          sepLeaving && "is-leaving",
+        ].filter(Boolean).join(" ")}>
+          <button type="button" className="review-tier-label review-tier-toggle" aria-expanded={lowShown} aria-controls={`${tipId}-low`}
+            onClick={letGo(() => onOpen("low", !open.low))}><span>{optional > 0 ? `Safe edits (${optional})` : "Safe edits"}</span><Icon name="chevron" size={10} /></button>
+          {onDoneLow && optional > 0 && <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
+            onClick={letGo(onDoneLow)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>}
+        </div>}
+        <div id={`${tipId}-low`} className="review-low-body" role="group" aria-label="Safe edits" hidden={!lowShown}>{renderSectionList("low")}</div>
+        {!hasYouRows && !showConfident && <p className="simple-review-empty">{nothing ? "No edits yet." : "Nothing waits on you."}</p>}
       </div>
     </div>
     <div className="review-rail-foot">

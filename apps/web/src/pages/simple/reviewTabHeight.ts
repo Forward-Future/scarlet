@@ -156,7 +156,7 @@ export function useReviewTabHeight(host: RefObject<HTMLElement | null>, opts: Re
     if (!el || !content) return;
     const observer = new ResizeObserver(() => {
       if (el.dataset.reviewPad !== undefined || lowClosing || mem.current.collapseAnim) return;
-      const lowEl = el.querySelector<HTMLElement>(":scope > :is(.simple-low-risk, .review-filter-bar)");
+      const lowEl = el.querySelector<HTMLElement>(":scope > .simple-low-risk");
       const lowOuter = lowEl ? outerVertical(lowEl).outer : 0;
       const contentBox = outerVertical(content);
       if (contentBox.height <= 0) return;
@@ -210,7 +210,7 @@ export function useReviewTabHeight(host: RefObject<HTMLElement | null>, opts: Re
     // Trigger 2 (everything finished) or Trigger 3 (a newer request started below): collapse smoothly instead of holding blank space.
     if (!tabChanged && (justFinishedAll || newerArrived) && mem.current.lockedHeight > 0) {
       collapseNow(true);
-      const lowEl = el.querySelector<HTMLElement>(":scope > :is(.simple-low-risk, .review-filter-bar)");
+      const lowEl = el.querySelector<HTMLElement>(":scope > .simple-low-risk");
       const lowOuter = lowEl ? outerVertical(lowEl).outer : 0;
       const contentBox = outerVertical(content);
       if (contentBox.height > 0) mem.current.prevNatural = lowOuter + contentBox.outer;
@@ -236,7 +236,7 @@ export function useReviewTabHeight(host: RefObject<HTMLElement | null>, opts: Re
     if (width > 0) mem.current.width = width;
     mem.current.inPin = inPin;
 
-    const lowEl = el.querySelector<HTMLElement>(":scope > :is(.simple-low-risk, .review-filter-bar)");
+    const lowEl = el.querySelector<HTMLElement>(":scope > .simple-low-risk");
     const lowOuter = lowEl ? outerVertical(lowEl).outer : 0;
     const naturalBody = lowOuter + contentBox.outer;
 

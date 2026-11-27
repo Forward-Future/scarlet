@@ -15,6 +15,7 @@ import { emissionStorePaths } from "../services/recordingAudio.js";
 import { savedSpeakerTurns } from "../services/recordingSpeakers.js";
 import { sourcePreviews } from "../services/sourcePreviews.js";
 import { createTask, saveTask } from "../services/tasks.js";
+import { editorFirst } from "../services/editorFirst.js";
 import { storeVersion } from "../services/timeline.js";
 
 let directory: string;
@@ -210,6 +211,19 @@ it("shows the last frame for a time past the end of a video, not an engine error
     expect([t, res.status, res.headers.get("Content-Type")]).toEqual([t, 200, "image/jpeg"]);
   }
   expect(lines.filter(line => line.startsWith("[error]"))).toEqual([]);
+});
+
+it("has background work yield while the editor looks at a source's frames, not while the agent does", async () => {
+  const { ctx } = workspace;
+  ctx.paths.ensureProject(project.id);
+  await ffmpeg(["-f", "lavfi", "-i", "color=red:size=160x90:rate=25:duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", join(ctx.paths.media(project.id), "clip.mp4")]);
+  ctx.repos.projects.putMedia(project.id, { id: "clip", name: "Clip", path: "clip.mp4", kind: "video", duration: 1, fps: 25, width: 160, height: 90, hasAudio: false }, "ready");
+  const touch = vi.spyOn(editorFirst, "touch");
+  expect((await api("GET", "/media/clip/frame?t=0.5&w=160")).status).toBe(200);
+  expect((await api("GET", "/media/clip/frame?t=0.4&w=160&priority=timeline")).status).toBe(200);
+  expect(touch).not.toHaveBeenCalled();
+  expect((await api("GET", "/media/clip/frame?t=0.3&w=160&priority=interactive")).status).toBe(200);
+  expect(touch).toHaveBeenCalledTimes(1);
 });
 
 it("shows a still's picture at any time in its clip, whatever its file is called", async () => {

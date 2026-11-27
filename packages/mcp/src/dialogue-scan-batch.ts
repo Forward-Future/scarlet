@@ -12,6 +12,7 @@ export class DialogueScanBatch {
   private seen: TimeRange[] = [];
   private pending: TimeRange[] = [];
   private pages = 0;
+  private toldCheckpoint = false;
 
   private unread(from: number, to: number) {
     const gaps: TimeRange[] = [];
@@ -36,6 +37,17 @@ export class DialogueScanBatch {
     if (this.pages < PAGES_PER_BATCH) return;
     const through = Math.max(...this.pending.map(r => r.end));
     return { through, next: `Save the settled cuts in this section with dialogue_apply_cuts so the editor can review them now. Continue editing on its continueFrom version. If nothing is ready to save, pass noCutsReadyThrough: ${through} on your next dialogue_scan. You can leave a retake open for more context.` };
+  }
+
+  /** The checkpoint a scan result carries: the whole sentence the first time on this recording, then a short one. */
+  checkpointShown() {
+    const checkpoint = this.checkpoint;
+    if (!checkpoint) return;
+    if (!this.toldCheckpoint) {
+      this.toldCheckpoint = true;
+      return checkpoint;
+    }
+    return { through: checkpoint.through, next: `Save this section's settled cuts, or pass noCutsReadyThrough: ${checkpoint.through} on your next dialogue_scan.` };
   }
 
   isNewPage(from: number, to: number) {

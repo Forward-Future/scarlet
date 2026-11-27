@@ -600,3 +600,12 @@ it("says on Models what is true signed in or not: no models until Claude Code or
     await act(async () => useHostsStore.setState(hosts, true));
   }
 });
+
+it("offers Classic workspace layout on General and omits the removed dictation review setting", async () => {
+  await open("/settings");
+  expect(el.textContent).not.toContain("Review dictation before sending");
+  expect(el.querySelector(".dictation-settings")).toBeNull();
+  const classicToggle = el.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Classic workspace layout"]')!;
+  expect(classicToggle).not.toBeNull();
+  expect(classicToggle.getAttribute("aria-checked")).toBe("false");
+});

@@ -1,8 +1,8 @@
 /**
  * A request with something for the editor to review lists its edits and calls under three tabs: Needs review, Working and
  * Done (the editor chose this on 2026-11-23). Every row is in exactly one place: waiting on the editor, optional (a low
- * risk edit: one Scarlet didn't flag that the editor hasn't decided, in Needs review's list once included), with Scarlet,
- * or decided.
+ * risk edit: one Scarlet didn't flag that the editor hasn't decided, in Needs review's list once included, or under Low
+ * risk below Needs review's rows in the new layout's column of edits), with Scarlet, or decided.
  * The chat draws its lists from this and ↑ ↓ and Keep step by it, so the two can't disagree about a tab's rows.
  */
 export type RowPlace = "you" | "optional" | "working" | "done";
@@ -30,8 +30,15 @@ export function inListOrder<R extends { at: number; num?: number }>(rows: readon
   return order.numbers && sorted.every(r => r.num !== undefined) ? sorted.sort((a, b) => a.num! - b.num!) : sorted;
 }
 
-/** The rows of the tab shown, top to bottom: Needs review's waiting rows, with the low risk ones among them while included. */
-export function rowsOfTab<R extends { place: RowPlace; at: number; num?: number }>(rows: readonly R[], tab: ReviewTab, optionalOpen: boolean, order: ListOrder): R[] {
+/**
+ * The rows of the tab shown, top to bottom: Needs review's waiting rows, with the low risk ones among them while included,
+ * or after them all with `optionalAfter` (the new layout).
+ */
+export function rowsOfTab<R extends { place: RowPlace; at: number; num?: number }>(rows: readonly R[], tab: ReviewTab, optionalOpen: boolean, order: ListOrder, optionalAfter = false): R[] {
+  if (optionalAfter && tab === "you") {
+    const of = (place: RowPlace) => inListOrder(rows.filter(r => r.place === place), order);
+    return [...of("you"), ...(optionalOpen ? of("optional") : [])];
+  }
   const shown = (place: RowPlace) => tab === "you" ? place === "you" || (optionalOpen && place === "optional") : place === tab;
   return inListOrder(rows.filter(r => shown(r.place)), order);
 }
@@ -85,9 +92,9 @@ export function reviewStops<E extends { at?: number; range: { start: number } },
   ];
 }
 
-/** The stops of the tab shown that ↑ and ↓ step through, top to bottom as the chat lists them. */
-export function stopsShown<E, C>(stops: readonly ReviewStop<E, C>[], open: string | undefined, order: ListOrder) {
-  return rowsOfTab(stops, tabShown(open), open === "all", order).filter(stop => !!stop.row || !!stop.call);
+/** The stops of the tab shown that ↑ and ↓ step through, top to bottom as the chat lists them (`optionalAfter` as for `rowsOfTab`). */
+export function stopsShown<E, C>(stops: readonly ReviewStop<E, C>[], open: string | undefined, order: ListOrder, optionalAfter = false) {
+  return rowsOfTab(stops, tabShown(open), open === "all", order, optionalAfter).filter(stop => !!stop.row || !!stop.call);
 }
 
 /** How long a row the editor has just acted on stays where it was with its new word, and how long it then takes to fade. */
@@ -104,7 +111,8 @@ type Held = { key: string; from: HeldFrom; leaving: boolean; busy: boolean; time
  * block moving between the conversation and the place above the message box.
  */
 export class ReviewLinger {
-  private places = new Map<string, RowPlace>();
+  /** Where each row was at the last draw; "unseen" (with `bySeen`) for a low risk row while those weren't on screen. */
+  private places = new Map<string, RowPlace | "unseen">();
   private held = new Map<string, Held>();
   private listeners = new Set<() => void>();
   private version = 0;
@@ -113,8 +121,12 @@ export class ReviewLinger {
    * it is kept here for the way back: Needs review pressed leaves the switch as it was.
    */
   lowRisk = false;
-  /** Whether Needs review's "Needs you" filter pill was active when Needs review was last shown, kept across Working/Done switches. */
-  needsOnly = false;
+
+  /**
+   * With `bySeen` (the new layout's column of edits) a low risk row the editor acts on is held if it was on screen when
+   * last drawn among its rows, even once they are folded; without it, only while they are shown.
+   */
+  constructor(private readonly bySeen = false) {}
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.version;
@@ -128,8 +140,8 @@ export class ReviewLinger {
   }
 
   /**
-   * Where each row is now. One that was listed in Needs review (`optionalShown`: its optional rows were too) and has gone
-   * to Working or Done is held. One that was in Done (`doneShown`: Done is shown, or it was still held in Needs review as
+   * Where each row is now. One that was listed in Needs review (`optionalShown`: its optional rows were too; see `bySeen`)
+   * and has gone to Working or Done is held. One that was in Done (`doneShown`: Done is shown, or it was still held in Needs review as
    * kept/done) and has gone to Working is held where it is so it shows Scarlet at work before fading out. `was` names
    * the rows it took the place of: a rejected edit is a new row for the old. `busy` says Scarlet is actively working
    * on it now. Called as the list draws, so a row that has just moved is still in the list in that same draw.
@@ -138,10 +150,13 @@ export class ReviewLinger {
     rows: readonly { key: string; place: RowPlace; was?: readonly string[]; busy?: boolean }[],
     optionalShown: boolean,
     doneShown = false,
+    preserve?: (key: string) => boolean,
   ) {
-    const next = new Map<string, RowPlace>();
+    const next = new Map<string, RowPlace | "unseen">();
     for (const { key, place, was = [], busy = false } of rows) {
-      next.set(key, place);
+      // A row seen among the low risk ones stays seen while they are off screen a moment, as while the list loads again.
+      const unseen = this.bySeen && place === "optional" && !optionalShown && this.places.get(key) !== "optional";
+      next.set(key, unseen ? "unseen" : place);
       const earlier = [key, ...was].find(k => this.places.has(k));
       const from = earlier === undefined ? undefined : this.places.get(earlier);
       // A row an earlier one became keeps what was held for it.
@@ -160,13 +175,18 @@ export class ReviewLinger {
           this.drop(key);
           this.hold(key, current.from, busy);
         }
-      } else if ((from === "you" || (from === "optional" && optionalShown)) && !current) {
+      } else if ((from === "you" || (from === "optional" && (this.bySeen || optionalShown))) && !current) {
         this.hold(key, from, busy);
       } else if (current && !current.leaving && place === "working" && busy && !current.busy) {
         // The revision was queued when first held and Scarlet just began working on it: restart the linger
         // window so the editor sees it actively working for a full moment before it fades out.
         this.drop(key);
         this.hold(key, current.from, true);
+      }
+    }
+    if (preserve) {
+      for (const [key, prev] of this.places) {
+        if (!next.has(key) && preserve(key)) next.set(key, prev);
       }
     }
     for (const key of [...this.held.keys()]) if (!next.has(key)) this.drop(key);

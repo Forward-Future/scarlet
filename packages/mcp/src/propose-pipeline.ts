@@ -138,7 +138,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
     showAreaFindings(before, laid, project.media, project.settings, id => { ids.add(id); return undefined; });
     if (!ids.size) return;
     const known = new Map<string, RecordingAreas>();
-    await Promise.all([...ids].map(async id => { const areas = await recordingAreas(id).catch(() => undefined); if (areas) known.set(id, areas); }));
+    await Promise.all([...ids].map(async id => { const areas = await recordingAreas(id).catch(withoutOnce(`failed to read the areas viewers may see in ${id}`, undefined)); if (areas) known.set(id, areas); }));
     let found = showAreaFindings(before, laid, project.media, project.settings, id => known.get(id));
     // Footage with no area on record is looked at now, a frame for each stretch, by short runs beside this one. An
     // area can end inside a stretch where the window moves, so what is still unset is asked about again, within the
@@ -157,7 +157,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
       const wait = Math.round((deadline - Date.now()) / 1000);
       const answers = await Promise.all([...bySource].map(async ([id, seconds]) => {
         const state = await client.post<RecordingAreas & { asked: number; answered: number }>(
-          `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(id)}/show-area/ask?wait=${wait}`, { seconds, taskId }).catch(() => undefined);
+          `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(id)}/show-area/ask?wait=${wait}`, { seconds, taskId }).catch(withoutOnce(`failed to ask where the areas of ${id} hold`, undefined));
         if (state) known.set(id, state);
         return state?.answered ?? 0;
       }));
@@ -269,9 +269,14 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
     let metCut: MetCut[] = [];
     let metRecordingCut: MetRecordingCut[] = [];
     let early: Awaited<ReturnType<typeof cutsRead>> | undefined;
+    // The ops laid on the base for the checks below, and the request they were laid for: an edit that moved no edge
+    // onto a cut is the same request after them, and laying its ops again cost as long as the checks on a long edit.
+    let askedFor: typeof body | undefined, askedMade: Timeline | undefined;
     if (author.type === "agent" && before && (body.timeline || body.ops)) {
       const asked = body.timeline ?? (() => { try { return applyOps(before, body.ops!); } catch { return undefined; } })();
       if (asked) {
+        askedFor = body;
+        askedMade = asked;
         const had = new Set(before.tracks.flatMap(t => t.clips.map(c => c.id)));
         const named = new Set((body.ops ?? []).flatMap(op => op.op === "addClip" && op.clip.id ? [op.clip.id] : []));
         const { project } = await getProject();
@@ -283,7 +288,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
         }
         // An insert's edge that runs under a second past a cut in its recording goes onto that cut, reported as metRecordingCut.
         const laid = closed.ops.length ? applyOps(asked, closed.ops) : asked;
-        early = await cutsRead(laid).catch(() => undefined);
+        early = await cutsRead(laid).catch(withoutOnce("failed to read where the recordings cut before placing the edit", undefined));
         if (early?.read?.cuts.size) {
           const onCuts = edgesOntoRecordingCuts(before, laid, project.media, project.settings, early.read.cuts, stable, early.fresh);
           if (onCuts.ops.length) {
@@ -294,7 +299,8 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
       }
     }
     // The summary leaves the saved timeline out, so the edit is laid on its base here, once, for the checks before and after saving.
-    const made = body.timeline ?? (body.ops && before ? (() => { try { return applyOps(before, body.ops!); } catch { return undefined; } })() : undefined);
+    const made = body.timeline ?? (body.ops && before ? body === askedFor && askedMade ? askedMade
+      : (() => { try { return applyOps(before, body.ops!); } catch { return undefined; } })() : undefined);
     if (author.type === "agent" && made) await insideShowAreas(before, made);
     const req: ProposeChangeRequest = {
       ...body,
@@ -309,7 +315,7 @@ export function createProposePipeline(deps: ProposePipelineDeps) {
     const action = change.state === "approved" ? "Applied" : "Proposed";
     const lines = diffDescription ?? (before && timeline ? describeDiff(diffTimelines(before, timeline), undefined, clipById) : []);
     const unframed = made && !notApplied ? unframedBeside(before, made) : [];
-    const bare = made && !notApplied ? await getProject().then(({ project }) => backgroundShows(before, made, project.media, project.settings)).catch(() => []) : [];
+    const bare = made && !notApplied ? await getProject().then(({ project }) => backgroundShows(before, made, project.media, project.settings)).catch(withoutOnce("failed to check what this edit shows with nothing behind it", [])) : [];
     const briefNow = made && !notApplied ? await briefOn(before, made, early).catch(error => { noteUnmeasured("the pictures this edit shows briefly", error); return undefined; }) : undefined;
     const brief = briefNow?.brief ?? [];
     const framedNow = made && !notApplied ? await framedOn(before, made).catch(error => { noteUnmeasured("the framing this edit made", error); return undefined; }) : undefined;

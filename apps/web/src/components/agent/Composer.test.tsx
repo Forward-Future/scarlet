@@ -3,7 +3,10 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { isDialogueGuide } from "@scarlet/shared";
+import { builtInCommand, commandGuides } from "@scarlet/shared";
+
+/** The skill that guides the dialogue pass, by what its header says. */
+const dialogueGuide = (skills: Parameters<typeof commandGuides>[1]) => commandGuides(builtInCommand("first-cut").name, skills)[0];
 import { api } from "../../lib/client";
 import { flushAppLog, startAppLog, stopAppLog } from "../../lib/appLog";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
@@ -89,7 +92,7 @@ it.each(["typing", "voice"])("dismisses the first-project glow for good on first
 
 // "There's no notice above the message box. The editor chose this design." (AGENTS.md)
 it("puts nothing above the message box on the first import, even with the dialogue pass ready", async () => {
-  const guide = db.skills.find(isDialogueGuide)!;
+  const guide = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ status: "ready", skills: [guide] });
   useUiStore.getState().offerFirstEditHint(PRJ);
   await show();
@@ -220,7 +223,7 @@ it("opens the skill library with / and sends the chosen skill for the whole vide
 });
 
 it.each(["missing", "disabled"])("sends and rewords explicit dialogue shortcuts with the shipped guide %s", async state => {
-  const guide = db.skills.find(isDialogueGuide)!;
+  const guide = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ status: "ready", skills: state === "missing" ? [] : [{ ...guide, enabled: false }] });
   await show();
   const request = "Start here /tighten-pauses-here please.";
@@ -305,7 +308,7 @@ it.each(["click", "keyboard"])("creates a skill from the picker by %s and return
 });
 
 it.each(["/dialogue-pass", "/tighten-pauses-here"])("submits %s with the canonical dialogue skill", async command => {
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   await show();
   const field = container.querySelector("textarea")!;
@@ -697,12 +700,13 @@ it("still drops a point the box took from the playhead once a draft restored aft
   localStorage.removeItem("scarlet.drafts.v1");
 });
 
-it("sends a spoken edit to the explicitly attached moment and spoken revisions to the open thread", async () => {
+it("dictates into the box aimed at the explicitly attached moment or open thread, and sends on Enter", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
-  const createVoiceNote = vi.fn().mockResolvedValue({ note: db.notes[0], task: db.tasks[0] });
+  const createVoiceNote = vi.fn();
   useProjectStore.setState({ createVoiceNote });
   vi.spyOn(api, "speechToText").mockResolvedValue({ text: "Keep the last word" });
+  const input = () => container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
   await show();
   const recording = { blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" };
   await selectPoint({ time: 3.5, clipIds: [] });
@@ -710,7 +714,13 @@ it("sends a spoken edit to the explicitly attached moment and spoken revisions t
   await act(async () => { micProps.onStart?.(); });
   await act(async () => usePlayerStore.getState().setTime(8));
   await act(async () => { finishRecording(recording); });
-  expect(createVoiceNote).toHaveBeenCalledWith(PRJ, recording.blob, expect.objectContaining({ time: 3.5 }));
+  expect(micProps.review).toBe(true);
+  expect(input().value).toBe("Keep the last word");
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 3.5 });
+  expect(createVoiceNote).not.toHaveBeenCalled();
+  expect(useProjectStore.getState().createNote).not.toHaveBeenCalled();
+  await submit();
+  expect(useProjectStore.getState().createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({ time: 3.5, text: "Keep the last word" }));
   expect(useUiStore.getState().agentContext).toBeNull();
 
   const ready = buildThreads(current).find(t => t.needs === "decision")!;
@@ -721,22 +731,64 @@ it("sends a spoken edit to the explicitly attached moment and spoken revisions t
   await act(() => container.querySelector<HTMLButtonElement>('[role="radio"][aria-label="Claude Code · Fable 5.1"]')!.click());
   expect(picker.textContent).toContain("Fable 5.1");
   await act(async () => { micProps.onStart?.(); micProps.onResult(recording); });
+  expect(input().value).toBe("Keep the last word");
+  expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
+  await submit();
   expect(useProjectStore.getState().revise).toHaveBeenCalledWith(ready.latest!.id,
-    expect.objectContaining({ assignTo: "claude:fable", text: "Keep the last word", voiceTranscript: "Keep the last word" }));
-  expect(createVoiceNote).toHaveBeenCalledTimes(1);
+    expect.objectContaining({ assignTo: "claude:fable", text: "Keep the last word" }));
+  expect(createVoiceNote).not.toHaveBeenCalled();
 });
 
-it("sends a late voice transcript to the project that owned the recording", async () => {
+it("leaves what was said in the box after the draft, aimed where it was, and sends nothing until Enter", async () => {
+  let micProps!: ComponentProps<typeof mic.MicButton>;
+  vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
+  const createVoiceNote = vi.fn();
+  useProjectStore.setState({ createVoiceNote });
+  const { createTask, createNote, revise, answerTask } = useProjectStore.getState();
+  vi.spyOn(api, "speechToText").mockResolvedValue({ text: "Keep the last word" });
+  const recording = { blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" };
+  const input = () => container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  await show();
+  // The red button says what a press does now.
+  expect(micProps.review).toBe(true);
+  const point = { time: 3.5, clipIds: [] };
+  await selectPoint(point);
+  await type("Tighten this,");
+  await act(async () => { micProps.onStart?.(); });
+  await act(async () => { micProps.onResult(recording); });
+  expect(input().value).toBe("Tighten this, Keep the last word");
+  expect(document.activeElement).toBe(input());
+  expect(input().selectionStart).toBe(input().value.length);
+  expect(useUiStore.getState().agentContext).toBe(point);
+  for (const sent of [createVoiceNote, createTask, createNote, revise, answerTask]) expect(sent).not.toHaveBeenCalled();
+  // Enter sends it as typed words, to the moment it was said about.
+  await act(async () => input().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  expect(createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({ time: 3.5, text: "Tighten this, Keep the last word" }));
+  expect(createVoiceNote).not.toHaveBeenCalled();
+
+  // A reply said into an open edit waits in its box too, and goes to that edit once sent.
+  const ready = buildThreads(current).find(t => t.needs === "decision")!;
+  await show({ thread: ready });
+  expect(input().value).toBe("");
+  await act(async () => { micProps.onStart?.(); });
+  await act(async () => { micProps.onResult(recording); });
+  expect(input().value).toBe("Keep the last word");
+  expect(revise).not.toHaveBeenCalled();
+  await submit();
+  expect(revise).toHaveBeenCalledWith(ready.latest!.id, expect.objectContaining({ text: "Keep the last word" }));
+});
+
+it("keeps a late voice transcript in the draft of the project that owned the recording", async () => {
   const source = project.media[0]!;
   const other = db.projects.find(p => p.id !== project.id)!;
   let finish!: (result: { text: string }) => void;
   const transcribe = vi.spyOn(api, "speechToText").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-  const task = { ...db.tasks[0]!, id: "voice-request", projectId: project.id };
-  const send = vi.spyOn(api, "createTask").mockResolvedValue({ task });
+  const send = vi.spyOn(api, "createTask");
   useProjectStore.setState({ createTask: stores[0].createTask });
   vi.spyOn(mic, "MicButton").mockImplementation(({ onStart, onResult }) =>
     <button onClick={() => { onStart?.(); onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/webm" }); }}>Record</button>);
 
+  useUiStore.getState().openDraft(project.id);
   await selectPoint({ time: 3.5, mediaId: source.id, clipIds: [] });
   await show();
   const recordButton = [...container.querySelectorAll("button")].find(button => button.textContent === "Record")!;
@@ -744,12 +796,16 @@ it("sends a late voice transcript to the project that owned the recording", asyn
   expect(transcribe).toHaveBeenCalledOnce();
   await act(async () => root.render(null));
   useProjectStore.setState({ current: { ...current, id: other.id, project: other, tasks: [] } });
+  useUiStore.getState().openDraft(other.id);
   await act(async () => finish({ text: "Trim this take" }));
 
-  expect(send).toHaveBeenCalledWith(project.id, expect.objectContaining({
-    instruction: "Trim this take", context: { version: project.head, mediaId: source.id, time: 3.5, end: undefined },
-  }));
-  expect(useProjectStore.getState().current?.tasks).toEqual([]);
+  expect(send).not.toHaveBeenCalled();
+  expect(useUiStore.getState().agentDraft).toBe("");
+  useUiStore.getState().openDraft(project.id);
+  expect(useUiStore.getState()).toMatchObject({
+    agentDraft: "Trim this take",
+    agentContext: { time: 3.5, mediaId: source.id },
+  });
 });
 
 it("pins a reply to the selected individual edit while typing and sends it in the same thread", async () => {
@@ -929,22 +985,27 @@ it("tells the page once a message has gone out, and not when sending fails", asy
   expect(container.textContent).toContain("Engine unreachable");
 });
 
-it("tells the page a spoken message went out, unless a typed one is still waiting in the box", async () => {
+it("appends dictated words after any typed draft without sending or calling onSent until Enter", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   vi.spyOn(api, "speechToText").mockResolvedValue({ text: "Keep the last word" });
   const onSent = vi.fn();
   const recording = { blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" };
+  const box = () => container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!.value;
   await show({ thread: buildThreads(current).find(t => t.needs === "decision")!, onSent });
   await act(async () => { micProps.onStart?.(); micProps.onResult(recording); });
-  expect(useProjectStore.getState().revise).toHaveBeenCalledTimes(1);
-  expect(onSent).toHaveBeenCalledTimes(1);
-  // The typed message is still the editor's to send, so the box stays as it is.
+  expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
+  expect(onSent).not.toHaveBeenCalled();
+  expect(box()).toBe("Keep the last word");
+  // Words already in the box stay first, and dictated words follow them until the editor sends.
   await type("And lower the music");
   await act(async () => { micProps.onStart?.(); micProps.onResult(recording); });
-  expect(useProjectStore.getState().revise).toHaveBeenCalledTimes(2);
+  expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
+  expect(onSent).not.toHaveBeenCalled();
+  expect(box()).toBe("And lower the music Keep the last word");
+  await submit();
+  expect(useProjectStore.getState().revise).toHaveBeenCalledTimes(1);
   expect(onSent).toHaveBeenCalledTimes(1);
-  expect(container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!.value).toBe("And lower the music");
 });
 
 it("doesn't tell the page a message went out while text typed since is still in the box", async () => {
@@ -978,7 +1039,7 @@ it("doesn't tell the page a message went out while text typed since is still in 
   expect(box()).toBe("");
   expect(onSent).toHaveBeenCalledTimes(1);
 
-  // The same goes for text typed while a spoken message is still being written down.
+  // Text typed while a spoken message is still being written down stays first, and what was said follows it.
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   let heard!: (result: { text: string }) => void;
@@ -988,22 +1049,14 @@ it("doesn't tell the page a message went out while text typed since is still in 
   await act(async () => { micProps.onStart?.(); micProps.onResult(recording); });
   await type("And lower the music");
   await act(async () => heard({ text: "Keep the last word" }));
-  await act(async () => land());
-  expect(revise).toHaveBeenCalledTimes(4);
-  expect(revise.mock.calls[3]![1]).toMatchObject({ text: "Keep the last word" });
+  expect(revise).toHaveBeenCalledTimes(3);
   expect(onSent).toHaveBeenCalledTimes(1);
-  expect(box()).toBe("And lower the music");
+  expect(box()).toBe("And lower the music Keep the last word");
 
   // Aiming the box at another edit while a message is on its way keeps the page untold as well: that target is for the next message.
   await type("");
   const wrap = { changeId: "chg_ready", editIndex: 2, time: 11.5, clipIds: [], label: "wrap" };
-  await act(async () => { micProps.onStart?.(); micProps.onResult(recording); });
   await act(async () => useUiStore.getState().setAgentContext(wrap));
-  await act(async () => heard({ text: "Hold the last word" }));
-  await act(async () => land());
-  expect(revise).toHaveBeenCalledTimes(5);
-  expect(onSent).toHaveBeenCalledTimes(1);
-  expect(useUiStore.getState().agentContext).toBe(wrap);
   await type("Make it longer");
   await submit();
   await act(async () => useUiStore.getState().setAgentContext({ ...wrap, editIndex: 1, label: "captions" }));
@@ -1011,17 +1064,9 @@ it("doesn't tell the page a message went out while text typed since is still in 
   expect(onSent).toHaveBeenCalledTimes(1);
   expect(box()).toBe("");
   expect(useUiStore.getState().agentContext).toMatchObject({ label: "captions" });
-
-  // A spoken message that couldn't be sent stays for the editor, and the page isn't told.
-  await act(async () => useUiStore.getState().setAgentContext(null));
-  await act(async () => useProjectStore.setState({ revise: vi.fn().mockRejectedValue(new Error("Engine unreachable")) }));
-  await act(async () => { micProps.onStart?.(); micProps.onResult(recording); });
-  await act(async () => heard({ text: "One more thing" }));
-  expect(onSent).toHaveBeenCalledTimes(1);
-  expect(box()).toBe("One more thing");
 });
 
-it("leaves an earlier request's draft clean when its spoken message lands after the box moved on", async () => {
+it("saves a late dictated transcript to the earlier request's draft when the box moved on", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   let heard!: (result: { text: string }) => void;
@@ -1036,10 +1081,10 @@ it("leaves an earlier request's draft clean when its spoken message lands after 
   await act(async () => useUiStore.getState().openDraft(PRJ));
   await act(async () => useUiStore.getState().setAgentDraft("Something else"));
   await act(async () => heard({ text: "Keep the last word" }));
-  expect(useProjectStore.getState().revise).toHaveBeenCalledTimes(1);
-  expect(useUiStore.getState().savedDrafts[first]).toBeUndefined();
+  expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
+  expect(useUiStore.getState().savedDrafts[first]).toMatchObject({ agentDraft: "Keep the last word" });
   expect(useUiStore.getState().agentDraft).toBe("Something else");
-  expect(onSent).toHaveBeenCalledTimes(1);
+  expect(onSent).not.toHaveBeenCalled();
 });
 
 it("tells the page a spoken message is in the box while it is recorded and written down, so the box isn't aimed elsewhere", async () => {
@@ -1058,7 +1103,8 @@ it("tells the page a spoken message is in the box while it is recorded and writt
   await act(async () => { micProps.onRecording?.(false); micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
   expect(speaking()).toBe(true);
   await act(async () => heard({ text: "Keep the last word" }));
-  expect(useProjectStore.getState().revise).toHaveBeenCalledTimes(1);
+  expect(useUiStore.getState().agentDraft).toBe("Keep the last word");
+  expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
   expect(speaking()).toBe(false);
   // A recording that never made a message lets the box go too, and so does the box going away mid-recording.
   await act(async () => micProps.onRecording?.(true));
@@ -1069,12 +1115,11 @@ it("tells the page a spoken message is in the box while it is recorded and writt
   expect(speaking()).toBe(false);
 });
 
-it("recovers a failed spoken edit in the project where it was recorded", async () => {
+it("keeps a late dictated edit in the project where it was recorded, aimed where it started", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   let finish!: (result: { text: string }) => void;
   vi.spyOn(api, "speechToText").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-  useProjectStore.setState({ createTask: vi.fn().mockRejectedValue(new Error("Engine unreachable")) });
   useUiStore.getState().openDraft(PRJ);
   await selectPoint({ time: 3.5, mediaId: project.media[0]!.id, clipIds: [] });
   await show();
@@ -1089,12 +1134,11 @@ it("recovers a failed spoken edit in the project where it was recorded", async (
   expect(useUiStore.getState()).toMatchObject({ agentDraft: "Trim this take.", agentContext: { time: 3.5, mediaId: project.media[0]!.id } });
 });
 
-it("puts a spoken message that couldn't be sent back with the request it was said to, not in the box aimed elsewhere since", async () => {
+it("puts dictated words with the request they were said to, not in the box aimed elsewhere since", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   let heard!: (result: { text: string }) => void;
   vi.spyOn(api, "speechToText").mockImplementation(() => new Promise(resolve => { heard = resolve; }));
-  useProjectStore.setState({ revise: vi.fn().mockRejectedValue(new Error("Engine unreachable")) });
   const thread = buildThreads(current).find(t => t.needs === "decision")!;
   const first = JSON.stringify([PRJ, thread.id]);
   await act(async () => useUiStore.getState().openDraft(PRJ, thread.id));
@@ -1499,7 +1543,7 @@ it("changes a queued request's words in the box, across its whole width, saving 
 });
 
 it("saves a queued request's new words with the skills their /commands name, as a send does", async () => {
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   let text = "/dialogue-pass Keep the aside.";
   const rewording = { id: "task_queued", get text() { return text; }, onChange: vi.fn((t: string) => { text = t; }),
@@ -1574,8 +1618,12 @@ it("dictates for the whole video with no moment picked, including after an aband
   await act(async () => { micProps.onStart?.(); });
   await act(async () => usePlayerStore.getState().setTime(310));
   await act(async () => { micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
+  expect(container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!.value).toBe("Fix the levels throughout");
+  expect(useUiStore.getState().agentContext).toBeNull();
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+  await submit();
   expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
-    instruction: "Fix the levels throughout", voiceTranscript: "Fix the levels throughout", context: { version: project.head },
+    instruction: "Fix the levels throughout", context: { version: project.head },
   }));
   expect(createVoiceNote).not.toHaveBeenCalled();
 });
@@ -1667,18 +1715,21 @@ it("keeps a point the playhead still rests on as it was picked, on the version t
   expect(useProjectStore.getState().createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({ text: "Zoom in here", time: 8, version: "v_suggested", clipIds: ["clip_in_suggestion"] }));
 });
 
-it("clears the chosen point after a voice note is sent even if playback moved while recording", async () => {
+it("keeps the chosen point through dictation even if playback moved while recording, then clears it on send", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
-  const createVoiceNote = vi.fn().mockResolvedValue({ note: db.notes[0] });
-  useProjectStore.setState({ createVoiceNote });
+  vi.spyOn(api, "speechToText").mockResolvedValue({ text: "Trim this pause" });
   const onSent = vi.fn();
   await show({ onSent });
   await selectPoint({ time: 10, clipIds: [] });
   await act(async () => { micProps.onStart?.(); });
   await act(async () => usePlayerStore.setState({ time: 42, playing: true }));
   await act(async () => { micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
-  expect(createVoiceNote).toHaveBeenCalledWith(PRJ, expect.anything(), expect.objectContaining({ time: 10 }));
+  expect(useUiStore.getState().agentDraft).toBe("Trim this pause");
+  expect(useUiStore.getState().agentContext).toMatchObject({ time: 10 });
+  expect(onSent).not.toHaveBeenCalled();
+  await submit();
+  expect(useProjectStore.getState().createNote).toHaveBeenCalledWith(PRJ, expect.objectContaining({ time: 10, text: "Trim this pause" }));
   // The message is out: the box is empty and aimed at nothing, and the page hears of it.
   expect(useUiStore.getState().agentContext).toBeNull();
   expect(onSent).toHaveBeenCalledTimes(1);
@@ -1752,7 +1803,7 @@ it("puts what was said for a queued request in the box, where the tick saves it 
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   vi.spyOn(api, "speechToText").mockResolvedValue({ text: "/dialogue-pass Keep the aside, but trim the breath before it." });
-  const skill = db.skills.find(isDialogueGuide)!;
+  const skill = dialogueGuide(db.skills)!;
   useSkillsStore.setState({ skills: [skill], status: "ready" });
   let text = "Keep the aside.";
   const rewording = { id: "task_queued", get text() { return text; }, onChange: vi.fn((t: string) => { text = t; }),
@@ -1777,7 +1828,7 @@ it("puts what was said for a queued request in the box, where the tick saves it 
   expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
 });
 
-it("sends a message being spoken as itself when a queued request's words take the box meanwhile, and drops words said for ones put back", async () => {
+it("keeps a message being spoken in its draft when a queued request's words take the box meanwhile, and drops words said for ones put back", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
   let heard!: (result: { text: string }) => void;
@@ -1790,15 +1841,18 @@ it("sends a message being spoken as itself when a queued request's words take th
   await act(async () => { micProps.onStart?.(); micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
   await show({ thread, rewording });
   await act(async () => heard({ text: "Keep the last word" }));
+  expect(rewording.onChange).not.toHaveBeenCalled();
   expect(rewording.onSave).not.toHaveBeenCalled();
-  expect(useProjectStore.getState().revise).toHaveBeenCalledTimes(1);
-  // Spoken for the queued request, whose words the editor put back before it was written down: nothing is sent.
+  expect(useUiStore.getState().agentDraft).toBe("Keep the last word");
+  expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
+  // Spoken for the queued request, whose words the editor put back before it was written down: nothing changes.
   await act(async () => { micProps.onStart?.(); micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
   await show({ thread });
   await act(async () => heard({ text: "Trim the breath" }));
   expect(rewording.onChange).not.toHaveBeenCalled();
   expect(rewording.onSave).not.toHaveBeenCalled();
-  expect(useProjectStore.getState().revise).toHaveBeenCalledTimes(1);
+  expect(useUiStore.getState().agentDraft).toBe("Keep the last word");
+  expect(useProjectStore.getState().revise).not.toHaveBeenCalled();
 });
 
 it("saves a queued request's words once while Enter is held, and doesn't send the message that comes back to the box", async () => {
@@ -2052,10 +2106,10 @@ it("sends a message about a moment that carries files as a request about that mo
   }));
 });
 
-it("carries attached files and marked frames on a dictated request about a moment, while plain voice notes still keep their recording", async () => {
+it("carries attached files and marked frames when sending a dictated request about a moment", async () => {
   let micProps!: ComponentProps<typeof mic.MicButton>;
   vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
-  const createVoiceNote = vi.fn().mockResolvedValue({ note: db.notes[0], task: db.tasks[0] });
+  const createVoiceNote = vi.fn();
   useProjectStore.setState({ createVoiceNote });
   const upload = vi.spyOn(api, "uploadAttachment").mockResolvedValue({ attachment: { id: "att_logo", name: "logo.png", size: 3 } });
   vi.spyOn(api, "speechToText")
@@ -2064,42 +2118,43 @@ it("carries attached files and marked frames on a dictated request about a momen
     .mockResolvedValueOnce({ text: "Blur the marked area here" });
   const recording = { blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/webm" };
 
-  // Attached file + timeline moment: routes through speech -> createTask with attachments and clears the file.
+  // Attached file + timeline moment: dictation lands in box, then sending attaches the file and clears it.
   await show();
   await selectPoint({ time: 11, clipIds: [] });
   await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/logo.png"]));
   await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
   expect(createVoiceNote).not.toHaveBeenCalled();
+  expect(useProjectStore.getState().createTask).not.toHaveBeenCalled();
+  expect(useUiStore.getState().agentDraft).toBe("Put this logo in the corner here");
+  expect(container.querySelector(".composer-files")).not.toBeNull();
+  await submit();
   expect(useProjectStore.getState().createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({
     instruction: "Put this logo in the corner here",
-    voiceTranscript: "Put this logo in the corner here",
     context: expect.objectContaining({ time: 11, attachments: [{ id: "att_logo", name: "logo.png", size: 3 }] }),
   }));
   expect(container.querySelector(".composer-files")).toBeNull();
 
-  // An attachment still uploading when dictation finishes waits to settle and rides on the request.
+  // An attachment still uploading when the dictated message is sent waits to settle and rides on the request.
   let finishUpload!: (res: { attachment: { id: string; name: string; size: number } }) => void;
   upload.mockImplementationOnce(() => new Promise(resolve => { finishUpload = resolve; }));
   await selectPoint({ time: 12, clipIds: [] });
   await act(async () => { dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/slide.png"]); });
-  let pendingVoice!: Promise<void>;
+  await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
+  expect(useUiStore.getState().agentDraft).toBe("Use the slide that is uploading");
   await act(async () => {
-    micProps.onStart?.();
-    pendingVoice = Promise.resolve(micProps.onResult(recording));
+    container.querySelector<HTMLButtonElement>(".composer-input button.btn-primary")!.click();
   });
   expect(createVoiceNote).not.toHaveBeenCalled();
   await act(async () => {
     finishUpload({ attachment: { id: "att_slide", name: "slide.png", size: 5 } });
-    await pendingVoice;
   });
   expect(useProjectStore.getState().createTask).toHaveBeenLastCalledWith(PRJ, expect.objectContaining({
     instruction: "Use the slide that is uploading",
-    voiceTranscript: "Use the slide that is uploading",
     context: expect.objectContaining({ time: 12, attachments: [{ id: "att_slide", name: "slide.png", size: 5 }] }),
   }));
   expect(container.querySelector(".composer-files")).toBeNull();
 
-  // Marked frame + timeline moment: routes through speech -> createTask with marked frame attachment & pictureMarks and clears marks.
+  // Marked frame + timeline moment: dictation lands in box, then sending includes marked frame attachment & pictureMarks and clears marks.
   const picture = new Blob(["png"], { type: "image/png" });
   vi.spyOn(markedFrame, "markedFramePicture").mockResolvedValue(picture);
   upload.mockResolvedValueOnce({ attachment: { id: "att_frame", name: "Marked frame 0.07.png", size: 3, mime: "image/png" } });
@@ -2109,10 +2164,11 @@ it("carries attached files and marked frames on a dictated request about a momen
   });
   await selectPoint({ time: 7, clipIds: [] });
   await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
+  expect(useUiStore.getState().agentDraft).toBe("Blur the marked area here");
+  await submit();
   expect(createVoiceNote).not.toHaveBeenCalled();
   expect(useProjectStore.getState().createTask).toHaveBeenLastCalledWith(PRJ, expect.objectContaining({
     instruction: "Blur the marked area here",
-    voiceTranscript: "Blur the marked area here",
     context: expect.objectContaining({
       time: 7,
       attachments: [{ id: "att_frame", name: "Marked frame 0.07.png", size: 3, mime: "image/png" }],
@@ -2121,20 +2177,6 @@ it("carries attached files and marked frames on a dictated request about a momen
   }));
   expect(usePictureMarksStore.getState().byProject[PRJ]).toBeUndefined();
   expect(container.querySelector(".composer-files")).toBeNull();
-
-  // Plain voice note at a moment with no files or marks still calls createVoiceNote to keep its recording.
-  await selectPoint({ time: 15, clipIds: [] });
-  await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
-  expect(createVoiceNote).toHaveBeenCalledTimes(1);
-  expect(createVoiceNote).toHaveBeenCalledWith(PRJ, recording.blob, expect.objectContaining({ time: 15 }));
-
-  // Only a failed attachment in the box still leaves a voice note on createVoiceNote so its recording is kept.
-  upload.mockRejectedValueOnce(new Error("Too large"));
-  await act(async () => dropTargets.get(container.querySelector(".composer-dock")!)!.drop(["/Users/me/huge.mov"]));
-  await selectPoint({ time: 18, clipIds: [] });
-  await act(async () => { micProps.onStart?.(); await micProps.onResult(recording); });
-  expect(createVoiceNote).toHaveBeenCalledTimes(2);
-  expect(createVoiceNote).toHaveBeenLastCalledWith(PRJ, recording.blob, expect.objectContaining({ time: 18 }));
 });
 
 it("marks timestamps as the editor types and sends the first one with the original words", async () => {

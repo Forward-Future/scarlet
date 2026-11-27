@@ -6,11 +6,10 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import { sha256, SOURCE_PREVIEW_SECONDS, stableStringify } from "@scarlet/timeline";
 import type { Clip, MediaAsset, Project, Timeline, TimeRange, Track, TransitionPlan } from "@scarlet/timeline";
-import { fileInDirectory } from "./assetPath.js";
-import { audioEffectDelay, effectKind } from "./effects.js";
+import { audioEffectDelay, effectKind, resolveLutFile } from "./effects.js";
 import { TONE_MAP_REVISION } from "./hdr.js";
 import { fnum } from "./exec.js";
-import { clipPlacement, fillsFrames, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graphTransform.js";
+import { clipPlacement, fillsFrames, hasAnimatedTransform, holdsFrame, holdsSample, proxyHeightForClip, videoClockStart } from "./graphTransform.js";
 import { isMovingAsset, isStillAsset } from "./probe.js";
 import { outputSize, type RenderQuality } from "./render.js";
 import { motionsIn, planTransitions, type TransitionMotion } from "./transitions.js";
@@ -19,6 +18,7 @@ export const RENDER_REVISION = 5;
 export const PROXY_CLOCK_REVISION = 3;
 export const DELIVERY_AUDIO_REVISION = 4;
 export const TRANSITION_RENDER_REVISION = 1;
+export const SMOOTH_TRANSFORM_REVISION = 1;
 
 export interface SegmentKeyOptions {
   quality: RenderQuality;
@@ -108,9 +108,12 @@ function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset
   // A sound an effect plays late used to end that much early in each section. Saying so sets these sections apart
   // from the ones cached then, and leaves every other clip's part of the key as it has been.
   const lateTail = (heard && audioEffectDelay(rest.effects) > 0) || undefined;
+  // Animated transforms render with subpixel `perspective` instead of integer `scale:eval=frame` + `overlay`.
+  // Tagging only clips that actually animate invalidates previously cached shaky segments without disturbing others.
+  const smoothTransform = (track.kind === "video" && !track.hidden && hasAnimatedTransform(rest)) ? SMOOTH_TRANSFORM_REVISION : undefined;
   if (!asset?.hash || rest.effects.some(effect => effect.enabled && effect.type === "lut")) {
     // Pending/legacy sources and external LUTs retain the old placement-sensitive identity.
-    return { ...rest, timelineIn, range, media: mediaFingerprint(asset, format), frameFill, lateTail, motion };
+    return { ...rest, timelineIn, range, media: mediaFingerprint(asset, format), frameFill, lateTail, motion, smoothTransform };
   }
   const { sourceIn, sourceOut: _out, ...input } = rest;
   const videoStart = videoClockStart(rest, p.local0);
@@ -122,7 +125,7 @@ function segmentClip(clip: Clip, range: TimeRange, media: Map<string, MediaAsset
   return { ...input, placement, media: mediaFingerprint(asset, format),
     seek: fnum(sourceIn + p.local0 * rest.speed), sourceDuration: fnum(p.vis * rest.speed),
     videoStart: fnum(videoStart), audioStart: fnum(audioStart), shift: fnum(p.pos - videoStart), delaySamples: format.pictureOnly ? undefined : Math.round(p.pos * settings.sampleRate),
-    videoFadeStart: fadeStart(rest.videoFadeOut), audioFadeStart: fadeStart(rest.audioFadeOut), frameFill, lateTail, motion };
+    videoFadeStart: fadeStart(rest.videoFadeOut), audioFadeStart: fadeStart(rest.audioFadeOut), frameFill, lateTail, motion, smoothTransform };
 }
 
 /** Fingerprint the rendered window independently of its absolute timeline position. */
@@ -184,7 +187,7 @@ export function deliveryPicture(project: Project, timeline: Timeline): Timeline 
 }
 
 /** A LUT is an external file rather than an immutable media row. Include its current identity in cached pictures. */
-export function lutFileStamps(timeline: Timeline, mediaRoot: string) {
+export function lutFileStamps(timeline: Timeline, mediaRoot: string, lutRoots?: readonly string[]) {
   const names = new Set<string>();
   for (const track of timeline.tracks) for (const clip of track.clips) {
     if (clip.kind !== "media" || clip.enabled === false) continue;
@@ -195,16 +198,16 @@ export function lutFileStamps(timeline: Timeline, mediaRoot: string) {
     }
   }
   return [...names].sort().map(name => {
-    const file = fileInDirectory(mediaRoot, name);
+    const file = resolveLutFile(name, mediaRoot, lutRoots);
     const info = file && statSync(file, { throwIfNoEntry: false });
     return [name, info ? [file, info.size, info.mtimeMs, info.ctimeMs] : null];
   });
 }
 
 export function segmentInfo(project: Project, timeline: Timeline, range: TimeRange, cacheDir: string, format: SegmentKeyOptions,
-  mediaRoot: string, media: Map<string, MediaAsset>, transitions: TransitionPlan): SegmentInfo {
+  mediaRoot: string, media: Map<string, MediaAsset>, transitions: TransitionPlan, lutRoots?: readonly string[]): SegmentInfo {
   let key = plannedSegmentKey(project, timeline, range, format, media, transitions);
-  const luts = lutFileStamps(timeline, mediaRoot);
+  const luts = lutFileStamps(timeline, mediaRoot, lutRoots);
   if (luts.length) key = sha256(stableStringify([key, luts]));
   const file = path.join(cacheDir, `${key}.mp4`);
   return { range, key, file, cached: false };

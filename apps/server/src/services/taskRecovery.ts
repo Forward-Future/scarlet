@@ -51,7 +51,7 @@ function reconcileTask(ctx: Ctx, task: Task, unstarted: boolean, quit: boolean, 
   const again = quit || lost < LOST_WORKER_ATTEMPTS;
   let carriesOn = false;
   // A learning check cut short isn't run again: its request has moved on, and the next message is read anyway.
-  if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check" && saved.kind !== "area_check" && saved.kind !== "listen_check" && saved.kind !== "hand_off") {
+  if (again && saved.state === "failed" && saved.interrupted && saved.kind !== "transcribe" && saved.kind !== "learning_check" && saved.kind !== "area_check" && saved.kind !== "listen_check" && saved.kind !== "batch_summary" && saved.kind !== "hand_off") {
     try {
       // All of the next attempt or none of it: one left half made would run beside a run that still offers Resume.
       ctx.db.savepoint(() => resumeTask(ctx, saved, {}));
@@ -332,6 +332,7 @@ function resumeTranscriptions(ctx: Ctx, projectId?: string, mediaId?: string): v
       }
       if (completedTranscriptAfter(ctx, task.projectId, media.id, task.createdAt ?? "")) continue;
       const { task: restarted, done } = startTranscription(ctx, task.projectId, media, chosen, "interrupt", { interrupted: task });
+      // The restarted run logs its own failure ("[transcribe] … failed"); this only keeps the rejection from going unhandled.
       ctx.track(done.catch(() => null), task.projectId);
       ctx.log(`[task] ${task.id} was interrupted; continuing transcription of ${media.id} as ${restarted.id}`);
     } catch (err) {

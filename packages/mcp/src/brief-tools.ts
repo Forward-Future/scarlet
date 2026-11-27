@@ -40,6 +40,73 @@ const HELP_AT_ONCE = 8;
 const SEPARATOR = "\n\n---\n\n";
 const notReadTail = (names: readonly string[]) => `Not read in this call, to ask for next: ${names.join(", ")}.`;
 
+type Schema = Record<string, unknown>;
+/** The keywords `parameterLines` writes out; a node with any other is written as its JSON, so nothing is dropped. */
+const READ_KEYWORDS = new Set(["type", "description", "properties", "required", "additionalProperties", "items", "enum", "const", "anyOf",
+  "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength", "minItems", "maxItems", "default", "$schema"]);
+const isSchema = (value: unknown): value is Schema => !!value && typeof value === "object" && !Array.isArray(value);
+const between = (low: unknown, high: unknown, unit = "") => low !== undefined && high !== undefined
+  ? (low === high ? `${low}${unit}` : `${low} to ${high}${unit}`) : low !== undefined ? `>= ${low}${unit}` : high !== undefined ? `<= ${high}${unit}` : "";
+
+/** What a schema node takes, on one line: its type, values and limits, such as `integer, 0 to 12` or `"cut" | "keep"`. */
+function typeOf(node: Schema): string {
+  if (Object.keys(node).some(key => !READ_KEYWORDS.has(key))) {
+    const { description: _description, ...rest } = node;
+    return `JSON schema ${JSON.stringify(rest)}`;
+  }
+  if (Array.isArray(node.anyOf)) return node.anyOf.map(branch => isSchema(branch) ? typeOf(branch) : JSON.stringify(branch)).join(" | ");
+  const parts: string[] = [];
+  if (node.const !== undefined) parts.push(JSON.stringify(node.const));
+  else if (Array.isArray(node.enum)) parts.push(node.enum.map(value => JSON.stringify(value)).join(" | "));
+  else {
+    const types = Array.isArray(node.type) ? node.type.join(" | ") : typeof node.type === "string" ? node.type : "any";
+    const item = isSchema(node.items) ? typeOf(node.items) : undefined;
+    if (types === "array") parts.push(item ? `array of ${item.includes(", ") ? `(${item})` : item}` : "array");
+    else if (types === "object" && isSchema(node.additionalProperties) && Object.keys(node.additionalProperties).length)
+      parts.push(node.properties ? `object, other fields ${typeOf(node.additionalProperties)}` : `object of ${typeOf(node.additionalProperties)}`);
+    else parts.push(types);
+  }
+  const low = node.exclusiveMinimum !== undefined ? undefined : node.minimum, high = node.exclusiveMaximum !== undefined ? undefined : node.maximum;
+  const range = [between(low, high), node.exclusiveMinimum !== undefined ? `> ${node.exclusiveMinimum}` : "", node.exclusiveMaximum !== undefined ? `< ${node.exclusiveMaximum}` : ""].filter(Boolean).join(", ");
+  if (range) parts.push(range);
+  const chars = node.minLength === 1 && node.maxLength === undefined ? "nonempty" : between(node.minLength, node.maxLength, " chars");
+  const items = between(node.minItems, node.maxItems, " items");
+  if (chars) parts.push(chars);
+  if (items) parts.push(items);
+  if (node.default !== undefined) parts.push(`default ${JSON.stringify(node.default)}`);
+  return parts.join(", ");
+}
+
+/** The object a node's fields are listed under: itself, the items of an array of them, or each such branch of a choice. */
+const fieldHolders = (node: Schema): Schema[] => isSchema(node.properties) ? [node]
+  : isSchema(node.items) ? fieldHolders(node.items)
+  : Array.isArray(node.anyOf) ? node.anyOf.filter(isSchema).flatMap(fieldHolders) : [];
+
+/**
+ * A tool's parameters as one line each, nested fields indented under theirs: name (`*` when required), type and limits,
+ * and description. The same facts as its JSON schema, without the schema's braces, quotes and keywords on every field
+ * (2.8 of dialogue_apply_cuts' 7 KB of parameters were those, 2026-11-27).
+ */
+export function parameterLines(schema: Schema, depth = 0): string[] {
+  const required = new Set(Array.isArray(schema.required) ? schema.required as string[] : []);
+  return Object.entries(isSchema(schema.properties) ? schema.properties : {}).flatMap(([field, value]) => {
+    const node = isSchema(value) ? value : {};
+    const describe = typeof node.description === "string" ? `: ${node.description}` : "";
+    const own = `${"  ".repeat(depth)}- ${field}${required.has(field) ? "*" : ""} (${typeOf(node)})${describe}`;
+    if (own.includes("(JSON schema ")) return [own];
+    const holders = fieldHolders(node);
+    // Two shapes to choose from are listed apart, each under its own line, so their fields aren't read as one object's.
+    if (holders.length < 2) return [own, ...holders.flatMap(holder => parameterLines(holder, depth + 1))];
+    return [own, ...holders.flatMap((holder, i) => [`${"  ".repeat(depth + 1)}- ${i ? "or" : "either"} (object):`, ...parameterLines(holder, depth + 2)])];
+  });
+}
+
+/** A tool's whole description and parameters, as tool_help gives them. */
+export function toolDoc(tool: Tool): string {
+  const fields = parameterLines(tool.inputSchema as Schema);
+  return `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (* = required):\n${fields.length ? fields.join("\n") : "none"}`;
+}
+
 /** What every tool `tool_call` reaches may do, so a harness asks about a call through it as it would about the boldest. */
 function unionAnnotations(tools: readonly Tool[]): ToolAnnotations {
   const all = (hint: keyof ToolAnnotations) => tools.every(t => t.annotations?.[hint] === true);
@@ -72,7 +139,7 @@ export function listToolsBriefly(server: McpServer, maxChars = DEFAULT_RESULT_CH
   server.registerTool(TOOL_HELP, {
     description: "A Scarlet tool's full description and parameters. Read it before you first call a tool.",
     inputSchema: { name: z.string().optional().describe("The tool's name, such as transcript_get"),
-      names: z.array(z.string()).min(1).optional().describe("Several tools' names instead, read in one call; as many as fit are read, the rest listed for another call") },
+      names: z.array(z.string()).min(1).optional().describe("Several tools' names instead, read in one call: every one that fits is read, in the order asked, and the rest are named at the end to ask for next") },
     annotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false, openWorldHint: false },
   }, async ({ name, names }, extra) => {
     if ((name === undefined) === (names === undefined)) return errorText("Give either name, for one tool, or names, for several.");
@@ -88,20 +155,22 @@ export function listToolsBriefly(server: McpServer, maxChars = DEFAULT_RESULT_CH
     if (!known.length && !overflowCount.length) return errorText(missing!);
     const whole: string[] = [];
     const deferred: string[] = [];
+    // Room kept for naming every tool that may be left for later, so whatever is deferred the reply stays within maxChars.
+    const tailRoom = SEPARATOR.length + notReadTail([...known.map(t => t.name), ...overflowCount]).length;
     let used = missing ? missing.length : 0;
-    for (let i = 0; i < known.length; i++) {
-      const tool = known[i]!;
-      const entry = `${tool.name}\n\n${tool.description ?? ""}\n\nParameters (JSON schema):\n${JSON.stringify(tool.inputSchema)}`;
-      const remaining = [...known.slice(i + 1).map(t => t.name), ...overflowCount];
-      const tailLen = remaining.length ? SEPARATOR.length + notReadTail(remaining).length : 0;
+    // Every asked tool that fits is read, in the order asked: one too long for what is left is named for the next call
+    // and the ones after it are still tried, so a call fills its budget instead of stopping at the first that doesn't
+    // fit (passes asked for the same names again and again, 2026-11-26). The first is read whole however long it is.
+    known.forEach((tool, i) => {
+      const entry = toolDoc(tool);
       const added = (used > 0 ? SEPARATOR.length : 0) + entry.length;
-      if (whole.length > 0 && used + added + tailLen > maxChars) {
-        deferred.push(...known.slice(i).map(t => t.name));
-        break;
+      const tail = deferred.length || overflowCount.length || i < known.length - 1 ? tailRoom : 0;
+      if (whole.length > 0 && used + added + tail > maxChars) deferred.push(tool.name);
+      else {
+        whole.push(entry);
+        used += added;
       }
-      whole.push(entry);
-      used += added;
-    }
+    });
     const later = [...deferred, ...overflowCount];
     const rest = later.length ? notReadTail(later) : undefined;
     return { content: [{ type: "text" as const, text: [...(missing ? [missing] : []), ...whole, ...(rest ? [rest] : [])].join(SEPARATOR) }] };

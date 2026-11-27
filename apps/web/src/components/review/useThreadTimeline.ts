@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { matchesEdit, type EditRef, type Thread, type ThreadEdit } from "@scarlet/shared";
+import { continuousBrollSections, matchesEdit, type EditRef, type Thread, type ThreadEdit } from "@scarlet/shared";
 import { errorMessage } from "../../lib/client";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { markedRangeOf, useUiStore, withMarkedRange, type AgentContext } from "../../stores/ui";
 import { useProjectStore } from "../../stores/project";
-import { takeUpLatest } from "../../stores/shownCut";
+import { takeUpLatest, useShownCut } from "../../stores/shownCut";
 import { editGroups } from "./threadEditState";
 import { originalReviewRef } from "../../lib/editReviews";
 import { editMoments } from "./EditReferences";
@@ -86,7 +86,10 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
     const cue = head === change.toVersion ? editMoments(change.description, ranges).find(m => m.spot === edit.spot && m.cue)?.time : undefined;
     return { beforeVersion: original.appliedOnto ?? original.fromVersion, cue };
   }
-  const rows = useMemo(() => passFocused ? edits.map(edit => [edit]) : editGroups(edits).map(g => g.members.map(m => m.edit)), [edits, passFocused]);
+  const { timeline } = useShownCut();
+  const media = useProjectStore(s => s.current?.media);
+  const brollSections = useMemo(() => timeline ? continuousBrollSections(timeline, media) : undefined, [timeline, media]);
+  const rows = useMemo(() => passFocused ? edits.map(edit => [edit]) : editGroups(edits, brollSections).map(g => g.members.map(m => m.edit)), [edits, passFocused, brollSections]);
   // A pass's list shows its edits as moments: edits that overlap on the timeline exactly are one row, named for its
   // main edit, which is the one chosen when the moment is. One of its edits picked on its own is just that edit.
   const moments = useMemo(() => passFocused ? listMoments(edits) : undefined, [edits, passFocused]);
@@ -122,21 +125,22 @@ export function useThreadTimeline(projectId: string, head: string | null, thread
     retry: () => { setResult(undefined); setAttempt(n => n + 1); },
     /**
      * Open an edit. A moment's main edit opens the whole moment, as its row does; any other edit of a moment, or one
-     * picked with `single` from under the moment's row, is that edit alone.
+     * picked with `single: true` from under the moment's row, is that edit alone. `"moment"` opens the edit without
+     * forcing `single` even before a new timeline's moment list arrives (e.g. after rejecting a moment's lead edit).
      */
-    choose: (edit: ThreadEdit, origin: "timeline" | "chat" = "timeline", single = false) => {
+    choose: (edit: ThreadEdit, origin: "timeline" | "chat" = "timeline", single: boolean | "moment" = false) => {
       const ui = useUiStore.getState();
       const found = momentOf(edit);
-      const moment = !single && found && found.edits.length > 1 && found.main === edit ? found : undefined;
-      const alone = !moment && !!found && found.edits.length > 1;
+      const moment = single === true ? undefined : found && found.edits.length > 1 && found.main === edit ? found : undefined;
+      const alone = single === "moment" ? false : !moment && !!found && found.edits.length > 1;
       // Timeline selections explicitly target the reply. Chat previews preserve a draft already in progress.
       // A stretch marked on the ruler stays with the box either way: the workspace aims it at the edit that opens.
       if (origin === "timeline" || !ui.agentDraft.trim()) ui.setAgentContext(withMarkedRange(ui.agentDraft.trim() ? replyTarget(edit, moment) : null, markedRangeOf(ui.agentContext)));
       setPicked(prev => ({ owner, ref: { changeId: edit.changeId, spot: edit.spot }, request: (prev?.request ?? 0)+1, ...alone && { single: true } }));
     },
     /**
-     * The editor rejected the open edit: it holds as it is, on the version it is on, from the press until another is
-     * chosen or it is let go. `stay` is for a rejection the engine didn't make after all.
+     * Hold the open edit steady while an engine put-back is in flight so an arriving timeline doesn't blink or close
+     * the card before the workspace advances to the next edit. `stay` releases the hold if the engine didn't reject it.
      */
     leave: () => setPicked(prev => prev && { ...prev, leaving: true }),
     stay: () => setPicked(prev => prev?.leaving ? { ...prev, leaving: false } : prev),

@@ -73,13 +73,17 @@ class Groups {
 export function buildThreads(d: Source): Thread[] {
   const g = new Groups();
   const tasks = d.tasks.filter(editsVideo);
+  // ⌘Z on an edit the engine put back takes the version that put it back out again (`revertsVersion`): the edit is
+  // back as it was in its own request, and the step back is no request of its own. Read as one, the chat showed
+  // "Undo · Rejected · …" with a row of its own under it, beside the edit it had brought back (2026-11-26).
+  const changes = d.changes.filter(c => !c.revertsVersion);
   const key = (kind: "t" | "c" | "x", id: string) => `${kind}:${id}`;
   // The requests that flagged each change's edits. A request there about one of those edits, such as Revise or Undo
   // from its card, stays in the request that raised the doubt, which lists the edit, and doesn't join the two.
   const raisedIn = new Map<string, Set<string>>();
   const byId = new Map(tasks.map(t => [t.id, t]));
-  const changeById = new Set(d.changes.map(c => c.id));
-  for (const c of d.changes) for (const flag of c.flags ?? []) {
+  const changeById = new Set(changes.map(c => c.id));
+  for (const c of changes) for (const flag of c.flags ?? []) {
     const raiser = byId.get(flag.taskId);
     if (raiser) (raisedIn.get(c.id) ?? raisedIn.set(c.id, new Set()).get(c.id)!).add(raiser.context.threadId ?? raiser.id);
   }
@@ -99,7 +103,7 @@ export function buildThreads(d: Source): Thread[] {
   for (const note of d.notes) {
     if (note.changeId) feedbackChanges.set(note.id, note.changeId);
   }
-  for (const c of d.changes) {
+  for (const c of changes) {
     g.add(key("c", c.id));
     if (c.threadId) {
       g.union(key("x", c.threadId), key("c", c.id));
@@ -125,7 +129,7 @@ export function buildThreads(d: Source): Thread[] {
     b.tasks.push(t);
     b.explicit ??= t.context.threadId;
   }
-  for (const c of d.changes) {
+  for (const c of changes) {
     const b = bucket(key("c", c.id));
     b.changes.push(c);
     b.explicit ??= c.threadId;
@@ -194,14 +198,14 @@ export function buildThreads(d: Source): Thread[] {
   }
   // A doubt about an edit goes to the request that raised it, where the editor is looking, not to the one that made it.
   const byTask = new Map(threads.flatMap(thread => thread.tasks.map(task => [task.id, thread] as const)));
-  for (const change of d.changes) for (const flag of change.flags ?? []) {
+  for (const change of changes) for (const flag of change.flags ?? []) {
     const thread = byTask.get(flag.taskId);
     if (!thread || thread.changes.includes(change) || thread.flagged?.includes(change)) continue;
     (thread.flagged ??= []).push(change);
   }
   // A later version of a flagged edit, revised or undone from the request that made it, comes too: the request that
   // raised the doubt lists the edit as it is now. Oldest first, so each version follows the one it replaces.
-  const byAge = d.changes.toSorted((x, y) => ts(x.createdAt) - ts(y.createdAt));
+  const byAge = changes.toSorted((x, y) => ts(x.createdAt) - ts(y.createdAt));
   for (const thread of threads) {
     const flagged = thread.flagged;
     if (!flagged) continue;

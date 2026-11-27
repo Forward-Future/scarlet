@@ -302,7 +302,8 @@ export interface Card {
   /** Each recording's passes' counts below the card, per 10 minutes and in the whole video. */
   countsByCase: Record<string, Record<CountKey | "per10Min" | "stylePer10Min", Stat | null>>;
   /** Not scored: for the editor's eye. */
-  facts: { asks: Stat | null; tokens: Stat | null; minutes: Stat | null; finishMinutes: Stat | null; cents: Stat | null };
+  facts: { asks: Stat | null; tokens: Stat | null; minutes: Stat | null; finishMinutes: Stat | null; cents: Stat | null;
+    steps?: Stat | null; cacheMisses?: Stat | null };
 }
 export interface Trial { caseId?: string; gradingSha256?: string; score: Score }
 
@@ -374,7 +375,8 @@ export function card(label: string, trials: readonly Trial[], at: OperatingPoint
     mistakeCounts: Object.fromEntries(COUNT_KEYS.map(k => [k, count(k)])) as Record<CountKey, Stat | null>,
     facts: { asks: asks(), tokens: headline("tokens"), minutes: headline("activeMinutes"), finishMinutes: headline("finishMinutes"),
       // In cents, so the one-decimal mean keeps a cheap pass's cost.
-      cents: stat(numbers(trials.map(t => t.score.headline.costUsd)).map(v => v * 100)) },
+      cents: stat(numbers(trials.map(t => t.score.headline.costUsd)).map(v => v * 100)),
+      steps: headline("modelSteps"), cacheMisses: headline("cacheMisses") },
   };
 }
 
@@ -521,7 +523,8 @@ export function scorecardMarkdown(cards: readonly Card[], ledger?: { label: stri
   const fact = (x: Stat | null, digits = 1, scale = 1) => x ? (x.mean / scale).toFixed(digits) : "–";
   lines.push("", "Not scored: " + cards.map(c => `${c.label}: ${fact(c.facts.asks)} calls and flags for the editor, ` +
     `${fact(c.facts.finishMinutes)} min to finish (${fact(c.facts.minutes)} active), ${fact(c.facts.tokens, 2, 1e6)}M tokens, ` +
-    `${c.facts.cents ? `$${fact(c.facts.cents, 2, 100)}` : "no estimated cost"} a pass`).join(" · ") + ".");
+    `${c.facts.cents ? `$${fact(c.facts.cents, 2, 100)}` : "no estimated cost"} a pass` +
+    `${c.facts.steps ? `, ${fact(c.facts.steps, 0)} model steps and ${fact(c.facts.cacheMisses ?? null)} cache misses` : ""}`).join(" · ") + ".");
   lines.push("", "± is how far a figure moves by luck alone: run the same code again and it lands within the ± about 95 times in 100. " +
     "It comes from how much this run's passes of the same recording disagree. A change counts only when it moves more than its ±; " +
     "“could be luck” marks one that doesn't, and the recordings it went up or down on say whether it was one video or all of them.");

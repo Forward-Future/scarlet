@@ -193,7 +193,7 @@ interface UiState {
   showRunTokens: boolean;
   setShowRunTokens(v: boolean): void;
 
-  /** Try the new three-column workspace layout (Beta). Off by default unless turned on in Settings → General. */
+  /** Use the three-column workspace layout. On by default unless the editor switches to the classic layout in Settings → General. */
   newLayout: boolean;
   setNewLayout(v: boolean): void;
 
@@ -202,8 +202,11 @@ interface UiState {
   savedDrafts: Record<string, ComposerDraft>;
   openDraft(projectId: string | null, threadId?: string): void;
   clearSentDraft(owner: string | null, sent: ComposerDraft): void;
-  /** Puts a message that couldn't be sent back into the box it was sent from, unless that box has words in it again. */
-  keepUnsent(owner: string | null, unsent: ComposerDraft): void;
+  /**
+   * Puts words said into the mic at the end of the message being written in the box they were said into, aimed where
+   * the box was when the mic opened, to be read and sent. Says whether that box is the one on the page.
+   */
+  dictate(owner: string | null, text: string, aim: ComposerDraft["agentContext"]): boolean;
   agentContext: ComposerDraft["agentContext"];
   /** `was` is the target this one takes the place of when the page re-aims it at the same thing, as when a staged cut moves. */
   setAgentContext(c: AgentContext | "whole" | null, was?: AgentContext): void;
@@ -310,6 +313,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   agentSelected: false,
   setAgent: (agent) => {
     set({ agent, agentSelected: true });
+    // Which model the next request goes to: a model's name, never anything typed in the box.
+    appLog("action", "model", { agent: agent.agent, model: agent.model?.slice(0, 80), effort: agent.effort, tier: agent.serviceTier }, { key: "model" });
     saveAgent(agent);
   },
   setDefaultAgent: (agent) => {
@@ -325,11 +330,11 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ showRunTokens: v });
   },
 
-  newLayout: (() => { try { return localStorage.getItem(NEW_LAYOUT_KEY) === "1"; } catch { return false; } })(),
+  newLayout: (() => { try { return localStorage.getItem(NEW_LAYOUT_KEY) !== "0"; } catch { return true; } })(),
   setNewLayout: (v) => {
     try {
-      if (v) localStorage.setItem(NEW_LAYOUT_KEY, "1");
-      else localStorage.removeItem(NEW_LAYOUT_KEY);
+      if (v) localStorage.removeItem(NEW_LAYOUT_KEY);
+      else localStorage.setItem(NEW_LAYOUT_KEY, "0");
     } catch { /* Keep the choice for this session. */ }
     set({ newLayout: v });
   },
@@ -375,16 +380,20 @@ export const useUiStore = create<UiState>((set, get) => ({
       set({ savedDrafts });
     }
   },
-  keepUnsent: (owner, unsent) => {
+  dictate: (owner, text, aim) => {
     const state = get();
     const current = state.draftOwner === owner;
     const existing = current ? state : owner ? state.savedDrafts[owner] : undefined;
-    if (existing?.agentDraft) return;
-    // Restore the recording's target, including a newer version of the same cut Scarlet re-aimed while transcribing.
-    const recovered = existing && sameTarget(existing.agentContext, unsent.agentContext)
-      ? { ...unsent, agentContext: existing.agentContext } : unsent;
-    if (current) set(recovered);
-    else if (owner) set({ savedDrafts: { ...state.savedDrafts, [owner]: recovered } });
+    const words = existing?.agentDraft ?? "";
+    // Words typed while the mic was open stay first, and what was said follows them.
+    const agentDraft = words.trim() ? `${words.replace(/\s+$/, "")} ${text}` : text;
+    // The box stays aimed where it is when words were typed meanwhile or it is the recording's target re-aimed (a newer
+    // version of the same cut); otherwise it goes back to where the recording was aimed.
+    const kept = existing?.agentContext ?? null;
+    const agentContext = aim === null || words.trim() || sameTarget(kept, aim) ? kept ?? aim : aim;
+    if (current) set({ agentDraft, agentContext });
+    else if (owner) set({ savedDrafts: { ...state.savedDrafts, [owner]: { agentDraft, agentContext } } });
+    return current;
   },
   agentContext: null,
   setAgentContext: (agentContext, was) => {

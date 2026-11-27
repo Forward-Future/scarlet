@@ -15,7 +15,7 @@ import type {
   Transform,
   TransformKeyframe,
 } from "@scarlet/timeline";
-import { fnum } from "./exec.js";
+import { even, ffmpegFilters, fnum } from "./exec.js";
 import { isMovingAsset } from "./probe.js";
 
 /** Where a clip sits inside the render range. */
@@ -169,6 +169,10 @@ export interface AnimatedTransform {
   x: string | null;
   y: string | null;
   scale: string | null;
+  /** Maximum scale reached across base and all keyframes. */
+  maxScale: number;
+  /** Every resolved keyframe (or base) pose, for canvas-coverage checks. */
+  poses: Array<{ x: number; y: number; scale: number }>;
 }
 
 export function resolveTransform(
@@ -177,11 +181,24 @@ export function resolveTransform(
 ): AnimatedTransform {
   const base = TransformSchema.parse(clip.transform ?? {});
   const kfs = (clip.keyframes ?? []).slice().sort((a, b) => a.time - b.time);
-  const out: AnimatedTransform = { base, x: null, y: null, scale: null };
+  const out: AnimatedTransform = {
+    base,
+    x: null,
+    y: null,
+    scale: null,
+    maxScale: base.scale,
+    poses: [{ x: base.x, y: base.y, scale: base.scale }],
+  };
   if (!kfs.length) return out;
   if (kfs.some((k) => ["rotation", "cropLeft", "cropRight", "cropTop", "cropBottom"].some((p) => p in k.transform))) {
     warn(`clip ${clip.id}: keyframed rotation/crop are not supported; base values used`);
   }
+  out.poses = kfs.map((k) => ({
+    x: k.transform.x ?? base.x,
+    y: k.transform.y ?? base.y,
+    scale: k.transform.scale ?? base.scale,
+  }));
+  out.maxScale = out.poses.reduce((hi, p) => Math.max(hi, p.scale), 0) || base.scale;
   for (const prop of ["x", "y", "scale"] as const) {
     const points: KeyPoint[] = kfs.map((k) => ({
       time: k.time,
@@ -198,8 +215,216 @@ export function resolveTransform(
   return out;
 }
 
-/** crop → scale (contain-fit × scale) → round corners → rotate, as filter strings. */
-export function transformChain(tf: AnimatedTransform, W: number, H: number): string[] {
+/** True when x, y or scale actually moves across the clip's keyframes. */
+export function isAnimatedTransform(tf: AnimatedTransform): boolean {
+  return tf.x !== null || tf.y !== null || tf.scale !== null;
+}
+
+/** Whether a clip has an animated transform (used by both graph building and segment keying). */
+export function hasAnimatedTransform(clip: { transform?: Transform; keyframes?: TransformKeyframe[] }): boolean {
+  if (!clip.keyframes?.length) return false;
+  return isAnimatedTransform(resolveTransform({ id: "", transform: clip.transform, keyframes: clip.keyframes }, () => {}));
+}
+
+/** Whether this ffmpeg build has the `perspective` filter used for subpixel-smooth animated transforms. */
+export async function canPerspective(ffmpegPath?: string): Promise<boolean> {
+  try {
+    const filters = await ffmpegFilters(ffmpegPath);
+    return filters.size === 0 || filters.has("perspective");
+  } catch { return true; }
+}
+
+function gcd(a: number, b: number): number {
+  let x = Math.abs(Math.round(a)), y = Math.abs(Math.round(b));
+  while (y !== 0) { const r = x % y; x = y; y = r; }
+  return x || 1;
+}
+
+/**
+ * Pick an aspect-exact working canvas `(width, height)` for subpixel `perspective` zooms:
+ * - Preserves source detail up to `min(maxScale, sourceHeadroom, 2)` without exceeding 4K (unless canvas > 4K).
+ * - When `maxScale <= 1`, keeps the exact canvas size and pre-scales down cleanly (`sRel`) to avoid aliasing.
+ */
+export function smoothWorkingSize(
+  W: number,
+  H: number,
+  maxScale: number,
+  croppedSource?: { width: number; height: number },
+): { width: number; height: number; sRel: number } {
+  if (maxScale <= 1) {
+    const sRel = maxScale * Math.min(W, H) < 64 ? 1 : Math.max(0.25, maxScale);
+    return { width: W, height: H, sRel };
+  }
+  const headroom = croppedSource ? Math.max(croppedSource.width / W, croppedSource.height / H) : 1;
+  const dimCap = Math.max(W, H, 3840) / Math.max(W, H);
+  const m = Math.max(1, Math.min(maxScale, headroom, 2, dimCap));
+  if (m <= 1.01) return { width: W, height: H, sRel: 1 };
+  const g = gcd(W, H);
+  const uw = W / g, uh = H / g;
+  const parity = (uw % 2 === 0 && uh % 2 === 0) ? 1 : 2;
+  const stepW = uw * parity, stepH = uh * parity;
+  if (stepW <= W / 2) {
+    const k = Math.max(1, Math.ceil((W * m) / stepW));
+    const wp = k * stepW, hp = k * stepH;
+    if (Math.max(wp, hp) <= Math.max(W, H, 3840) + stepW) return { width: wp, height: hp, sRel: 1 };
+  }
+  return m >= 1.5 && Math.max(W * 2, H * 2) <= Math.max(W, H, 3840)
+    ? { width: even(W * 2), height: even(H * 2), sRel: 1 }
+    : { width: W, height: H, sRel: 1 };
+}
+
+function roundedCornersFilter(cornerRadius: number): string {
+  // Only pixels in the four corner squares need the distance to the arc.
+  // Fade the source alpha across one displayed pixel at its boundary.
+  const radius = `min(W,H)*${fnum(cornerRadius)}`;
+  const edgeX = "min(X+0.5,W-X-0.5)", edgeY = "min(Y+0.5,H-Y-0.5)";
+  const arc = `clip(${radius}+0.5-hypot(${radius}-${edgeX},${radius}-${edgeY}),0,1)`;
+  const coverage = `if(lt(max(${edgeX},${edgeY}),${radius}),${arc},1)`;
+  return `geq=lum='p(X,Y)':a='alpha(X,Y)*${coverage}':i=nearest`;
+}
+
+export interface SmoothTransformContext {
+  fps: number;
+  /** Clip-local time in seconds at `perspective`'s first frame (`on = 1`). */
+  startTime: number;
+  source?: { width?: number; height?: number; hasAlpha?: boolean };
+}
+
+export interface SmoothTransformStages {
+  /** Static per-image preparation (crop, pre-scale, optional corner radius & transparent pad). For stills, runs once before looping. */
+  prepare: string[];
+  /** Per-frame subpixel transform (`perspective`, optional crop/post-scale/unpremultiply, `format=yuva420p`). */
+  animate: string[];
+}
+
+/**
+ * Subpixel-accurate animated transform pipeline using FFmpeg's `perspective` filter with cubic interpolation.
+ * Replaces integer-quantized `scale:eval=frame` + integer `overlay` positioning so slow zooms and pans never
+ * stair-step or wobble, while keeping exact Scarlet contain-fit / normalized-offset / rotation / cornerRadius geometry.
+ *
+ * Output is always a full canvas-sized (`W x H`) `yuva420p` layer ready to overlay at `(0, 0)`.
+ */
+export function smoothTransformStages(
+  tf: AnimatedTransform,
+  W: number,
+  H: number,
+  ctx: SmoothTransformContext,
+): SmoothTransformStages {
+  const { base } = tf;
+  const prepare: string[] = [];
+  const cropW = Math.max(0.01, 1 - base.cropLeft - base.cropRight);
+  const cropH = Math.max(0.01, 1 - base.cropTop - base.cropBottom);
+  const hasCrop = !!(base.cropLeft || base.cropRight || base.cropTop || base.cropBottom);
+  if (hasCrop) {
+    prepare.push(
+      `crop=w='trunc(iw*${fnum(cropW)})':h='trunc(ih*${fnum(cropH)})':x='trunc(iw*${fnum(base.cropLeft)})':y='trunc(ih*${fnum(base.cropTop)})'`,
+    );
+  }
+  const croppedSource = ctx.source?.width && ctx.source?.height
+    ? {
+      width: Math.max(1, Math.trunc(ctx.source.width * (hasCrop ? cropW : 1))),
+      height: Math.max(1, Math.trunc(ctx.source.height * (hasCrop ? cropH : 1))),
+    }
+    : undefined;
+  const { width: Wp, height: Hp, sRel } = smoothWorkingSize(W, H, tf.maxScale, croppedSource);
+
+  // Stay on the fast unpadded `yuva420p` path when the opaque fitted image fills the entire working canvas
+  // at every keyframe pose (typical 16:9 B-roll zoom or full-screen recording zoom): zero RGB round-trip
+  // and zero edge clamping against transparent padding.
+  let opaqueFullCanvas = false;
+  if (
+    ctx.source?.hasAlpha === false &&
+    !base.cornerRadius &&
+    !base.rotation &&
+    sRel === 1 &&
+    croppedSource
+  ) {
+    const fitP = Math.min(Wp / croppedSource.width, Hp / croppedSource.height);
+    const fittedW = Math.max(2, Math.trunc(croppedSource.width * fitP / 2) * 2);
+    const fittedH = Math.max(2, Math.trunc(croppedSource.height * fitP / 2) * 2);
+    if (fittedW === Wp && fittedH === Hp) {
+      const fwFrac = (croppedSource.width * fitP) / Wp;
+      const fhFrac = (croppedSource.height * fitP) / Hp;
+      opaqueFullCanvas = tf.poses.every(
+        (pose) =>
+          0.5 * fwFrac * pose.scale - Math.abs(pose.x) >= 0.5 - 1e-6 &&
+          0.5 * fhFrac * pose.scale - Math.abs(pose.y) >= 0.5 - 1e-6,
+      );
+    }
+  }
+
+  const fit = `min(${Wp}/iw,${Hp}/ih)`;
+  const sRelStr = sRel === 1 ? "" : `*${fnum(sRel)}`;
+  prepare.push(
+    `scale=w='max(2,trunc(iw*${fit}${sRelStr}/2)*2)':h='max(2,trunc(ih*${fit}${sRelStr}/2)*2)':flags=bicubic`,
+  );
+
+  const B = opaqueFullCanvas ? 0 : 2;
+  const PW = Wp + 2 * B;
+  const PH = Hp + 2 * B;
+  if (opaqueFullCanvas) {
+    prepare.push("format=yuva420p");
+  } else {
+    if (base.cornerRadius) {
+      prepare.push("format=yuva420p", roundedCornersFilter(base.cornerRadius));
+    }
+    // Pad with a 2px transparent border in planar RGB+A and premultiply so out-of-bounds pixels stay
+    // transparent and subpixel cubic edges composite without dark halos.
+    prepare.push(
+      "format=gbrap",
+      `pad=w=${PW}:h=${PH}:x='(ow-iw)/2':y='(oh-ih)/2':color=black@0`,
+      "premultiply=inplace=1",
+    );
+  }
+
+  // `perspective` exposes 1-based output frame count `on` (no `t`), so map `(on-1)/fps` to clip-local time.
+  const tExpr = ctx.startTime === 0
+    ? `((on-1)/${fnum(ctx.fps)})`
+    : `(${fnum(ctx.startTime)}+(on-1)/${fnum(ctx.fps)})`;
+  const sExpr = tf.scale
+    ? `max(0.001,${tf.scale.replaceAll(T, tExpr)})`
+    : fnum(Math.max(0.001, base.scale));
+  const txExpr = tf.x ? `(${tf.x.replaceAll(T, tExpr)})` : null;
+  const tyExpr = tf.y ? `(${tf.y.replaceAll(T, tExpr)})` : null;
+  const halfW = PW / 2, halfH = PH / 2;
+  const pxL = txExpr ? `(-${fnum(halfW)}-(${txExpr})*${Wp})` : fnum(-halfW - base.x * Wp);
+  const pxR = txExpr ? `(${fnum(halfW)}-(${txExpr})*${Wp})` : fnum(halfW - base.x * Wp);
+  const pyT = tyExpr ? `(-${fnum(halfH)}-(${tyExpr})*${Hp})` : fnum(-halfH - base.y * Hp);
+  const pyB = tyExpr ? `(${fnum(halfH)}-(${tyExpr})*${Hp})` : fnum(halfH - base.y * Hp);
+  const sMul = sRel === 1 ? "" : `*${fnum(sRel)}`;
+
+  const corner = (px: string, py: string): [string, string] => {
+    let rx = px, ry = py;
+    if (base.rotation) {
+      const a = (base.rotation * Math.PI) / 180;
+      const c = fnum(Math.cos(a), 8), s = fnum(Math.sin(a), 8);
+      rx = `((${px})*${c}+(${py})*${s})`;
+      ry = `(-(${px})*${s}+(${py})*${c})`;
+    }
+    return [
+      `${fnum(halfW)}+(${rx})${sMul}/(${sExpr})`,
+      `${fnum(halfH)}+(${ry})${sMul}/(${sExpr})`,
+    ];
+  };
+  const [x0, y0] = corner(pxL, pyT);
+  const [x1, y1] = corner(pxR, pyT);
+  const [x2, y2] = corner(pxL, pyB);
+  const [x3, y3] = corner(pxR, pyB);
+
+  const animate: string[] = [
+    `perspective=x0='${x0}':y0='${y0}':x1='${x1}':y1='${y1}':x2='${x2}':y2='${y2}':x3='${x3}':y3='${y3}':interpolation=cubic:sense=source:eval=frame`,
+  ];
+  if (B > 0) animate.push(`crop=${Wp}:${Hp}:${B}:${B}`);
+  if (Wp !== W || Hp !== H) animate.push(`scale=${W}:${H}:flags=bicubic`);
+  if (!opaqueFullCanvas) animate.push("unpremultiply=inplace=1", "format=yuva420p");
+  return { prepare, animate };
+}
+
+/**
+ * crop → scale (contain-fit × scale) → round corners → rotate, as filter strings.
+ * With `round`, a layer known to be opaque at its corners' step, of one size throughout, works out its corners once.
+ */
+export function transformChain(tf: AnimatedTransform, W: number, H: number, round?: { opaque: boolean; name: () => string }): string[] {
   const { base } = tf;
   const chain: string[] = [];
   if (base.cropLeft || base.cropRight || base.cropTop || base.cropBottom) {
@@ -218,13 +443,14 @@ export function transformChain(tf: AnimatedTransform, W: number, H: number): str
   );
   chain.push("format=yuva420p");
   if (base.cornerRadius) {
-    // Only pixels in the four corner squares need the distance to the arc.
-    // Fade the source alpha across one displayed pixel at its boundary.
-    const radius = `min(W,H)*${fnum(base.cornerRadius)}`;
-    const edgeX = "min(X+0.5,W-X-0.5)", edgeY = "min(Y+0.5,H-Y-0.5)";
-    const arc = `clip(${radius}+0.5-hypot(${radius}-${edgeX},${radius}-${edgeY}),0,1)`;
-    const coverage = `if(lt(max(${edgeX},${edgeY}),${radius}),${arc},1)`;
-    chain.push(`geq=lum='p(X,Y)':a='alpha(X,Y)*${coverage}':i=nearest`);
+    const corners = roundedCornersFilter(base.cornerRadius);
+    if (round?.opaque && !tf.scale) {
+      // Every frame of an opaque layer of one size gets the same alpha, so it is drawn on the first frame alone and
+      // laid on each (alphamerge repeats its last mask). geq on every frame took a tenth of a 4K picture-in-picture
+      // section's render; the pixels are the same.
+      const name = round.name();
+      chain.push(`split[${name}a][${name}b];[${name}b]trim=end_frame=1,${corners},alphaextract[${name}m];[${name}a][${name}m]alphamerge`);
+    } else chain.push(corners);
   }
   if (base.rotation) {
     const a = `${fnum(base.rotation)}*PI/180`;

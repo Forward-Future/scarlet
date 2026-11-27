@@ -86,7 +86,18 @@ export function PlayerTimeline(props: Omit<TimelineScrubberProps, "playhead">) {
  * footage (`subject`) and with the same change open (`highlight`), it keeps the stretch the editor had zoomed to.
  * `view` is that stretch; none when it showed the whole video, which the next one then does too.
  */
-interface KeptView { subject: string; highlight: string; view?: { from: number; span: number } }
+/** `banded`: the highlight's band was in that view, so the editor hadn't looked away from it. */
+interface KeptView { subject: string; highlight: string; view?: { from: number; span: number }; banded: boolean }
+
+/**
+ * Whether a stretch of the timeline (all of it when there is no `view`) shows `band`: all of it, or, zoomed in on a
+ * long one, only footage inside it. A band of no length (a join) is shown when its moment is.
+ */
+function showsBand(view: { from: number; span: number } | undefined, band: TimeRange) {
+  if (!view) return true;
+  const to = view.from + view.span, eps = 1e-6;
+  return (band.start >= view.from - eps && band.end <= to + eps) || (band.start <= view.from + eps && band.end >= to - eps);
+}
 
 export function TimelineScrubber(props: TimelineScrubberProps) {
   const { start, duration, waveform } = props;
@@ -157,14 +168,26 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
   // Zoom to a highlighted change when it appears, and back out when it goes. The zoom stays free in between.
   const highlightView = highlight && highlight.view.end > highlight.view.start ? highlight.view : undefined;
   const highlightKey = highlightView ? (highlight?.key ?? `${highlightView.start}/${highlightView.end}`) : "";
-  // The timeline this one takes the place of, when all that changed is the working cut under it.
-  const [carried] = useState(() => kept.current?.subject === subject && kept.current.highlight === highlightKey ? kept.current : undefined);
+  // What has to be in view for the change to be seen: its band, or the stretch it zooms to when it has none.
+  const highlightBand = highlightView ? highlight?.band ?? highlightView : undefined;
+  // The timeline this one takes the place of, when all that changed is the working cut under it. Its zoom is kept
+  // only while it still shows the band: built again for another version (a pass's next batch, the version that still
+  // has the footage round a call), the same cut can sit somewhere else, and a band out of view draws nothing (#686).
+  const [carried] = useState(() => {
+    const was = kept.current;
+    if (was?.subject !== subject || was.highlight !== highlightKey) return undefined;
+    if (!highlightBand || !was.banded || !was.view) return was;
+    const span = Math.min(was.view.span, total);
+    const view = { from: Math.max(start, Math.min(was.view.from, end - span)), span };
+    return showsBand(view, highlightBand) ? was : undefined;
+  });
   const { view: { from, span }, samples, target, blend, minSpan, zoomBy, fitRange, stopZoom, reveal } = useTimelineZoom(track, start, total, playhead, drag, carried?.view);
   const shownFrom = target?.from ?? from, shownSpan = target?.span ?? span;
+  const shownView = shownSpan < total ? { from: shownFrom, span: shownSpan } : undefined;
   // A timeline that doesn't know the video's length yet has shown nothing to keep, and couldn't zoom to its change.
   useLayoutEffect(() => {
-    if (total > 0) kept.current = { subject, highlight: highlightKey, view: shownSpan < total ? { from: shownFrom, span: shownSpan } : undefined };
-  }, [kept, subject, highlightKey, shownFrom, shownSpan, total]);
+    if (total > 0) kept.current = { subject, highlight: highlightKey, view: shownView, banded: !highlightBand || showsBand(shownView, highlightBand) };
+  }, [kept, subject, highlightKey, shownFrom, shownSpan, total, highlightBand?.start, highlightBand?.end]); // eslint-disable-line react-hooks/exhaustive-deps
   // A carried view was already zoomed to its change, or left it since: it isn't zoomed to it a second time.
   const fittedHighlight = useRef(carried ? highlightKey : undefined);
   useLayoutEffect(() => {
@@ -174,6 +197,16 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
     if (highlightView) fitRange(highlightView.start, highlightView.end, previous !== undefined);
     else fitRange();
   }, [highlightKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The same change placed again on this timeline keeps its key, so the zoom stays as the editor left it. When it moves
+  // out of a view that showed it, it is zoomed to again: the band on the card is never left off the timeline.
+  const placedBand = useRef({ key: highlightKey, band: highlightBand });
+  useLayoutEffect(() => {
+    const was = placedBand.current;
+    placedBand.current = { key: highlightKey, band: highlightBand };
+    if (!highlightView || !highlightBand || !was.band || was.key !== highlightKey) return;
+    if (was.band.start === highlightBand.start && was.band.end === highlightBand.end) return;
+    if (showsBand(shownView, was.band) && !showsBand(shownView, highlightBand)) fitRange(highlightView.start, highlightView.end);
+  }, [highlightKey, highlightBand?.start, highlightBand?.end]); // eslint-disable-line react-hooks/exhaustive-deps
   // The caller asked for the whole timeline. A timeline built since hasn't been asked.
   const fitAsked = useRef(fit);
   useLayoutEffect(() => {
@@ -476,7 +509,8 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
             const ruler = e.currentTarget.querySelector<HTMLElement>(".timeline-lanes")?.offsetTop ?? 0;
             const onRuler = !!(e.target as Element).closest(".timeline-range-zone") || (ruler > 0 && box.height > 0 && e.clientY - box.top < ruler);
             const onLiveBand = !!(e.target as Element).closest(".simple-timeline-band.is-live");
-            const hit = !onRuler && !onLiveBand && !aimed && box.width > 0 ? gapAt(interactiveGaps, from, span, box.width, e.clientX - box.left) : undefined;
+            const onCutHandle = !!(e.target as Element).closest(".timeline-cut-handle");
+            const hit = !onRuler && !onLiveBand && !onCutHandle && !aimed && box.width > 0 ? gapAt(interactiveGaps, from, span, box.width, e.clientX - box.left) : undefined;
             const key = hit ? `${hit.start}/${hit.end}` : undefined;
             setHotGap(previous => previous === key ? previous : key);
           } else if (hotGap !== undefined) setHotGap(undefined);

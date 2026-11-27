@@ -14,12 +14,21 @@ import { StyleGuideEditorPage } from "./StyleGuideEditorPage";
 it("leaves Enter to an input method that is composing the style guide's name", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const now = "2026-11-24T12:00:00.000Z";
-  let guide: StyleGuideRecord = { id: "sg_main", name: "channel-brand", description: "", instructions: "", isDefault: false, assets: [], createdAt: now, updatedAt: now };
+  let guide: StyleGuideRecord = { id: "sg_main", name: "channel-brand", description: "", instructions: "", isDefault: false, assets: [], transitions: [], sounds: [], createdAt: now, updatedAt: now };
   useHostsStore.setState({ hosts: [buildDb().hosts.find(h => h.online)!] });
   useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
   useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
   vi.spyOn(api, "styleGuide").mockImplementation(async () => ({ styleGuide: guide, edits: [] }));
-  const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => ({ styleGuide: (guide = { ...guide, ...patch }) }));
+  const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => {
+    const { captionStyle, colorLook, ...rest } = patch;
+    guide = {
+      ...guide,
+      ...rest,
+      ...(captionStyle ? { captionStyle } : captionStyle === null ? { captionStyle: undefined } : {}),
+      ...(colorLook ? { colorLook } : colorLook === null ? { colorLook: undefined } : {}),
+    };
+    return { styleGuide: guide };
+  });
   const el = document.createElement("div");
   document.body.append(el);
   const root = createRoot(el);
@@ -57,7 +66,7 @@ it("reuses the created style guide and uploaded asset when retrying a failed sen
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const now = "2026-11-24T12:00:00.000Z";
   const created: StyleGuideRecord = {
-    id: "sg_new", name: "bold-editorial", description: "", instructions: "", isDefault: false, assets: [], createdAt: now, updatedAt: now,
+    id: "sg_new", name: "bold-editorial", description: "", instructions: "", isDefault: false, assets: [], transitions: [], sounds: [], createdAt: now, updatedAt: now,
   };
   const asset = { id: "ast_logo", name: "logo.png", path: "assets/logo.png", size: 128, mime: "image/png", createdAt: now };
   useHostsStore.setState({ hosts: [buildDb().hosts.find(h => h.online)!] });
@@ -138,7 +147,7 @@ it("sends attached files without requiring a typed message, derives a slug from 
   vi.useFakeTimers();
   const now = "2026-11-25T08:00:00.000Z";
   const created: StyleGuideRecord = {
-    id: "sg_brand", name: "forward-future-brand-guide", description: "", instructions: "", isDefault: false, assets: [], createdAt: now, updatedAt: now,
+    id: "sg_brand", name: "forward-future-brand-guide", description: "", instructions: "", isDefault: false, assets: [], transitions: [], sounds: [], createdAt: now, updatedAt: now,
   };
   const asset = { id: "sga_doc", name: "forward_future_brand_guide.md", size: 420, mime: "text/markdown", createdAt: now };
   const runningTask = {
@@ -221,6 +230,177 @@ it("sends attached files without requiring a typed message, derives a slug from 
     expect(el.querySelector(".style-guide-preview-status")).toBeNull();
   } finally {
     vi.useRealTimers();
+    await act(async () => root.unmount());
+    el.remove();
+    router.dispose();
+    useStyleGuidesStore.setState(useStyleGuidesStore.getInitialState());
+    useHostsStore.setState(useHostsStore.getInitialState());
+    useUiStore.setState(useUiStore.getInitialState());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("renders the Tabbed Stage (Graphics, Transitions, Sounds, Color look) and persists edits across tabs", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const now = "2026-11-26T10:00:00.000Z";
+  let guide: StyleGuideRecord = {
+    id: "sg_tabbed",
+    name: "studio-kit",
+    description: "Editorial dark kit",
+    instructions: "Use #141416 panels.",
+    isDefault: true,
+    assets: [{ id: "sga_lut", name: "StudioWarm.cube", size: 2048, mime: "text/plain", createdAt: now }],
+    transitions: [
+      { id: "tr_push", name: "Section push", type: "push", duration: 0.4, direction: "left", soundId: "sfx_whoosh", usageRule: "Default between sections", isDefault: true },
+    ],
+    sounds: [
+      { id: "sfx_whoosh", name: "Soft whoosh", source: "builtin", builtInId: "soft-whoosh", volumeDb: -14, duration: 0.45, usageRule: "Paired with push" },
+    ],
+    colorLook: {
+      name: "Warm Studio",
+      notes: "Warm skin tones with soft highlight rolloff",
+      lutAssetId: "sga_lut",
+      lutName: "StudioWarm.cube",
+      adjustments: { exposure: 0.15, contrast: 1.06, saturation: 1.04, warmth: 0.24, tint: -0.04, shadows: 0.12, highlights: -0.18, blacks: 0, whites: 0, gamma: 1 },
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+  useHostsStore.setState({ hosts: [buildDb().hosts.find(h => h.online)!] });
+  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
+  useStyleGuidesStore.setState({ styleGuides: [guide], status: "ready", error: null });
+  vi.spyOn(api, "styleGuide").mockImplementation(async () => ({ styleGuide: guide, edits: [] }));
+  const update = vi.spyOn(api, "updateStyleGuide").mockImplementation(async (_id, patch) => {
+    const { captionStyle, colorLook, ...rest } = patch;
+    guide = {
+      ...guide,
+      ...rest,
+      ...(captionStyle ? { captionStyle } : captionStyle === null ? { captionStyle: undefined } : {}),
+      ...(colorLook ? { colorLook } : colorLook === null ? { colorLook: undefined } : {}),
+    };
+    return { styleGuide: guide };
+  });
+
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const router = createMemoryRouter([{ path: "/settings/style-guides/:styleGuideId", element: <StyleGuideEditorPage /> }], {
+    initialEntries: [`/settings/style-guides/${guide.id}`],
+  });
+
+  try {
+    await act(async () => root.render(<RouterProvider router={router} />));
+    const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    expect(tabs.map(t => t.textContent?.trim())).toEqual(["Graphics", "Transitions1", "Sounds1", "Color look"]);
+    expect(tabs[0]!.getAttribute("aria-selected")).toBe("true");
+
+    // Switch to Transitions tab
+    await act(async () => tabs[1]!.click());
+    expect(tabs[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(el.textContent).toContain("Section push");
+    expect(el.textContent).toContain("Default between sections");
+    expect(el.textContent).toContain("Soft whoosh");
+
+    // Switch to Sounds tab and add a built-in starter sound
+    await act(async () => tabs[2]!.click());
+    expect(el.textContent).toContain("Soft whoosh");
+    expect(el.textContent).toContain("-14 dB");
+    expect(el.textContent).toContain("Subtle pop");
+    const addButtons = [...el.querySelectorAll<HTMLButtonElement>(".sg-starter-card button")].filter(b => b.textContent?.trim() === "Add");
+    expect(addButtons.length).toBeGreaterThan(0);
+    await act(async () => addButtons[0]!.click());
+    expect(update).toHaveBeenCalledWith(guide.id, expect.objectContaining({
+      sounds: expect.arrayContaining([
+        expect.objectContaining({ id: "sfx_whoosh" }),
+        expect.objectContaining({ source: "builtin", builtInId: "subtle-pop" }),
+      ]),
+    }));
+
+    // Switch to Color look tab and verify prompt-only readouts (no manual sliders or inputs) + Before/After split
+    await act(async () => tabs[3]!.click());
+    const splitSlider = el.querySelector<HTMLElement>('[role="slider"][aria-label="Before and after split position"]');
+    expect(splitSlider).not.toBeNull();
+    expect(splitSlider!.getAttribute("aria-valuenow")).toBe("50");
+    await act(async () => {
+      splitSlider!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+    });
+    expect(splitSlider!.getAttribute("aria-valuenow")).toBe("55");
+    expect(el.textContent).toContain("Warm Studio");
+    expect(el.textContent).toContain("StudioWarm.cube");
+    expect(el.textContent).toContain("Warmth");
+    expect(el.textContent).toContain("+24");
+    expect(el.querySelectorAll(".sg-tab-panel input")).toHaveLength(0);
+  } finally {
+    await act(async () => root.unmount());
+    el.remove();
+    router.dispose();
+    useStyleGuidesStore.setState(useStyleGuidesStore.getInitialState());
+    useHostsStore.setState(useHostsStore.getInitialState());
+    useUiStore.setState(useUiStore.getInitialState());
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("imports a dropped structured .style.json file defining all settings directly, and stages freeform docs to chat", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const now = "2026-11-26T11:00:00.000Z";
+  const initial: StyleGuideRecord = {
+    id: "sg_drop",
+    name: "starter",
+    description: "",
+    instructions: "",
+    isDefault: false,
+    assets: [],
+    transitions: [],
+    sounds: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  const importedGuide: StyleGuideRecord = {
+    ...initial,
+    description: "Imported full studio kit",
+    instructions: "Use #141416 panels and Inter.",
+    transitions: [
+      { id: "tr_push", name: "Section push", type: "push", duration: 0.4, direction: "left", soundId: "sfx_whoosh", usageRule: "Between sections", isDefault: true },
+    ],
+    sounds: [
+      { id: "sfx_whoosh", name: "Soft whoosh", source: "builtin", builtInId: "soft-whoosh", volumeDb: -14, duration: 0.45, usageRule: "Section pushes" },
+    ],
+    colorLook: {
+      name: "Warm Studio",
+      notes: "Warm balanced studio look",
+      adjustments: { exposure: 0.1, contrast: 1.05, saturation: 1.04, warmth: 0.2, tint: 0, shadows: 0.1, highlights: -0.15, blacks: 0, whites: 0, gamma: 1 },
+    },
+  };
+  useHostsStore.setState({ hosts: [buildDb().hosts.find(h => h.online)!] });
+  useUiStore.setState({ agent: { agent: "claude", model: "claude-opus-4-6" } });
+  useStyleGuidesStore.setState({ styleGuides: [initial], status: "ready", error: null });
+  vi.spyOn(api, "styleGuide").mockResolvedValue({ styleGuide: initial, edits: [] });
+  const importFile = vi.spyOn(api, "importStyleGuideFile").mockResolvedValue({ imported: true, styleGuide: importedGuide });
+
+  const el = document.createElement("div");
+  document.body.append(el);
+  const root = createRoot(el);
+  const router = createMemoryRouter([{ path: "/settings/style-guides/:styleGuideId", element: <StyleGuideEditorPage /> }], {
+    initialEntries: [`/settings/style-guides/${initial.id}`],
+  });
+
+  try {
+    await act(async () => root.render(<RouterProvider router={router} />));
+    const fileInput = el.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const styleJson = new File([JSON.stringify({ description: "Imported full studio kit" })], "studio.style.json", { type: "application/json" });
+    await act(async () => {
+      Object.defineProperty(fileInput, "files", { value: [styleJson], configurable: true });
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(importFile).toHaveBeenCalledWith(styleJson, { styleGuideId: "sg_drop", name: "studio.style.json" });
+    expect(el.textContent).toContain("Imported settings from studio.style.json.");
+    // Tab badges update immediately with the imported transitions, sounds, and color look
+    const tabs = [...el.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    expect(tabs.map(t => t.textContent?.trim())).toEqual(["Graphics", "Transitions1", "Sounds1", "Color look"]);
+  } finally {
     await act(async () => root.unmount());
     el.remove();
     router.dispose();

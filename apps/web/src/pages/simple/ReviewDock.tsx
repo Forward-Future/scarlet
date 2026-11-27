@@ -4,6 +4,7 @@ import { Icon } from "../../components/ui/primitives";
 import { clock as clockLabel } from "../../lib/format";
 import { inListOrder, ReviewLinger, tabShown, type ListOrder, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
+import { useProjectStore } from "../../stores/project";
 import { useLeavingRows } from "./lowRiskFold";
 import { dedupeDockEntries, type DockEntry, type DockRow, type ReviewDockStore } from "./reviewDockStore";
 import { useReviewTabHeight } from "./reviewTabHeight";
@@ -19,9 +20,8 @@ const TIME_ORDER: ListOrder = { numbers: false };
 
 const doneLabel = (count: number) => count === 1 ? "Keep the safe edit" : `Keep all ${count} safe edits`;
 
-function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], reveal, showNeeded, onKeepConfident }: {
+function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], reveal, showNeeded }: {
   need: number; optional: number; working: number; done: number; list: PassList; reveal(): void; showNeeded(): void;
-  onKeepConfident?(): void;
 }) {
   const tab = tabShown(open);
   const total = need + optional;
@@ -49,10 +49,6 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
       title={working ? `${working} with Scarlet` : undefined} onClick={letGo(show("working"))}>Working{tally(working)}</button>
     <button type="button" className="simple-review-tab" aria-label="Done" aria-pressed={tab === "done"}
       title={done ? `${done} decided` : undefined} onClick={letGo(show("done"))}>Done{tally(done)}</button>
-    {tab === "you" && optional > 0 && onKeepConfident && (
-      <button type="button" className="review-head-keep" title={doneLabel(optional)} aria-label={doneLabel(optional)}
-        onClick={letGo(onKeepConfident)}>Keep {optional} safe {optional === 1 ? "edit" : "edits"}</button>
-    )}
   </div>;
 }
 
@@ -62,11 +58,11 @@ function DockReviewTabs({ need, optional, working, done, list: [open, setOpen], 
  * Priority list (flagged edits pinned on top, confident edits right below), Working, Done,
  * and See all lists stay fixed at the bottom while new messages flow above them.
  */
-export function ReviewDock({ store, threadIds, list: listState, laterRequests = 0, onListOpen, onKeepConfident, flashedThreadId }: {
+export function ReviewDock({ store, threadIds, list: listState, laterRequests = 0, onListOpen, onKeepConfident }: {
   store: ReviewDockStore;
   /** Thread ids in conversation order (oldest first) for deterministic tie-breaking. */
   threadIds: readonly string[];
-  /** Active tab/filter state (`undefined`/`"all"` = Needs review All, `"need"` = Needs review Needs you only, `"working"`, `"done"`). */
+  /** Active tab state (`undefined` = Needs review, `"working"`, `"done"`). */
   list: PassList;
   /** Number of requests in the chat above; an increase collapses held blank tab space. */
   laterRequests?: number;
@@ -74,8 +70,6 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   onListOpen?(threadId: string, open: boolean, moved?: boolean): void;
   /** Keep all confident edits at once (with ⌘Z undo). */
   onKeepConfident?(): void;
-  /** Thread whose rows briefly flash after clicking Show → in chat. */
-  flashedThreadId?: string;
 }) {
   useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
   const [linger] = useState(() => new ReviewLinger());
@@ -83,6 +77,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   useSyncExternalStore(linger.subscribe, linger.snapshot, linger.snapshot);
 
   const [open, setOpen] = listState;
+  const paused = useProjectStore(s => !!s.current?.project.editingPaused);
   const host = useRef<HTMLDivElement>(null);
   useLeavingRows(host);
   const askedReveal = useRef(false);
@@ -92,27 +87,19 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const loadedOf = new Map(reports.map(r => [r.threadId, r.listLoaded] as const));
   const hasTabs = reports.some(r => r.hasForYou);
   const tab: ReviewTab = tabShown(open);
-  if (hasTabs && tab === "you") linger.needsOnly = open === "need";
 
-  // Merge all threads' entries (deduplicated across cross-thread flags) in timeline order for tracking, Working, and Done.
+  // Merge all threads' entries (deduplicated across cross-thread flags and continuous B-roll sections) in timeline order.
   const deduped = hasTabs ? dedupeDockEntries(reports.flatMap(r => r.entries)) : [];
-  const allowedKeys = new Set(deduped.map(e => e.key));
+  const dedupedByKey = new Map(deduped.map(e => [e.key, e]));
   const allEntries = hasTabs ? inListOrder(deduped, TIME_ORDER) : [];
   const inPlace = (place: RowPlace) => allEntries.filter(e => e.place === place);
   const optional = hasTabs ? inPlace("optional") : [];
   const need = hasTabs ? inPlace("you").filter(e => e.row.needs || e.row.asks).length : 0;
-  const needsOnly = hasTabs && tab === "you" && open === "need" && need > 0;
-  const optionalShown = hasTabs && tab === "you" && !needsOnly;
-  const allLoaded = reports.length > 0 && reports.every(r => r.listLoaded !== false);
-
-  // Automatically drop the "Needs you" filter once edit lists have loaded and no flagged edits remain so confident edits stay visible.
-  useEffect(() => {
-    if (hasTabs && allLoaded && open === "need" && need === 0 && optional.length > 0) setOpen(undefined);
-  }, [hasTabs, allLoaded, open, need, optional.length, setOpen]);
+  const optionalShown = hasTabs && tab === "you";
 
   // While a pass's confident edits are shown in the dock (and its list has settled), notify the workspace so the timeline shows its cuts too.
   const openPassThreadId = optionalShown
-    ? reports.find(r => r.isPass && r.listLoaded !== false && r.entries.some(e => e.place === "optional" && allowedKeys.has(e.key)))?.threadId
+    ? reports.find(r => r.isPass && r.listLoaded !== false && r.entries.some(e => dedupedByKey.get(e.key)?.place === "optional"))?.threadId
     : undefined;
   useEffect(() => {
     if (!onListOpen || !openPassThreadId) return;
@@ -121,12 +108,19 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   }, [openPassThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (hasTabs) {
+    const callKeys = new Set(allEntries.filter(e => e.row.callIndex !== undefined).map(e => e.key));
+    const reloading = (key: string) => {
+      if (callKeys.has(key)) return false;
+      const sep = key.indexOf("/");
+      return sep > 0 && loadedOf.get(key.slice(0, sep)) === false;
+    };
     linger.track(
       allEntries
         .filter(e => e.row.callIndex !== undefined || loadedOf.get(e.threadId) !== false)
         .map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })),
       optionalShown,
       tab === "done",
+      reloading,
     );
   }
   const heldFrom = (from: "you" | "optional" | "done") =>
@@ -142,7 +136,10 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const lowRows = optionalShown
     ? [...reports].reverse().flatMap(r =>
       inListOrder(
-        r.entries.filter(e => allowedKeys.has(e.key) && (e.place === "optional" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "optional"))),
+        r.entries.flatMap(raw => {
+          const e = dedupedByKey.get(raw.key);
+          return e && (e.place === "optional" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "optional")) ? [e] : [];
+        }),
         TIME_ORDER,
       ),
     )
@@ -165,7 +162,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     tab,
     counts: { you: youBaseRows + lowRows.length, working: workingCount, done: doneRows },
     youBase: youBaseRows,
-    hasLowRisk: need > 0 && optional.length > 0,
+    hasLowRisk: false,
     lowOpen: optionalShown,
     nestedCount,
     laterRequests,
@@ -184,7 +181,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         id: "you",
         label: hasCalls ? "Calls and edits for you" : "Edits for you",
         rows: [...youRows, ...lowRows],
-        splitAt: youRows.length > 0 && lowRows.length > 0 ? youRows.length : undefined,
+        splitAt: lowRows.length > 0 && (youRows.length > 0 || optional.length > 0) ? youRows.length : undefined,
       }]
       : [{
         id: tab,
@@ -199,7 +196,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
       }]
       : [];
 
-  // Auto-switch tabs/filter when an edit or call is opened from outside (timeline dot, ⌘Z, Learnings, Show →).
+  // Auto-switch tabs when an edit or call is opened from outside (timeline dot, ⌘Z, Learnings, Show →).
   const onEntry = hasTabs ? allEntries.find(e => e.row.on || e.members?.some(m => m.on)) : undefined;
   const openId = onEntry?.row.id;
   const lastOpen = useRef<string | undefined>(undefined);
@@ -208,7 +205,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     lastOpen.current = openId;
     if (!hasTabs || !onEntry || openId === was) return;
     const shown = tab === "you" ? onEntry.place === "you" || (onEntry.place === "optional" && optionalShown) : onEntry.place === tab;
-    if (!shown) setOpen(onEntry.place === "you" ? (linger.needsOnly ? "need" : undefined) : onEntry.place === "optional" ? undefined : onEntry.place);
+    if (!shown) setOpen(onEntry.place === "you" || onEntry.place === "optional" ? undefined : onEntry.place);
   }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset dock list state only when review tabs disappear after having been shown (never on initial mount before turns report).
@@ -232,7 +229,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
     askedReveal.current = false;
     lastRevealSeq.current = revealSeq;
     if (!rows.querySelector('[aria-current="true"]')) {
-      rows.querySelector(":scope > li > button")?.scrollIntoView?.({ block: "nearest" });
+      rows.querySelector(":scope > li:not(.review-tier-sep) > button")?.scrollIntoView?.({ block: "nearest" });
     }
   }, [open, untabbedReport?.threadId, revealSeq, drawn.length]);
 
@@ -258,7 +255,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   if (!hasTabs && !untabbedReport && !passApplying && !passErrorReport) return null;
 
   const showNeeded = () => {
-    setOpen(linger.needsOnly ? "need" : undefined);
+    setOpen(undefined);
     const waitingOpen = allEntries.some(e => (e.row.on && (e.row.needs || e.row.asks)) || e.members?.some(m => m.on && (m.needs || m.asks)));
     const confidentOpen = !waitingOpen && need === 0 && allEntries.some(e => e.row.on && e.place === "optional");
     if (!waitingOpen && !confidentOpen) {
@@ -270,13 +267,14 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const pastHour = drawn.some(list => list.rows.some(({ row }) => clockLabel(row.displayAt).length > 5));
 
   const renderMember = (entry: DockEntry, m: DockRow) => (
-    <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}>
+    <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined} data-working={m.busy && !m.asks ? "busy" : undefined}>
       <button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
         data-log-control={m.dataLogControl} data-log-label="Edit in a moment" disabled={!m.open} title={m.title || m.label}
         onClick={letGo(() => store.openMember(entry.threadId, entry.key, m.key))}
         onPointerEnter={() => store.hoverRow(entry.threadId, m.mark, m.hover)} onPointerLeave={() => store.hoverRow(entry.threadId)}>
         <span className="simple-pass-label">
           {m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+          {m.busy && !m.asks && <span className="simple-pass-spin" aria-hidden="true" />}
           <span className="simple-pass-words">{m.label}</span>
           {m.version > 0 && <EditVersion n={m.version} hover={m.spent} />}
         </span>
@@ -299,18 +297,31 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         const { row, members, more, moment, unfolded } = entry;
         const value = id === "all" ? row.value : row.decision ?? row.value;
         const heldRow = hasTabs ? linger.of(entry.key) : undefined;
-        const leaving = !!heldRow?.leaving && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
-        const canUnkeepRow = !!row.unkeep && !leaving;
+        const lingeringHere = !!heldRow && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
+        const lingerKind = lingeringHere ? (entry.place === "working" ? "working" : (row.decided || row.rejected || row.skipped) ? "done" : undefined) : undefined;
+        const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
+        const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
+        const leaving = !!heldRow?.leaving && lingeringHere;
+        const canUnkeepRow = !!row.unkeep && !leaving && !lingeringHere;
         const isLowRow = id === "you" && lowKeys.has(entry.key);
-        const flashed = !!flashedThreadId && flashedThreadId === entry.threadId;
         return <Fragment key={row.key}>
           {splitAt !== undefined && idx === splitAt && (
-            <li className="review-tier-sep" role="presentation"><span>Safe edits ({optional.length})</span></li>
+            <li className={splitAt === 0 ? "review-tier-sep is-first" : "review-tier-sep"} role="presentation">
+              <span className="review-tier-sep-row">
+                <span className="review-tier-label">{optional.length > 0 ? `Safe edits (${optional.length})` : "Safe edits"}</span>
+                {optional.length > 0 && onKeepConfident && (
+                  <button type="button" className="review-head-keep" title={doneLabel(optional.length)} aria-label={doneLabel(optional.length)}
+                    onClick={letGo(onKeepConfident)}>Keep {optional.length} safe {optional.length === 1 ? "edit" : "edits"}</button>
+                )}
+              </span>
+            </li>
           )}
           <li className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
             data-thread={entry.threadId}
             data-low-risk={isLowRow ? "" : undefined}
-            data-flash={flashed ? "" : undefined}>
+            data-lingering={lingerKind}
+            data-working={workingState}
+            data-paused={workingState === "pending" && paused ? "" : undefined}>
             <button type="button"
               className={[
                 row.on && "is-on",
@@ -333,6 +344,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
               <span className="simple-pass-label">
                 {(row.rejected || row.skipped) && <RejectedMark />}
                 {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+                {spinning && <span className="simple-pass-spin" aria-hidden="true" />}
                 <span className="simple-pass-words">{row.label}</span>
                 {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
                 {row.fresh && <small className="edit-version is-new">New</small>}
@@ -347,7 +359,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
               onPointerEnter={() => store.hoverRow(entry.threadId, row.mark, row.hover)} onPointerLeave={() => store.hoverRow(entry.threadId)}>
               <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
                 aria-label={`Unkeep ${row.label}`} title={row.unkeepTip ?? "Unkeep"}
-                onClick={letGo(() => store.unkeepRow(entry.threadId, entry.key))}>Unkeep</button>
+                onClick={letGo(() => store.unkeepRow(entry.threadId, entry.key, threadIds))}>Unkeep</button>
             </span>}
             {row.nests.map(nest => nest.node)}
             {unfolded && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
@@ -372,16 +384,8 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   return <div className="simple-review-dock" role="region" aria-label="Edit lists">
     <div ref={host} className="simple-pass" role="group" aria-label={isPassDock ? "Dialogue pass" : "Edits"}>
       {hasTabs && <DockReviewTabs need={need} optional={optional.length} working={workingCount} done={doneCount}
-        list={listState} reveal={reveal} showNeeded={showNeeded} onKeepConfident={onKeepConfident} />}
+        list={listState} reveal={reveal} showNeeded={showNeeded} />}
       {seeTab}
-      {hasTabs && tab === "you" && need > 0 && optional.length > 0 && (
-        <div className="review-filter-bar" role="group" aria-label="Filter edits">
-          <button type="button" className="review-filter-chip" aria-pressed={!needsOnly}
-            onClick={letGo(() => setOpen(undefined))}>All {need + optional.length}</button>
-          <button type="button" className="review-filter-chip is-warn" aria-pressed={needsOnly}
-            onClick={letGo(() => setOpen("need"))}><span className="review-filter-dot" aria-hidden="true" />Needs you {need}</button>
-        </div>
-      )}
       {drawn.map(list => <Fragment key={list.id}>
         {list.rows.length > 0 ? rowList(list) : list.id !== "all" && <p className="simple-review-empty">{EMPTY_TAB[list.id]}</p>}
       </Fragment>)}

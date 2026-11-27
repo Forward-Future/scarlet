@@ -143,6 +143,17 @@ function listenFor<T>(name: string, event: string, cb: (payload: T) => void) {
   });
 }
 
+/** What a problem report says, beside the logs Scarlet adds. */
+export interface ProblemReportWords {
+  description: string;
+  /** The error on screen the report is about. */
+  about?: string;
+  /** The page, as the log names it. */
+  page?: string;
+  /** The newest errors the window showed. */
+  onScreen?: string[];
+}
+
 export interface StorageSize { bytes: number; files: number; estimated: boolean }
 export interface DeveloperStorage extends StorageSize { kind: "cargo" | "scratch"; path: string }
 
@@ -201,6 +212,12 @@ export const desktop = {
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   /** Save the logs and a system report as one .zip the editor picks a place for. Null when cancelled. */
   exportLogs: () => invoke<string | null>("export_logs"),
+  /** Send a problem report to the Scarlet team now: the editor's words, the error on screen and the cleaned logs. */
+  sendProblemReport: (report: ProblemReportWords) => invoke<{ id: string; reference: string }>("send_problem_report", { report }),
+  /** Add the editor's words to a report already sent with one press. */
+  sendProblemDetails: (details: { reportId: string; description: string }) => invoke<void>("send_problem_details", { details }),
+  /** Save a problem report that couldn't be sent in Downloads. Returns where it went. */
+  saveProblemReport: (report: ProblemReportWords) => invoke<string>("save_problem_report", { report }),
   pickFile: (title: string) => invoke<string | null>("plugin:dialog|open", { options: { title, multiple: false, directory: false } }),
   pickFolder: (title: string) => invoke<string | null>("plugin:dialog|open", { options: { title, directory: true, multiple: false } }),
   installCrisperModel: (directory: string) => invoke<void>("install_crisper_model", { directory }),
@@ -223,6 +240,10 @@ export const desktop = {
   },
   async onHostStatus(cb: (s: HostStatus) => void): Promise<Unlisten> {
     return listenFor("host-status", "host://status", cb);
+  },
+  /** Help → Report a Problem… in the menu bar. */
+  async onReportProblem(cb: () => void): Promise<Unlisten> {
+    return listenFor("report-problem", "report-problem://open", () => cb());
   },
 };
 

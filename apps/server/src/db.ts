@@ -143,13 +143,13 @@ export class Db {
   }
 }
 
-export function openDb(path: string): Db {
+export function openDb(path: string, log: (line: string) => void = () => {}): Db {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Db(path);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
-  migrate(db);
+  migrate(db, undefined, log);
   // These private in-flight results can coexist with a newer library schema used by another Scarlet build.
   db.exec(`CREATE TABLE IF NOT EXISTS transcription_work (
     media_id TEXT PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
@@ -165,11 +165,15 @@ export function openDb(path: string): Db {
       (NEW.state = 'failed' AND json_extract(NEW.json, '$.interrupted') IS NOT 1))
     BEGIN DELETE FROM transcription_work WHERE task_id = NEW.id; END;`);
   ensureReadIndexes(db);
-  ensureLookupIndexes(db);
+  ensureLookupIndexes(db, log);
   ensureGraphics(db);
   db.exec(`CREATE TABLE IF NOT EXISTS show_areas (
     media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE, at REAL NOT NULL, json TEXT NOT NULL, created_at TEXT NOT NULL,
     PRIMARY KEY (media_id, at)
+  );
+  CREATE TABLE IF NOT EXISTS batch_summaries (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, batch_key TEXT NOT NULL, title TEXT NOT NULL, created_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, batch_key)
   );`);
   ensureProjectRowRevision(db);
   ensureColumn(db, "projects", "editing_paused", "ALTER TABLE projects ADD COLUMN editing_paused INTEGER NOT NULL DEFAULT 0;");

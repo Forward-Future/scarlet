@@ -32,3 +32,23 @@ it("opens native logs while the engine is offline and can copy an error without 
     vi.unstubAllGlobals();
   }
 });
+
+it("sends a report of what stopped Scarlet in one press", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+  const send = vi.spyOn(desktop, "sendProblemReport").mockResolvedValue({ id: "a", reference: "AAAA-BBBB" });
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<StartupRecovery title="Scarlet couldn’t start" detail="Engine exited with code 1" showLogs />));
+    expect([...container.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Report a problem", "Open logs", "Copy diagnostics"]);
+    await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Report a problem")!.click());
+    expect(send.mock.calls[0]![0].about).toBe("Scarlet couldn’t start: Engine exited with code 1");
+    expect(container.textContent).toContain("Report sent");
+  } finally {
+    await act(async () => root.unmount());
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});

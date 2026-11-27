@@ -71,7 +71,8 @@ export function useAppliedCut({ current, reviewingEdit, focusThread, threadTimel
   // While the cut plays, After stays on the version it started on. A pass applying its next cuts moves the video on
   // every moment, and following it put up a new player each time, before the last had played a frame: nothing
   // played. Once the editor pauses, or the cut changes or another opens, it takes up the video as it runs now.
-  const playingNow = usePlayerStore(s => s.playing);
+  // Only an applied cut's After holds while it plays, so the page isn't drawn again on every play and pause otherwise.
+  const playingNow = usePlayerStore(s => !!reviewingEdit?.beforeCut && s.playing);
   const heldAfter = useRef<{ key?: string; source?: typeof latestAfter }>(undefined);
   const afterKey = reviewingEdit && editPlaybackKey(reviewingEdit, undefined, cutBase);
   // A cut the editor just rejected holds it too, for the moment it takes to leave the timeline: the video without it
@@ -207,6 +208,10 @@ export function useAppliedCut({ current, reviewingEdit, focusThread, threadTimel
   // isn't a cut: an edit that changes from one to the other when its revision lands isn't started again either.
   const playedApplied = useRef<{ pick: string; chosen: string }>(undefined);
   const heardPick = useRef<string>(undefined);
+  // The version the listen last played on. Taken up again on another one (the cut opens on an earlier or later version
+  // once a pass saves its next batch, or an earlier batch's cut beside it comes or goes), the playhead goes to the same
+  // footage there: its time on the version it was on is another moment on this one, and was often past the cut (#686).
+  const playedOn = useRef<{ pick: string; timeline: NonNullable<typeof beforeTimeline> }>(undefined);
   useLayoutEffect(() => {
     if (playedApplied.current?.pick !== openPick) playedApplied.current = undefined;
     if (heardPick.current !== openPick) heardPick.current = undefined;
@@ -217,6 +222,14 @@ export function useAppliedCut({ current, reviewingEdit, focusThread, threadTimel
       quietOpen.current = false;
       playedApplied.current = { pick: openPick, chosen };
       heardPick.current = openPick;
+      const was = playedOn.current?.pick === openPick ? playedOn.current.timeline : undefined;
+      if (again && was && beforeTimeline && was.version !== beforeTimeline.version) {
+        const time = usePlayerStore.getState().time;
+        const onto = makeTimeMap(was, beforeTimeline, fps);
+        const at = onto(time, "right") ?? onto(time, "left") ?? playedListen.from ?? playedListen.start;
+        if (Math.abs(at - time) > 1e-6) player.seek(at, true);
+      }
+      playedOn.current = beforeTimeline && { pick: openPick, timeline: beforeTimeline };
       return again ? player.audition(playedListen, fps, true) : player.audition(playedListen, fps);
     });
   }, [playedListen, fps, joinPending, appliedJoined?.version, openPick, shownSide?.take]); // eslint-disable-line react-hooks/exhaustive-deps

@@ -15,14 +15,17 @@ import type { AudioTrackSelection, Author, Change, CutAssessment, CutReview, Med
 import type { ActivityEntry, ExpandMediaPathsResponse, MusicReading, TrashedProject, FullRenderKeys, PlaybackCacheStatus, SourceCacheStatus, ProjectDetail, ProjectSummary, Render, RenderFileInfo, RenderRequest, ServerSettings, User, WaveformResponse, RetakeGroup, LocalModelStatus, TelemetryUnavailable, HandoffResponse } from "./api.js";
 import type { AgentHost, RunChoice } from "./agents.js";
 import type { CompleteTaskRequest, CreateTaskRequest, PictureMarks, RewordTaskRequest, TaskAttachment, Task, TaskEvent, TaskPrompt, TaskSkillDraft } from "./tasks.js";
-import type { KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
+import type { BatchSummariesRequest, BatchSummariesResponse, KeepEditsRequest, UnkeepEditsRequest, KeptEdit, ApproveResponse, CreateNoteRequest, ProposeChangeRequest, ReviseRequest, UpdateNoteRequest, VersionSummary, DialogueCutsRequest, JoinCrossfades, FlagEditRequest, CutChoicesRequest, StagedCutRevision } from "./changes.js";
 import type { ApproveLearningRequest, ReviseLearningRequest, Learning, SuggestLearningRequest } from "./learnings.js";
 import type { RecordTaskUsageRequest, UsageGroupBy, UsageResponse } from "./usage.js";
 import type { GraphicRenderResponse, SaveStyleGuideRequest } from "./graphics.js";
 import type { Skill, SkillVersion, EditSkillRequest, UpsertSkillRequest } from "./skills.js";
+import type { BuiltInStyleSound } from "./builtInSfx.js";
 import type {
+  ActiveStyleGuide,
   CreateStyleGuideRequest,
   EditStyleGuideRequest,
+  ImportStyleGuideSoundRequest,
   StyleGuideAsset,
   StyleGuideFromGraphicRequest,
   StyleGuidePreviewRenderRequest,
@@ -31,6 +34,13 @@ import type {
   TaskStyleGuideDraft,
   UpdateStyleGuideRequest,
 } from "./styleGuides.js";
+import type {
+  YouTubeChaptersResponse,
+  YouTubeConfigRequest,
+  YouTubeConnectionStatus,
+  YouTubePublishRequest,
+  YouTubeUploadJob,
+} from "./youtube.js";
 
 /**
  * File extension for a recorded clip. Chromium (Windows) records webm/opus;
@@ -119,6 +129,17 @@ export class ScarletClient extends ClientTransport {
   }
   recordEditReview(projectId: string, body: EditReviewRequest) {
     return this.post<void>(`/projects/${projectId}/edit-reviews`, body);
+  }
+  /** Ask the engine for AI-generated short titles for collapsed edit batches. Gracefully returns empty on older engines. */
+  async summarizeBatches(projectId: string, body: BatchSummariesRequest): Promise<BatchSummariesResponse> {
+    try {
+      return await this.post<BatchSummariesResponse>(`/projects/${apiPathId(projectId)}/batch-summaries`, body);
+    } catch (error) {
+      if (isMissingRouteError(error, message => message.startsWith("no route for POST ") && message.endsWith("/batch-summaries"))) {
+        return { summaries: {}, pending: [] };
+      }
+      throw error;
+    }
   }
   setThreadDone(projectId: string, threadId: string, done: boolean, revision: string) {
     return this.post<{ completedThreads: Record<string, string>; project?: Project }>(`/projects/${projectId}/threads/${encodeURIComponent(threadId)}/disposition`, { done, revision });
@@ -523,7 +544,7 @@ export class ScarletClient extends ClientTransport {
   }
   tasks(projectId: string, state?: string, events?: "conversation") {
     // Not URLSearchParams.size: a WebView older than Safari 17 has none, and the whole query was dropped there.
-    return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]> }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
+    return this.get<{ tasks: Task[]; conversation?: Record<string, TaskEvent[]>; handOffs?: Task[] }>(withQuery(`/projects/${projectId}/tasks`, { state: state || undefined, events }));
   }
   task(taskId: string, events: "all" | "conversation" | "none" = "all") {
     return this.withResource("tasks", taskId, path => this.get<{ task: Task; events: TaskEvent[]; checksTaskAttempts?: true; listener?: Listener;
@@ -671,6 +692,9 @@ export class ScarletClient extends ClientTransport {
   styleGuides() {
     return this.get<{ styleGuides: StyleGuideRecord[] }>("/style-guides");
   }
+  activeStyleGuides(opts?: { projectId?: string; taskId?: string }) {
+    return this.get<{ styleGuides: ActiveStyleGuide[] }>(withQuery("/style-guides/active", opts ?? {}));
+  }
   styleGuide(styleGuideId: string) {
     return this.get<{ styleGuide: StyleGuideRecord; edits?: Task[] }>(`/style-guides/${apiPathId(styleGuideId)}`);
   }
@@ -679,6 +703,19 @@ export class ScarletClient extends ClientTransport {
   }
   createStyleGuideFromGraphic(body: StyleGuideFromGraphicRequest) {
     return this.post<{ styleGuide: StyleGuideRecord }>("/style-guides/from-graphic", body);
+  }
+  importStyleGuideFile(file: Blob | { path: string }, opts: { styleGuideId?: string; name?: string } = {}) {
+    const query = opts.styleGuideId ? `?styleGuideId=${encodeURIComponent(opts.styleGuideId)}` : "";
+    const path = `/style-guides/import-file${query}`;
+    if (!(file instanceof Blob)) {
+      return this.post<{ imported: true; styleGuide: StyleGuideRecord } | { imported: false }>(path, {
+        path: file.path,
+        ...(opts.styleGuideId && { styleGuideId: opts.styleGuideId }),
+      });
+    }
+    const fd = new FormData();
+    fd.append("file", file, opts.name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "style-guide.json"));
+    return this.post<{ imported: true; styleGuide: StyleGuideRecord } | { imported: false }>(path, fd);
   }
   updateStyleGuide(styleGuideId: string, body: UpdateStyleGuideRequest) {
     return this.put<{ styleGuide: StyleGuideRecord }>(`/style-guides/${apiPathId(styleGuideId)}`, body);
@@ -694,13 +731,33 @@ export class ScarletClient extends ClientTransport {
   }
   uploadStyleGuideAsset(styleGuideId: string, file: Blob | { path: string }, name?: string) {
     const path = `/style-guides/${apiPathId(styleGuideId)}/assets`;
-    if (!(file instanceof Blob)) return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord }>(path, { path: file.path });
+    if (!(file instanceof Blob)) return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord; duration?: number }>(path, { path: file.path });
     const fd = new FormData();
     fd.append("file", file, name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "asset"));
-    return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord }>(path, fd);
+    return this.post<{ asset: StyleGuideAsset; styleGuide: StyleGuideRecord; duration?: number }>(path, fd);
+  }
+  deleteStyleGuideAsset(styleGuideId: string, assetId: string) {
+    return this.delete<{ styleGuide: StyleGuideRecord }>(`/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}`);
   }
   styleGuideAssetUrl(styleGuideId: string, assetId: string) {
     return this.fileUrl(`/style-guides/${apiPathId(styleGuideId)}/assets/${apiPathId(assetId)}`);
+  }
+  builtInStyleSounds() {
+    return this.get<{ sounds: BuiltInStyleSound[] }>("/style-guides/sounds/builtin");
+  }
+  builtInStyleSoundUrl(soundId: string) {
+    const slug = soundId.startsWith("builtin:") ? soundId.slice("builtin:".length) : soundId;
+    return this.fileUrl(`/style-guides/sounds/builtin/${apiPathId(slug)}`);
+  }
+  importStyleGuideSound(projectId: string, body: ImportStyleGuideSoundRequest) {
+    return this.post<{
+      media: ProjectDetail["project"]["media"][number];
+      name: string;
+      volumeDb: number;
+      volume: number;
+      duration?: number;
+      usageRule: string;
+    }>(`/projects/${apiPathId(projectId)}/media/from-style-sound`, body);
   }
   readStyleGuideAsset(styleGuideId: string, assetId: string, pages?: number[]) {
     return this.post<{ name: string; path: string; size: number; mime?: string; text?: string; pageCount?: number;
@@ -774,5 +831,42 @@ export class ScarletClient extends ClientTransport {
   }
   updateSettings(body: Partial<ServerSettings>) {
     return this.patch<{ settings: ServerSettings }>("/settings", body);
+  }
+
+  // YouTube connection, final-cut chapters & direct upload
+  youtubeStatus() {
+    return this.get<{ status: YouTubeConnectionStatus }>("/settings/youtube");
+  }
+  youtubeUpdateConfig(body: YouTubeConfigRequest) {
+    return this.put<{ status: YouTubeConnectionStatus }>("/settings/youtube/config", body);
+  }
+  youtubeConnect() {
+    return this.post<{ authUrl: string; status: YouTubeConnectionStatus }>("/settings/youtube/connect", {});
+  }
+  youtubeCancelConnect() {
+    return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/cancel", {});
+  }
+  youtubeDisconnect() {
+    return this.post<{ status: YouTubeConnectionStatus }>("/settings/youtube/disconnect", {});
+  }
+  youtubeChapters(projectId: string, version?: string, signal?: AbortSignal) {
+    return this.request<YouTubeChaptersResponse>(
+      "GET",
+      withQuery(`/projects/${apiPathId(projectId)}/youtube/chapters`, { version }),
+      undefined,
+      { signal },
+    );
+  }
+  youtubePublish(projectId: string, body: YouTubePublishRequest) {
+    return this.post<{ upload: YouTubeUploadJob }>(`/projects/${apiPathId(projectId)}/youtube/publish`, body);
+  }
+  youtubeUploads(projectId: string) {
+    return this.get<{ uploads: YouTubeUploadJob[] }>(`/projects/${apiPathId(projectId)}/youtube/uploads`);
+  }
+  youtubeUpload(uploadId: string) {
+    return this.get<{ upload: YouTubeUploadJob }>(`/youtube/uploads/${apiPathId(uploadId)}`);
+  }
+  youtubeCancelUpload(uploadId: string) {
+    return this.post<{ upload: YouTubeUploadJob }>(`/youtube/uploads/${apiPathId(uploadId)}/cancel`, {});
   }
 }

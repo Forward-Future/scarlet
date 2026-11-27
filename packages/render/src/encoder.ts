@@ -1,4 +1,4 @@
-import { FFMPEG_BASE_ARGS, FfmpegError, failureReason, ffmpegEncoders, fnum, resolveFfmpeg, runCapture } from "./exec.js";
+import { FFMPEG_BASE_ARGS, FfmpegError, failureReason, ffmpegEncoders, fnum, logReason, logRender, resolveFfmpeg, runCapture } from "./exec.js";
 
 export const PROGRAM_AUDIO_BITRATE = "192k";
 export const BEST_AUDIO_BITRATE = "320k";
@@ -48,10 +48,16 @@ function probeEncoder(name: string, format: VideoFormat, quality: RenderQuality,
       // Intel VideoToolbox accepts average bitrate instead of constant quality. Scale the
       // target with the output: about 12.4 Mb/s for a 1080p30 delivery, half for a preview.
       const bitrate = Math.max(128_000, Math.round(format.width * format.height * format.fps * (quality === "delivery" ? 0.2 : 0.1)));
+      logRender(`[render] ${name} has no constant quality here; trying an average bitrate of ${Math.round(bitrate / 1000)} kb/s`);
       return test(["-allow_sw", "0", "-b:v", String(bitrate)], name + "-" + bitrate);
-    }).catch((error: unknown) => {
+    }).then(encoding => {
+      logRender(`[render] hardware encoder ${name} works for ${dimensions} ${quality}`);
+      return encoding;
+    }, (error: unknown) => {
       // Process-start and session-limit failures can clear before the next job.
-      if ((error instanceof FfmpegError && !error.started) || busyEncoder(error)) encoderProbe.delete(key);
+      const transient = (error instanceof FfmpegError && !error.started) || busyEncoder(error);
+      if (transient) encoderProbe.delete(key);
+      logRender(() => `[render] hardware encoder ${name} can't encode ${dimensions} ${quality}${transient ? " for now (busy or didn't start)" : ""}: ${logReason(error)}`, `probe:${key}`);
       warn?.(`${name} could not encode a ${dimensions} frame (${failureReason(error)}).`);
       return undefined;
     });
@@ -77,6 +83,7 @@ export async function resolveEncoding(hwaccel: HwAccel | undefined, ffmpegPath: 
   const policy = hwaccel ?? (exporting ? "auto" : "none");
   if (policy === "none") return softwareEncoder(quality);
   const available = await ffmpegEncoders(ffmpegPath).catch((error: unknown) => {
+    logRender(() => `[render] couldn't list this ffmpeg's encoders: ${logReason(error)}`, "encoders");
     warn?.(`Could not list this ffmpeg's encoders (${failureReason(error)}).`);
     return new Set<string>();
   });
@@ -92,8 +99,19 @@ export async function resolveEncoding(hwaccel: HwAccel | undefined, ffmpegPath: 
     const encoding = await probeEncoder(name, format, quality, resolveFfmpeg(ffmpegPath), warn);
     if (encoding) return encoding;
   }
+  // Once per policy and outcome: a preview asks this for every section it plays.
+  const skipped = [...candidates].filter(name => failed.has(name));
+  const why = !candidates.size ? "none offered" : ![...candidates].some(name => available.has(name)) ? "this ffmpeg lists none of them"
+    : skipped.length ? `${skipped.join(", ")} failed during a render` : "none could encode a test frame";
+  const said = `${policy}|${quality}|${exporting}|${why}`;
+  if (!softwareNoted.has(said)) {
+    softwareNoted.add(said);
+    logRender(`[render] using software encoder libx264 for ${exporting ? "exports" : "previews"} (hardware ${policy}: ${why})`);
+  }
   return softwareEncoder(quality);
 }
+
+const softwareNoted = new Set<string>();
 
 /** The encoder available for this output. A named device is preferred first for delivery. */
 export async function resolveVideoEncoder(hwaccel?: HwAccel, ffmpegPath?: string, size = { width: 1280, height: 720 },

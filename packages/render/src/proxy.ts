@@ -7,7 +7,7 @@ import { mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT, type AudioTrackSelection } from "@scarlet/timeline";
 import { audioMapArgs } from "./audioTrack.js";
-import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, runFfmpeg, threadedAvcPreview } from "./exec.js";
+import { FfmpegError, LOCAL_MEDIA_INPUT, even, failureReason, logRender, runFfmpeg, threadedAvcPreview } from "./exec.js";
 import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
 import { probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
 import { toneMapFilters } from "./hdr.js";
@@ -45,6 +45,9 @@ export interface ProxyResult {
   warnings: string[];
 }
 
+/** One checkpoint of a preview copy: its file and the source seconds it holds. */
+interface Part { index: number; name: string; path: string; start: number; end: number }
+
 /** Checkpoints start on source frames, including at fractional rates. */
 function checkpointSpan(fps: number) {
   return Math.max(1, Math.round(fps * 30)) / fps;
@@ -70,7 +73,11 @@ function proxySize(probe: ProbeResult, height: number) {
   return { width: even((probe.width * h) / probe.height), height: h };
 }
 
-function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, opts: ProxyOptions, hardwareDecode: boolean, toneMap: string[]): { input: string[]; output: string[] } {
+function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, opts: ProxyOptions, hardwareDecode: boolean, toneMap: string[]): {
+  input: string[]; output: string[];
+  /** Input arguments for a second, hardware-decoded lane beside the CPU's, when parts can be made side by side. */
+  hardwareLane?: string[];
+} {
   const encoder = encoding.name;
   const scale = `w=-2:h='2*trunc(min(${height},ih)/2)'`;
   // An HDR picture is made small first and then tone-mapped to SDR, so the tone-mapping works on the preview's pixels.
@@ -100,9 +107,14 @@ function videoArgs(probe: ProbeResult, height: number, encoding: VideoEncoder, o
       output: ["-vf", `scale_cuda=${scale}:format=yuv420p:interp_algo=bicubic`, ...encode] };
   }
   const threaded = opts.hwaccel === "auto" && threadedAvcPreview && probe.videoCodec === "h264";
+  const appleDecode = hardwareDecode && encoder === "h264_videotoolbox" && nativeCodec;
   return {
-    input: hardwareDecode && encoder === "h264_videotoolbox" && nativeCodec && !threaded ? ["-hwaccel", "videotoolbox"] : [],
+    input: appleDecode && !threaded ? ["-hwaccel", "videotoolbox"] : [],
     output: ["-vf", picture, ...encode, "-pix_fmt", "yuv420p"],
+    // The CPU decodes AVC fastest here, and VideoToolbox's decoder is otherwise idle: it makes parts of its own at
+    // the same time, the same pictures, while costing the CPU's lane little. A 30 s 4K part took 2.0 s on the CPU
+    // alone and 2.1 s beside a VideoToolbox part, which took 5.0 s (M5 Max, 2026-11-26).
+    hardwareLane: appleDecode && threaded ? ["-hwaccel", "videotoolbox"] : undefined,
   };
 }
 
@@ -142,55 +154,124 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   // Phone recordings whose frame rate drifts a little are saved in parts too, so a restart keeps them; only the
   // scrub previews need a steady rate to map a part's pictures back to source frames, and they check for it.
   if (opts.checkpointDir && !opts.range && video && pictureDuration > 30 && probe.fps > 0 && probe.videoStartPts === 0 && probe.videoStart === 0) {
-    // Align each boundary to a picture frame. Mux audio from the original once
+    // Align each boundary to a picture frame. Encode audio from the original once
     // so independent AAC encodes cannot introduce gaps at those boundaries.
     const dir = join(opts.checkpointDir, encoding.cacheKey + "-" + height);
     await mkdir(dir, { recursive: true });
     const span = checkpointSpan(probe.fps);
-    // The final pass re-reads the original for its audio and rewrites the file, so it keeps a share of the bar.
+    // The final pass copies the parts and the sound into one file, so it keeps a share of the bar.
     const PARTS = 0.9;
-    const parts: Array<{ name: string; start: number }> = [];
+    // The sound needs no picture decoding, so it is encoded while the parts are rather than after them.
+    const heard = { audioTrack: opts.audioTrack, audioStreamCount: probe.audioStreams?.length };
+    const sound = probe.hasAudio ? encodeSound(input, join(dir, randomUUID() + ".sound.m4a"), heard, opts) : undefined;
+    const all: Part[] = [];
     for (let i = 0; i * span < pictureDuration - 0.000001; i++) {
-      opts.signal?.throwIfAborted();
-      const start = i * span, end = Math.min(pictureDuration, (i + 1) * span);
       // A VFR checkpoint can begin between pictures. Older parts after the first rounded that offset to milliseconds.
-      const name = (i > 0 && !probe.previewClock ? "pts-" : "") + i + ".mp4", path = join(dir, name);
-      if (!(await stat(path).catch(() => null))?.size) {
-        const temp = path + "." + randomUUID() + ".part.mp4";
-        try {
-          await runFfmpeg(["-y", ...video.input, "-ss", String(start), ...LOCAL_MEDIA_INPUT, "-i", input,
-            "-t", String(end - start), "-map", "0:v:0", ...video.output, "-movie_timescale", "1000000", "-an", temp], {
-            ffmpegPath: opts.ffmpegPath, signal: opts.signal,
-            onProgress: t => opts.onProgress?.(PARTS * Math.min(end, start + t) / pictureDuration),
-          });
-          await rename(temp, path);
-        } catch (error) {
-          // A cancelled encode can reject immediately on retry. Clean up before creating that promise.
-          await rm(temp, { force: true });
-          return retry(error);
-        }
-      }
-      // A VFR screen capture may hold a picture for this entire part. An empty MP4 stops concat at that point.
-      if (probe.previewClock || (await probeMedia(path, { ffprobePath: opts.ffprobePath, signal: opts.signal })).hasVideo) {
-        parts.push({ name, start });
-      }
-      opts.onProgress?.(PARTS * end / pictureDuration);
+      const name = (i > 0 && !probe.previewClock ? "pts-" : "") + i + ".mp4";
+      all.push({ index: i, name, path: join(dir, name), start: i * span, end: Math.min(pictureDuration, (i + 1) * span) });
     }
-    const manifest = join(dir, randomUUID() + ".ffconcat");
+    const todo: Part[] = [];
+    for (const part of all) if (!(await stat(part.path).catch(() => null))?.size) todo.push(part);
+    // Progress counts finished parts and the seconds of each part being made, whichever lane is making it.
+    let finished = all.filter(part => !todo.includes(part)).reduce((sum, part) => sum + part.end - part.start, 0), shown = 0;
+    const making = new Map<number, number>();
+    const report = () => {
+      const fraction = PARTS * Math.min(pictureDuration, finished + [...making.values()].reduce((a, b) => a + b, 0)) / pictureDuration;
+      if (fraction > shown) opts.onProgress?.(shown = fraction);
+    };
+    report();
+    // A part is published by the first lane to finish it; the other one's copy is dropped.
+    const published = new Set<number>();
+    async function makePart(part: Part, inputArgs: string[], signal: AbortSignal | undefined) {
+      const temp = part.path + "." + randomUUID() + ".part.mp4";
+      try {
+        await runFfmpeg(["-y", ...inputArgs, "-ss", String(part.start), ...LOCAL_MEDIA_INPUT, "-i", input,
+          "-t", String(part.end - part.start), "-map", "0:v:0", ...video!.output, "-movie_timescale", "1000000", "-an", temp], {
+          ffmpegPath: opts.ffmpegPath, signal,
+          onProgress: t => {
+            if (published.has(part.index)) return;
+            making.set(part.index, Math.max(making.get(part.index) ?? 0, Math.min(part.end - part.start, t)));
+            report();
+          },
+        });
+        if (published.has(part.index)) return;
+        published.add(part.index);
+        await rename(temp, part.path);
+        making.delete(part.index);
+        finished += part.end - part.start;
+        report();
+      } finally {
+        // A cancelled encode can reject immediately on retry. Clean up before creating that promise.
+        await rm(temp, { force: true });
+      }
+    }
+    // The CPU makes parts from the front, the hardware lane from the back, until they meet.
+    let front = 0, back = todo.length - 1;
+    const stopHardware = new AbortController();
+    const hardwareSignal = opts.signal ? AbortSignal.any([opts.signal, stopHardware.signal]) : stopHardware.signal;
+    const held = new Map<number, Promise<boolean>>();
+    const hardwareLane = (async () => {
+      if (!video.hardwareLane) return;
+      while (front < back) {
+        const part = todo[back--]!;
+        const job = makePart(part, video.hardwareLane, hardwareSignal).then(() => true, (error: unknown) => {
+          if (!hardwareSignal.aborted) warnings.push(`VideoToolbox could not decode part ${part.index + 1} of this preview copy (${failureReason(error)}); decoded it on the CPU.`);
+          return false;
+        });
+        held.set(part.index, job);
+        if (!await job) return;
+      }
+    })();
     try {
-      // Place each part at its source boundary, preserving the hold through any intervening empty parts.
-      const list = parts.flatMap(({ name, start }, i) => [
-        "file " + name, "inpoint 0", "duration " + ((parts[i + 1]?.start ?? pictureDuration) - start).toFixed(9),
-      ]);
-      await writeFile(manifest, list.join("\n") + "\n");
-      const heard = { audioTrack: opts.audioTrack, audioStreamCount: probe.audioStreams?.length };
-      const audio = probe.hasAudio
-        ? [...LOCAL_MEDIA_INPUT, "-i", input, "-map", "0:v:0", ...audioMapArgs(heard, { input: 1, channelLayout: "stereo", label: "pa" }), ...PROXY_AUDIO]
-        : ["-map", "0:v:0", "-an"];
-      await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
-        "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
-        onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
-    } finally { await rm(manifest, { force: true }); }
+      try {
+        while (front <= back) await makePart(todo[front++]!, video.input, opts.signal);
+        // Then the parts the hardware lane took: one it couldn't make is made here, and the one it is still making is
+        // raced, so a slow hardware decode never makes the copy later than the CPU alone would have.
+        for (const part of todo) {
+          if (published.has(part.index)) continue;
+          const hardware = held.get(part.index);
+          if (!hardware) { await makePart(part, video.input, opts.signal); continue; }
+          const race = new AbortController();
+          const cpu = makePart(part, video.input, opts.signal ? AbortSignal.any([opts.signal, race.signal]) : race.signal);
+          const first = await Promise.race([hardware.then(ok => ok ? "hardware" : "failed"), cpu.then(() => "cpu")]);
+          if (first === "hardware") {
+            race.abort();
+            await cpu.catch(() => {});
+          } else if (first === "cpu") stopHardware.abort();
+          else await cpu;
+        }
+      } catch (error) {
+        stopHardware.abort();
+        await hardwareLane;
+        await sound?.stop();
+        // Awaited here, so the finally below doesn't leave its rejection unheard while it stops the sound.
+        return await retry(error);
+      }
+      await hardwareLane;
+      const parts: Part[] = [];
+      for (const part of all) {
+        opts.signal?.throwIfAborted();
+        // A VFR screen capture may hold a picture for this entire part. An empty MP4 stops concat at that point.
+        if (probe.previewClock || (await probeMedia(part.path, { ffprobePath: opts.ffprobePath, signal: opts.signal })).hasVideo) parts.push(part);
+      }
+      const manifest = join(dir, randomUUID() + ".ffconcat");
+      try {
+        // Place each part at its source boundary, preserving the hold through any intervening empty parts.
+        const list = parts.flatMap(({ name, start }, i) => [
+          "file " + name, "inpoint 0", "duration " + ((parts[i + 1]?.start ?? pictureDuration) - start).toFixed(9),
+        ]);
+        await writeFile(manifest, list.join("\n") + "\n");
+        const audio = sound
+          ? [...LOCAL_MEDIA_INPUT, "-i", await sound.ready(), "-map", "0:v:0", "-map", "1:a:0", "-c:a", "copy"]
+          : ["-map", "0:v:0", "-an"];
+        await runFfmpeg(["-y", "-f", "concat", "-safe", "1", "-i", manifest, ...audio,
+          "-c:v", "copy", "-movflags", "+faststart", output], { signal: opts.signal, ffmpegPath: opts.ffmpegPath,
+          onProgress: opts.onProgress && (t => opts.onProgress!(PARTS + (1 - PARTS) * Math.min(1, t / Math.max(probe.duration, pictureDuration)))) });
+      } finally { await rm(manifest, { force: true }); }
+    } finally { await sound?.stop(); }
+    // The engine logs every finished proxy; this says only what it can't, that an earlier run's parts were reused.
+    const kept = all.length - todo.length;
+    if (kept) logRender(`[media] proxy resumed: ${kept} of ${all.length} parts kept from an earlier run, ${todo.length} encoded now`);
     opts.onProgress?.(1);
     return { output, duration: probe.duration, hasVideo, hasAudio: probe.hasAudio, encoder, warnings };
   }
@@ -222,4 +303,25 @@ async function encodeProxy(input: string, output: string, opts: ProxyOptions, ha
   }
   opts.onProgress?.(1);
   return { output, duration, hasVideo, hasAudio: probe.hasAudio, encoder, warnings };
+}
+
+/**
+ * Encode a preview copy's sound alone from the original, as the one-pass copy does, into `file`. `ready` gives the
+ * file once it is complete; `stop` ends the encode if it still runs and removes the file.
+ */
+function encodeSound(input: string, file: string, heard: { audioTrack?: AudioTrackSelection; audioStreamCount?: number }, opts: ProxyOptions) {
+  const stopped = new AbortController();
+  const signal = opts.signal ? AbortSignal.any([opts.signal, stopped.signal]) : stopped.signal;
+  const job = runFfmpeg(["-y", ...LOCAL_MEDIA_INPUT, "-i", input, "-vn",
+    ...audioMapArgs(heard, { channelLayout: "stereo", label: "pa" }), ...PROXY_AUDIO, file], { ffmpegPath: opts.ffmpegPath, signal });
+  // Its failure is reported when the file is asked for; a copy stopped early never asks.
+  job.catch(() => {});
+  return {
+    async ready() { await job; return file; },
+    async stop() {
+      stopped.abort();
+      await job.catch(() => {});
+      await rm(file, { force: true });
+    },
+  };
 }

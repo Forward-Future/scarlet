@@ -7,6 +7,8 @@ import { Icon } from "../ui/primitives";
 
 /** What the red button is named while it records: a press sends what was said, and Esc throws it away. */
 export const SEND_RECORDING = "Send (Esc to discard)";
+/** Its name when what was said waits in the message box to be read before sending. */
+export const REVIEW_RECORDING = "Stop and review (Esc to discard)";
 
 /**
  * The recordings Esc throws away. That press is the recording's alone: it closes no card, clears no tag and leaves a
@@ -29,10 +31,11 @@ if (typeof window !== "undefined") {
  * Mic toggle. Click toggles recording; holding V (uiStore.voiceHold) records
  * push-to-talk style when `followHold` is set. Shows a red dot and elapsed
  * time while recording and auto-stops at the 2 minute cap. A press on the red
- * button, letting go of V and the cap all send what was said. Esc throws the
+ * button, letting go of V and the cap all send what was said, or with `review`
+ * stop it so the words wait in the message box. Esc throws the
  * recording away instead, and that press does nothing else.
  */
-export function MicButton({ onResult, onStart, onRecording, onError, disabled, disabledReason, followHold = false, label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; onError?(message: string): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; label?: string }) {
+export function MicButton({ onResult, onStart, onRecording, onError, disabled, disabledReason, followHold = false, review = false, label = "Record a voice note" }: { onResult: (r: RecorderResult) => void; onStart?(): void; onRecording?(on: boolean): void; onError?(message: string): void; disabled?: boolean; disabledReason?: string; followHold?: boolean; review?: boolean; label?: string }) {
   const rec = useRecorder(onResult);
   useEffect(() => { if (rec.error) onError?.(rec.error); }, [onError, rec.error]);
   const hold = useUiStore((s) => s.voiceHold);
@@ -111,14 +114,15 @@ export function MicButton({ onResult, onStart, onRecording, onError, disabled, d
 
   const unsupported = rec.state === "unsupported";
   const isDisabled = disabled || unsupported;
-  const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? SEND_RECORDING : followHold ? `${label} (hold V)` : label;
+  const stopLabel = review ? REVIEW_RECORDING : SEND_RECORDING;
+  const title = unsupported ? "Scarlet can’t record audio on this computer" : disabled ? disabledReason : rec.recording ? stopLabel : followHold ? `${label} (hold V)` : label;
 
   return (
     <div className="flex items-center gap-2">
       <button
         ref={button}
         type="button"
-        aria-label={rec.recording ? SEND_RECORDING : label}
+        aria-label={rec.recording ? stopLabel : label}
         aria-pressed={rec.recording}
         title={title}
         disabled={isDisabled}

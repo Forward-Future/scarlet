@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDb, PRJ } from "../../../lib/mock/fixtures";
 import { api } from "../../../lib/client";
 import * as markedFrame from "../../../lib/markedFrame";
@@ -13,6 +13,7 @@ import { usePictureMarksStore } from "../../../stores/pictureMarks";
 import { usePlayerStore } from "../../../stores/player";
 import { useProjectStore, type ProjectData } from "../../../stores/project";
 import { insertInDraft, markedRangeOf, useUiStore, withMarkedRange, type MarkedRange } from "../../../stores/ui";
+import * as mic from "../../../components/agent/MicButton";
 import { Composer } from "./ComposerBeta";
 
 const stores = [useProjectStore.getState(), useUiStore.getState(), usePlayerStore.getState(), useHostsStore.getState()] as const;
@@ -125,4 +126,29 @@ it("refuses twenty attached files plus a marked frame in the beta composer befor
   expect(upload).not.toHaveBeenCalled();
   expect(createTask).not.toHaveBeenCalled();
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("A message can carry 20 files, the marked frame included. Remove one.");
+});
+
+it("always leaves dictated words in the box, after the draft and focused, and sends nothing until Enter", async () => {
+  let micProps!: ComponentProps<typeof mic.MicButton>;
+  vi.spyOn(mic, "MicButton").mockImplementation(props => { micProps = props; return <></>; });
+  const createTask = vi.fn().mockResolvedValue(db.tasks[0]);
+  useProjectStore.setState({ createTask });
+  vi.spyOn(api, "speechToText").mockResolvedValue({ text: "Add a title at the start" });
+  await show();
+  expect(micProps.review).toBe(true);
+  const input = () => container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input(), "Make it punchy.");
+    input().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => { micProps.onStart?.(); });
+  await act(async () => { micProps.onResult({ blob: new Blob(["voice"]), seconds: 1, mimeType: "audio/mp4" }); });
+  expect(input().value).toBe("Make it punchy. Add a title at the start");
+  expect(document.activeElement).toBe(input());
+  expect(input().selectionStart).toBe(input().value.length);
+  expect(createTask).not.toHaveBeenCalled();
+  await act(async () => {
+    input().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  });
+  expect(createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({ instruction: "Make it punchy. Add a title at the start" }));
 });
