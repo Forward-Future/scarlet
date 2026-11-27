@@ -332,7 +332,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
               recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepRefs, name: title });
             }}>Unkeep</button>
         </span>}
-        <AimRow on={on}>{lead}<span className="composer-aim-words">{title}</span></AimRow>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
+        <AimRow on={on}>{lead}<span className="composer-aim-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} />}</AimRow>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
     })}
   </ol>;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ScarletApiError } from "@scarlet/shared";
+import { RevisionTargetHeader, type RevisionTargetInfo } from "../../pages/simple/beta/RevisionTargetHeader";
 import { Icon } from "../ui/primitives";
 
 export interface QueuedRequest {
@@ -8,6 +9,8 @@ export interface QueuedRequest {
   text: string;
   /** What it revises, when it's about one edit or cut: "Revising the cut at 2:05". */
   target?: string;
+  /** Rich target header for a single-edit revision bubble in the beta layout. */
+  revisionTarget?: RevisionTargetInfo;
   /** Scarlet made this request itself, so its words aren't the editor's to change. */
   fixed?: boolean;
 }
@@ -44,9 +47,12 @@ export function QueueInChat({ items, hint, waits, rewording, onRemove, onReword,
       : first && waits ? <span className="queue-next is-waiting">{waits}</span>
       : <span className="queue-next">{first ? "Up next" : "Queued"}</span>;
     return <div key={item.id} className={editing ? "queue-row is-rewording" : "queue-row"}>
-      <p className="queue-bubble">
+      {item.revisionTarget ? <div className="queue-bubble is-revision" title={item.text}>
+        <RevisionTargetHeader target={item.revisionTarget} />
+        <p className="rev-body"><span className={reword && !editing ? "queue-text is-rewordable" : "queue-text"} onClick={editing ? undefined : reword}>{item.text}</span></p>
+      </div> : <p className="queue-bubble">
         {item.target && <span className="queue-target">{item.target}</span>}
-        <span className={reword && !editing ? "queue-text is-rewordable" : "queue-text"} onClick={editing ? undefined : reword}>{item.text}</span></p>
+        <span className={reword && !editing ? "queue-text is-rewordable" : "queue-text"} onClick={editing ? undefined : reword}>{item.text}</span></p>}
       <div className="queue-foot">
         {first && onStart && !editing && <button type="button" className="queue-start" aria-label={`Start now: ${item.text}`}
           title="Start now, before your calls" onClick={() => onStart(item.id)}><Icon name="play" size={10} /></button>}

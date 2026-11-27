@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import type { Change } from "@scarlet/timeline";
-import { closingCheckFailed, isProjectEditTask, matchesEdit, requestTargetKey, requestText, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
+import { closingCheckFailed, isAddRequest, isProjectEditTask, isRejectRequest, matchesEdit, requestTargetKey, requestText, threadEditList, type Learning, type Task, type ThreadEdit } from "@scarlet/shared";
 import { resumeRunChoice, useAgentAvailability } from "../../components/agent/AgentChip";
 import { RequestMetrics, RunBundle, runEnded, Said } from "../../components/review/RunBundle";
 import { useReviewed, useRevising, useThreadEdits, waitingPassRows, waitingRows } from "../../components/review/threadEditState";
@@ -23,6 +23,8 @@ import { useProjectStore } from "../../stores/project";
 import { useSkillsStore } from "../../stores/skills";
 import { useUiStore } from "../../stores/ui";
 import type { PassSummary as PassSummaryBeta, ThreadResult as ThreadResultBeta } from "./beta/PassSummaryBeta";
+import { useChatSlots } from "./beta/chatSlots";
+import { fallbackRevisionTitle, revisionActionLabel, RevisionTargetHeader, type RevisionTargetInfo } from "./beta/RevisionTargetHeader";
 import { PassSummary, ThreadResult } from "./PassSummary";
 import { useReviewRail } from "./railStore";
 import { useReviewDockStore } from "./reviewDockStore";
@@ -126,7 +128,9 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
   // either layout, so the hooks are the same; there is no column without the new layout.
   const railStore = useReviewRail();
   const rail = beta ? railStore : undefined;
+  const chatSlots = useChatSlots();
   const notes = useProjectStore(s => s.current?.notes ?? []);
+  const media = useProjectStore(s => s.current?.media ?? []);
   // Only this thread's runs: every streamed event replaces the project's map, and this thread rebuilds only for its own.
   const events = useProjectStore(useShallow(s => Object.fromEntries(thread.tasks.flatMap(t => {
     const own = s.current?.taskEvents[t.id];
@@ -245,7 +249,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
   // of the request that asked for it, and the revision's card says what it did to its cut.
   const owner = runs.find(run => run.attempts.some(t => passTasks.has(t.id)))
     ?? (pendingPass ? runs.find(run => !aboutOne(run) && run.attempts.some(t => t.id === waitingPass?.taskId)) ?? runs.find(run => !aboutOne(run)) : undefined)
-    ?? runs[0];
+    ?? (beta ? runs.find(run => !aboutOne(run)) : runs[0]);
   // A rejected edit keeps its row, also when it was the request's only edit: nothing else says it was rejected (2026-11-23).
   const hasRows = listed.length > 0 || rejected.length > 0 || (summed && (actions.pass?.threadId === thread.id || (listLoaded && hasDecidedCalls)));
   // With no line for the pass (it was thrown away), its list is closed: a pass staged again starts folded. A pass that
@@ -294,8 +298,14 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
   // Every edit with a row, rejected ones too: Scarlet's put-back of an edit marks it rejected as soon as it saves, and
   // the request that asked for it, still checking its joins, stays under that row rather than in a block of its own.
   const everyEdit = useMemo(() => rejected.length ? [...listed, ...rejected] : listed, [listed, rejected]);
+  // Fallback saved edit list so revision bubbles still name their target edit before threadEdits resolves or after removal.
+  const savedEdits = useMemo(() => beta ? threadEditList(thread, media) : [], [beta, thread, media]);
   // The one cut or edit each request was about.
   const targets = new Map(runs.map(run => [run.root, run !== owner ? requestTarget(aimOf(run), finalOf(run), thread.changes, everyEdit, thread.tasks) : undefined] as const));
+  // In the beta layout, human single-edit revisions stay visible in the chat (in chronological order) with a clear
+  // target header instead of hiding under rail rows or vanishing once done. Automatic rechecks and stopped-early
+  // revisions (which surface a Resume/Retry button under their rail row in Needs review) still nest under rows.
+  const isUserRevision = (run: Run) => !!beta && run !== owner && aboutOne(run) && !isRecheck(run.task) && !runEnded(run.task);
 
   // The cut or edit a request is about, as its row's key, whether or not that row is listed now: an applied edit, or a
   // call of the pass that waits.
@@ -325,7 +335,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
   // that changed nothing and said why, or whose new version couldn't be prepared: Scarlet's words are the only place
   // that says so. One that stopped early leaves once it is overtaken: left there it would have no action to offer.
   const settled = (run: Run) => {
-    if (run === owner || !aboutOne(run) || pinned === run.root) return false;
+    if (run === owner || !aboutOne(run) || pinned === run.root || isUserRevision(run)) return false;
     if (run.task.state === "cancelled" || run.task.state === "failed") return overtaken(run);
     // One paused for its transcripts ended as done, and stopped early all the same: it stays, with its way to finish.
     if (run.task.state !== "done" || !!runEnded(run.task) || (listLoaded && !targets.get(run.root))) return false;
@@ -350,6 +360,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     return call && callRowKey(call);
   };
   const nested = new Map(owner && hasRows ? runs.flatMap(run => {
+    if (isUserRevision(run)) return [];
     const key = run !== owner && aboutOne(run) && !settled(run) ? rowOf(run) : undefined;
     return key ? [[run.root, key] as const] : [];
   }) : []);
@@ -498,15 +509,27 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     const laterRuns = owner && !beta ? runs.filter(r => r !== owner && !settled(r) && !nested.has(r.root)).length : 0;
     const rows = run === owner && hasRows ? (aside: ReactNode) => editLists({ aside, working: runIsActive(task), nests, laterRuns }) : undefined;
     // A request about one cut or edit says what it did there, and its row opens that cut or edit on the timeline.
+    const isRevision = isUserRevision(run);
+    const aimTask = aimOf(run);
     const target = targets.get(run.root);
     const pass = actions.pass?.threadId === thread.id ? actions.pass : undefined;
     const call = target && !target.edit && pass?.change.id === target.changeId
       ? pass!.calls.find(c => c.index === target.call && c.state !== "revising") : undefined;
+    const anyCall = isRevision && pass && !target?.edit
+      ? (pass.calls.find(c => !!c.run && run.attempts.some(t => t.id === c.run!.id))
+        ?? (target?.call !== undefined && target.changeId === pass.change.id ? pass.calls.find(c => c.index === target.call) : undefined))
+      : undefined;
     const aimed = target?.edit;
+    const savedEdit = isRevision && !aimed && aimTask.context.changeId && aimTask.context.editIndex !== undefined
+      ? savedEdits.find(e => matchesEdit(e, { changeId: aimTask.context.changeId!, spot: aimTask.context.editIndex! }))
+      : undefined;
     // The same edit can be open from the list on the request that made it. Then this card isn't the one that's open.
     const showingIt = aimed ? actions.showingFrom === run.root && !!actions.showing && matchesEdit(actions.showing, aimed)
       : !!call && actions.listening?.changeId === pass!.change.id && actions.listening.index === call.index;
-    const open = aimed ? () => actions.openEdit(thread, aimed, run.root) : call ? () => pass!.openCall(call.index)
+    const showingTarget = isRevision && (aimed ? !!actions.showing && matchesEdit(actions.showing, aimed)
+      : !!anyCall && actions.listening?.changeId === pass!.change.id && actions.listening.index === anyCall.index);
+    const open = aimed ? () => actions.openEdit(thread, aimed, isRevision ? undefined : run.root) : anyCall ? () => pass!.openCall(anyCall.index)
+      : call ? () => pass!.openCall(call.index)
       : final?.state === "approved" && run !== owner ? () => actions.play(thread, final) : undefined;
     // The block holds the place above the message box while Scarlet is on it, or on a request drawn inside it. With the
     // fixed bottom review dock, every request stays in .simple-chat above the lists.
@@ -515,7 +538,51 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     // about one cut or edit says which before its words, in the tag the message box showed: "Cut 2" for a call, by its
     // time otherwise. A request about a whole edit says which the same way.
     const tag = request?.revisionLabel ? tagOf(tagFor(request) ?? request.revisionLabel) : undefined;
-    const about = aboutOne(run) ? actions.cutName?.(aimOf(run).context) ?? tag : undefined;
+    const about = aboutOne(run) ? actions.cutName?.(aimTask.context) ?? tag : undefined;
+    // Which version (v2, v3…) this specific revision made or is making, for the beta revision bubble header.
+    const revisionVersion = (() => {
+      if (!isRevision || isAddRequest(aimTask) || isRejectRequest(aimTask)) return undefined;
+      if (anyCall) return anyCall.state === "revising" ? anyCall.version + 1 : anyCall.version > 1 ? anyCall.version : 2;
+      const edit = aimed ?? savedEdit;
+      if (edit && final) {
+        const chain = [...edit.previous, edit];
+        const idx = chain.findIndex(item => item.changeId === final.id);
+        if (idx >= 1) return idx + 1;
+      }
+      const sub = subject(run);
+      const aimKey = requestTargetKey(aimTask, threadChanges);
+      const siblings = runs.filter(other => isUserRevision(other) && !isAddRequest(aimOf(other)) && !isRejectRequest(aimOf(other))
+        && ((!!sub && subject(other) === sub) || (!!aimKey && requestTargetKey(aimOf(other), threadChanges) === aimKey)));
+      const rank = siblings.indexOf(run);
+      if (edit && runIsActive(task)) {
+        const activeAhead = siblings.slice(0, Math.max(0, rank)).filter(other => runIsActive(other.task)).length;
+        return Math.max(rank >= 0 ? rank + 2 : 2, edit.previous.length + 2 + activeAhead);
+      }
+      if (rank >= 0) return rank + 2;
+      return edit && edit.previous.length ? edit.previous.length + 1 : 2;
+    })();
+    const revTarget: RevisionTargetInfo | undefined = isRevision && !inside ? (() => {
+      const edit = aimed ?? savedEdit;
+      const fallback = fallbackRevisionTitle(aimTask, about ?? tag);
+      const at = edit ? (edit as ThreadEdit).at ?? edit.range.start : anyCall?.start;
+      const time = at !== undefined ? clockLabel(at) : fallback.time;
+      const title = edit ? ((edit.reason && edit.summary) || edit.label)
+        : anyCall ? (anyCall.summary || anyCall.reason || fallback.title)
+        : fallback.title;
+      const needsReview = aimed ? (!!aimed.check && !reviewed(aimed) && !revising(aimed)) : anyCall?.state === "open";
+      return {
+        action: revisionActionLabel(aimTask, edit, !!anyCall),
+        time,
+        title,
+        version: revisionVersion,
+        needsReview,
+        active: showingTarget,
+        onOpen: proposing ? undefined : open,
+        onHover: aimed ? (on => actions.lightMark(on ? ((aimed as ThreadEdit).at ?? aimed.range.start) : undefined, on ? { threadId: thread.id, editKey: editKey(aimed) } : undefined))
+          : anyCall ? (on => actions.lightMark(on ? anyCall.at : undefined, on ? { threadId: thread.id, call: anyCall.index } : undefined))
+          : undefined,
+      };
+    })() : undefined;
     // Where the request stands, at the right of its heading: a dot while Scarlet asks, a word once it stopped early or
     // left a suggestion, and Paused while editing waits for Resume. The review count appears on Needs review.
     const ended = runEnded(task);
@@ -527,7 +594,7 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     // Scarlet works on several cuts or edits at once, an agent on each. The block that holds one of them says how many
     // there are, in the heading's place for where a request stands: each has its own row, and some may be out of view.
     const atOnce = actions.atOnce ?? 0;
-    const among = !inside && atOnce > 1 && [run, ...(run === owner ? runs.filter(r => nested.has(r.root)) : [])]
+    const among = !inside && !isRevision && atOnce > 1 && [run, ...(run === owner ? runs.filter(r => nested.has(r.root)) : [])]
       .some(r => aboutOne(r) && isWorking(r.task.state));
     // In the new layout a question waiting isn't in the chat: it sits on top of the message box while the box answers
     // it. With the box aimed elsewhere, Answer after the dot puts it back on the question (and opens the cut a question
@@ -578,11 +645,14 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     // A recheck Scarlet began itself is headed too, by its reason after the Auto tag: where it stands and its controls
     // are at that heading's right, as a request's are, and not said again on a row under it.
     const headed = !!request || autoHeading;
-    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} under={inside} callTime={actions.callTime}
+    const hasClosingReply = entries.some(e => closingReply(e) && ids.has(e.replyTo!));
+    const bundle = <RunBundle task={task} events={events[task.id] ?? []} opening={opened && events[opened.id]} changes={thread.changes} finalChange={final} banded={headed} under={inside || isRevision} callTime={actions.callTime}
         say={said.length ? <div className="req-said">{said}</div> : undefined} told={told} result={rows} recovery={recovery}
-        // Under its call's row, that row is the cut it saved, with Scarlet's note: the note isn't said again under it.
-        // A pass's calls are listed for as long as it waits, so a request keyed to one is always under its row.
-        summary={target?.note} listedAbove={inside && !!nested.get(run.root)?.startsWith("call/")} showing={showingIt} onOpen={proposing ? undefined : open}
+        // Under its call's row, or on a beta revision bubble whose header already names and opens the edit, skip
+        // repeating the edit title when Scarlet already replied. If a revision finishes silently with no reply or note,
+        // show "Updated to v2" (or "Updated") rather than echoing the user's prompt from the change summary.
+        summary={target?.note ?? (isRevision && !ended && final?.state === "approved" && !told && !hasClosingReply ? (revisionVersion ? `Updated to v${revisionVersion}` : "Updated") : undefined)}
+        listedAbove={(inside && !!nested.get(run.root)?.startsWith("call/")) || (isRevision && (told || hasClosingReply))} showing={showingIt} onOpen={proposing ? undefined : open}
         // Scarlet's other requests have no heading. Their menu stays with the active run's row.
         actions={headed ? undefined : editActions} onStop={headed || editsProject ? undefined : stop} paused={paused}
         held={task.state === "queued" ? actions.waitsOn?.(task) : undefined}
@@ -631,10 +701,14 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
         {beta ? <>
           {/* The editor's words are a bubble at the chat's right, so what they said never reads as Scarlet's. Quiet
               metrics sit on the bubble itself (never inside display:none .unit-meta) so hover stats anchor to the bubble. */}
-          <div className="unit-bubble">
+          {revTarget ? <div className={`unit-bubble is-revision${revTarget.active ? " is-active-target" : ""}`}>
+            <RevisionTargetHeader target={revTarget} />
+            <div className="rev-body"><Said fixed lead={<MarkedFrameOnRequest projectId={projectId} task={task} />} text={request.text} /></div>
+            {quietMetrics && metrics}
+          </div> : <div className="unit-bubble">
             <Said fixed lead={<>{(about ?? tag) && <span className="simple-revising">{about ?? tag}</span>}<MarkedFrameOnRequest projectId={projectId} task={task} /></>} text={request.text} />
             {quietMetrics && metrics}
-          </div>
+          </div>}
           <div className="unit-meta">
             <span className="unit-state">{standing}</span>
             {answerHere}
@@ -654,6 +728,8 @@ export function Turn({ projectId, thread, threadOrder = 0, actions, pinned, pinH
     const replies = listing || shut ? [] : entries.flatMap((e, i) => closingReply(e) && ids.has(e.replyTo!) ? [loose(e, i)] : []);
     // Always the same shape, so the block isn't mounted anew when its replies give way to its list and come back.
     const node = <Fragment key={run.root}>{block}{replies}</Fragment>;
+    const slot = isRevision && !isPinned ? chatSlots?.host(run.root) : null;
+    if (slot) return createPortal(node, slot, run.root);
     return isPinned && pinHost ? createPortal(node, pinHost, run.root) : node;
   };
   const placed = new Set<string>();
