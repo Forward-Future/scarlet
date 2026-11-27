@@ -313,9 +313,13 @@
 [data-new-layout] .review-sec-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 6px; }
 [data-new-layout] .review-sec-body:last-child { padding-bottom: 12px; }
 [data-new-layout] .review-sec-body[hidden] { display: none; }
+[data-new-layout] .review-sec-body[aria-label="Working"] :is(.simple-pass-list > li > button, .simple-edit) { transition: background-color .3s ease; }
 /* When both Working and Done are open, cap Working's share so a long Done list can't shrink Working away and a long Working list can't crowd Done out. */
 [data-new-layout] .review-rail-foot > .review-sec-body:not([hidden]):has(~ .review-sec-body:not([hidden])) { flex: 0 0 auto; max-height: max(0px, calc(27.5vh - 44px)); }
-@media (prefers-reduced-motion: reduce) { [data-new-layout] .review-sec svg { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  [data-new-layout] .review-sec svg { transition: none; }
+  [data-new-layout] .review-sec-body[aria-label="Working"] :is(.simple-pass-list > li > button, .simple-edit) { transition: none; }
+}
 @media (max-width: 767px) { [data-new-layout] .review-rail { display: none; } }
 [data-new-layout] .simple-need-link { align-self: flex-start; display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 0; border: 0; background: none; color: var(--color-fg);
   font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }

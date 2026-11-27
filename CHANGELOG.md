@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 27, 2026
+
+- In the beta layout, the highlight on an edit you just sent to Working now clears itself after a few seconds.
+
 ## November 26, 2026
 
 - A first cut with Gemini costs about a fifth less: Scarlet reads each stretch of the recording in fewer steps, and its tool instructions and replies are shorter.
