@@ -6,9 +6,11 @@ import { desktop } from "../../lib/desktop";
 import { exportCounting, exportFailureSeen, exportFile, PICTURE_DONE, useExports, type ExportFile } from "../../lib/exportJobs";
 import { clock, fileBaseName, fmtBytes, pct, playbackClock } from "../../lib/format";
 import { useProjectStore, type ProjectData } from "../../stores/project";
+import { useYouTubeStore } from "../../stores/youtube";
 import { ActivityProgress, Field, Icon, InlineError, Modal } from "../ui/primitives";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
 import { ReportLink } from "../shell/ReportLink";
+import { isYouTubeUploadActive, useYouTubePublish, YouTubePublishFooter, YouTubePublishView } from "./YouTubePublishView";
 
 type ExportQuality = RenderRequest["quality"] | "best";
 
@@ -57,7 +59,12 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
       closeRef.current();
     }
   }, [exported]);
-  // For Resolve, Final Cut or Premiere: the folder for finishing the edit in another app. Otherwise the video or its captions.
+  // For Resolve, Final Cut or Premiere: the folder for finishing the edit in another app. Otherwise the video, captions, or YouTube.
+  const activeYouTubeUpload = useYouTubeStore(s => s.uploads[current.id]);
+  const [destination, setDestination] = useState<"file" | "youtube">(() =>
+    !busy && isYouTubeUploadActive(activeYouTubeUpload?.phase) ? "youtube" : "file",
+  );
+  const youtubeCtrl = useYouTubePublish(current, destination === "youtube", hasCut, duration);
   const [advanced, setAdvanced] = useState(previous?.format === "folder");
   const [plainFormat, setPlainFormat] = useState<"mp4" | "srt" | "vtt">(previous?.format === "srt" || previous?.format === "vtt" ? previous.format : "mp4");
   const format: ExportFile["format"] = advanced ? "folder" : plainFormat;
@@ -128,10 +135,20 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     const name = format === "folder" ? stem : `${stem}.${format}`;
     void exportFile(current, { format, name, video, ...(captions && exportTrackId ? { trackId: exportTrackId } : {}) });
   };
-  const switchTo = !busy && !exportedCurrentEdit && <button type="button" className="btn-quiet mr-auto" onClick={() => setAdvanced(!advanced)}>
+  const isYouTube = destination === "youtube" && !advanced;
+  // Offered whenever no export is under way: once this version was exported it was gone, and so was Back, until the
+  // video changed (2026-11-26).
+  const switchTo = !busy && <button type="button" className="btn-quiet mr-auto" onClick={() => setAdvanced(!advanced)}>
     {advanced ? "Back" : "For Resolve, Final Cut or Premiere…"}
   </button>;
-  return <Modal open title={advanced ? "Export for Resolve, Final Cut or Premiere" : "Export"} width={600} onClose={onClose} footer={running ? <>
+  const modalTitle = advanced
+    ? "Export for Resolve, Final Cut or Premiere"
+    : isYouTube
+      ? "Publish to YouTube"
+      : "Export";
+  const modalFooter = isYouTube ? (
+    <YouTubePublishFooter ctrl={youtubeCtrl} onClose={onClose} />
+  ) : running ? <>
     {busy.phase === "rendering" && <button type="button" className="btn-quiet" onClick={busy.cancel}>Cancel export</button>}
     <button type="button" className="btn-primary" onClick={onClose}>Continue editing</button>
   </> : <>
@@ -140,7 +157,39 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     <button type="submit" form="export-working-cut" className="btn-primary" data-log-control="export" disabled={!!busy || !!invalid}>
       {failed ? "Retry" : "Export"}
     </button>
-  </>}>
+  </>;
+  return <Modal open title={modalTitle} width={600} onClose={onClose} footer={modalFooter}>
+    {!advanced && (
+      <div className="mb-3 flex items-center gap-1 rounded-lg border border-line bg-bg p-1" role="tablist" aria-label="Export destination">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!isYouTube}
+          disabled={youtubeCtrl.uploading}
+          onClick={() => setDestination("file")}
+          className={`flex-1 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
+            !isYouTube ? "bg-raised text-fg" : "text-muted hover:text-fg"
+          }`}
+        >
+          Save to computer
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={isYouTube}
+          disabled={!!busy}
+          onClick={() => setDestination("youtube")}
+          className={`flex-1 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
+            isYouTube ? "bg-raised text-fg" : "text-muted hover:text-fg"
+          }`}
+        >
+          Publish to YouTube
+        </button>
+      </div>
+    )}
+    {isYouTube ? (
+      <YouTubePublishView ctrl={youtubeCtrl} hasCut={hasCut} onClose={onClose} />
+    ) : <>
     <form id="export-working-cut" onSubmit={event => { event.preventDefault(); submit(); }}>
       <fieldset disabled={!!busy} className="min-w-0">
         {advanced ? <HandoffSummary summary={handoff} /> : <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
@@ -208,6 +257,7 @@ function ExportForm({ current, hasCut, onClose }: { current: ProjectData; hasCut
     </p>}
     <InlineError>{(failed || revealError) && <span data-log-private>{failed ? job.error : revealError}</span>}</InlineError>
     {failed && <ReportLink className="btn-quiet mt-1 -ml-3" label="Report this problem" about={`Export failed${job.error ? `: ${job.error}` : ""}`} />}
+    </>}
   </Modal>;
 }
 

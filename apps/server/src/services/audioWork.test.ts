@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AudioLane, askFor, audioLane, whisperLane, type AudioWork } from "./audioWork.js";
+import { AudioLane, askFor, audioLane, pageWhisperLane, whisperLane, type AudioWork } from "./audioWork.js";
 
 function gate() {
   let open!: () => void;
@@ -291,6 +291,36 @@ describe("audio lane", () => {
   it("shares one lane per engine data directory", () => {
     expect(audioLane({ paths: { root: "/tmp/one" } })).toBe(audioLane({ paths: { root: "/tmp/one" } }));
     expect(audioLane({ paths: { root: "/tmp/one" } })).not.toBe(audioLane({ paths: { root: "/tmp/two" } }));
+  });
+
+  it("reads a pass's pages in a second Whisper lane beside the transcript's, where memory allows", async () => {
+    const ctx = { paths: { root: "/tmp/page-whisper" } };
+    const gb = 1024 ** 3;
+    // Without a GPU lane, or on a small Mac, pages take their turn with the transcript.
+    expect(pageWhisperLane(ctx, false, 64 * gb)).toBe(audioLane(ctx));
+    expect(pageWhisperLane(ctx, true, 8 * gb)).toBe(whisperLane(ctx, true));
+    const pages = pageWhisperLane(ctx, true, 36 * gb);
+    expect(pages).not.toBe(whisperLane(ctx, true));
+    expect(pageWhisperLane(ctx, true, 36 * gb)).toBe(pages);
+    const order: string[] = [];
+    const hold = (lane: AudioLane, name: string, work: AudioWork) => {
+      const g = gate();
+      return { release: g.open, done: lane.run(work, undefined, async () => { order.push(name); await g.opened; }) };
+    };
+    const unfocus = audioLane(ctx).focus("a");
+    expect(pages.focusedOn("a")).toBe(true);
+    const transcript = hold(whisperLane(ctx, true), "transcript a", { mediaId: "a", kind: "transcript" });
+    const page = hold(pages, "page a", { mediaId: "a", kind: "page" });
+    await tick();
+    // The page's Whisper doesn't wait for the transcript's.
+    expect(order).toEqual(["transcript a", "page a"]);
+    const work: AudioWork = { mediaId: "a", kind: "page" };
+    const next = hold(pages, "next page a", work);
+    askFor(ctx, work);
+    expect(work.asked).toBe(true);
+    for (const job of [transcript, page, next]) { job.release(); await job.done; await tick(); }
+    expect(order).toEqual(["transcript a", "page a", "next page a"]);
+    unfocus();
   });
 
   it("gives GPU Whisper a lane of its own that runs beside the CPU models and ranks by the same recordings", async () => {

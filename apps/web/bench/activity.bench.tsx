@@ -72,10 +72,16 @@ describe("open editor with 60 pending decisions and 240 completed edits", () => 
     }
     if (!container.querySelector(".composer-aim-name")?.textContent?.includes("At 0:09")) throw new Error("Point did not update");
   }, options);
-  bench("play and pause five times with 300 edit threads", () => {
+  // Each press is a task of its own, as Space is in the app. Pressed in one task, React stops the run as a loop after
+  // about 27 presses, and the benchmark reported nothing.
+  const press = (playing: boolean) => {
+    flushSync(() => usePlayerStore.setState({ playing }));
+    return new Promise(resolve => setImmediate(resolve));
+  };
+  bench("play and pause five times with 300 edit threads", async () => {
     for (let i = 0; i < 5; i++) {
-      flushSync(() => usePlayerStore.setState({ playing: true }));
-      flushSync(() => usePlayerStore.setState({ playing: false }));
+      await press(true);
+      await press(false);
     }
   }, options);
   bench("restore a 1,500-event run and display its next ten updates", () => {

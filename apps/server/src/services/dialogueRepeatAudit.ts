@@ -5,6 +5,7 @@ import { adjacentRepeatCandidates, closesSentence, cutAnchorOn, findRestarts, fl
   SHORT_PIECE_SECONDS, SILENCE_LEFT_SECONDS, versionJoins, type JoinEdges, type JoinFragment, type JoinHearing, type SaidWord, type ShortPiece, type SilenceLeft,
   type Task } from "@scarlet/shared";
 import type { Ctx } from "../context.js";
+import { clip as clipText } from "../logText.js";
 import { acousticWordReader } from "../transcribe/acousticWords.js";
 import { EmissionFile } from "../transcribe/emissions.js";
 import { readsEnglishSpeech, measureRecordingWords } from "../transcribe/wordAlign.js";
@@ -388,7 +389,11 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
         // restart away ("including 3D, including three, uh, including its ability" reads "including 3D, including its
         // ability" there), and the restarts it hid played on in finished passes (2026-11-16).
         const scanned = await sharedDialogueDetector(ctx).savedWords(project.id, media, Math.min(...ranges.map(r => r.start)),
-          Math.max(...ranges.map(r => r.end))).catch(() => undefined);
+          Math.max(...ranges.map(r => r.end))).catch(err => {
+          // The audit goes on with the transcript's words alone.
+          ctx.log(`[dialogue] ${task.id}: couldn't read the saved scan words of ${mediaId}, so the join audit uses the transcript: ${clipText((err as Error)?.message ?? String(err))}`);
+          return undefined;
+        });
         const inScan = (t: number) => !!scanned?.covered.some(r => t >= r.start && t < r.end);
         const playedWords = [...(scanned?.words ?? []), ...said.filter(w => !inScan((w.start + w.end) / 2))];
         for (const part of selected) {
@@ -421,6 +426,7 @@ export async function auditDialogueAudio(ctx: Ctx, project: Project, tl: Timelin
       }
     } catch (err) {
       signal.throwIfAborted();
+      ctx.log(`[dialogue] ${task.id}: couldn't audit the joins of ${mediaId}: ${clipText((err as Error)?.message ?? String(err))}`);
       unavailable.push({ mediaId, reason: (err as Error).message });
     } finally { await store?.close(); recording?.release(); }
   }

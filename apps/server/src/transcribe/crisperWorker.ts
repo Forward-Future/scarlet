@@ -10,6 +10,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Readable } from "node:stream";
 import { mediaToolLaunchError } from "@scarlet/render";
+import { clip, humanDuration } from "../logText.js";
 import { FfmpegError } from "../render/ffmpeg.js";
 import { editorFirst, type StillBackground } from "../services/editorFirst.js";
 import { audioWorker } from "./audioWorker.js";
@@ -26,9 +27,13 @@ export interface CrisperRequest {
   signal?: AbortSignal;
   /** Each line the adapter writes to stderr while it reads this request. */
   onStderrLine?: (line: string) => void;
+  /** Where the worker's start and exit go: the request that starts a worker gives it this for its life. */
+  log?: (message: string) => void;
 }
 
-type Worker = { key: string; child: ChildProcess; args: string[]; errors: string; failure?: string; kill?: ReturnType<typeof setTimeout> };
+/** `why`: what the engine stopped it for, for the line its exit leaves in the log. */
+type Worker = { key: string; child: ChildProcess; args: string[]; errors: string; failure?: string; kill?: ReturnType<typeof setTimeout>;
+  log?: (message: string) => void; startedAt: number; why?: string };
 type Job = { id: number; request: CrisperRequest; resolve(): void; reject(error: unknown): void; worker?: Worker;
   cancel?: () => void; background?: StillBackground; replied?: boolean; stderrEnded?: boolean };
 
@@ -67,7 +72,10 @@ const tail = (errors: string) => errors.trim().split("\n").slice(-6).join("\n");
 function start(request: CrisperRequest, key: string): Worker {
   const { binary, args } = request;
   const child = spawn(binary, args, { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
-  const started: Worker = { key, child, args, errors: "" };
+  const started: Worker = { key, child, args, errors: "", log: request.log, startedAt: Date.now() };
+  const named = `the CrisperWhisper worker${child.pid !== undefined ? ` (pid ${child.pid})` : ""}`;
+  // A program that couldn't be started has no pid, and its error says so.
+  if (child.pid !== undefined) started.log?.(`[transcribe] started ${named}`);
   // Background work's readings yield to the editor, as each run of the adapter did.
   if (child.pid !== undefined) {
     const release = editorFirst.adopt(child.pid, () => current?.worker === started && !!current.background?.());
@@ -116,11 +124,21 @@ function start(request: CrisperRequest, key: string): Worker {
     const { signal } = job.request;
     finish(job, () => job.reject(signal?.aborted ? signal.reason : why()));
   };
-  child.on("error", error => stopped(() =>
-    new FfmpegError(mediaToolLaunchError(binary, error, `${binary} failed to start: ${error.message}`), args, started.errors)));
-  child.on("close", (code, signal) => stopped(() => started.failure !== undefined
-    ? new FfmpegError(`${binary} failed: ${started.failure}\n${tail(started.errors)}`, args, started.errors)
-    : new FfmpegError(`${binary} exited with ${signal ? `signal ${signal}` : `code ${code}`}: ${tail(started.errors)}`, args, started.errors)));
+  child.on("error", error => {
+    started.log?.(`[transcribe] ${named} failed${child.pid === undefined ? " to start" : ""}: ${clip(error.message)}`);
+    stopped(() => new FfmpegError(mediaToolLaunchError(binary, error, `${binary} failed to start: ${error.message}`), args, started.errors));
+  });
+  child.on("close", (code, signal) => {
+    // A worker that never started has no exit worth a line of its own.
+    if (child.pid !== undefined) {
+      const job = current?.worker === started ? current : undefined;
+      const why = started.failure !== undefined ? "after the adapter reported a failure" : started.why ?? (job ? "while it read a recording" : "on its own");
+      started.log?.(`[transcribe] ${named} exited with ${signal ? `signal ${signal}` : `code ${code}`} after ${humanDuration(Date.now() - started.startedAt)}, ${why}`);
+    }
+    stopped(() => started.failure !== undefined
+      ? new FfmpegError(`${binary} failed: ${started.failure}\n${tail(started.errors)}`, args, started.errors)
+      : new FfmpegError(`${binary} exited with ${signal ? `signal ${signal}` : `code ${code}`}: ${tail(started.errors)}`, args, started.errors));
+  });
   return started;
 }
 
@@ -132,9 +150,10 @@ function hold(target: Worker, working: boolean) {
   }
 }
 
-function stop() {
+function stop(why = "stopped") {
   const stopping = worker;
   worker = undefined;
+  if (stopping) stopping.why ??= why;
   stopping?.child.kill();
 }
 
@@ -155,7 +174,7 @@ function pump() {
     const rest = () => {
       idle = setTimeout(() => {
         if (worker && audioWorker.wanted?.()) return rest();
-        stop();
+        stop("stopped after a minute idle");
       }, IDLE_MS);
       idle.unref?.();
     };
@@ -167,7 +186,7 @@ function pump() {
   const { request } = job;
   try {
     const key = [request.binary, ...request.args].join("\0");
-    if (worker && worker.key !== key) stop();
+    if (worker && worker.key !== key) stop("replaced by one started another way");
     const target = job.worker = worker ??= start(request, key);
     hold(target, true);
     // What the adapter writes from here on is about this request, and is what a failure reports.
@@ -175,6 +194,7 @@ function pump() {
     // Killing the worker is the only way to stop a reading under way. The next request starts another.
     const abort = () => {
       if (worker === target) worker = undefined;
+      target.why ??= "stopped to cancel a reading";
       target.child.kill("SIGKILL");
     };
     request.signal?.addEventListener("abort", abort, { once: true });

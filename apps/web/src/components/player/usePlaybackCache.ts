@@ -5,6 +5,8 @@ import { api } from "../../lib/client";
 import { useProjectStore } from "../../stores/project";
 import { useUiStore } from "../../stores/ui";
 import { renderCompletion } from "../../lib/renderCompletion";
+import { errorName } from "../../lib/appLog";
+import { playbackLog } from "../../lib/playbackLog";
 
 /** How often a caching render is read back while the socket reports it anyway. */
 const SOCKET_POLL_MS = 15_000;
@@ -35,12 +37,20 @@ export function usePlaybackCache(project: Project, { version, mediaId, automatic
     const owner = automatic ? crypto.randomUUID() : undefined;
     let ownedId: string | undefined;
     const release = (renderId: string) => { if (owner) void api.releaseRender(renderId, owner).catch(() => {}); };
+    // One line each time the cache changes state (found ready, started, ready, failed), never for each poll or percent.
+    let shownState: Cache["state"] | undefined, preparing = 0;
+    const note = (cache: Cache, how: string, renderId?: string) => {
+      if (cache.state === shownState) return;
+      shownState = cache.state;
+      playbackLog(cache.state === "failed" ? "cache failed" : "cache", { state: cache.state, how, project: id, media: mediaId, render: renderId,
+        ms: preparing && cache.state !== "caching" ? Math.round(performance.now() - preparing) : undefined }, "cache");
+    };
     async function read(action: "open" | "automatic" | "manual" | "poll", pendingId?: string) {
       const sequence = ++generation;
       waiting?.abort();
       clearTimeout(timer);
       const prepare = action === "automatic" || action === "manual";
-      if (prepare) setResult({ key, cache: { state: "caching" } });
+      if (prepare) { setResult({ key, cache: { state: "caching" } }); preparing ||= performance.now(); }
       try {
         let cache: Cache;
         if (mediaId) {
@@ -67,6 +77,7 @@ export function usePlaybackCache(project: Project, { version, mediaId, automatic
         }
         if (!live || sequence !== generation) return;
         reconnectDelay = 1200;
+        note(cache, action, pendingId);
         if (ownedId === pendingId && cache.state !== "caching") ownedId = undefined;
         const needsPreparation = action === "open" ? cache.state !== "ready"
           : action === "poll" && mediaId && cache.state === "uncached";
@@ -97,14 +108,21 @@ export function usePlaybackCache(project: Project, { version, mediaId, automatic
         if (!live || sequence !== generation) return;
         if (!completed || (prepareSoon && completed.state !== "done")) { void resume(); return; }
         ownedId = undefined;
-        setResult({ key, cache: renderStatus(completed) });
+        const done = renderStatus(completed);
+        note(done, action, completed.id);
+        setResult({ key, cache: done });
       } catch (error) {
         if (!live || sequence !== generation) return;
         if (action === "poll" && error instanceof TypeError) {
           // A dropped connection need not discard a render the engine is still writing.
+          playbackLog("cache retry", { project: id, render: pendingId, delay: reconnectDelay }, "cache-retry");
           timer = setTimeout(() => void read("poll", pendingId), reconnectDelay);
           reconnectDelay = Math.min(8000, reconnectDelay * 2);
-        } else setResult({ key, cache: { state: "failed" } });
+        } else {
+          playbackLog("cache read-failed", { how: action, project: id, media: mediaId, render: pendingId, name: errorName(error) });
+          shownState = "failed";
+          setResult({ key, cache: { state: "failed" } });
+        }
       }
     }
     start.current = () => { void read("manual"); };

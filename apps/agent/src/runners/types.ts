@@ -88,6 +88,13 @@ export interface RunAgentOptions {
    * run's address and model, so a user's `env` block can't send it elsewhere. Never a secret: it is on the command line.
    */
   settingsEnv?: Record<string, string>;
+  /**
+   * The host's own log (never the task's events): how the CLI was launched and ended, and which way the run went where
+   * it had a choice (a fallback, a retry). Never the prompt, the model's words or a secret.
+   */
+  log?: (msg: string) => void;
+  /** The task the run is for, which names its lines in the host's log. */
+  task?: string;
 }
 
 export interface RunAgentResult {

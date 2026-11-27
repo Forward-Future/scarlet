@@ -99,7 +99,10 @@ pub async fn ffmpeg_status(state: State<'_, AppState>) -> Result<crate::ffmpeg::
     let resources = state.paths.resource_dir.clone();
     tokio::task::spawn_blocking(move || crate::ffmpeg::status(&home, resources.as_deref()))
         .await
-        .map_err(|e| format!("Could not check FFmpeg status: {e}"))
+        .map_err(|e| {
+            log::warn!("FFmpeg status check failed: {e}");
+            format!("Could not check FFmpeg status: {e}")
+        })
 }
 
 #[tauri::command]
@@ -111,7 +114,10 @@ pub async fn ffmpeg_install(state: State<'_, AppState>) -> Result<crate::ffmpeg:
 /// Progress arrives on `agent-login://status`.
 #[tauri::command]
 pub async fn agent_login_start(state: State<'_, AppState>, agent: String) -> Result<LoginStatus, String> {
-    state.login.start(&agent).await.map_err(|e| format!("{e:#}"))
+    state.login.start(&agent).await.map_err(|e| {
+        log::warn!("{agent} sign-in could not start: {e:#}");
+        format!("{e:#}")
+    })
 }
 
 /// Paste the authorization code from the browser (Claude's manual fallback or Gemini's OAuth code).
@@ -120,7 +126,11 @@ pub async fn agent_login_code(state: State<'_, AppState>, agent: String, code: S
     if code.trim().is_empty() {
         return Err("empty code".into());
     }
-    state.login.submit_code(&agent, &code).await.map_err(|e| e.to_string())
+    // Never the code itself.
+    state.login.submit_code(&agent, &code).await.map_err(|e| {
+        log::warn!("{agent} sign-in: the code could not be passed on: {e}");
+        e.to_string()
+    })
 }
 
 #[tauri::command]

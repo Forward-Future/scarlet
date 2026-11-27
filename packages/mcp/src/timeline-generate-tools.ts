@@ -71,7 +71,7 @@ export interface TimelineGenerateToolsDeps {
 export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
   const { tool, client, projectId, taskId, task, caps, session, errors, proposePipeline, useStagedCut } = deps;
   const { getProject, peekTimeline, baseTimeline, headTimelineOrNull, transcriptWords, edgesInSound, edgeInSoundText, planSources, edgeWaitMs } = session;
-  const { withoutUnlessPreparing } = errors;
+  const { withoutUnlessPreparing, withoutOnce, unavailableOnce } = errors;
   const { recordingAreas, propose, presetInsetOver, presetInsetText } = proposePipeline;
   const intentInput = makeIntentInput(Boolean(taskId));
 
@@ -116,7 +116,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       const place = () => framingOps(before, project.media, project.settings,
         framings.map((f, i) => ({ at: f.at, show: fraction(f.show), within: f.within ? fraction(f.within) : withinOnRecord[i], over: f.over, ...(f.ease && { ease: f.ease }), inset: corners[i] })), { mediaId, trackId, to });
       let plan = place();
-      const areasOnRecord = await recordingAreas(mediaId, 5).catch(() => undefined);
+      const areasOnRecord = await recordingAreas(mediaId, 5).catch(withoutOnce(`failed to read the areas viewers may see in ${mediaId}`, undefined));
       if (areasOnRecord?.done && areasOnRecord.areas.length) {
         withinOnRecord = framings.map((f, i) => {
           const at = plan.frames[i]?.sourceTime;
@@ -133,7 +133,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
           const read = await client.get<{ done: boolean; spans: Array<{ text: string; box: [number, number, number, number] }> }>(
             `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/screen-text?from=${f.sourceTime}&to=${f.sourceTime + 1}&wait=${framings[i]!.inset === "clear" ? 20 : 2}`);
           return read.done ? read.spans : undefined;
-        } catch { return undefined; }
+        } catch (err) { unavailableOnce(`failed to read the screen text of ${mediaId} for framing`, err); return undefined; }
       }));
       // `clear`: the inset's own corner when no text of the frame is under it there, else the corner it is in, else
       // another with none. Moving it moves the frame that keeps `show` clear of it, so each choice is checked again
@@ -172,7 +172,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
           const read = await client.get<{ done: boolean; cuts: RecordingCut[] }>(
             `/projects/${encodeURIComponent(projectId)}/media/${encodeURIComponent(mediaId)}/picture-cuts?from=${srcMin}&to=${srcMax}&wait=2`);
           return read.cuts;
-        } catch { return undefined; }
+        } catch (err) { unavailableOnce(`failed to read where ${mediaId} cuts for framing`, err); return undefined; }
       })() : undefined;
       const beforeClip = before.tracks
         .filter(t => t.kind === "video" && !t.hidden && (!trackId || t.id === trackId))
@@ -397,7 +397,7 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
 
   tool(
     "captions_generate",
-    "Generate a caption track from the transcript, mapped through the CURRENT edit: for audible clips by default (or all enabled placements of an explicitly named mediaId) the words inside its kept source range are placed at the matching timeline time; words that were cut out are dropped. Groups words into caption clips of at most `maxWords` words / `maxChars` characters with per-word timings (karaoke highlighting possible). The result gives each caption's reading rate: the median and the five fastest, in characters a second, with their timeline times. Choose a destination when caption tracks already exist. Replacing one track preserves the others. `style` is a partial CaptionStyle: fontFamily, fontSize (fraction of canvas height, e.g. 0.05), color, backgroundColor, outlineColor, outlineWidth, y (0..1 from top, 0.85 = lower third), align, maxWidth, uppercase, highlightColor.",
+    "Generate a caption track from the transcript, mapped through the CURRENT edit: for audible clips by default (or all enabled placements of an explicitly named mediaId) the words inside its kept source range are placed at the matching timeline time; words that were cut out are dropped. Groups words into caption clips of at most `maxWords` words / `maxChars` characters with per-word timings (karaoke highlighting possible). The result gives each caption's reading rate: the median and the five fastest, in characters a second, with their timeline times. Choose a destination when caption tracks already exist. Replacing one track preserves the others. When an active style guide (named with @style or the library Default) has a saved captionStyle, Scarlet applies it automatically and merges any explicit `style` fields on top. `style` is a partial CaptionStyle: fontFamily (system font or a font attached to an active style guide), fontWeight (normal, medium, semibold, bold, black), fontSize (fraction of canvas height, e.g. 0.05), color, backgroundColor, outlineColor, outlineWidth, y (0..1 from top, 0.85 = lower third), align, maxWidth, uppercase, highlightColor.",
     {
       mediaId: z.string().optional(),
       intent: intentInput,
@@ -422,6 +422,9 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         next: "Choose destination new or supply replaceTrackId. No tracks were changed." });
       const target = typeof destination === "object" ? tracks.find(t => t.id === destination.replaceTrackId) : undefined;
       if (typeof destination === "object" && !target) throw new Error("Choose a caption track on the current version.");
+      const activeGuides = (await client.activeStyleGuides?.({ projectId, taskId }).catch(withoutOnce("failed to read the active style guides for captions", { styleGuides: [] })))?.styleGuides ?? [];
+      const styledGuide = activeGuides.find(g => g.captionStyle && Object.keys(g.captionStyle).length > 0);
+      const guideStyle = styledGuide?.captionStyle;
       const sources = new Set(detail.project.media.filter(carriesAudio).map(m => m.id));
       const clips = captionSourceClips(head, id => sources.has(id), mediaId);
       const mediaIds = new Set(clips.map(c => c.mediaId));
@@ -461,12 +464,20 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
         words: g.words.map((w) => ({ text: w.text, start: w.start, end: Math.min(w.end, g.end) })),
         enabled: true,
       }));
+      const mergedCaptionStyle = (() => {
+        if (!guideStyle && !target?.captionStyle && !style) return undefined;
+        // Replacing an existing track keeps its prior look unless the request explicitly named a @style or passed `style`.
+        const base = target && styledGuide?.reason !== "mentioned"
+          ? { ...guideStyle, ...target.captionStyle }
+          : { ...target?.captionStyle, ...guideStyle };
+        return { ...base, ...style };
+      })();
       const ops: TimelineOp[] = [];
       if (target) ops.push({ op: "removeTrack", trackId: target.id });
       const track: Track = {
         id: target?.id ?? newId("cap"), kind: "caption", name: trackName ?? target?.name ?? "Captions",
         muted: target?.muted ?? false, hidden: target?.hidden ?? false,
-        captionStyle: style ? { ...target?.captionStyle, ...style } : target?.captionStyle,
+        captionStyle: mergedCaptionStyle,
         clips: captionClips,
       };
       ops.push({ op: "addTrack", track, ...(target && { index: head.tracks.indexOf(target) }) });
@@ -479,13 +490,19 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
       const median = sortedRates.length ? sortedRates[Math.floor(sortedRates.length / 2)]! : 0;
       const fastest = [...rates].sort((a, b) => b.cps - a.cps).slice(0, 5)
         .map(r => `${r.at.toFixed(2)} s ${r.cps.toFixed(1)}/s "${r.text.replace(/\s+/g, " ").trim()}"`);
+      const styleNote = styledGuide
+        ? `\nApplied caption style from @${styledGuide.name}${style ? " (with explicit style overrides)" : ""}.`
+        : !style && activeGuides.length
+          ? `\nActive style guide @${activeGuides[0]!.name} has no structured captionStyle yet; pass explicit \`style\` fields if its instructions define a caption look.`
+          : "";
       return {
         ...result,
         content: [
           {
             type: "text",
             text: `${captionClips.length} caption clip(s) from ${words.length} words across ${clips.length} media clip(s)${skipped.length ? `; skipped media without transcript: ${skipped.join(", ")}` : ""}.` +
-              (rates.length ? `\nReading rate in characters a second (timeline seconds): median ${median.toFixed(1)}; fastest ${fastest.join("; ")}.` : ""),
+              (rates.length ? `\nReading rate in characters a second (timeline seconds): median ${median.toFixed(1)}; fastest ${fastest.join("; ")}.` : "") +
+              styleNote,
           },
           ...result.content,
         ],

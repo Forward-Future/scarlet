@@ -58,13 +58,40 @@ export function recordExportFinished(ctx: Recorder, route: Exclude<ExportRoute, 
   ctx.db.afterCommit(() => ctx.telemetry.recordExport(route, exportedBefore));
 }
 
+/** The engine's own code for why an upload failed. Anything else (which shouldn't happen) is `other`. */
+const YOUTUBE_FAILURE_CODE = /^(?:youtube|render)_[a-z_]{1,48}$/;
+
+/**
+ * A YouTube upload that ended. Its title, description, channel and video id stay on the installation; a success is
+ * also an export. Call before the upload's own log entry.
+ */
+export function recordYouTubeUploadFinished(ctx: Recorder, upload: {
+  state: "done" | "failed" | "cancelled";
+  visibility: string;
+  reusedRender: boolean;
+  failureCode?: string;
+}): void {
+  const exportedBefore = upload.state === "done" && ctx.telemetry.active && libraryHasExported(ctx);
+  ctx.db.afterCommit(() => {
+    ctx.telemetry.record("youtube.upload_finished", {
+      state: upload.state,
+      visibility: ["public", "unlisted", "private"].includes(upload.visibility) ? upload.visibility : "other",
+      reusedRender: upload.reusedRender,
+      ...(upload.state === "failed"
+        ? { failureCode: upload.failureCode && YOUTUBE_FAILURE_CODE.test(upload.failureCode) ? upload.failureCode : "other" }
+        : {}),
+    });
+    if (upload.state === "done") ctx.telemetry.recordExport("youtube", exportedBefore);
+  });
+}
+
 /**
  * The library finished an export before this install kept its marker, so the next one isn't its first: an export made
  * by an earlier release, or while reports were off. `renderId` is the export being reported.
  */
 function libraryHasExported(ctx: Pick<Ctx, "db">, renderId = ""): boolean {
   try {
-    return !!ctx.db.prepare(`SELECT 1 FROM activity WHERE type = 'export.completed'
+    return !!ctx.db.prepare(`SELECT 1 FROM activity WHERE type IN ('export.completed', 'youtube.published')
       UNION ALL SELECT 1 FROM renders WHERE kind = 'export' AND state = 'done' AND id != ? LIMIT 1`).get(renderId);
   } catch {
     return false;

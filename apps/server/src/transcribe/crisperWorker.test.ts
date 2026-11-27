@@ -139,6 +139,18 @@ it("stops an idle worker after a minute, which gives its memory back", async () 
 });
 
 it("says which program could not start", async () => {
-  await expect(crisperWorker.transcribe({ binary: join(dir, "missing-python"), args: [], wav: "a.wav", out: join(dir, "x"), language: "en", progress: false }))
+  const log = vi.fn();
+  await expect(crisperWorker.transcribe({ binary: join(dir, "missing-python"), args: [], wav: "a.wav", out: join(dir, "x"), language: "en", progress: false, log }))
     .rejects.toThrow(FfmpegError);
+  expect(log.mock.calls).toEqual([[expect.stringMatching(/^\[transcribe\] the CrisperWhisper worker failed to start: /)]]);
+});
+
+it("logs the worker's start and its exit, with its code and why it went", async () => {
+  const log = vi.fn();
+  const failed = crisperWorker.transcribe({ binary: process.execPath, args: [adapter], wav: join(dir, "broken.wav"), out: join(dir, "broken"), language: "en", progress: false, log });
+  await expect(failed).rejects.toThrow(FfmpegError);
+  expect(log.mock.calls.map(([line]) => (line as string).replace(/\(pid \d+\)/, "(pid <pid>)").replace(/after \S+,/, "after <time>,"))).toEqual([
+    "[transcribe] started the CrisperWhisper worker (pid <pid>)",
+    "[transcribe] the CrisperWhisper worker (pid <pid>) exited with code 1 after <time>, after the adapter reported a failure",
+  ]);
 });

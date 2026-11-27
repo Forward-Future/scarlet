@@ -500,6 +500,22 @@ function pictureTimes(file: string) {
     "frame=pts_time", "-of", "csv=p=0", file]).then(result => result.stdout.toString().split("\n").filter(Boolean).map(parseFloat));
 }
 
+it("makes a long recording's parts side by side where the hardware decoder can help, every picture at its source time", async () => {
+  // On a Mac that decodes AVC on its CPU cores, VideoToolbox makes parts from the end while the CPU makes them from the start.
+  const input = path.join(dir, "lanes.mp4"), output = path.join(dir, "lanes-preview.mp4");
+  await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30000/1001:d=95",
+    "-f", "lavfi", "-i", "sine=d=95", "-c:v", "libx264", "-g", "30", "-c:a", "aac", input]);
+  const progress: number[] = [];
+  const result = await makeProxy(input, output, { height: 90, hwaccel: "auto", checkpointDir: path.join(dir, "lane-parts"), onProgress: p => progress.push(p) });
+  expect(result.warnings.filter(w => w.startsWith("VideoToolbox could not"))).toEqual([]);
+  expect(progress).toEqual([...progress].sort((a, b) => a - b));
+  expect(progress.at(-1)).toBe(1);
+  const [want, got] = await Promise.all([pictureTimes(input), pictureTimes(output)]);
+  expect(got.length).toBe(want.length);
+  expect(Math.max(...got.map((t, i) => Math.abs(t - want[i]!)))).toBeLessThan(1e-4);
+  expect((await probeMedia(output)).hasAudio).toBe(true);
+});
+
 it("resumes a recording whose frame rate drifts and keeps each picture at its source time", async () => {
   // A phone recording at 29.97 that drops two pictures before it ends: its measured rate no longer matches the declared one.
   const input = path.join(dir, "drifting.mp4"), output = path.join(dir, "drifting-preview.mp4");
@@ -847,6 +863,10 @@ describe("render", () => {
     expect(timelinePreviewDecoder("videotoolbox", "videotoolbox")).toBe("videotoolbox");
     expect(timelinePreviewDecoder("auto", "cuda")).toBe("cuda");
     expect(timelinePreviewDecoder("none", undefined)).toBeUndefined();
+    // A picture the editor waits on decodes on a high-core Mac's CPU while it has room; HEVC included.
+    expect(timelinePreviewDecoder("auto", "videotoolbox", true)).toBe(ffmpeg.threadedAvcPreview ? undefined : "videotoolbox");
+    expect(timelinePreviewDecoder("videotoolbox", "videotoolbox", true)).toBe("videotoolbox");
+    expect(timelinePreviewDecoder("auto", "cuda", true)).toBe("cuda");
   });
 
   it("uses the probed playback codec for hardware decoding older imports", async () => {
@@ -1214,6 +1234,30 @@ describe("render", () => {
       const luma = (rgb: Buffer) => rgb[0]! * 0.299 + rgb[1]! * 0.587 + rgb[2]! * 0.114;
       expect(luma(pixel(34, 18))).toBeGreaterThan(luma(pixel(48, 40)) + 4);
       expect(luma(pixel(34, 18))).toBeLessThan(luma(pixel(32, 16)) - 4);
+    });
+
+    it("rounds an opaque layer's corners on its first frame alone, with the pixels rounding every frame gave", async () => {
+      const movie = { id: "red", kind: "video" as const, name: "red", path: "red.mp4", duration: 4, fps: 30, width: 64, height: 64, hasAudio: false };
+      const inset = makeMediaClip("red", 0, 0.5, 0, { transform: {
+        x: 0.25, y: 0.125, scale: 0.75, rotation: 0, cropLeft: 0.25, cropRight: 0.25, cropTop: 0.25, cropBottom: 0, cornerRadius: 0.25,
+      } });
+      const timeline = edit(track([inset]));
+      timeline.background = "#00FF00";
+      const graphOf = async () => {
+        const graph = await buildFilterGraph(stills, timeline, { start: 0, end: 0.5 }, { mediaRoot: dir, pictureOnly: true });
+        await graph.cleanup();
+        return graph.graph;
+      };
+      // Known to be opaque: one mask, laid on every frame.
+      stills.media = [{ ...movie, hasAlpha: false }];
+      expect(await graphOf()).toContain("alphamerge");
+      const once = await pictures(stills, timeline, { start: 0, end: 0.5 });
+      // Not known to be: each frame's own alpha is rounded.
+      stills.media = [movie];
+      expect(await graphOf()).not.toContain("alphamerge");
+      const everyFrame = await pictures(stills, timeline, { start: 0, end: 0.5 });
+      expect(once).toHaveLength(15);
+      expect(Buffer.concat(once).equals(Buffer.concat(everyFrame))).toBe(true);
     });
 
     it("holds a still for exactly its clip: a PNG, a GIF's first picture, a one-picture movie and a colour", async () => {
@@ -2452,7 +2496,7 @@ it("encodes multi-split batches cleanly when an adelay audio clip precedes an ea
 }, 60_000);
 
 it("fits anamorphic footage by its displayed shape rather than its stored pixels", async () => {
-  const renderBounds = async (name: string, sar: string, srcW = 144, srcH = 108, outW = 96, outH = 54) => {
+  const renderBounds = async (name: string, sar: string, srcW = 144, srcH = 108, outW = 96, outH = 54, zoom = false) => {
     const clipFile = path.join(dir, `${name}.mp4`);
     const outFile = path.join(dir, `${name}-out.mp4`);
     await runCapture(resolveFfmpeg(), [
@@ -2467,7 +2511,10 @@ it("fits anamorphic footage by its displayed shape rather than its stored pixels
     });
     const timeline: Timeline = {
       version: "draft", parent: null, projectId: project.id, name: "Main", background: "#000000", markers: [],
-      tracks: [{ id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [makeMediaClip("m1", 0, 0.2, 0)] }],
+      tracks: [{ id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [makeMediaClip("m1", 0, 0.2, 0, zoom ? {
+        // A slow zoom takes the subpixel `perspective` path; its first frame is at scale 1.
+        keyframes: [{ time: 0, transform: { scale: 1 }, ease: "linear" }, { time: 10, transform: { scale: 1.1 }, ease: "linear" }],
+      } : {})] }],
     };
     await renderRange(project, timeline, { start: 0, end: 0.2 }, outFile, {
       mediaRoot: dir, quality: "delivery", hwaccel: "none", pictureOnly: true,
@@ -2494,4 +2541,7 @@ it("fits anamorphic footage by its displayed shape rather than its stored pixels
   expect(await renderBounds("square-1-1", "1")).toEqual({ left: 12, width: 72, top: 0, height: 54 });
   // Exact 16:9 NTSC DV (720x480 SAR 32:27): float rounding of iw*sar*fit must not drop 2 px.
   expect(await renderBounds("ntsc-dv-16-9", "32/27", 720, 480, 960, 540)).toEqual({ left: 0, width: 960, top: 0, height: 540 });
+  // An animated zoom fits by the displayed shape too.
+  expect(await renderBounds("anamorphic-4-3-zoom", "4/3", 144, 108, 96, 54, true)).toEqual({ left: 0, width: 96, top: 0, height: 54 });
+  expect(await renderBounds("square-1-1-zoom", "1", 144, 108, 96, 54, true)).toEqual({ left: 12, width: 72, top: 0, height: 54 });
 });

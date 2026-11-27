@@ -80,11 +80,20 @@ export function briefPictures(timeline: Timeline, media: readonly MediaAsset[], 
       return [{ clip, order, source: { width: asset.width || canvas.width, height: asset.height || canvas.height } }];
     }));
   layers.sort((a, b) => b.order - a.order);
+  const ends = layers.map(l => clipEnd(l.clip));
+  const end = Math.max(0, ...ends);
+  // Each stretch of the timeline lists the layers that reach into it, top first, so a moment's picture reads only
+  // those: reading every layer for every clip edge took seconds on a long edit.
+  const span = Math.max(end, 1e-3) / Math.max(1, layers.length), slots = Math.max(1, layers.length);
+  const slotOf = (t: number) => Math.min(slots - 1, Math.max(0, Math.floor(t / span) || 0));
+  const bySlot: number[][] = Array.from({ length: slots }, () => []);
+  layers.forEach((l, i) => { for (let s = slotOf(l.clip.timelineIn), last = slotOf(ends[i]!); s <= last; s++) bySlot[s]!.push(i); });
 
   function picture(t: number): Shown[] {
     const shown: Shown[] = [];
-    for (const { clip, source } of layers) {
-      if (!(clip.timelineIn <= t && t < clipEnd(clip))) continue;
+    for (const i of bySlot[slotOf(t)]!) {
+      const { clip, source } = layers[i]!;
+      if (!(clip.timelineIn <= t && t < ends[i]!)) continue;
       const box = pictureBox(clip, t - clip.timelineIn, source, canvas);
       if (box[2] <= 0 || box[3] <= 0 || box[0] >= 1 || box[1] >= 1) continue;
       shown.push({ clip, box });
@@ -100,7 +109,6 @@ export function briefPictures(timeline: Timeline, media: readonly MediaAsset[], 
       crop(x.clip).every((v, k) => near(v, crop(y.clip)[k]!, 0.001));
   });
 
-  const end = Math.max(0, ...layers.map(l => clipEnd(l.clip)));
   // Clip edges within a millisecond of each other are one change, read just before the first and just after the last.
   const times = layers.flatMap(l => [l.clip.timelineIn, clipEnd(l.clip)]).filter(t => t > 0 && t < end).sort((a, b) => a - b);
   const edges: [number, number][] = [];
@@ -151,8 +159,11 @@ export function briefPictures(timeline: Timeline, media: readonly MediaAsset[], 
  */
 export function newBriefPictures(before: Timeline | null, after: Timeline, media: readonly MediaAsset[], canvas: { width: number; height: number },
   cuts?: ReadonlyMap<string, readonly RecordingCut[]>, fresh: ReadonlySet<string> = new Set()) {
+  // Each timeline's clips by id, read once for all its brief pictures.
+  const clipsOf = new Map<Timeline, Map<string, Timeline["tracks"][number]["clips"][number]>>();
   const sig = (tl: Timeline, f: BriefPicture) => {
-    const clips = new Map(tl.tracks.flatMap(t => t.clips.map(c => [c.id, c] as const)));
+    let clips = clipsOf.get(tl);
+    if (!clips) clipsOf.set(tl, clips = new Map(tl.tracks.flatMap(t => t.clips.map(c => [c.id, c] as const))));
     return `${f.seconds}|${f.shows.map(id => { const c = clips.get(id); return c?.kind === "media" ? c.mediaId : id; }).join(",")}`;
   };
   const mediaOf = new Map(after.tracks.flatMap(t => t.clips.map(c => [c.id, c.kind === "media" ? c.mediaId : ""] as const)));

@@ -37,23 +37,26 @@ import { adjacentPictureReads, collectCanvasCovers, directExportPicture, hasInde
 import {
   FRAME_SLACK,
   atempoFactors,
+  canPerspective,
   clipPlacement,
   ffColor,
   fillsFrames,
   holdsFrame,
   holdsSample,
+  isAnimatedTransform,
   keyframeExpr,
   overlayPosition,
   proxyHeightForClip,
   resolveTransform,
   signed,
+  smoothTransformStages,
   transformChain,
   videoClockStart,
   type AnimatedTransform,
   type Placement,
 } from "./graphTransform.js";
 import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
-import { hasIndexedAvc, isImagePath, isStillAsset, probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
+import { hasIndexedAvc, isImagePath, isStillAsset, probeMedia, sampleAspectRatio, storedAsShown, type ProbeResult } from "./probe.js";
 import { motionFilters, motionOffsets, motionsIn, planTransitions, type TransitionMotion } from "./transitions.js";
 
 export {
@@ -78,6 +81,11 @@ export interface GraphOptions extends FontOptions {
   transitions?: Pick<TransitionPlan, "motions" | "layers">;
   /** Reuse probed movie headers for seeks when the caller supports discovery fallback. */
   indexedInputs?: boolean;
+  /**
+   * A short read the editor waits on: an HEVC original with wavefront rows or tiles (`ProbeResult.rowParallel`) that
+   * decodes on the CPU uses slice threads, which decode each picture's rows at once, instead of frame threads.
+   */
+  rowThreads?: boolean;
   signal?: AbortSignal;
   pictureSource?: (asset: MediaAsset, from: number, to: number, minimumHeight: number) => Promise<{ file: string; start: number } | undefined>;
   audioOnly?: boolean;
@@ -88,6 +96,8 @@ export interface GraphOptions extends FontOptions {
   pictureFilter?: string;
   /** Absolute directory that relative `MediaAsset.path`s resolve against. */
   mediaRoot: string;
+  /** Optional extra trusted directories (such as library-wide style guides) for `.cube`/`.3dl` LUTs. */
+  lutRoots?: readonly string[];
   /** Output canvas; defaults to the project settings. Previews pass a smaller size. */
   width?: number;
   height?: number;
@@ -138,6 +148,14 @@ interface MediaPicture {
   /** One picture on every project frame (`fillsFrames`). */
   filled: boolean;
   toneMap: string[];
+  /** Fully opaque until its corners are rounded (a picture without alpha and no effect that could give it some), over several frames. */
+  opaque: boolean;
+  /** Resolved transform (computed once so input setup and filter graph agree on smooth animation). */
+  tf: AnimatedTransform;
+  /** Render animated scale/x/y via subpixel `perspective` instead of integer `scale:eval=frame` + `overlay`. */
+  smooth: boolean;
+  /** Source metadata used for smooth working-size and canvas-coverage checks. */
+  source?: { width?: number; height?: number; hasAlpha?: boolean; sar?: number };
 }
 
 export async function buildFilterGraph(
@@ -177,7 +195,7 @@ async function writeFilterGraph(
   };
   const media = new Map(project.media.map((m) => [m.id, m]));
   const probes = opts.probes ?? new Map<string, ProbeResult>();
-  const effectCtx = { mediaRoot: opts.mediaRoot, warn };
+  const effectCtx = { mediaRoot: opts.mediaRoot, lutRoots: opts.lutRoots, warn };
   // Transitions add picture-only layers around their joins and move the clips either side.
   const transitions = opts.transitions
     ? { timeline, motions: opts.transitions.motions, layers: opts.transitions.layers }
@@ -234,12 +252,11 @@ async function writeFilterGraph(
   let directPicture: FilterGraph["directPicture"];
 
   /** Lay `layer` over the stack where its transform, at `localT`, and its transition `moves` put it. */
-  const overlay = (layer: string, tf: AnimatedTransform, localT: string, moves: TransitionMotion[], p: Placement, filled = false) => {
+  const overlay = (layer: string, pos: { x: string; y: string }, moves: TransitionMotion[], p: Placement, filled = false) => {
     directPicture = undefined;
-    const pos = overlayPosition(tf, localT);
     const moved = motionOffsets(moves, W, H);
-    const x = moved.x ? `${pos.x}+${moved.x}` : pos.x;
-    const y = moved.y ? `${pos.y}+${moved.y}` : pos.y;
+    const x = moved.x ? (pos.x === "0" ? moved.x : `${pos.x}+${moved.x}`) : pos.x;
+    const y = moved.y ? (pos.y === "0" ? moved.y : `${pos.y}+${moved.y}`) : pos.y;
     const out = label("s");
     // The layer's own end stops it. Its start needs the test: overlay shows a layer from the base frame
     // nearest its first picture, which can be the frame before. A filled layer holds its last picture for as
@@ -251,47 +268,88 @@ async function writeFilterGraph(
     stack = out;
   };
 
-  const videoForMedia = (clip: MediaClip, idx: number, p: Placement, { still, cudaScale, sharedStart, held, filled, toneMap }: MediaPicture) => {
+  const videoForMedia = (clip: MediaClip, idx: number, p: Placement, { still, cudaScale, sharedStart, held, filled, toneMap, tf, smooth, source, opaque }: MediaPicture) => {
     const speed = clip.speed ?? 1;
     const moves = motionsOf(clip.id);
-    const tf = resolveTransform(clip, warn);
     const chain: string[] = [];
-    // Repeat the first picture on the clock the image demuxer's loop gives a still: one tick a frame.
-    if (held) chain.push("loop=loop=-1:size=1:start=0", "settb=AVTB", `setpts=N/${fnum(fps)}/TB`, `fps=${fnum(fps)}`);
-    // Download only the preview-sized picture for the CPU compositor.
-    if (cudaScale) chain.push(`scale_cuda=w=${W}:h=${H}:force_original_aspect_ratio=decrease:force_divisible_by=2:format=yuv420p:interp_algo=bicubic`, "hwdownload", "format=yuv420p");
-    // Source → clip-local time (speed applied, shifted so the first visible frame
-    // sits at local0, which keeps fades and keyframes in clip time).
-    chain.push(sharedStart === undefined ? `trim=duration=${fnum(still ? p.vis : p.vis * speed)}`
-      : `trim=start=${fnum(sharedStart)}:end=${fnum(sharedStart + p.vis)}`);
     const div = speed !== 1 && !still ? `/${fnum(speed)}` : "";
     const localStart = videoClockStart(clip, p.local0);
     // A still's clock ticks once a frame and setpts drops the fraction, so 0.033333 s would land a frame early.
     const offset = (seconds: number) => still ? `${seconds < 0 ? "-" : "+"}round(${fnum(Math.abs(seconds))}/TB)` : signed(seconds, "/TB");
-    chain.push(`setpts=(PTS-STARTPTS)${div}${localStart > 0 ? offset(localStart) : ""}`);
-    // An HDR picture becomes SDR before anything else is done to it, so effects, looks and the canvas see what a normal screen shows.
-    chain.push(...toneMap);
-    chain.push(...effectFilters(clip.effects, "video", effectCtx));
-    // A still's pixel-aspect tag is ignored as image viewers do, so the fit and the cover check agree.
-    if (still) chain.push("setsar=1");
-    chain.push(...transformChain(tf, W, H));
+    const shift = p.pos - localStart;
+    // A still's output clock rounds `p.pos` to the nearest frame tick; carry that same fractional offset into
+    // `perspective`'s clip-local start time so segments stitch cleanly even when `timelineIn` is off-grid.
+    const smoothStart = still && !opts.singleFrame
+      ? localStart + (Math.round(p.pos * fps) / fps - p.pos)
+      : localStart;
+    let overlayFilled = filled;
+
+    if (smooth && still) {
+      // Static image with animated zoom/pan: prepare frame 0 once (toneMap, effects, crop, pre-scale, pad),
+      // then loop that single prepared frame and apply subpixel `perspective` per project frame.
+      const stages = smoothTransformStages(tf, W, H, { fps, startTime: smoothStart, source });
+      chain.push("trim=end_frame=1");
+      chain.push(...toneMap);
+      chain.push(...effectFilters(clip.effects, "video", effectCtx));
+      // A still's pixel-aspect tag is ignored as image viewers do, so the fit and the cover check agree.
+      chain.push("setsar=1");
+      chain.push(...stages.prepare);
+      chain.push("loop=loop=-1:size=1:start=0", "settb=AVTB", `setpts=N/${fnum(fps)}/TB`, `fps=${fnum(fps)}`);
+      chain.push(`trim=duration=${fnum(p.vis)}`);
+      chain.push(`setpts=(PTS-STARTPTS)${localStart > 0 ? offset(localStart) : ""}`);
+      chain.push(...stages.animate);
+    } else if (smooth) {
+      // Video clip with animated zoom/pan: normalize to project frame rate before `perspective` so `on` advances
+      // smoothly by `1/fps` per frame even for VFR, non-project-fps, or slow-motion sources.
+      const stages = smoothTransformStages(tf, W, H, { fps, startTime: smoothStart, source });
+      if (cudaScale) chain.push(`scale_cuda=w=${W}:h=${H}:force_original_aspect_ratio=decrease:force_divisible_by=2:format=yuv420p:interp_algo=bicubic`, "hwdownload", "format=yuv420p");
+      chain.push(sharedStart === undefined ? `trim=duration=${fnum(p.vis * speed)}`
+        : `trim=start=${fnum(sharedStart)}:end=${fnum(sharedStart + p.vis)}`);
+      chain.push(`setpts=(PTS-STARTPTS)${div}`);
+      if (!opts.singleFrame) {
+        chain.push(`fps=${fnum(fps)}`);
+        overlayFilled = true;
+      }
+      if (localStart > 0) chain.push(`setpts=PTS${offset(localStart)}`);
+      chain.push(...toneMap);
+      chain.push(...effectFilters(clip.effects, "video", effectCtx));
+      chain.push(...stages.prepare);
+      chain.push(...stages.animate);
+    } else {
+      // Repeat the first picture on the clock the image demuxer's loop gives a still: one tick a frame.
+      if (held) chain.push("loop=loop=-1:size=1:start=0", "settb=AVTB", `setpts=N/${fnum(fps)}/TB`, `fps=${fnum(fps)}`);
+      // Download only the preview-sized picture for the CPU compositor.
+      if (cudaScale) chain.push(`scale_cuda=w=${W}:h=${H}:force_original_aspect_ratio=decrease:force_divisible_by=2:format=yuv420p:interp_algo=bicubic`, "hwdownload", "format=yuv420p");
+      // Source → clip-local time (speed applied, shifted so the first visible frame
+      // sits at local0, which keeps fades and keyframes in clip time).
+      chain.push(sharedStart === undefined ? `trim=duration=${fnum(still ? p.vis : p.vis * speed)}`
+        : `trim=start=${fnum(sharedStart)}:end=${fnum(sharedStart + p.vis)}`);
+      chain.push(`setpts=(PTS-STARTPTS)${div}${localStart > 0 ? offset(localStart) : ""}`);
+      // An HDR picture becomes SDR before anything else is done to it, so effects, looks and the canvas see what a normal screen shows.
+      chain.push(...toneMap);
+      chain.push(...effectFilters(clip.effects, "video", effectCtx));
+      // A still's pixel-aspect tag is ignored as image viewers do, so the fit and the cover check agree.
+      if (still) chain.push("setsar=1");
+      chain.push(...transformChain(tf, W, H, { opaque, name: () => `round${labelN++}` }));
+    }
+
     if (clip.videoFadeIn > 0) chain.push(`fade=t=in:st=0:d=${fnum(clip.videoFadeIn)}:alpha=1`);
     if (clip.videoFadeOut > 0) {
       chain.push(`fade=t=out:st=${fnum(Math.max(0, p.clipDur - clip.videoFadeOut))}:d=${fnum(clip.videoFadeOut)}:alpha=1`);
     }
     if (clip.opacity < 1) chain.push(`format=rgba,colorchannelmixer=aa=${fnum(clip.opacity)},format=yuva420p`);
     // Clip-local → output time.
-    const shift = p.pos - localStart;
     if (shift !== 0) chain.push(`setpts=PTS${offset(shift)}`);
     // A transition's fades and blur run on the output clock, across the clip and the layer that continues it.
     chain.push(...motionFilters(moves, W, c => ffColor(c)));
     // Overlay shows a layer's last picture for one project frame, however long its source showed it, and of two
     // pictures that land on one frame it shows the first. Filled, the layer has one picture on every frame: each
     // held until the next, and the last to the end of its stream.
-    if (filled) chain.push(`fps=${fnum(fps)}`);
+    if (filled && !smooth) chain.push(`fps=${fnum(fps)}`);
     const lbl = label("v");
     lines.push(`[${idx}:v]${chain.join(",")}${lbl}`);
-    overlay(lbl, tf, shift ? `(t${signed(-shift)})` : "t", moves, p, filled);
+    const pos = smooth ? { x: "0", y: "0" } : overlayPosition(tf, shift ? `(t${signed(-shift)})` : "t");
+    overlay(lbl, pos, moves, p, overlayFilled);
   };
 
   const videoForColor = (clip: ColorClip, p: Placement) => {
@@ -308,7 +366,7 @@ async function writeFilterGraph(
     chain.push(...motionFilters(moves, W, c => ffColor(c)));
     const lbl = label("c");
     lines.push(`${chain.join(",")}${lbl}`);
-    overlay(lbl, tf, "t", moves, p);
+    overlay(lbl, overlayPosition(tf, "t"), moves, p);
   };
 
   const audioForMedia = (clip: MediaClip, idx: number, p: Placement, skip: number, track: ResolvedAudioTrack, explicitTrack: boolean) => {
@@ -362,6 +420,7 @@ async function writeFilterGraph(
   // The HDR transfer of a moving picture: from its import, or read from the file for one imported before colour was.
   const hdrOf = async (asset: MediaAsset) => asset.color ? asset.color.hdr : (await verifiedProbe(asset))?.color?.hdr;
   let zscale: Promise<boolean> | undefined;
+  let perspectiveOk: Promise<boolean> | undefined;
   const toneMapFor = async (hdr: HdrTransfer | undefined) => hdr ? toneMapChain(hdr, await (zscale ??= canZscale(opts.ffmpegPath))) : [];
   const covers = opts.audioOnly
     ? []
@@ -424,10 +483,13 @@ async function writeFilterGraph(
       const shared = motionsOf(clip.id).length ? undefined : sharedReads?.get(clip);
       const indexedPicture = opts.indexedInputs && !includeAudio;
       let indexedOriginal = !!asset.previewClock && hasIndexedAvc(asset);
+      // Decided once per clip, so the clip's picture and sound still share one input.
+      const rowThreads = !!opts.rowThreads && wantVideo && !still && codec === "hvc1" && (await verifiedProbe(asset))?.rowParallel === true;
       const open = (input: string, start: number, hardware: boolean, duration = p.vis * speed) => addInput([
         ...(indexedPicture && (input !== file || shared || indexedOriginal) ? INDEXED_MP4_INPUT : []),
         ...(hardware && cudaScale ? CUDA_FRAMES_INPUT :
-          hardware && accelerate && opts.decoder !== "cuda" ? ["-hwaccel", "videotoolbox"] : []),
+          hardware && accelerate && opts.decoder !== "cuda" ? ["-hwaccel", "videotoolbox"] :
+          rowThreads && input === file ? ["-thread_type", "slice"] : []),
         ...(start > 0 ? ["-ss", fnum(start)] : []), "-t", fnum(duration),
       ], input);
       const pictureDelay = still ? 0 : Math.max(0, firstPicture - srcStart) / speed;
@@ -446,9 +508,12 @@ async function writeFilterGraph(
           indexedOriginal = hasIndexedClock(source, asset.fps) && source.rotation === 0 && source.pixFmt === "yuv420p" &&
             source.width === asset.width && source.height === asset.height;
         }
+        const tf = resolveTransform(clip, warn);
+        const smooth = isAnimatedTransform(tf) && await (perspectiveOk ??= canPerspective(opts.ffmpegPath));
         // Only the image demuxer repeats a picture at the input. A GIF, a HEIC or AVIF photo (which FFmpeg opens as a
-        // movie, with no loop option), or a movie holding one picture, is read once and repeated in the graph.
-        const held = still && (!isImagePath(file) || /\.(gif|heic|avif)$/i.test(file));
+        // movie, with no loop option), a movie holding one picture, or an animated still (pre-scaled once before
+        // looping into `perspective`), is read once and repeated in the graph.
+        const held = still && (smooth || !isImagePath(file) || /\.(gif|heic|avif)$/i.test(file));
         const idx = held ? addInput(["-t", fnum(p.vis)], file)
           : still ? addInput(["-loop", "1", "-framerate", fnum(fps), "-t", fnum(p.vis)], file)
           : shared ? open(file, shared.start / fps, true, (shared.end - shared.start) / fps)
@@ -463,6 +528,11 @@ async function writeFilterGraph(
           filled: !opts.singleFrame && fillsFrames(clip, asset, fps),
           // A preview copy of an HDR file is SDR already.
           toneMap: proxy ? [] : await toneMapFor(hdr),
+          tf,
+          smooth,
+          source: { width: asset.width, height: asset.height, hasAlpha: asset.hasAlpha, sar: smooth && !still ? sampleAspectRatio(await verifiedProbe(asset)) : 1 },
+          // A single frame has no frames to share a mask with.
+          opaque: !opts.singleFrame && asset.hasAlpha === false && !clip.effects.length,
         });
         if (opts.directPicture && opts.pictureOnly && !opts.pictureFilter && !opts.singleFrame && firstLayer && !shared && !proxy && !still && !motionsOf(clip.id).length &&
             directExportPicture(clip, visible, asset, await verifiedProbe(asset), W, H, fps, D)) {

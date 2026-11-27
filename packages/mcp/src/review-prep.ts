@@ -103,6 +103,7 @@ export class ReviewInspections {
     try {
       while (!this.closed && q.next < q.total && q.next < q.reached + (this.opts.lookahead ?? 8)) {
         const index = q.next++;
+        // A cut that couldn't be prepared ahead is inspected afresh when the agent asks for it, and fails there out loud.
         await this.prepare(q.change, { index, audio: this.opts.defaultAudio ?? false, wholePicture: false }, "next").catch(() => undefined);
       }
     } finally { q.workers--; }

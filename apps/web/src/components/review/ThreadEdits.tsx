@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { historyLineage } from "@scarlet/timeline";
 import { AimRow } from "./AimRow";
-import { matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
+import { continuousBrollSections, matchesEdit, threadRevision, isThreadDone, ADD_MESSAGE, REJECT_MESSAGE, REVISED_CHECK, ScarletApiError, type EditRef, type Task, type Thread, type ThreadEdit, type VersionSummary } from "@scarlet/shared";
+import { useShownCut } from "../../stores/shownCut";
 import { recordEditReview, requestPosition } from "../../lib/editReviews";
 import { errorMessage } from "../../lib/client";
-import { asksEditor, editGroups, listPlaces, noEdits, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
+import { asksEditor, editGroups, listPlaces, noEdits, pressAdd, revisionWord, useAdding, useCanUnkeep, useRejecting, useReviewed, useRevising, type ListedEdit } from "./threadEditState";
 import { clock as clockLabel } from "../../lib/format";
 import { editRowWord } from "../../lib/editKind";
 import { editKey, keepEdits, unkeepEdits } from "../../lib/keptEdits";
@@ -101,32 +102,46 @@ export function addInstruction(ask?: string) {
   return `The editor asked you to add what this to-do asks for${ask?.trim() ? `: “${ask.trim()}”` : ""}. Make or find it, put it in the video at this spot, and mark the to-do resolved.`;
 }
 
+/** Why an Add didn't go, by its to-do: the card went on at the press, so the reason waits on the to-do's card. */
+const addFailures = new Map<string, string>();
+
 /**
  * Add on a to-do's card: Scarlet is asked to make or find what the to-do says to add and put it in the video there,
  * with the same agent and the same target as typing it would. The editor pressed Add and wrote nothing, so the
  * request reads "Add it" under its to-do's tag, in the chat and in the queue; what Scarlet is told is the instruction.
+ * `onPress` comes with the press, so the card can go on at once and a quick run of A presses adds every to-do: the
+ * to-do counts as queued from then. `onSent` follows once the request is in; `onFailed` if it couldn't be sent.
  */
-export function AddTodo({ projectId, thread, target, ask, onSent }: { projectId: string; thread: Thread; target: AgentContext;
-  ask?: string; onSent(task: Task): void }) {
+export function AddTodo({ projectId, thread, target, ask, onPress, onSent, onFailed }: { projectId: string; thread: Thread; target: AgentContext;
+  ask?: string; onPress?(): void; onSent(task: Task): void; onFailed?(): void }) {
   const { effective, unavailableReason } = useAgentAvailability();
   const createTask = useProjectStore(s => s.createTask);
   const head = useProjectStore(s => s.current?.project.head ?? undefined);
+  const failureKey = `${thread.id} ${target.changeId} ${target.editIndex}`;
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => addFailures.get(failureKey) ?? "");
   async function add() {
     // One request per press: pressed again while the first is on its way, it sends nothing more.
     if (busy) return;
     if (!effective) { setError(unavailableReason); return; }
     setBusy(true);
     setError("");
+    addFailures.delete(failureKey);
+    const sending = createTask(projectId, { kind: "edit", ...effective, instruction: addInstruction(ask),
+      context: { version: head, ...requestPosition(target), threadId: thread.id, message: ADD_MESSAGE } });
+    const done = target.changeId && target.editIndex !== undefined ? pressAdd(thread.id, target.changeId, target.editIndex) : undefined;
+    onPress?.();
     try {
-      const task = await createTask(projectId, { kind: "edit", ...effective, instruction: addInstruction(ask),
-        context: { version: head, ...requestPosition(target), threadId: thread.id, message: ADD_MESSAGE } });
+      const task = await sending;
       recordEditReview(projectId, target, "revise");
       onSent(task);
     } catch (e) {
-      setError(errorMessage(e));
+      const message = errorMessage(e);
+      addFailures.set(failureKey, message);
+      setError(message);
+      onFailed?.();
     } finally {
+      done?.();
       setBusy(false);
     }
   }
@@ -167,7 +182,7 @@ export function RejectedMark() {
  * its time. `label` names such a list, and `leaving` picks the rows that are on their way out of it: decided or sent back a
  * moment ago, they fade before they go.
  */
-export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, low, inRail, askingKey }: {
+export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, showing, onPlay, onHover, under, only, spent, nextQueuedId, label, leaving, lingering, low, inRail, askingKey }: {
   projectId: string; thread: Thread; edits: ListedEdit[]; showing?: ThreadEdit;
   /** Edits the editor rejected, which are out of the video: each keeps a row where it was, with a × and "Rejected". */
   rejected?: ListedEdit[];
@@ -177,6 +192,8 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   /** The queued request Scarlet will take up next, so its edit's row says "Up next" instead of "Queued". */
   nextQueuedId?: string;
   label?: string; leaving?(edit: ListedEdit): boolean;
+  /** Which new status a row is briefly showing in place before moving out of this list. */
+  lingering?(edit: ListedEdit): "working" | "done" | undefined;
   /** The rows that are in Needs review's list only while low risk edits are included: they open into it and close out of it. */
   low?(edit: ListedEdit): boolean;
   /** Drawn inside the beta edits column: use Scarlet's hover tooltip instead of the system title tooltip. */
@@ -189,19 +206,25 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   const revising = useRevising(thread);
   const rejecting = useRejecting(thread);
   const adding = useAdding(thread);
+  const paused = useProjectStore(s => s.current?.id === projectId ? !!s.current.project.editingPaused : false);
+  const { timeline } = useShownCut();
+  const media = useProjectStore(s => s.current?.media);
+  const brollSections = timeline ? continuousBrollSections(timeline, media) : undefined;
   const list = useRef<HTMLOListElement>(null);
   // A rejected edit that's open is its own row: the edit that took its place in the video's order isn't lit for it.
   const open = showing?.rejected ? -1 : edits.findIndex(edit => !!showing && matchesEdit(showing, edit));
-  // An edit made in several places is one row. It stands for the place that's open, else the first one asking for a
-  // look, else the first.
+  // An edit made in several places (or a continuous B-roll section) is one row. It stands for the place that's open,
+  // else the first one asking for a look, else the first.
   const order = listPlaces(thread, edits, rejected);
-  const rows = editGroups(edits).filter(({ members }) => !only || members.some(m => only(m.edit))).map(({ members }) => {
+  const rows = editGroups(edits, brollSections).filter(({ members }) => !only || members.some(m => only(m.edit))).map(({ members, continuousBroll, stretch }) => {
     const waiting = (m: { edit: ListedEdit }) => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit);
     // Scarlet stopped work on it to ask the editor something: it is their turn, so it is the place the row stands for.
     const asking = (m: { edit: ListedEdit }) => asksEditor(revising(m.edit));
     const relevant = only ? members.filter(m => only(m.edit)) : members;
     const shown = members.find(m => m.i === open) ?? members.find(asking) ?? members.find(waiting) ?? relevant[0] ?? members[0]!;
-    return { ...shown, first: members[0]!.i, places: members.length, needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
+    return { ...shown, first: members[0]!.i, places: members.length, continuousBroll, stretch,
+      maxVersion: Math.max(0, ...members.map(m => m.edit.previous.length ? m.edit.previous.length + 1 : 0)),
+      needs: members.filter(waiting).length, allKept: relevant.every(m => reviewed(m.edit)),
       unkeepRefs: relevant.filter(m => canUnkeep(m.edit)).map(m => m.edit),
       nested: under ? members.flatMap(m => under(m.edit)) : [], took: spent ? members.flatMap(m => spent(m.edit) ?? [])[0] : undefined };
   });
@@ -238,19 +261,21 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   const goneAfter = (from: number, to: number) => goneBetween(from, to).map(e => {
     // Lit for the edit it was, too, while that one is still on its card, leaving.
     const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e, showing));
-    return <li key={editKey(e)} className={leaving?.(e) ? "is-leaving" : undefined}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
+    const rowTime = clockLabel((e as ThreadEdit).at ?? e.range.start);
+    const lead = <span className="edit-row-time simple-pass-time">{rowTime}</span>;
+    return <li key={editKey(e)} className={leaving?.(e) ? "is-leaving" : undefined} data-lingering={lingering?.(e)}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
       data-log-control="open-edit" data-log-label="Rejected edit" aria-label={`${e.label}, rejected`}
       title={inRail ? undefined : e.label} data-row-tip={inRail ? e.label : undefined}
       onClick={event => { blurOnPointerClick(event); onPlay(e); }}>
-      <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
-      <span className="simple-edit-title"><span className="simple-edit-words">{e.label}</span></span>
+      {lead}
+      <span className="simple-edit-title"><RejectedMark /><span className="simple-edit-words">{e.label}</span></span>
       <span className="simple-edit-value">Rejected</span>
     </button>
-      <AimRow on={on}><span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span><span className="composer-aim-words">{e.label}</span></AimRow></li>;
+      <AimRow on={on}>{lead}<span className="composer-aim-words">{e.label}</span></AimRow></li>;
   });
   return <ol ref={list} className="simple-edits" aria-label={label ?? (only ? "Edits that need you" : "Edits in this thread")}>
     {goneAfter(-1, firstOf(0))}
-    {rows.map(({ edit, i, places, needs, allKept, unkeepRefs, nested, took }, at) => {
+    {rows.map(({ edit, i, places, continuousBroll, stretch, maxVersion, needs, allKept, unkeepRefs, nested, took }, at) => {
       const on = i === open;
       const isKept = places > 1 ? allKept : reviewed(edit);
       // A revision on its way takes the edit off the editor's list until it comes back. Its row says so whether or not
@@ -261,7 +286,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const statusWord = revisionWord(revisingNow, { rejecting: rejecting(edit), adding: adding(edit), nextQueuedId });
       // Scarlet stopped to ask the editor something about it: the row waits on them again, amber, and doesn't shimmer.
       const asks = asksEditor(revisingNow);
-      const version = edit.previous.length ? edit.previous.length + 1 : 0;
+      const version = continuousBroll ? maxVersion : (edit.previous.length ? edit.previous.length + 1 : 0);
       const decided = isKept && !isRevising;
       // In Needs review, a handled edit says how it was decided (Kept, or Done for a marker).
       // Otherwise every edit ends on a consistent word for what it did (Cut, Audio, B-roll, Edit…).
@@ -270,15 +295,22 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
       const title = (edit.reason && edit.summary) || edit.label;
       // One that came back revised with no reason from Scarlet keeps its type tag beside v2 rather than replacing it.
       const revised = edit.check === REVISED_CHECK && !reviewed(edit) && !isRevising;
-      const rowTime = clockLabel((edit as ThreadEdit).at ?? edit.range.start);
+      const rowTime = clockLabel(continuousBroll && stretch ? stretch.start : (edit as ThreadEdit).at ?? edit.range.start);
       const isAskingCurrent = !!askingKey && askingKey === editKey(edit);
       // Every row leads with its time, amber while it asks for a look, as a pass's row does: once kept it asks no more.
       const lead = <span className={asks || (check && !isKept) ? "edit-row-time simple-pass-time is-need" : "edit-row-time simple-pass-time"}>{rowTime}</span>;
       const checkTitle = revised || edit.reason ? undefined : edit.check;
       const isLeaving = !!leaving?.(edit);
-      const showUnkeep = decided && !edit.marker && !isLeaving && unkeepRefs.length > 0;
+      const lingerKind = lingering?.(edit);
+      const workingState = isRevising && !asks ? (busy ? "busy" : "pending") : undefined;
+      const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
+      const showUnkeep = decided && !edit.marker && !isLeaving && !lingerKind && unkeepRefs.length > 0;
       const unkeepTip = edit.check ? "Move back to Needs review" : only ? "Move back to safe edits" : "Unkeep";
-      return <Fragment key={editKey(edit)}><li className={[isLeaving && "is-leaving", showUnkeep && "has-unkeep"].filter(Boolean).join(" ") || undefined} data-low-risk={low?.(edit) ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
+      return <Fragment key={editKey(edit)}><li className={[isLeaving && "is-leaving", showUnkeep && "has-unkeep"].filter(Boolean).join(" ") || undefined}
+        data-low-risk={low?.(edit) ? "" : undefined}
+        data-lingering={lingerKind}
+        data-working={workingState}
+        data-paused={workingState === "pending" && paused ? "" : undefined}><button type="button" aria-current={on || undefined} data-log-control="open-edit" data-log-label="Edit"
         // Clicked, the row lets go of the focus (WebView2 leaves it there), or Space would press the row again and start
         // the edit over, instead of playing the video.
         className={["simple-edit", on && "is-on", asks && "is-asking", isAskingCurrent && "is-asking-current", !on && only && decided && "is-decided"].filter(Boolean).join(" ")} onClick={e => { blurOnPointerClick(e); onPlay(edit); }}
@@ -290,7 +322,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
         data-row-detail={inRail && checkTitle && checkTitle !== title ? checkTitle : undefined}
         aria-label={`${rowTime}: ${title}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`}>
         {lead}
-        <span className="simple-edit-title">{decided && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-edit-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} hover={took} />}</span>
+        <span className="simple-edit-title">{decided && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}{spinning && <span className="simple-pass-spin" aria-hidden="true" />}<span className="simple-edit-words">{title}</span>{version > 0 && (places === 1 || continuousBroll) && <EditVersion n={version} hover={took} />}</span>
         {/* What the row ends on says on hover what the requests about this edit took: their time and tokens, nothing else. */}
         {/* While sent back, the row ends on its live status (Revising…, Up next, Queued, Needs your answer). Once revised,
             v2 sits beside the title and the edit keeps its type tag on the right. */}
@@ -308,7 +340,7 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
               recordUndo({ kind: "unkeep", word: "Unkeep", projectId, threadId: thread.id, refs: unkeepRefs, name: title });
             }}>Unkeep</button>
         </span>}
-        <AimRow on={on}>{lead}<span className="composer-aim-words">{title}</span></AimRow>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
+        <AimRow on={on}>{lead}<span className="composer-aim-words">{title}</span>{version > 0 && places === 1 && <EditVersion n={version} />}</AimRow>{nested}</li>{goneAfter(firstOf(at), firstOf(at + 1))}</Fragment>;
     })}
   </ol>;
 }

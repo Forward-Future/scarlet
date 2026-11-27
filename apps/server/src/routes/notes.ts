@@ -101,7 +101,7 @@ export function noteRoutes(ctx: Ctx) {
       const wav = join(ctx.paths.tmp, `${newId("voice")}.wav`);
       try {
         const result = await provider.transcribe({ path: abs, tmpDir: ctx.paths.tmp, keepWavAt: wav });
-        voiceTranscript = await filterDictationText({ audioPath: abs, segments: result.segments, tmpDir: ctx.paths.tmp, signal: c.req.raw.signal, wavPath: wav });
+        voiceTranscript = await filterDictationText({ audioPath: abs, segments: result.segments, tmpDir: ctx.paths.tmp, signal: c.req.raw.signal, wavPath: wav, log: m => ctx.log(m) });
         if (voiceTranscript) text = voiceTranscript;
       } catch (e) {
         const msg = errorMessage(e);
@@ -149,7 +149,7 @@ export function noteRoutes(ctx: Ctx) {
     await writeFile(abs, Buffer.from(await audio.arrayBuffer()));
     try {
       const result = await provider.transcribe({ path: abs, tmpDir: ctx.paths.tmp, keepWavAt: wav });
-      const text = await filterDictationText({ audioPath: abs, segments: result.segments, tmpDir: ctx.paths.tmp, signal: c.req.raw.signal, wavPath: wav });
+      const text = await filterDictationText({ audioPath: abs, segments: result.segments, tmpDir: ctx.paths.tmp, signal: c.req.raw.signal, wavPath: wav, log: m => ctx.log(m) });
       if (!text) throw badRequest("no_speech", NO_SPEECH);
       return c.json({ text });
     } finally {

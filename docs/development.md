@@ -29,7 +29,7 @@ Run commands from the repository root. `pnpm desktop:dev` opens your local proje
 
 The render tests need `ffmpeg` and `ffprobe` on `PATH`. A full run spreads the two longest test files, `apps/web/src/pages/SimpleWorkspace.test.tsx` and `apps/server/src/workspace.test.ts`, over their `.part*.test` files so they don't hold one worker for minutes. Write tests in the long file as usual; naming it on the command line runs it whole. [How the parts work](../test/parts.ts) For a change to editing behavior, use the editing evaluations and keep real footage, transcripts and results outside the repository. For performance work, the editor benchmarks measure project opening, scrubbing, previews and export. [Editing evaluations](../evals/README.md) · [Editor benchmarks](editor-performance.md)
 
-For headless integration work, `pnpm --filter @scarlet/server start` runs the API and render workers. `docker compose up -d` starts the containerized engine. To connect an external agent, configure `pnpm mcp` as a stdio MCP server with `SCARLET_SERVER` set to the engine URL, `SCARLET_PROJECT` to the project ID and `SCARLET_TOKEN` to the destination engine’s token. Use HTTPS for remote engines, or an HTTP loopback address through a tunnel. The standalone agent and MCP CLIs also accept `--token-file PATH` for an owner-readable file. The desktop app handles this connection for you. Both hosts include a Gemini CLI runner, which also requires a working sandbox backend.
+For headless integration work, `pnpm --filter @scarlet/server start` runs the API and render workers. `docker compose up -d` starts the containerized engine. To connect an external agent, configure `pnpm mcp` as a stdio MCP server with `SCARLET_SERVER` set to the engine URL, `SCARLET_PROJECT` to the project ID and `SCARLET_TOKEN` to the destination engine’s token. Use HTTPS for remote engines, or an HTTP loopback address through a tunnel. The standalone agent and MCP CLIs also accept `--token-file PATH` for an owner-readable file. The desktop app handles this connection for you. Both hosts include a Gemini runner through Antigravity CLI (`agy`), which also requires a working sandbox backend. Both also run Ollama, LM Studio and OpenRouter models through Claude Code. Each reads `OLLAMA_HOST`, `LMSTUDIO_HOST` or `OPENROUTER_API_KEY` from the environment when **Settings → Models** (or the standalone host's config file) leaves it unset.
 
 ### Ubuntu 24.04 x86-64
 
@@ -49,7 +49,7 @@ Download the `.deb` from the [Ubuntu preview releases](https://github.com/Forwar
 
 ## Transcription
 
-Scarlet prefers a local verbatim CrisperWhisper installation. Bundled Whisper large-v3-turbo handles local speech until that installation is ready. You can also choose another local model in **Settings → General**. [Transcription model setup and adapter interface](transcription-models.md)
+Bundled Whisper large-v3-turbo is the default local model. If you choose CrisperWhisper, bundled Whisper handles local speech until that installation is ready. You can also choose another local model in **Settings → General**. [Transcription model setup and adapter interface](transcription-models.md)
 
 Scarlet’s bundled whisper.cpp runtime supports GGML models. In a source checkout, `node apps/desktop/scripts/build-whisper.mjs` builds the pinned runtime with CMake. Set `CMAKE_COMMAND` if CMake is installed outside `PATH`. Packaged apps include the runtime.
 
@@ -106,7 +106,7 @@ Rerun the enable command after changing the helper script so the installed copy 
 
 ## Diagnose a problem
 
-**Settings → Advanced → Share logs → Export logs…** saves a ZIP with operational events and `system.json` for the app version, OS, engine, assistant status and desktop settings. The ZIP retains timings, status and error codes, generated IDs and route names. Free-form error text stays in the local log. The ZIP excludes media files, projects, transcript files, the database and sign-in tokens. For a bug report, note the time of the problem and review the bundle before sharing it.
+**Settings → Advanced → Share logs → Export logs…** saves a ZIP with operational events and `system.json` for the app version, OS, engine, assistant status and desktop settings. The ZIP retains timings, status and error codes, generated IDs and route names. Free-form error text stays in the local log. The ZIP excludes media files, projects, transcript files, the database and sign-in tokens. For a bug report, note the time of the problem and review the bundle before sharing it. **Settings → About → Report a problem…** sends the same system report and cleaned log straight to the Scarlet team with your description. [What a problem report sends](telemetry.md#problem-reports)
 
 | Platform | Desktop log |
 | --- | --- |
@@ -121,16 +121,22 @@ Times are in UTC. Scarlet rotates the log at 5 MB and keeps the five previous fi
 | Log tag | Where to look |
 | --- | --- |
 | `[engine] [task]`, `[host]` | Queue blockers, claim, completion, cancellation, recovery and retry. Host completion records the requested state and the state acknowledged by the engine. |
+| `[scarlet-agent]`, `[host] quota-refresh` | Each assistant CLI run: how it was started (flag names only, never the prompt), its exit code or signal, elapsed time and stderr tail on failure, stalls, time limits, retries and unreadable output lines. Assistant detection, model catalog refreshes and subscription quota checks when their result changes. |
 | `[engine] [mcp]` | Tool names, elapsed time, outcomes and counts of missing measurements for the attempt. |
-| `[engine] [transcribe]`, `[engine] [audio]` | Transcript progress, audio work and queue delays. **Finish when ready** resumes a paused edit once its transcripts are saved. |
+| `[engine] [transcribe]`, `[engine] [audio]` | Transcript progress, audio work and queue delays, helper processes starting and exiting, and GPU to CPU fallbacks. **Finish when ready** resumes a paused edit once its transcripts are saved. |
+| `[engine] [ingest]`, `[engine] [web-video]` | Footage added from a file or a link: bytes downloaded or copied, fingerprinting, preview copies and where an import stopped. Web video pages, captions and parts saved for B-roll (never the address). |
+| `[engine] [db]`, `[engine] [lifecycle]` | Library schema migrations with their times, lookup index rebuilds, engine startup time and what a quit waited for. |
+| `[engine] [cleanup]`, `[engine] [telemetry]` | Voice-note cleanup outcomes (provider, model, time, never the note) and dropped usage reports. |
 | `[engine] [edit]`, `[project]`, `[render]`, `[media]`, `[activity]` | Applied changes and versions, render warnings, footage and project history. |
+| `[engine] [graphics]`, `[skills]`, `[review]`, `[inspection]`, `[align]`, `[whisper]` | Graphics and style guide renders, skill changes, review decisions, picture checks and their fallbacks, word alignment and the transcription runtime in use. |
 | `[ui] [action]`, `[ui] [nav]` | The control or shortcut used and the page it opened. |
 | `[ui] [request]` | What became of each message: the draft starting and emptying (its length, never its words), each press of send and what it did (`send`, `send-ignored reason=…`, `send-refused`, `send-failed`), and the request the engine made of it (`created task=…`, `answered`, `revision-created`, `note-created`). |
 | `[ui] [voice]`, `[ui] [marks]`, `[ui] [timeline]`, `[ui] [export]` | Recordings started and stopped and why, marks on a frame, ranges set and cleared, and each export's outcome. |
 | `[ui] [api]`, `[engine] [http]` | The window’s request, the engine’s response, failures and slow calls. |
 | `[engine] [transfer]`, `[export]` | File reads and native saves. The engine logs bytes read from disk and the desktop logs bytes received and where the save stopped. |
 | `[ui] [realtime]`, `[engine] [ws]` | Events that changed the interface and connections that dropped or recovered. |
-| `[ui] [playback]` | Player state, transport commands, streams, dropped frames and stalls. A new `el=` identifies a replacement video element. |
+| `[ui] [playback]` | Player state, transport commands, streams, dropped frames and stalls, and each change in a cut's preview cache (`cache …`) with its time to ready. A new `el=` identifies a replacement video element. |
+| `[desktop]` | Engine and agent host start, readiness time and stop, FFmpeg installs, update downloads, storage scans and events that failed to reach the window. |
 | `[ui] [error]` | UI, microphone, asset and export errors. Search for `WARN` or `ERROR` across the log for failures from other components. |
 
 By default, the desktop host stops an agent after ten minutes without CLI output. In `desktop.json`, `stallMinutes` controls that interval and `timeoutMinutes` sets an optional total run limit. Zero disables the corresponding limit. A stopped run keeps its saved work, and **Resume** continues from there.

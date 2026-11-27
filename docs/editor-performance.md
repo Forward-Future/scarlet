@@ -308,3 +308,23 @@ Seen and left: each cut's Before still renders its own short file (0.4–1.2 s o
 ```sh
 SCARLET_BIN_DIR="/Applications/Scarlet.app/Contents/MacOS" node apps/server/scripts/bench-frame-burst.mjs <long recording.mp4>
 ```
+
+## Fourth pass: the editor's pictures while Scarlet works
+
+The editor's own frames kept their slot in the picture lane, but not the cores: while an agent's frames decoded a 4K recording on the CPU, the editor's frame decoded beside them at a share of the machine. Now a frame of the agent's that starts while the editor is looking at pictures (one of theirs decoding, or one in the last 5 s) decodes on VideoToolbox, which returns the same JPEG byte for byte and uses little of the CPU, and one more of them may run at a time then. Once the editor looks away the agent's frames use the CPU again, as before. The editor's source frames also have background work nobody waits on (an import's proxies, caches and analysis) yield, as a cut's frames already did.
+
+Measured on the same Mac, alternating builds, on a 55-minute 4K camera recording with a keyframe every 8 s (main `84917c35` against this branch):
+
+| Operation | Before p50 / p95 | After p50 / p95 |
+| --- | ---: | ---: |
+| The editor's frames, asked one after another all through a burst of 24 agent frames (114 and 212 frames, 4 pairs of runs) | 628 / 1,082 ms | 392 / 654 ms |
+| That burst of 24 agent frames, the editor asking throughout (12 bursts each) | 6.5 / 8.1 s | 7.5 / 9.2 s |
+| The editor's frames, 300 ms apart, while the recording's source proxy is prepared (82 and 101 frames, 3 pairs) | 414 / 824 ms | 291 / 450 ms |
+| The editor's frame with nothing else running | 0.25–0.4 s | unchanged |
+
+The agent's burst is slower only while the editor keeps asking: each VideoToolbox decode takes a little longer, and the editor got twice as many frames in the same time. Without the extra slot it was 15% slower again; with as many extra slots as the lane has, the burst was quicker than before but the editor's frames slowed by a quarter, and two extra slots gained the agent 10% for 8% at the editor's p95. A higher `nice` on the agent's decodes didn't help the editor; four decoder threads each, or Darwin's background policy while an editor frame decoded, helped it less than VideoToolbox and cost the agent a third to two thirds of its frames. Frames asked for by both builds matched by SHA-256 in every run (105 in the burst runs, 35 in the proxy runs), and a test checks VideoToolbox's JPEG against the CPU's.
+
+```sh
+SCARLET_BIN_DIR="/Applications/Scarlet.app/Contents/MacOS" node apps/server/scripts/bench-frame-burst.mjs <long recording.mp4> 3
+SCARLET_BIN_DIR="/Applications/Scarlet.app/Contents/MacOS" node apps/server/scripts/bench-frame-background.mjs <long recording.mp4> 20
+```

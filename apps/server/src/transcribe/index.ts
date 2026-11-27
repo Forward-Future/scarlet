@@ -51,6 +51,9 @@ export interface TranscriptionProvider {
 
 export type ProviderName = ServerSettings["transcription"]["provider"];
 
+/** The last local runtime written to the log: a choice is logged when it changes, not on every recording. */
+let loggedLocalRuntime: string | undefined;
+
 /** A saved preset identifies its model. A generic local or cloud provider alone does not. */
 export function presetLabel(preset?: LocalTranscriptionModel): string | undefined {
   if (preset === "crisperwhisper") return "CrisperWhisper 2.0 large";
@@ -83,6 +86,12 @@ export function getTranscriptionProvider(ctx: Ctx, override?: string, snapshot =
       modelLabel = presetLabel(localModel) ?? (runtime.model ? win32.basename(runtime.model)
         : runtime.adapterOwnsModel ? `Model not reported by ${win32.basename(runtime.binary)}` : bundledWhisperModel.displayName);
       separateWhisperLane = runtime.separateWhisperLane ?? false;
+      const choice = `[transcribe] local transcription uses ${runtime.active ?? runtime.selected}${runtime.selected !== runtime.active ? ` (${runtime.selected} chosen)` : ""}`
+        + `${runtime.bundled ? ", the bundled runtime" : ""}${runtime.gpuBinary ? ", GPU build first" : ""}${runtime.reason ? `: ${runtime.reason}` : ""}`;
+      if (choice !== loggedLocalRuntime) {
+        loggedLocalRuntime = choice;
+        ctx.log(choice);
+      }
       const model = runtime.model || (runtime.adapterOwnsModel ? undefined
         : (signal?: AbortSignal) => ctx.whisperModel.get(signal ?? AbortSignal.any([policy, ctx.shutdown])));
       provider = new WhisperCppProvider({

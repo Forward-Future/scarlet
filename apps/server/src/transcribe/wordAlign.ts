@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { QUIET_PEAK, QUIET_RMS } from "@scarlet/mcp/gap-sound";
 import { speechActivityOf, type HeardAudio } from "@scarlet/render";
 import type { TimeRange, TranscriptSegment } from "@scarlet/timeline";
-import { humanDuration } from "../logText.js";
+import { clip, humanDuration } from "../logText.js";
 import { extractWav } from "../render/ffmpeg.js";
 import { AnalysisCache } from "../services/analysisCache.js";
 import { audioLane, type AudioLane, type AudioWork } from "../services/audioWork.js";
@@ -146,7 +146,9 @@ export class WordAligner {
     /** Asked before each turn: something this alignment should let finish first, or nothing. */
     hold?: () => Promise<unknown> | undefined;
     onProgress?: (fraction: number) => void; onTurn?: AlignmentTurn;
-    onPlaced?: (placed: number, words: number) => void }) {
+    onPlaced?: (placed: number, words: number) => void;
+    /** Where trouble that doesn't stop the alignment goes, such as audio the gaps between words couldn't be measured in. */
+    log?: (message: string) => void }) {
     opts.signal.throwIfAborted();
     if (!alignsLanguage(opts.language)) return segments;
     const spanish = isSpanish(opts.language);
@@ -187,10 +189,17 @@ export class WordAligner {
     if (nextWord > 0) report(resume?.fraction ?? reached(0));
     // Words the aligner could not place go on the sound between their placed neighbors, measured once per gap.
     const heard = new Map<string, TimeRange[]>();
+    // Once for each alignment: every turn measures its gaps from the same audio.
+    let troubled = false;
+    const trouble = (message: string) => {
+      if (troubled) return;
+      troubled = true;
+      opts.log?.(message);
+    };
     const getWav = () => typeof wav === "string" ? wav : wav();
     const settle = async (whole: boolean) => {
       const gaps = unplacedGaps(segments, timings, MIN_SCORE, fixedPrefix, whole);
-      const sound = gaps.length ? await soundIn(await getWav(), gaps, heard, opts.signal) : undefined;
+      const sound = gaps.length ? await soundIn(await getWav(), gaps, heard, opts.signal, trouble) : undefined;
       return applyTimings(segments, timings, MIN_SCORE, fixedPrefix, sound, whole);
     };
     for (let first = 0; first < groups.length;) {
@@ -271,7 +280,7 @@ export function measureInTurn(ctx: { paths: { root: string } }, source: Emission
 export function alignWords(ctx: { paths: { root: string } }, wav: string | (() => Promise<string>), segments: TranscriptSegment[],
   opts: { language?: string; signal: AbortSignal; work?: AudioWork; emissions?: EmissionSource; resume?: AlignmentCheckpoint; hold?: () => Promise<unknown> | undefined;
     onProgress?: (fraction: number) => void; onTurn?: AlignmentTurn;
-    onPlaced?: (placed: number, words: number) => void }): Promise<TranscriptSegment[]> {
+    onPlaced?: (placed: number, words: number) => void; log?: (message: string) => void }): Promise<TranscriptSegment[]> {
   const { work, ...rest } = opts;
   return recordingAligner(ctx).align(wav, segments, { ...rest, ...(work && { lane: { lane: audioLane(ctx), work } }) });
 }
@@ -309,7 +318,8 @@ export async function alignTranscript(ctx: { paths: { root: string; tmp: string 
     ctx.log(`[align] ${basename(source)}: placed ${count} of ${words} words in ${humanDuration(Date.now() - started)}`);
   try {
     const emissions = input.emissions === undefined ? undefined : { file: input.emissions, wav: audio };
-    return await alignWords(ctx, audio, segments, { language, signal, work, emissions, resume: input.resume, hold, onProgress, onTurn, onPlaced });
+    return await alignWords(ctx, audio, segments, { language, signal, work, emissions, resume: input.resume, hold, onProgress, onTurn, onPlaced,
+      log: message => ctx.log(`[align] ${basename(source)}: ${message}`) });
   } catch (error) {
     signal.throwIfAborted();
     ctx.log(`[align] ${basename(source)}: ${(error as Error).message}`);
@@ -370,19 +380,25 @@ const VOICE_WARMUP = 0.3, VOICE_WINDOW = 60;
  * and the faint noise of a room would take the words Whisper invented over a silence. Gaps measured before are read from `heard`. A gap that can't be measured, for audio that
  * can't be read, has no sound reading, and its words keep the aligner's older fallback.
  */
-async function soundIn(wav: string, gaps: readonly TimeRange[], heard: Map<string, TimeRange[]>, signal: AbortSignal): Promise<SoundIn> {
+async function soundIn(wav: string, gaps: readonly TimeRange[], heard: Map<string, TimeRange[]>, signal: AbortSignal,
+  trouble?: (message: string) => void): Promise<SoundIn> {
   const key = (gap: TimeRange) => `${gap.start}:${gap.end}`;
   const missing = gaps.filter(gap => !heard.has(key(gap)));
-  const audio = missing.length ? await openWav(wav).catch(() => undefined) : undefined;
+  const fallback = "so words the aligner couldn't place keep its older fallback";
+  const audio = missing.length ? await openWav(wav).catch((error: unknown) => {
+    trouble?.(`couldn't open the audio to measure the gaps between words, ${fallback}: ${clip(error instanceof Error ? error.message : String(error))}`);
+    return undefined;
+  }) : undefined;
   if (audio) {
     try {
       for (const gap of missing) {
         signal.throwIfAborted();
         heard.set(key(gap), await soundRuns(audio, gap));
       }
-    } catch {
+    } catch (error) {
       // The words keep the older fallback rather than losing the alignment.
       signal.throwIfAborted();
+      trouble?.(`couldn't measure the gaps between words, ${fallback}: ${clip(error instanceof Error ? error.message : String(error))}`);
     } finally { await audio.close(); }
   }
   return gap => heard.get(key(gap));

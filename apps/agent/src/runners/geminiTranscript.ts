@@ -21,11 +21,47 @@ function agyTranscriptPath(env: Record<string, string | undefined>, geminiDir: s
   return join(dir, "antigravity-cli", "brain", sessionId, ".system_generated", "logs", "transcript.jsonl");
 }
 
+/** One model step's tokens, from its `PLANNER_RESPONSE`: what it sent uncached and cached, and what it wrote. */
+export interface StepTokens { step?: number; input: number; cacheRead: number; cacheWrite: number; output: number }
+/** A step that read much less from the cache than the step before sent: Gemini billed the rest of it uncached. */
+export interface CacheMiss { step?: number; context: number; cached: number; missed: number }
+/** A run's steps: how many, the largest context one sent, and its cache misses with the tokens they re-sent uncached. */
+export interface StepsReport { steps: number; peakContext: number; misses: CacheMiss[]; missedTokens: number }
+
+/** Least shortfall, in tokens and as a share of the step before's context, read as a miss rather than a trimmed prompt. */
+export const MISS_TOKENS = 4_096;
+export const MISS_SHARE = 0.25;
+
+/** The context a step sent: its input, uncached and cached. */
+const contextOf = (s: StepTokens) => s.input + s.cacheRead + s.cacheWrite;
+
+/**
+ * Whether `step` missed the cache: agy's cache holds the whole of the request before (its read equals that request's
+ * input, step after step), so a read far under it means Gemini sent that context again uncached. A pass lost about
+ * $0.87 that way that nothing recorded showed (2026-11-26).
+ */
+export function cacheMiss(before: StepTokens, step: StepTokens): CacheMiss | undefined {
+  const context = contextOf(before), missed = context - step.cacheRead;
+  return missed > Math.max(MISS_TOKENS, context * MISS_SHARE) ? { ...(step.step !== undefined && { step: step.step }), context, cached: step.cacheRead, missed } : undefined;
+}
+
+/** What a run's steps add up to, or nothing when the transcript gave none. */
+export function stepsReport(steps: readonly StepTokens[]): StepsReport | undefined {
+  if (!steps.length) return undefined;
+  const misses = steps.slice(1).flatMap((step, i) => cacheMiss(steps[i]!, step) ?? []);
+  return { steps: steps.length, peakContext: Math.max(...steps.map(contextOf)), misses, missedTokens: misses.reduce((sum, m) => sum + m.missed, 0) };
+}
+
 export class TranscriptUsageTailer {
   private path: string | undefined;
   private offset = 0;
   private seenSteps = new Set<number>();
   private turnUsage: AgentUsage | undefined;
+  /** Every step of the run, across its turns, for `report`. */
+  private steps: StepTokens[] = [];
+
+  /** `onMiss` hears of each cache miss as its step is read. */
+  constructor(private readonly onMiss?: (miss: CacheMiss) => void) {}
 
   open(env: Record<string, string | undefined>, geminiDir: string | undefined, sessionId: string, skipExisting: boolean) {
     this.path = agyTranscriptPath(env, geminiDir, sessionId);
@@ -39,6 +75,12 @@ export class TranscriptUsageTailer {
     }
     this.seenSteps.clear();
     this.turnUsage = undefined;
+    this.steps = [];
+  }
+
+  /** The run's steps so far: how many, the peak context and the cache misses. */
+  report(): StepsReport | undefined {
+    return stepsReport(this.steps);
   }
 
   poll(model: string | undefined): AgentUsage | undefined {
@@ -73,6 +115,12 @@ export class TranscriptUsageTailer {
           this.seenSteps.add(val.step_index);
         }
         this.turnUsage = addUsage(this.turnUsage, stepUsage);
+        const step: StepTokens = { ...(typeof val.step_index === "number" && Number.isFinite(val.step_index) && { step: val.step_index }),
+          input: stepUsage.inputTokens, cacheRead: stepUsage.cacheReadTokens, cacheWrite: stepUsage.cacheWriteTokens, output: stepUsage.outputTokens };
+        const before = this.steps.at(-1);
+        const miss = before && cacheMiss(before, step);
+        this.steps.push(step);
+        if (miss) this.onMiss?.(miss);
       }
       return this.turnUsage;
     } catch {

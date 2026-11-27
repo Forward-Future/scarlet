@@ -127,7 +127,10 @@ export function taskRoutes(ctx: Ctx) {
       state ? [project.id, TaskState.parse(state)] : [project.id], "created_at DESC");
     const conversation = c.req.query("events") === "conversation"
       ? ctx.repos.taskEvents.conversations(tasks.filter(t => t.kind !== "transcribe").map(t => t.id)) : undefined;
-    return c.json({ tasks, conversation });
+    // Hand-offs still at work, so a request's row in Working can say which model is doing its work now.
+    const handOffs = state ? undefined
+      : ctx.repos.tasks.select("project_id = ? AND kind = 'hand_off' AND state IN ('queued', 'claimed', 'running', 'waiting_for_user')", [project.id], "created_at");
+    return c.json({ tasks, conversation, ...(handOffs && { handOffs }) });
   });
 
   r.on("GET", ["/tasks/:taskId", "/projects/:projectId/tasks/:taskId"], async (c) => {

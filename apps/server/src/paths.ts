@@ -44,6 +44,14 @@ export class Paths {
   get accessToken() {
     return join(this.root, "access-token");
   }
+  /** Encrypted YouTube OAuth tokens and optional custom client config (owner-only permissions). */
+  get youtubeAuth() {
+    return join(this.root, "youtube-auth.json");
+  }
+  /** Local symmetric key protecting `youtube-auth.json` at rest (owner-only permissions). */
+  get youtubeKey() {
+    return join(this.root, "youtube-auth.key");
+  }
   /** The random id anonymous usage reports are sent under. See docs/telemetry.md. */
   get telemetryId() {
     return join(this.root, "telemetry-id");

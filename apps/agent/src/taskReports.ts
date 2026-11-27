@@ -4,6 +4,7 @@
  */
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentUsage, ScarletClient, Task, TaskEvent } from "@scarlet/shared";
+import { humanDuration } from "./logText.js";
 import { errMsg } from "./runners/spawn.js";
 import { addUsage } from "./runners/usage.js";
 
@@ -73,14 +74,4 @@ export function createLiveUsageReporter(client: ScarletClient, task: Task, signa
       if (usage) await client.recordTaskUsage(task.id, { ...usage, startedAt: task.startedAt }).catch(err => log(`usage report failed: ${errMsg(err)}`));
     },
   };
-}
-
-/** Elapsed time for log lines: "850ms", "12s", "45m 2s", "1h 3m". Matches the desktop host. */
-export function humanDuration(ms: number): string {
-  const secs = Math.floor(Math.max(0, ms) / 1000);
-  if (secs === 0) return `${Math.max(0, Math.round(ms))}ms`;
-  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
-  if (h) return m ? `${h}h ${m}m` : `${h}h`;
-  if (m) return s ? `${m}m ${s}s` : `${m}m`;
-  return `${s}s`;
 }

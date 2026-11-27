@@ -1,5 +1,5 @@
 import type { User } from "@scarlet/shared";
-import { adjustCut, adjustEdit, diffTimelines, frameAligned, HistoryConflict, makeTimeMap, newId, planRevert, putBackCut, putBackLooks, putBackMarkers, putBackSplit, timelineDuration, type Change, type TimeRange } from "@scarlet/timeline";
+import { adjustCut, adjustEdit, clipEnd, diffTimelines, frameAligned, HistoryConflict, makeTimeMap, newId, planRevert, putBackCut, putBackLooks, putBackMarkers, putBackSplit, timelineDuration, type Change, type TimeRange, type Timeline } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { conflict, notFound } from "../errors.js";
@@ -206,6 +206,42 @@ export function rejectEdits(ctx: Ctx, user: User, projectId: string, threadId: s
   }, "immediate")();
 }
 
+/** Align only the edge(s) that actually moved so an unmoved non-frame-aligned boundary (e.g. a recording end) never drifts. */
+function alignMovedEdges(oldRange: TimeRange, nextRange: TimeRange, fps: number): TimeRange {
+  const half = 0.5 / fps;
+  if (nextRange.end - nextRange.start <= half) return { start: nextRange.start, end: nextRange.start };
+  const startMoved = Math.abs(nextRange.start - oldRange.start) >= half;
+  const endMoved = Math.abs(nextRange.end - oldRange.end) >= half;
+  const aligned = frameAligned(nextRange, fps);
+  const start = startMoved ? aligned.start : oldRange.start;
+  const end = endMoved ? aligned.end : oldRange.end;
+  return end > start ? { start, end } : { start, end: start };
+}
+
+/**
+ * Exact video-track join edges near `approx`. When adjacent clips have a sub-millisecond overlap or gap before
+ * `adjustCut` snaps them together, probing `min(leftEnd, rightStart)` for `"left"` and `max(leftEnd, rightStart)` for
+ * `"right"` guarantees each `makeTimeMap` probe lands on its own side of the join.
+ */
+function findVideoJoinEdges(tl: Timeline, approx: number, fps: number): { at: number; leftAt: number; rightAt: number } {
+  const tol = 1.5 / fps;
+  let leftEnd: number | undefined, leftDist = Infinity;
+  let rightStart: number | undefined, rightDist = Infinity;
+  for (const track of tl.tracks) {
+    if (track.kind !== "video") continue;
+    for (const clip of track.clips) {
+      const end = clipEnd(clip);
+      const de = Math.abs(end - approx);
+      if (de <= tol && de < leftDist) { leftEnd = end; leftDist = de; }
+      const ds = Math.abs(clip.timelineIn - approx);
+      if (ds <= tol && ds < rightDist) { rightStart = clip.timelineIn; rightDist = ds; }
+    }
+  }
+  const L = leftEnd ?? rightStart ?? approx;
+  const R = rightStart ?? leftEnd ?? approx;
+  return { at: leftEnd ?? rightStart ?? approx, leftAt: Math.min(L, R), rightAt: Math.max(L, R) };
+}
+
 /** An applied cut whose edges the editor dragged directly on the timeline. */
 export interface AdjustedCutTarget {
   changeId: string;
@@ -234,32 +270,47 @@ export function adjustAppliedCut(ctx: Ctx, user: User, projectId: string, thread
     const oldRemoved = cut.before.removed;
     const oldLength = oldRemoved.end - oldRemoved.start;
     if (oldLength <= 0.5 / rate) throw unclear();
-    const target = frameAligned(nextRemoved, rate);
+    const target = alignMovedEdges(oldRemoved, nextRemoved, rate);
     const pullsToZero = target.end - target.start <= 0.5 / rate;
     const deltaStart = target.start - oldRemoved.start;
     const deltaEnd = target.end - oldRemoved.end;
     if (!pullsToZero && Math.abs(deltaStart) < 0.5 / rate && Math.abs(deltaEnd) < 0.5 / rate) throw conflict("unchanged", "Cut edges did not move.");
     const media = ctx.repos.projects.get(projectId)?.media;
     const dur = timelineDuration(timeline);
-    const fullDelta = cut.at <= 0.5 / rate
+    const isOpening = cut.at <= 0.5 / rate;
+    // A rearranged interior cut that mapped to 0:00 is not an opening cut: its `before` footage doesn't start at 0:00.
+    if (isOpening && oldRemoved.start > 1 / rate) throw unclear();
+    const isClosing = !isOpening && dur > 0.5 / rate && !timeline.tracks.some(t => t.clips.some(c => c.timelineIn >= cut.at - 0.5 / rate))
+      && Math.abs(oldRemoved.end - timelineDuration(before)) <= 1.5 / rate;
+    const fullDelta = isOpening
       ? { ds: 0, de: -oldLength }
-      : dur > 0.5 / rate && Math.abs(cut.at - dur) <= 0.5 / rate
+      : isClosing
         ? { ds: oldLength, de: 0 }
         : { ds: deltaStart, de: deltaEnd };
     const result = pullsToZero
       ? (putBackCut(timeline, cut.at, oldLength, rate) ?? adjustCut(timeline, cut.at, oldLength, fullDelta.ds, fullDelta.de, rate, media))
       : adjustCut(timeline, cut.at, oldLength, deltaStart, deltaEnd, rate, media);
     if (!result) throw unclear();
-    const newJoinAt = Math.max(0, cut.at + deltaStart);
+    const approxJoin = Math.max(0, cut.at + deltaStart);
+    const newJoin = pullsToZero || isOpening ? { at: isOpening ? 0 : approxJoin, leftAt: 0, rightAt: 0 } : findVideoJoinEdges(result, approxJoin, rate);
+    const newJoinAt = newJoin.at;
     const newLength = pullsToZero ? 0 : target.end - target.start;
     const expectedDuration = timelineDuration(timeline) + (oldLength - newLength);
     if (Math.abs(timelineDuration(result) - expectedDuration) > 1 / rate) throw unclear();
     if (!pullsToZero) {
-      // Verify the footage still plays cleanly right up to the adjusted join on `before`'s clock.
+      // Verify the footage still plays cleanly right up to the adjusted join on `before`'s clock. Compare against the
+      // pre-adjustment join map when available so a later whole-track picture-sync offset doesn't cause a false mismatch.
+      const beforeDur = timelineDuration(before);
+      const oldJoin = isOpening ? { at: 0, leftAt: 0, rightAt: 0 } : findVideoJoinEdges(timeline, cut.at, rate);
+      const backBefore = makeTimeMap(timeline, before, rate);
+      const oldLeft = !isOpening && oldJoin.leftAt > 0.5 / rate ? backBefore(oldJoin.leftAt, "left") : 0;
+      const oldRight = !isClosing && oldJoin.rightAt < dur - 0.5 / rate ? backBefore(oldJoin.rightAt, "right") : beforeDur;
       const back = makeTimeMap(result, before, rate);
-      const leftEdge = newJoinAt > 0.5 / rate ? back(newJoinAt, "left") : 0;
-      const rightEdge = newJoinAt < timelineDuration(result) - 0.5 / rate ? back(newJoinAt, "right") : timelineDuration(before);
-      if (leftEdge === null || rightEdge === null || Math.abs(leftEdge - target.start) > 1.5 / rate || Math.abs(rightEdge - target.end) > 1.5 / rate) {
+      const leftEdge = !isOpening && newJoin.leftAt > 0.5 / rate ? back(newJoin.leftAt, "left") : 0;
+      const rightEdge = !isClosing && newJoin.rightAt < timelineDuration(result) - 0.5 / rate ? back(newJoin.rightAt, "right") : beforeDur;
+      const expectedLeft = oldLeft !== null ? oldLeft + deltaStart : target.start;
+      const expectedRight = oldRight !== null ? oldRight + deltaEnd : target.end;
+      if (leftEdge === null || rightEdge === null || Math.abs(leftEdge - expectedLeft) > 1.5 / rate || Math.abs(rightEdge - expectedRight) > 1.5 / rate) {
         throw unclear();
       }
     }
@@ -358,7 +409,7 @@ export function adjustAppliedEdit(ctx: Ctx, user: User, projectId: string, threa
     if (head !== expectedHead || project.branch !== branch) throw conflict("cut_changed", "The video changed. Try again.");
     const rate = project.settings.fps;
     const unclear = () => conflict("needs_scarlet", "This edit can’t be adjusted directly. Use Revise instead.");
-    const target = frameAligned(nextRange, rate);
+    const target = alignMovedEdges(edit.range, nextRange, rate);
     const media = ctx.repos.projects.get(projectId)?.media;
     const prior = ctx.repos.changes.get(edit.changeId);
     const priorNamed = prior?.timelineEdits?.[edit.spot];

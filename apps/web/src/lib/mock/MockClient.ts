@@ -155,8 +155,9 @@ export class MockClient implements ScarletApi {
     const project = this.store.projectById(id);
     const thread = this.projectThread(id, threadId);
     const head = project.head && this.store.db.timelines[project.head];
+    const projectChanges = this.store.db.changes.filter(c => c.projectId === id);
     return { version: project.head, edits: head ? threadTimeline(thread, head, this.store.db.versions[id] ?? [],
-      version => this.store.db.timelines[version], project.settings.fps, this.store.db.media[id]) : [] };
+      version => this.store.db.timelines[version], project.settings.fps, this.store.db.media[id], projectChanges) : [] };
   }
 
   async summarizeBatches(id: string, body: BatchSummariesRequest): Promise<BatchSummariesResponse> {
@@ -377,13 +378,24 @@ export class MockClient implements ScarletApi {
     const fps = project.settings.fps;
     const oldRemoved = body.cut.before.removed;
     const oldLen = oldRemoved.end - oldRemoved.start;
-    const target = frameAligned(body.removed, fps);
+    const alignMoved = (oldRange: TimeRange, nextRange: TimeRange): TimeRange => {
+      const half = 0.5 / fps;
+      if (nextRange.end - nextRange.start <= half) return { start: nextRange.start, end: nextRange.start };
+      const aligned = frameAligned(nextRange, fps);
+      const start = Math.abs(nextRange.start - oldRange.start) >= half ? aligned.start : oldRange.start;
+      const end = Math.abs(nextRange.end - oldRange.end) >= half ? aligned.end : oldRange.end;
+      return end > start ? { start, end } : { start, end: start };
+    };
+    const target = alignMoved(oldRemoved, body.removed);
     const rejects = target.end - target.start <= 0.5 / fps;
     const media = this.store.db.media[projectId] ?? project.media;
     const dur = timelineDuration(head);
-    const fullDelta = body.cut.at <= 0.5 / fps
+    const isOpening = body.cut.at <= 0.5 / fps;
+    if (isOpening && oldRemoved.start > 1 / fps) throw new ScarletApiError(409, "needs_scarlet", "This cut can’t be adjusted directly. Use Revise instead.");
+    const isClosing = !isOpening && dur > 0.5 / fps && !head.tracks.some(t => t.clips.some(c => c.timelineIn >= body.cut.at - 0.5 / fps));
+    const fullDelta = isOpening
       ? { ds: 0, de: -oldLen }
-      : dur > 0.5 / fps && Math.abs(body.cut.at - dur) <= 0.5 / fps
+      : isClosing
         ? { ds: oldLen, de: 0 }
         : { ds: target.start - oldRemoved.start, de: target.end - oldRemoved.end };
     const next = rejects
@@ -436,7 +448,14 @@ export class MockClient implements ScarletApi {
       if (op.op === "updateClip" && typeof op.clipId === "string") return [op.clipId];
       return [];
     });
-    const target = frameAligned(body.nextRange, fps);
+    const half = 0.5 / fps;
+    const aligned = frameAligned(body.nextRange, fps);
+    const target = body.nextRange.end - body.nextRange.start <= half
+      ? { start: body.nextRange.start, end: body.nextRange.start }
+      : {
+        start: Math.abs(body.nextRange.start - body.edit.range.start) >= half ? aligned.start : body.edit.range.start,
+        end: Math.abs(body.nextRange.end - body.edit.range.end) >= half ? aligned.end : body.edit.range.end,
+      };
     const result = adjustEdit(head, body.edit.range, target, fps, this.store.db.media[projectId] ?? project.media, {
       kind: body.edit.kind,
       ...(clipIds?.length && { clipIds }),
@@ -838,7 +857,9 @@ export class MockClient implements ScarletApi {
     if (body.isDefault) for (const g of this.store.db.styleGuides) g.isDefault = false;
     const styleGuide: import("@scarlet/shared").StyleGuideRecord = {
       id: newId("sg"), name: body.name, description: body.description?.trim() ?? "", instructions: body.instructions ?? "",
-      isDefault: Boolean(body.isDefault), assets: [], createdAt: ts, updatedAt: ts,
+      ...(body.captionStyle && Object.keys(body.captionStyle).length && { captionStyle: body.captionStyle }),
+      isDefault: Boolean(body.isDefault), assets: [], transitions: body.transitions ?? [], sounds: body.sounds ?? [],
+      ...(body.colorLook && { colorLook: body.colorLook }), createdAt: ts, updatedAt: ts,
     };
     this.store.db.styleGuides.push(styleGuide);
     this.store.emit({ type: "style_guide.updated", styleGuide });
@@ -847,6 +868,50 @@ export class MockClient implements ScarletApi {
   async createStyleGuideFromGraphic(body: import("@scarlet/shared").StyleGuideFromGraphicRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
     this.requireAuth();
     return this.createStyleGuide({ name: body.name, description: body.description || "Saved from project graphic", isDefault: body.isDefault });
+  }
+  async importStyleGuideFile(
+    file: Blob | { path: string },
+    opts: { styleGuideId?: string; name?: string } = {},
+  ): Promise<{ imported: true; styleGuide: import("@scarlet/shared").StyleGuideRecord } | { imported: false }> {
+    this.requireAuth();
+    if (!(file instanceof Blob)) return this.latency({ imported: false as const }, 80);
+    const text = await file.text();
+    const { parseStyleGuideDefinitionJson, slugifyStyleGuideName } = await import("@scarlet/shared");
+    const fileName = opts.name ?? (typeof File !== "undefined" && file instanceof File ? file.name : "style-guide.json");
+    const baseName = fileName.replace(/\.(?:style\.)?json$/i, "");
+    const existing = opts.styleGuideId ? this.store.db.styleGuides.find(g => g.id === opts.styleGuideId) : undefined;
+    const parsed = parseStyleGuideDefinitionJson(text, {
+      fallbackName: baseName,
+      existingAssetIds: new Set(existing?.assets.map(a => a.id) ?? []),
+    });
+    if (!parsed) return this.latency({ imported: false as const }, 80);
+    if (existing) {
+      const updated = await this.updateStyleGuide(existing.id, {
+        ...(parsed.description !== undefined && { description: parsed.description }),
+        ...(parsed.instructions !== undefined && { instructions: parsed.instructions }),
+        ...(parsed.isDefault !== undefined && { isDefault: parsed.isDefault }),
+        ...(parsed.transitions !== undefined && { transitions: parsed.transitions }),
+        ...(parsed.sounds !== undefined && { sounds: parsed.sounds }),
+        ...(parsed.colorLook !== undefined && { colorLook: parsed.colorLook }),
+      });
+      return { imported: true, styleGuide: updated.styleGuide };
+    }
+    const baseSlug = parsed.name || slugifyStyleGuideName(baseName) || "imported-style";
+    let uniqueName = baseSlug;
+    let n = 2;
+    while (this.store.db.styleGuides.some(g => g.name.toLowerCase() === uniqueName.toLowerCase())) {
+      uniqueName = `${baseSlug}-${n++}`;
+    }
+    const created = await this.createStyleGuide({
+      name: uniqueName,
+      description: parsed.description,
+      instructions: parsed.instructions,
+      isDefault: parsed.isDefault,
+      transitions: parsed.transitions,
+      sounds: parsed.sounds,
+      ...(parsed.colorLook ? { colorLook: parsed.colorLook } : {}),
+    });
+    return { imported: true, styleGuide: created.styleGuide };
   }
   async updateStyleGuide(styleGuideId: string, body: import("@scarlet/shared").UpdateStyleGuideRequest): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
     this.requireAuth();
@@ -861,8 +926,16 @@ export class MockClient implements ScarletApi {
       ...(body.description !== undefined && { description: body.description.trim() }),
       ...(body.instructions !== undefined && { instructions: body.instructions }),
       ...(body.isDefault !== undefined && { isDefault: body.isDefault }),
+      ...(body.transitions !== undefined && { transitions: body.transitions }),
+      ...(body.sounds !== undefined && { sounds: body.sounds }),
+      ...(body.colorLook !== undefined && { colorLook: body.colorLook ?? undefined }),
       updatedAt: new Date().toISOString(),
     });
+    if (body.captionStyle === null) delete guide.captionStyle;
+    else if (body.captionStyle !== undefined) {
+      if (Object.keys(body.captionStyle).length) guide.captionStyle = body.captionStyle;
+      else delete guide.captionStyle;
+    }
     this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
     return this.latency({ styleGuide: { ...guide } }, 120);
   }
@@ -910,6 +983,30 @@ export class MockClient implements ScarletApi {
     this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
     return this.latency({ asset, styleGuide: { ...guide } }, 150);
   }
+  async deleteStyleGuideAsset(styleGuideId: string, assetId: string): Promise<{ styleGuide: import("@scarlet/shared").StyleGuideRecord }> {
+    this.requireAuth();
+    const guide = this.store.db.styleGuides.find(g => g.id === styleGuideId);
+    if (!guide) throw new ScarletApiError(404, "not_found", "style guide not found");
+    const removedSounds = new Set(guide.sounds.filter(s => s.source === "asset" && s.assetId === assetId).map(s => s.id));
+    guide.assets = guide.assets.filter(a => a.id !== assetId);
+    guide.sounds = guide.sounds.filter(s => !(s.source === "asset" && s.assetId === assetId));
+    guide.transitions = guide.transitions.map(t => (t.soundId && removedSounds.has(t.soundId) ? { ...t, soundId: undefined } : t));
+    if (guide.colorLook?.lutAssetId === assetId) {
+      guide.colorLook = { ...guide.colorLook, lutAssetId: undefined, lutName: undefined };
+    }
+    guide.updatedAt = new Date().toISOString();
+    this.store.emit({ type: "style_guide.updated", styleGuide: { ...guide } });
+    return this.latency({ styleGuide: { ...guide } }, 100);
+  }
+  async builtInStyleSounds() {
+    this.requireAuth();
+    const { BUILT_IN_STYLE_SOUNDS } = await import("@scarlet/shared");
+    return this.latency({ sounds: [...BUILT_IN_STYLE_SOUNDS] }, 60);
+  }
+  builtInStyleSoundUrl(soundId: string) {
+    const slug = soundId.startsWith("builtin:") ? soundId.slice("builtin:".length) : soundId;
+    return this.fileUrl(`/style-guides/sounds/builtin/${encodeURIComponent(slug)}`);
+  }
   styleGuideAssetUrl(styleGuideId: string, assetId: string) {
     return this.fileUrl(`/style-guides/${encodeURIComponent(styleGuideId)}/assets/${encodeURIComponent(assetId)}`);
   }
@@ -928,5 +1025,122 @@ export class MockClient implements ScarletApi {
     this.store.db.settings = { ...this.store.db.settings, ...body, transcription: { ...this.store.db.settings.transcription, ...body.transcription }, noteCleanup: { ...this.store.db.settings.noteCleanup, ...body.noteCleanup }, render: { ...this.store.db.settings.render, ...body.render } };
     if (previous.hwaccel !== this.store.db.settings.render.hwaccel || previous.previewHeight !== this.store.db.settings.render.previewHeight) this.store.emit({ type: "render.settings.updated" });
     return this.latency({ settings: this.store.db.settings }, 250);
+  }
+
+  // --- YouTube demo stand-in -----------------------------------------------------------
+  private ytStatus: import("@scarlet/shared").YouTubeConnectionStatus = {
+    state: "disconnected",
+    configured: false,
+    configSource: "none",
+    hasCustomClientId: false,
+    hasCustomClientSecret: false,
+  };
+  private ytUploads: import("@scarlet/shared").YouTubeUploadJob[] = [];
+
+  async youtubeStatus() {
+    this.requireAuth();
+    return this.latency({ status: { ...this.ytStatus } }, 60);
+  }
+  async youtubeUpdateConfig(body: import("@scarlet/shared").YouTubeConfigRequest) {
+    this.requireAuth();
+    const id = body.clientId === undefined ? (this.ytStatus.hasCustomClientId ? "custom" : "") : (body.clientId?.trim() ?? "");
+    const hasSecret = body.clientSecret === undefined ? !!this.ytStatus.hasCustomClientSecret : !!body.clientSecret?.trim();
+    this.ytStatus = {
+      ...this.ytStatus,
+      configured: !!id,
+      configSource: id ? "custom" : "none",
+      hasCustomClientId: !!id,
+      hasCustomClientSecret: hasSecret,
+      clientIdHint: id ? `${id.slice(0, 8)}…` : undefined,
+    };
+    this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
+    return this.latency({ status: { ...this.ytStatus } }, 80);
+  }
+  async youtubeConnect() {
+    this.requireAuth();
+    if (!this.ytStatus.configured) {
+      throw new ScarletApiError(400, "youtube_not_configured", "Add a Google OAuth Client ID in Settings before connecting YouTube.");
+    }
+    this.ytStatus = {
+      ...this.ytStatus,
+      state: "connected",
+      channel: { id: "UC_demo", title: "Demo Channel", handle: "@scarletdemo" },
+      connectedAt: now(),
+      error: undefined,
+      needsReconnect: false,
+    };
+    this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
+    return this.latency({ authUrl: "https://accounts.google.com/o/oauth2/v2/auth", status: { ...this.ytStatus } }, 120);
+  }
+  async youtubeCancelConnect() {
+    this.requireAuth();
+    this.ytStatus = { ...this.ytStatus, state: "disconnected", authUrl: undefined };
+    this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
+    return this.latency({ status: { ...this.ytStatus } }, 60);
+  }
+  async youtubeDisconnect() {
+    this.requireAuth();
+    this.ytStatus = { ...this.ytStatus, state: "disconnected", channel: undefined, connectedAt: undefined, needsReconnect: false, error: undefined };
+    this.store.emit({ type: "youtube.connection.updated", status: { ...this.ytStatus } });
+    return this.latency({ status: { ...this.ytStatus } }, 80);
+  }
+  async youtubeChapters(projectId: string) {
+    this.requireAuth();
+    const project = this.store.projectById(projectId);
+    const tl = project.head ? this.store.db.timelines[project.head] : undefined;
+    const duration = tl ? timelineDuration(tl) : 20;
+    const chapters = [
+      { time: 0, timestamp: "0:00", title: "Intro" },
+      { time: Math.min(7, Math.floor(duration / 3)), timestamp: `0:0${Math.min(7, Math.floor(duration / 3))}`, title: "Main discussion" },
+      { time: Math.min(14, Math.floor((duration * 2) / 3)), timestamp: `0:${String(Math.min(14, Math.floor((duration * 2) / 3))).padStart(2, "0")}`, title: "Wrap-up" },
+    ];
+    return this.latency({
+      version: project.head ?? "ver_1",
+      duration,
+      chapters,
+      chaptersText: chapters.map(c => `${c.timestamp} ${c.title}`).join("\n"),
+    }, 100);
+  }
+  async youtubePublish(projectId: string, body: import("@scarlet/shared").YouTubePublishRequest) {
+    this.requireAuth();
+    if (this.ytStatus.state !== "connected") {
+      throw new ScarletApiError(401, "youtube_not_connected", "Connect your YouTube account in Settings before uploading.");
+    }
+    const project = this.store.projectById(projectId);
+    const job: import("@scarlet/shared").YouTubeUploadJob = {
+      id: newId("ytup"),
+      projectId,
+      version: project.head ?? "ver_1",
+      context: `${projectId}:${project.head ?? "ver_1"}`,
+      phase: "done",
+      progress: 1,
+      title: body.title,
+      visibility: body.visibility,
+      videoId: "demoVideoId",
+      studioUrl: "https://studio.youtube.com/video/demoVideoId/edit",
+      watchUrl: "https://www.youtube.com/watch?v=demoVideoId",
+      createdAt: now(),
+      finishedAt: now(),
+    };
+    this.ytUploads = [job, ...this.ytUploads];
+    this.store.emit({ type: "youtube.upload.updated", projectId, upload: job });
+    return this.latency({ upload: job }, 200);
+  }
+  async youtubeUploads(projectId: string) {
+    this.requireAuth();
+    return this.latency({ uploads: this.ytUploads.filter(u => u.projectId === projectId) }, 60);
+  }
+  async youtubeUpload(uploadId: string) {
+    this.requireAuth();
+    const found = this.ytUploads.find(u => u.id === uploadId);
+    if (!found) throw notFound("YouTube upload");
+    return this.latency({ upload: found }, 60);
+  }
+  async youtubeCancelUpload(uploadId: string) {
+    this.requireAuth();
+    const found = this.ytUploads.find(u => u.id === uploadId);
+    if (!found) throw notFound("YouTube upload");
+    found.phase = "cancelled";
+    return this.latency({ upload: { ...found } }, 60);
   }
 }

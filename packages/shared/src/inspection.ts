@@ -36,7 +36,7 @@ export interface SilenceLeft { id: string; start: number; end: number; seconds: 
 /**
  * A wordless stretch this long that a pass leaves playing is accounted for: cut, or kept for what the viewer sees or
  * hears in it. The default when the check isn't given one; how long a silence may play unremarked is the skill's pace,
- * so the default is the stock dialogue-pass skill's dead air, about a second. It was 2 s: passes left five times the
+ * so the default is the dead air the shipped dialogue skill describes, about a second. It was 2 s: passes left five times the
  * published editor's pauses of a second or more and asked about none of them (benchmarks/safety-only-sol-2026-11-21).
  */
 export const SILENCE_LEFT_SECONDS = 1;
@@ -51,7 +51,7 @@ export interface ShortPiece { id: string; from: number; to: number; seconds: num
   source: TimeRange; plays: string; before: string; after: string; cutBefore: number; cutAfter: number }
 /**
  * A piece between two cuts shorter than this is listed by the check when it isn't given a length. How short a piece
- * plays as a stutter is the skill's pace, so the default is the stock dialogue-pass skill's, about a second. Passes left
+ * plays as a stutter is the skill's pace, so the default is the shipped dialogue skill's, about a second. Passes left
  * about twice the published editor's pieces under a second, and nothing they read showed them one: each comes from two
  * cuts made apart, and the pass reads the recording, not the edit it leaves (benchmarks/dead-air-sol-2026-11-21).
  */
@@ -104,7 +104,7 @@ export interface RepeatAuditResult {
 
 /**
  * Text whose usual line height is below this percent of the video's height (about 27 px at 1080p) is listed by the
- * closing check as `smallText` when it isn't given another bar. Matches the stock `frame-screen` skill.
+ * closing check as `smallText` when it isn't given another bar. Matches what the shipped screen-framing skill says.
  */
 export const SMALL_TEXT_PERCENT = 2.5;
 

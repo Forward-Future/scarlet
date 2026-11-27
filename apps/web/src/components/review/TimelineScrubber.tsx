@@ -509,7 +509,8 @@ function Scrubber({ duration, start = 0, playhead, waveform, activeShortcuts, su
             const ruler = e.currentTarget.querySelector<HTMLElement>(".timeline-lanes")?.offsetTop ?? 0;
             const onRuler = !!(e.target as Element).closest(".timeline-range-zone") || (ruler > 0 && box.height > 0 && e.clientY - box.top < ruler);
             const onLiveBand = !!(e.target as Element).closest(".simple-timeline-band.is-live");
-            const hit = !onRuler && !onLiveBand && !aimed && box.width > 0 ? gapAt(interactiveGaps, from, span, box.width, e.clientX - box.left) : undefined;
+            const onCutHandle = !!(e.target as Element).closest(".timeline-cut-handle");
+            const hit = !onRuler && !onLiveBand && !onCutHandle && !aimed && box.width > 0 ? gapAt(interactiveGaps, from, span, box.width, e.clientX - box.left) : undefined;
             const key = hit ? `${hit.start}/${hit.end}` : undefined;
             setHotGap(previous => previous === key ? previous : key);
           } else if (hotGap !== undefined) setHotGap(undefined);

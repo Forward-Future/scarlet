@@ -27,7 +27,7 @@ import {
   type CdpPage,
   type GraphicPageOptions,
 } from "./chromeCdp.js";
-import { AbortError, FFMPEG_BASE_ARGS, even, fnum, resolveFfmpeg, runCapture } from "./exec.js";
+import { AbortError, FFMPEG_BASE_ARGS, even, fnum, logElapsed, logRender, resolveFfmpeg, runCapture } from "./exec.js";
 import { pdfPageCount, pdfPages, renderPdfDocument } from "./pdf.js";
 
 export { ChromeNotFound, chromeCandidates, findChrome, hasChrome, pdfPageCount, pdfPages, renderPdfDocument, type GraphicPageOptions };
@@ -280,9 +280,13 @@ export async function renderGraphic(opts: GraphicRenderOptions): Promise<Graphic
       }
     };
     await pipe.run(() => held ? pipe.writeSequential(held) : Promise.all(pages.map((page, w) => draw(page, w))).then(() => undefined));
+    const problems = [...new Set(pages.flatMap(p => p.problems))].slice(0, 10);
+    logRender(() => `[graphics] drew ${opts.width}x${opts.height} at ${fnum(opts.fps, 3)} fps: ${total} frames in ${logElapsed(performance.now() - started)}, ` +
+      `${held ? "one still picture held" : `${drawn} drawn on ${pages.length} page${pages.length === 1 ? "" : "s"}`}` +
+      `${missingFonts.length ? `, ${missingFonts.length} fonts missing` : ""}${problems.length ? `, ${problems.length} page problems` : ""}`);
     return {
       output: opts.output, frames: total, missingFonts, installedFonts,
-      problems: [...new Set(pages.flatMap(p => p.problems))].slice(0, 10),
+      problems,
       drawn, elapsedMs: Math.round(performance.now() - started),
     };
   });

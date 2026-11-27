@@ -114,7 +114,8 @@ it("says a line it is given instead, and keeps it", async () => {
   expect(startupLine()).toBe("Reconnecting to Scarlet…");
 });
 
-it("is what the window shows while its first page's code loads", async () => {
+// The whole app's code is read fresh here (modules reset per test), which takes seconds on a busy machine.
+it("is what the window shows while its first page's code loads", { timeout: 30_000 }, async () => {
   await engine("loading");
   window.history.replaceState(null, "", "/settings");
   const { App } = await import("../../App");

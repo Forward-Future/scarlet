@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { copyFile, open, realpath, rm, stat, utimes } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
+import { clip, humanDuration } from "../logText.js";
 
 const run = promisify(execFile);
 
@@ -86,16 +87,35 @@ async function cloneFile(source: string, destination: string, signal?: AbortSign
 /**
  * Copy a file into the library as its own file: a clone where the disk allows it, which is instant and takes no space,
  * and otherwise `steadyCopy`, so a large recording on a disk without clones doesn't stall the engine. A copy that fails
- * leaves nothing at the destination.
+ * leaves nothing at the destination. `log` hears how a large file was copied and how long it took, untagged: the caller
+ * names the file.
  */
 export async function cloneOrSteadyCopy(source: string, destination: string, signal?: AbortSignal,
-  options: { smallBytes?: number; clone?: typeof cloneFile } = {}): Promise<void> {
+  options: { smallBytes?: number; clone?: typeof cloneFile; log?: (line: string) => void } = {}): Promise<void> {
+  const started = Date.now();
+  let size: number | undefined;
   try {
     signal?.throwIfAborted();
-    if ((await stat(source)).size < (options.smallBytes ?? SMALL_COPY)) await copyFile(source, destination, constants.COPYFILE_FICLONE);
-    else if (!(await (options.clone ?? cloneFile)(source, destination, signal))) await steadyCopy(source, destination, signal);
+    size = (await stat(source)).size;
+    if (size < (options.smallBytes ?? SMALL_COPY)) await copyFile(source, destination, constants.COPYFILE_FICLONE);
+    else if (await (options.clone ?? cloneFile)(source, destination, signal)) {
+      options.log?.(`${megabytes(size)} cloned in ${humanDuration(Date.now() - started)}`);
+    } else {
+      await steadyCopy(source, destination, signal);
+      options.log?.(`${megabytes(size)} copied in steps (the disk can't clone it) in ${humanDuration(Date.now() - started)}`);
+    }
   } catch (error) {
+    if (!signal?.aborted && size !== undefined) {
+      options.log?.(`copying ${megabytes(size)} into the library failed after ${humanDuration(Date.now() - started)}: ${failure(error)}`);
+    }
     await rm(destination, { force: true });
     throw error;
   }
 }
+
+/** The error's code alone where it has one: a file system message names the editor's file. */
+const failure = (error: unknown) => {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" ? code : clip(error instanceof Error ? error.name : String(error), 60);
+};
+const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(bytes < 1024 * 1024 * 1024 ? 0 : 1)} MB`;
