@@ -197,7 +197,7 @@ it("renders the edit, uploads it in resumable chunks and links to the finished v
   const [activity] = workspace.ctx.repos.activity.select("type = ?", ["youtube.published"]);
   expect(activity).toMatchObject({ projectId: project.id, summary: "Uploaded to YouTube (unlisted)", data: { version, videoId: "vid_123", visibility: "unlisted" } });
   expect((activity!.data as Record<string, unknown>).reusedRender).toBeUndefined();
-  expect(logs).toContain(`[youtube] upload complete id=${job.id} visibility=unlisted`);
+  expect(logs).toContainEqual(expect.stringMatching(new RegExp(`^\\[youtube\\] upload complete id=${job.id} visibility=unlisted size_mb=1 upload=`)));
 });
 
 it("uploads a render that is already finished straight away and lists uploads newest first", async () => {
@@ -206,7 +206,7 @@ it("uploads a render that is already finished straight away and lists uploads ne
   expect(second).toMatchObject({ phase: "uploading", progress: 0, reusedRender: true, renderId: first.renderId });
   await settle();
   expect(getYouTubeUpload(workspace.ctx, second.id)).toMatchObject({ phase: "done", reusedRender: true });
-  expect(logs).toContain(`[youtube] upload complete id=${second.id} visibility=public reusedRender=true`);
+  expect(logs).toContainEqual(expect.stringMatching(new RegExp(`^\\[youtube\\] upload complete id=${second.id} visibility=public reusedRender=true size_mb=1 upload=`)));
   const activities = workspace.ctx.repos.activity.select("type = ?", ["youtube.published"]);
   expect(activities.map(a => (a.data as Record<string, unknown>).reusedRender)).toContain(true);
 
@@ -290,7 +290,7 @@ it("fails with the render's own reason when rendering stops", async () => {
   expect(job).toMatchObject({ phase: "failed", errorCode: "render_failed", error: render.error });
   expect(job.error).toBeTruthy();
   expect(inits()).toHaveLength(0);
-  expect(logs).toContain(`[youtube] upload failed id=${job.id} code=render_failed`);
+  expect(logs).toContainEqual(expect.stringMatching(new RegExp(`^\\[youtube\\] upload failed id=${job.id} code=render_failed phase=rendering after=`)));
 });
 
 it("ends as cancelled when the project goes to the trash during the upload", async () => {

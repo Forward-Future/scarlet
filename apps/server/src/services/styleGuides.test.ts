@@ -436,7 +436,9 @@ describe("saving a project graphic as a style guide", () => {
     expect(noChrome.instructions).not.toContain("## Palette");
     expect(noChrome.instructions).not.toContain("## Attached assets");
     expect(still.fn).toHaveBeenLastCalledWith(expect.objectContaining({ width: 1920, height: 1080, time: 0.5 }));
-    expect(logged.filter(l => l.includes("[style-guides]"))).toEqual([]);
+    expect(logged.filter(l => l.includes("[style-guides]"))).toEqual([
+      expect.stringMatching(new RegExp(`^\\[style-guides\\] ${noChrome.id} saved from graphic med_plain with 0 files, without a preview, in `)),
+    ]);
 
     still.fn.mockRejectedValueOnce(new Error("page crashed"));
     const crashed = await save("med_plain", "crashed");
