@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 27, 2026
 
+- While you preview Before, K and L from the Video editor (J/K/L) preset and a changed play key now work; next and previous edit keys set with ⌘ or ⌥ work on edit and call cards; and a shortcut set to + shows its key, and works with ⌘.
 - Gemini can now read a style guide and bring in its sound effects instead of being refused.
 - Scarlet has a new app icon: an ink-painted moth in front of a red sun.
 - Keep, Revise, and Reject now look and animate the same across Needs review and Safe edits in both workspace layouts, including keeping timestamps, popping in a red ×, and lingering cleanly through refreshes before fading to Done or Working.
@@ -17,7 +18,6 @@ Add one line under today's date for each change an editor would notice. Leave ou
 - Space plays the video again right after you drag or click the edge of a cut or edit on the timeline.
 - The sound on the timeline now shows the audio track you picked in Media straight away, and stays steady while other files are added.
 - Simplified edit hover cards in the edits sidebar: dropped clip file names and repeated rationale, and combined live status and model into one short line (such as "Revising with GPT-6.2-Sol").
-- While you preview Before, K and L from the Video editor (J/K/L) preset and a changed play key now work; next and previous edit keys set with ⌘ or ⌥ work on edit and call cards; and a shortcut set to + shows its key, and works with ⌘.
 
 ## November 26, 2026
 
