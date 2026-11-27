@@ -492,7 +492,7 @@ it("keeps the sign-in after a temporary Google error but asks to reconnect after
   err = await rejection(getValidYouTubeAccessToken(app.ctx));
   expect(err).toMatchObject({ status: 401, code: "youtube_reconnect_required" });
   expect(getYouTubeStatus(app.ctx).needsReconnect).toBe(true);
-  expect(logs).toContain("[youtube] token refresh rejected: reconnect required");
+  expect(logs).toContain("[youtube] token refresh rejected: reconnect required (HTTP 401)");
 });
 
 it("asks to reconnect when Google answers a refresh with invalid_grant on an unusual status", async () => {
