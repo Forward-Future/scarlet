@@ -16,6 +16,7 @@ import { Said } from "../components/review/RunBundle";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { ConfirmDialog, ErrorState, Icon, InlineError, Loading, Modal, Spinner, Toggle } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
+import { builtinStyleGuideByName } from "../lib/builtinStyleGuides";
 import { desktop, isDesktop } from "../lib/desktop";
 import { isComposing } from "../lib/hotkeys";
 import { taskActivityLabel } from "../lib/taskActivity";
@@ -24,6 +25,7 @@ import { useEscapeToLeave, useFileDropTarget } from "../lib/uiHooks";
 import { useStyleGuidesStore } from "../stores/styleGuides";
 import { ColorLookStage } from "./style-guide/ColorLookStage";
 import { SoundsStage } from "./style-guide/SoundsStage";
+import { StyleSpecimen } from "./style-guide/StyleSpecimen";
 import { useStyleSoundPlayer } from "./style-guide/stageAudio";
 import { TransitionsStage } from "./style-guide/TransitionsStage";
 import "../simple.css";
@@ -459,6 +461,7 @@ export function StyleGuideEditorPage() {
   if (!isNew && !guide) return <Loading label="Loading style guide…" />;
 
   const previewUrl = guide?.preview ? api.styleGuidePreviewUrl(guide.id, guide.preview.updatedAt) : undefined;
+  const fallbackPreset = !previewUrl && guide ? builtinStyleGuideByName(guide.name) : undefined;
   const canSend = Boolean(ask.trim() || stagedFiles.length > 0);
 
   return (
@@ -739,6 +742,10 @@ export function StyleGuideEditorPage() {
                     >
                       <img src={previewUrl} alt={`Live preview of @${guide!.name}`} />
                     </button>
+                  ) : fallbackPreset ? (
+                    <div className="style-guide-preview-frame">
+                      <StyleSpecimen preset={fallbackPreset} />
+                    </div>
                   ) : (
                     <div className="style-guide-preview-frame is-empty">
                       <span className="style-guide-preview-placeholder-title">Live preview</span>

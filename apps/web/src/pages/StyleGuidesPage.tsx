@@ -7,6 +7,7 @@ import { desktop, isDesktop } from "../lib/desktop";
 import { useFileDropTarget } from "../lib/uiHooks";
 import { useStyleGuidesStore } from "../stores/styleGuides";
 import { EmptyState, ErrorState, Icon, InlineError, Loading, SectionTitle, Spinner } from "../components/ui/primitives";
+import { StyleSpecimen } from "./style-guide/StyleSpecimen";
 
 const JSON_FILE = /\.json$/i;
 
@@ -16,48 +17,6 @@ function guideMetaSummary(guide: StyleGuideRecord): string {
   if (guide.sounds.length) parts.push(`${guide.sounds.length} ${guide.sounds.length === 1 ? "sound" : "sounds"}`);
   if (guide.colorLook) parts.push("Color look");
   return parts.join(" · ");
-}
-
-function StyleSpecimen({ preset }: { preset: BuiltinStyleGuide }) {
-  const s = preset.specimen;
-  const titleFont = s.titleFont === "serif"
-    ? "Georgia, 'Times New Roman', serif"
-    : s.titleFont === "mono"
-      ? "var(--font-mono)"
-      : "var(--font-sans)";
-  return (
-    <div className="style-specimen" style={{ background: s.canvas }} aria-hidden="true">
-      <div className="style-specimen-top">
-        <div className="style-specimen-title" style={{ color: s.text, fontFamily: titleFont }}>
-          <span className="style-specimen-kicker" style={{ color: s.accent }}>01</span>
-          <span>Chapter Title</span>
-        </div>
-        <div className="style-specimen-callout" style={{ background: s.surface, borderColor: s.border }}>
-          <span className="style-specimen-callout-kicker" style={{ color: s.accent }}>KEY POINT</span>
-          <span className="style-specimen-callout-val" style={{ color: s.text }}>3× faster cut</span>
-        </div>
-      </div>
-      <div className="style-specimen-bottom">
-        <div className="style-specimen-lower" style={{ background: s.surface, borderColor: s.border, borderLeftColor: s.accent }}>
-          <span className="style-specimen-lower-name" style={{ color: s.text, fontFamily: titleFont }}>Alex Rivera</span>
-          <span className="style-specimen-lower-role" style={{ color: s.muted }}>Creative Director</span>
-        </div>
-        <div
-          className="style-specimen-caption"
-          style={{
-            background: s.captionBg,
-            color: s.captionText,
-            textTransform: s.captionUppercase ? "uppercase" : undefined,
-            textShadow: s.captionBg === "transparent" ? "0 1px 2px #000, 0 0 4px #000" : undefined,
-          }}
-        >
-          <span>Make every </span>
-          <span style={{ color: s.captionHighlight ?? s.captionText, fontWeight: 700 }}>frame</span>
-          <span> count</span>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export function StyleGuidesPage() {
@@ -146,6 +105,9 @@ export function StyleGuidesPage() {
         description: preset.description,
         instructions: preset.instructions,
         captionStyle: preset.captionStyle,
+        transitions: preset.transitions,
+        sounds: preset.sounds,
+        colorLook: preset.colorLook,
       });
       navigate(`/settings/style-guides/${created.id}`);
     } catch (e) {
