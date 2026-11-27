@@ -281,7 +281,7 @@ export function passEntries(f: PassFacts, { projectId, thread, edits, rejected, 
     // A call goes by its time, as on its card and in the box's tag.
     ...(pass?.calls ?? []).map((c): PassRow => {
       const callWord = c.state === "revising" ? (revisionWord(c.run, { recheck: !!c.run && isRecheck(c.run), nextQueuedId: actions.nextQueuedId }) ?? "Revising…") : undefined;
-      const tip = rail ? callRowTooltip({ summary: c.summary, reason: c.reason, tag: c.tag, length: c.length, state: c.state, version: c.version, earlier: c.earlier, word: callWord }) : undefined;
+      const tip = rail ? callRowTooltip({ summary: c.summary, reason: c.reason, tag: c.tag, length: c.length, state: c.state, version: c.version, earlier: c.earlier, word: callWord, by: modelAt(c.run) }) : undefined;
       return { key: callRowKey(c), id: callRowKey(c), at: c.start, displayAt: c.start, mark: c.at,
         hover: { threadId: thread.id, call: c.index },
         label: c.summary, n: c.n, callIndex: c.index, num: numbers ? c.n : undefined, needs: c.state === "open", asks: c.state === "revising" && asksEditor(c.run), sentBack: c.state === "revising",
