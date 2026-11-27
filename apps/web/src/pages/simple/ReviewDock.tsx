@@ -108,12 +108,19 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   }, [openPassThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (hasTabs) {
+    const callKeys = new Set(allEntries.filter(e => e.row.callIndex !== undefined).map(e => e.key));
+    const reloading = (key: string) => {
+      if (callKeys.has(key)) return false;
+      const sep = key.indexOf("/");
+      return sep > 0 && loadedOf.get(key.slice(0, sep)) === false;
+    };
     linger.track(
       allEntries
         .filter(e => e.row.callIndex !== undefined || loadedOf.get(e.threadId) !== false)
         .map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })),
       optionalShown,
       tab === "done",
+      reloading,
     );
   }
   const heldFrom = (from: "you" | "optional" | "done") =>
@@ -291,7 +298,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         const value = id === "all" ? row.value : row.decision ?? row.value;
         const heldRow = hasTabs ? linger.of(entry.key) : undefined;
         const lingeringHere = !!heldRow && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
-        const lingerKind = lingeringHere ? (entry.place === "working" ? "working" : row.decided ? "done" : undefined) : undefined;
+        const lingerKind = lingeringHere ? (entry.place === "working" ? "working" : (row.decided || row.rejected || row.skipped) ? "done" : undefined) : undefined;
         const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
         const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
         const leaving = !!heldRow?.leaving && lingeringHere;
@@ -301,7 +308,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
           {splitAt !== undefined && idx === splitAt && (
             <li className={splitAt === 0 ? "review-tier-sep is-first" : "review-tier-sep"} role="presentation">
               <span className="review-tier-sep-row">
-                <span className="review-tier-label">Safe edits ({optional.length})</span>
+                <span className="review-tier-label">{optional.length > 0 ? `Safe edits (${optional.length})` : "Safe edits"}</span>
                 {optional.length > 0 && onKeepConfident && (
                   <button type="button" className="review-head-keep" title={doneLabel(optional.length)} aria-label={doneLabel(optional.length)}
                     onClick={letGo(onKeepConfident)}>Keep {optional.length} safe {optional.length === 1 ? "edit" : "edits"}</button>

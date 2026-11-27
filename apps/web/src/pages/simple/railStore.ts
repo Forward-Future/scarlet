@@ -1136,15 +1136,22 @@ export class RailStore {
     const hasStructured = [...this.infos.values()].some(info => info.rows !== undefined);
     if (!hasStructured) return;
     const unifiedRows = synthesizeUnifiedRows(this.infos);
+    const callKeys = new Set(unifiedRows.filter(u => u.isCall).map(u => u.key));
+    const reloading = (key: string) => {
+      if (callKeys.has(key)) return false;
+      const sep = key.indexOf(":");
+      return sep > 0 && this.infos.get(key.slice(0, sep))?.listLoaded === false;
+    };
     const tracked = unifiedRows
       .filter(u => u.isCall || u.rows.some(r => this.infos.get(r.threadId)?.listLoaded !== false))
       .map(u => ({ key: u.key, place: u.place, was: u.was, busy: u.busy }));
-    this.linger.track(tracked, this.lowShown, this.doneShown);
+    this.linger.track(tracked, this.lowShown, this.doneShown, reloading);
     const nextHeld = new Set<string>();
     for (const row of tracked) if (this.linger.of(row.key)) nextHeld.add(row.key);
+    for (const key of this.prevHeldKeys) if (this.linger.of(key)) nextHeld.add(key);
     this.prevHeldKeys = nextHeld;
     for (const key of [...this.arrived.keys()]) {
-      if (this.linger.of(key) || !unifiedRows.some(u => u.key === key && (u.place === "working" || u.place === "done"))) {
+      if (this.linger.of(key) || (!reloading(key) && !unifiedRows.some(u => u.key === key && (u.place === "working" || u.place === "done")))) {
         this.clearArrived(key);
       }
     }
