@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 27, 2026
 
+- Space plays the video again right after you drag or click the edge of a cut or edit on the timeline.
 - The sound on the timeline now shows the audio track you picked in Media straight away, and stays steady while other files are added.
 - Simplified edit hover cards in the edits sidebar: dropped clip file names and repeated rationale, and combined live status and model into one short line (such as "Revising with GPT-6.2-Sol").
 

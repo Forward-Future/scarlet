@@ -2,6 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useHotkeys } from "../../lib/hotkeys";
+import { matchesShortcut } from "../../stores/shortcuts";
 import { TimelineScrubber, type TimelineGap } from "./TimelineScrubber";
 
 /** The timeline by itself, a thousand pixels wide, with no pictures or sound to draw. */
@@ -307,6 +309,33 @@ it("lets hover-only edge handles drag an open cut's start or end edge, shows liv
   expect(onCommit).toHaveBeenCalledTimes(2);
   expect(onCommit.mock.calls[1]![0].start).toBeCloseTo(2 + 1 / 30, 5);
   expect(onCommit.mock.calls[1]![0].end).toBe(4);
+});
+
+it("leaves Space to playback after pressing a cut's edge handle", async () => {
+  const toggled = vi.fn();
+  function WithPlayback() {
+    useHotkeys(e => { if (matchesShortcut(e, "playPause")) toggled(); });
+    return (
+      <TimelineScrubber start={0} duration={20} playhead={5} fps={30} frameAt={() => undefined}
+        onSeek={t => seeks.push(t)} onScrubStart={() => released}
+        highlight={{ key: "cut-1", view: { start: 0, end: 10 }, band: { start: 2, end: 4 }, bandLabel: "Cut · 2.0 s" }}
+        cutAdjust={{ bounds: { minStart: 1, maxStart: 4, minEnd: 2, maxEnd: 6 }, onCommit: () => {} }} />
+    );
+  }
+  await act(async () => root.render(<WithPlayback />));
+  await zoomed();
+
+  const startHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="start"]')!;
+  await act(async () => {
+    startHandle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, button: 0, isPrimary: true, clientX: 200, bubbles: true }));
+    document.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, clientX: 200, bubbles: true }));
+  });
+  expect(document.activeElement).toBe(startHandle);
+
+  await act(async () => {
+    startHandle.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+  });
+  expect(toggled).toHaveBeenCalledOnce();
 });
 
 it("renders edit-toned edge handles with custom removeLabel when pulling a timed edit closed", async () => {
