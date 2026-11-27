@@ -84,7 +84,12 @@ jobs:
 
       - name: Verify Windows library permissions
         if: runner.os == 'Windows'
-        run: pnpm --filter @scarlet/server exec vitest run src/services/storagePrivacy.test.ts
+        shell: powershell
+        run: |
+          # As in ci.yml: new files belong to the runner's login, not Administrators, as they would for a desktop user.
+          ./.github/scripts/use-windows-test-owner.ps1
+          pnpm --filter @scarlet/server exec vitest run src/services/storagePrivacy.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Node SEA embeds the running node binary, so this runs on the target's architecture.
       - name: Build the engine sidecar (Node SEA)
