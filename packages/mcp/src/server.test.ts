@@ -2283,7 +2283,7 @@ it("scans consecutive source pages for first-cut evidence without proposing an e
     expect(first.fillers).toMatchObject([{ text: "Um,", start: 2.5, end: 2.7 }]);
     expect(first.fillerCandidates).toMatchObject([{ start: 2.48, end: 2.68, whisper: { text: "Um," }, uhm: { confidence: 0.93 } }]);
     expect(first.detectors).toEqual(["prompted-whisper", "uhm"]);
-    expect(first.unmatchedVoice).toEqual([{ start: 1.95, end: 2.35 }]);
+    expect(first.unmatchedVoice).toEqual([[1.95, 2.35]]);
     expect(await scan(119.5, 120.003)).toMatchObject({ from: 119.5, to: 120, nextFrom: null });
     expect(mock.state.events.filter(e => e.data?.scanPage).map(e => e.data?.scanPage)).toEqual([
       { mediaId: "m1", from: 0, end: 69 }, { mediaId: "m1", from: 0, to: 60, end: 69 },
@@ -2636,6 +2636,11 @@ describe("first-cut dialogue save checkpoints", () => {
     expect((await scan(116, 60)).isError).toBe(true);
     const next = JSON.parse(textOf(await scan(116, first.saveCheckpoint.through)));
     expect(next).toMatchObject({ from: 116, nextFrom: 232, restoredPages: [{ from: 174 }], saveCheckpoint: { through: 234 } });
+    // The call states the recording and its detectors once, and the checkpoint's sentence is whole only the first time.
+    expect(next.restoredPages[0]).not.toHaveProperty("mediaId");
+    expect(next.restoredPages[0]).not.toHaveProperty("detectors");
+    expect(next.saveCheckpoint.next).toBe("Save this section's settled cuts, or pass noCutsReadyThrough: 234 on your next dialogue_scan.");
+    expect(first.saveCheckpoint.next).toContain("continueFrom");
     expect((await scan(232, 118)).isError).toBe(true);
     expect(mock.requests.some(r => r.path.endsWith("/dialogue-cuts"))).toBe(false);
   });
@@ -3932,12 +3937,13 @@ it("lists a silence the pauses miss with what its picture does, and reports it w
   try {
     const page = await call("dialogue_scan", { mediaId: "m1", from: 0, until: 30 });
     const end = words.findLast(w => w.text === "note.")!.end;
-    const inside = page.pauses.map((p: { remove: { start: number; end: number } }) => p.remove).filter((r: { start: number; end: number }) => r.start >= end && r.end <= 12.25);
+    const inside = page.pauses.map(([start, end]: [number, number]) => ({ start, end })).filter((r: { start: number; end: number }) => r.start >= end && r.end <= 12.25);
     expect(Math.max(0, ...inside.map((r: { start: number; end: number }) => r.end - r.start))).toBeLessThan(2);
-    expect(page.silences.filter((s: { open?: string }) => !s.open)).toEqual([{ start: end, end: 12.25, seconds: expect.closeTo(12.25 - end, 3),
+    expect(page.silences.filter((s: { open?: string }) => !s.open)).toEqual([{ start: expect.closeTo(end, 2), end: 12.25, seconds: expect.closeTo(12.25 - end, 2),
       after: "note.", before: "You", voiceSeconds: 3.6, maxPeakDb: -60, picture: [
-        { mediaId: "m3", changedFrames: 59, frames: 246, typicalAreaPct: .04, largestAreaPct: 27, largestAt: expect.closeTo(end + .2, 3), lastChangeAt: 12.15 },
-        { mediaId: "m1", changedFrames: 59, frames: 246, typicalAreaPct: .04, largestAreaPct: 27, largestAt: expect.closeTo(end + .2, 3), lastChangeAt: 12.15 }] }]);
+        { mediaId: "m3", changedFrames: 59, frames: 246, typicalAreaPct: .04, largestAreaPct: 27, largestAt: expect.closeTo(end + .2, 2), lastChangeAt: 12.15 },
+        // The recording's own picture carries no mediaId.
+        { changedFrames: 59, frames: 246, typicalAreaPct: .04, largestAreaPct: 27, largestAt: expect.closeTo(end + .2, 2), lastChangeAt: 12.15 }] }]);
     // One request covers the page, and it asks for the screen on its own clock.
     const asked = mock.requests.filter(r => r.path.endsWith("/picture-activity"));
     expect(asked).toHaveLength(1);

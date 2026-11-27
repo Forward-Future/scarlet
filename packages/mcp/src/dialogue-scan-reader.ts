@@ -29,6 +29,7 @@ import { dialogueScanPage } from "./dialogue-plan.js";
 import { acousticRetakeContinuations, type AcousticRetakePage } from "./dialogue-retake-join.js";
 import { acousticRepeatedTakes, findRepeatedTakes } from "./dialogue-retakes.js";
 import { DialogueScanBatch } from "./dialogue-scan-batch.js";
+import { compactScanPage } from "./dialogue-scan-page.js";
 import { QUIET_PHRASE_CONTEXT } from "./gap-sound.js";
 import type { MediaSession } from "./media-session.js";
 import { levelPoints, type SessionErrorHelpers } from "./media-state.js";
@@ -342,11 +343,13 @@ export function createDialogueScanReader(deps: DialogueScanReaderDeps) {
     const { saved, background } = await scanPages(asset, from, end);
     const first = await readDialoguePage(asset, from, end, saved, background);
     batch?.delivered(first.from, first.to);
+    const shown = compactScanPage(first);
     const restoredPages = [];
+    let readEnd = first.to;
     let nextFrom = first.to < end ? first.to - 2 : null;
     // Leave room for wrapper fields (nextFrom, saveCheckpoint, reminders) so bundled pages stay inline.
     const scanBudget = Math.min(16_000, Math.max(2_000, (caps.resultChars ?? DEFAULT_RESULT_CHARS) - 600));
-    let responseSize = JSON.stringify(first).length;
+    let responseSize = JSON.stringify(shown).length;
     while (nextFrom !== null && saved.has(nextFrom) && restoredPages.length < 2 && responseSize < scanBudget) {
       const pageEnd = saved.get(nextFrom)!;
       if (batch?.needsSave(nextFrom, pageEnd) || (reviewFirst && batch?.isNewPage(nextFrom, pageEnd))) break;
@@ -356,13 +359,15 @@ export function createDialogueScanReader(deps: DialogueScanReaderDeps) {
         throw err;
       });
       if (!page) break;
-      responseSize += JSON.stringify(page).length;
+      const pageShown = compactScanPage(page, shown);
+      responseSize += JSON.stringify(pageShown).length;
       if (responseSize > scanBudget) break;
-      restoredPages.push(page);
+      restoredPages.push(pageShown);
       batch?.delivered(page.from, page.to);
+      readEnd = page.to;
       nextFrom = page.to < end ? page.to - 2 : null;
     }
-    const reached = Math.max(readTo.get(mediaId) ?? 0, (restoredPages.at(-1) ?? first).to);
+    const reached = Math.max(readTo.get(mediaId) ?? 0, readEnd);
     readTo.set(mediaId, reached);
     if (!savedAt.has(mediaId)) savedAt.set(mediaId, from);
     const unsaved = reached - savedAt.get(mediaId)!;
@@ -371,8 +376,8 @@ export function createDialogueScanReader(deps: DialogueScanReaderDeps) {
       : undefined;
     const pending = taskId ? await stagedState.stagedReview : undefined;
     const reviewReminder = pending?.unchecked ? reviewReminderText(pending) : undefined;
-    const saveCheckpoint = batch?.checkpoint;
-    return json({ ...first, nextFrom, ...(restoredPages.length ? { restoredPages } : {}), ...(saveReminder && { saveReminder }),
+    const saveCheckpoint = batch?.checkpointShown();
+    return json({ ...shown, nextFrom, ...(restoredPages.length ? { restoredPages } : {}), ...(saveReminder && { saveReminder }),
       ...(saveCheckpoint && { saveCheckpoint }), ...(reviewReminder && { reviewReminder }) });
   }
 
