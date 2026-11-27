@@ -8,6 +8,7 @@ import type { PictureEntrance } from "./picture-entrance.js";
 import { normalizeTranscriptToken } from "@scarlet/shared";
 import { captionSourceClips, dbfs, isTag, wordsByMidpoint } from "./analysis.js";
 import { quietBuckets, quietPeak, quietRms } from "./gap-sound.js";
+import { endsSentence, EXACT_WORD_TIMES, shortSeconds } from "./word-lines.js";
 
 // ---------------------------------------------------------------------------
 // Joins and time mapping
@@ -196,23 +197,34 @@ export function heardOnlyVerbatim(said: readonly TimelineWord[], heard: readonly
 }
 
 /**
- * Compact playback-order transcript. `lines` groups words between joins and pauses; `words` lists
- * each word with its index and timeline times. Join lines show the source jump and the words
- * either side, so a cut reads like the audience hears it. With `all`, the edit's whole list that
- * `joins` was taken from, a join keeps its number among them, the one timeline_join_audit gives it.
+ * Compact playback-order transcript. `lines` groups words between joins and pauses; `words` gives
+ * every word its index in the same lines, and more than EXACT_WORD_TIMES words (unless `exact`)
+ * say only each line's start; otherwise every word has its own line with its start and end. Join
+ * lines show the source jump and the words either side, so a cut reads like the audience hears it.
+ * With `all`, the edit's whole list that `joins` was taken from, a join keeps its number among them,
+ * the one timeline_join_audit gives it.
  */
 export function formatTimelineTranscript(words: TimelineWord[], joins: TimelineJoin[],
   opts: { detail: "lines" | "words"; fps: number; pause?: number; all?: TimelineJoin[]; removed?: (join: TimelineJoin) => string | undefined;
-    heard?: readonly HeardOnly[] }) {
+    heard?: readonly HeardOnly[]; exact?: boolean }) {
   const pause = opts.pause ?? .6;
   const lines: string[] = [];
   const heard = opts.heard ?? [];
+  const exact = opts.detail === "words" && (opts.exact || words.length <= EXACT_WORD_TIMES);
   let j = 0, h = 0, line: TimelineWord[] = [];
+  // In words, a speaker is named where it changes within one recording.
+  let speaker: string | undefined;
+  const named = (w: TimelineWord) => {
+    const changed = !!w.speaker && w.speaker !== speaker;
+    if (w.speaker) speaker = w.speaker;
+    return changed ? ` ${w.speaker}:` : "";
+  };
   const heardLine = (x: HeardOnly) => `  + heard ${x.start.toFixed(2)}-${x.end.toFixed(2)} ${x.mediaId} ${x.source.start.toFixed(2)}-${x.source.end.toFixed(2)}, not in the transcript: “${x.text}” in “${x.context}”`;
   const flush = () => {
     if (!line.length) return;
     const head = line[0]!, who = line.find(w => w.speaker)?.speaker;
-    lines.push(`${head.start.toFixed(2)} #${head.index}${who ? ` ${who}:` : ""} ${line.map(w => w.text).join(" ")}`);
+    lines.push(opts.detail === "words" ? `${shortSeconds(head.start)} ${line.map(w => `#${w.index}${named(w)} ${w.text}`).join(" ")}`
+      : `${head.start.toFixed(2)} #${head.index}${who ? ` ${who}:` : ""} ${line.map(w => w.text).join(" ")}`);
     line = [];
   };
   const allNumbers = opts.all && new Map(opts.all.map((join, i) => [join, i + 1]));
@@ -239,21 +251,26 @@ export function formatTimelineTranscript(words: TimelineWord[], joins: TimelineJ
     if (w.mediaId !== previous?.mediaId) {
       flush();
       lines.push(`mediaId ${w.mediaId}`);
+      speaker = undefined;
     }
     const gap = previous ? w.start - previous.end : 0;
-    if (opts.detail === "words") {
+    if (exact) {
       if (previous && gap >= pause) lines.push(`  (${gap.toFixed(2)} s)`);
-      lines.push(`${w.start.toFixed(2)}-${w.end.toFixed(2)} #${w.index}${w.speaker && w.speaker !== previous?.speaker ? ` ${w.speaker}:` : ""} ${w.text}`);
+      lines.push(`${shortSeconds(w.start)}-${shortSeconds(w.end)} #${w.index}${named(w)} ${w.text}`);
     } else {
       // Word-level speaker labels flicker on a shared mic; a new line needs a real handoff (a speaker change at a gap).
       const last = line.at(-1);
       const handoff = !!last && w.speaker !== undefined && last.speaker !== undefined && w.speaker !== last.speaker && gap >= .3;
-      if (line.length && (gap >= pause || line.length >= 14 || handoff)) {
+      if (opts.detail === "words" && previous && gap >= pause) {
+        // Every pause is said in words, where it stands for the end of the word before it.
+        flush();
+        lines.push(`  (${gap.toFixed(2)} s)`);
+      } else if (line.length && (gap >= pause || line.length >= 14 || handoff)) {
         flush();
         if (gap >= pause) lines.push(`  (${gap.toFixed(2)} s)`);
       }
       line.push(w);
-      if (/[.?!]["”’)]*$/.test(w.text)) flush();
+      if (endsSentence(w.text)) flush();
     }
     previous = w;
   }

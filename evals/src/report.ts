@@ -129,6 +129,8 @@ export function evaluationMarkdown(ev: Evaluation): string {
       `${t.errors ? ` (${Object.entries(t.errorsByTool).map(([k, v]) => `${k} ${v}`).join(", ")})` : ""}. ` +
       `Listened ${t.inspection.listened}×, visual inspections ${t.inspection.visual}, level reads ${t.inspection.levels}. ` +
       `Tokens: ${t.usage ? Object.entries(t.usage).filter(([k]) => k !== "estimatedApiCostUsd").map(([k, v]) => `${k} ${v}`).join(", ") : "not recorded"}. ` +
+      `${t.steps ? `${t.steps.steps} model steps, peak context ${t.steps.peakContext} tokens, ${t.steps.misses} cache miss${t.steps.misses === 1 ? "" : "es"}` +
+        `${t.steps.misses ? ` (${t.steps.missedTokens} tokens sent again uncached)` : ""}. ` : ""}` +
       `Estimated cost: ${t.costUsd !== null ? `$${t.costUsd.toFixed(2)} at API list prices`
         : t.unpricedModels.length ? `none, no price for ${t.unpricedModels.join(", ")}` : "not recorded"}.`, "");
   }

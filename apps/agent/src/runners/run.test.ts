@@ -8,7 +8,8 @@ import type { AgentUsage } from "@scarlet/shared";
 import { windowsAclShell } from "../private-files.js";
 import { runClaude } from "./claude.js";
 import { codexHomeDir, runCodex } from "./codex.js";
-import { runGemini } from "./gemini.js";
+import { reportSteps, runGemini } from "./gemini.js";
+import { cacheMiss, stepsReport } from "./geminiTranscript.js";
 import { runAgent, runnerFor } from "./index.js";
 import type { RunAgentFn, RunAgentOptions, RunnerEvent } from "./types.js";
 
@@ -997,6 +998,9 @@ describe("runGemini", { timeout: 20_000 }, () => {
         { model: "gemini-4-neon", inputTokens: 1600, outputTokens: 100, cacheReadTokens: 3000, cacheWriteTokens: 0, reasoningTokens: 70 },
       ]);
       expect(first.result.usage).toEqual(live.at(-1));
+      // Each step is kept: the run says how many there were and its peak context, and here the cache held every step.
+      expect(first.events.filter(e => e.data?.kind === "usage_steps")).toEqual([
+        { type: "log", text: "", data: { kind: "usage_steps", steps: 3, peakContext: 2400, misses: [], missedTokens: 0 } }]);
 
       // Resuming the same session skips earlier claims' lines in transcript.jsonl.
       const resumedLive: AgentUsage[] = [];
@@ -1030,6 +1034,27 @@ describe("runGemini", { timeout: 20_000 }, () => {
     } finally {
       await rm(fakeHome, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Gemini steps", () => {
+  it("flags a step that read far less from the cache than the step before sent, and reports steps and peak context", () => {
+    const step = (n: number, input: number, cacheRead: number, output = 500) => ({ step: n, input, cacheRead, cacheWrite: 0, output });
+    // The cache holds the whole of the request before, so a step normally reads what the one before it sent.
+    const steps = [step(1, 26_000, 0), step(2, 2_000, 26_000), step(3, 3_000, 28_000), step(4, 120_000, 0), step(5, 1_000, 120_000), step(6, 1_000, 112_000)];
+    expect(cacheMiss(steps[0]!, steps[1]!)).toBeUndefined();
+    expect(cacheMiss(steps[2]!, steps[3]!)).toEqual({ step: 4, context: 31_000, cached: 0, missed: 31_000 });
+    // A shortfall under a quarter of the context is a trimmed prompt, not a miss.
+    expect(cacheMiss(steps[4]!, steps[5]!)).toBeUndefined();
+    const report = stepsReport(steps)!;
+    expect(report).toEqual({ steps: 6, peakContext: 121_000, misses: [{ step: 4, context: 31_000, cached: 0, missed: 31_000 }], missedTokens: 31_000 });
+    expect(stepsReport([])).toBeUndefined();
+    const events: RunnerEvent[] = [], lines: string[] = [];
+    reportSteps(report, ev => events.push(ev), line => lines.push(line));
+    expect(events).toEqual([{ type: "log", text: "", data: { kind: "usage_steps", ...report } }]);
+    expect(lines).toEqual(["6 steps, peak context 121000 tokens, 1 cache miss (31000 tokens sent again uncached)"]);
+    reportSteps(undefined, ev => events.push(ev), line => lines.push(line));
+    expect(events).toHaveLength(1);
   });
 });
 
