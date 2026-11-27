@@ -342,7 +342,7 @@ describe("drawing a graphic", () => {
     let copied: string[] = [];
     drawing.renderGraphic.mockImplementation(async (opts: { htmlFile: string }) => {
       const folder = join(opts.htmlFile, "..");
-      copied = readdirSync(folder, { recursive: true }).map(String).sort();
+      copied = readdirSync(folder, { recursive: true }).map(name => String(name).replaceAll("\\", "/")).sort();
       return { output: "", frames: 1, missingFonts: [{ family: "Brand Sans", sample: "T" }], installedFonts: [], problems: [], elapsedMs: 1 };
     });
     const result = await draw({ options: { basedOn: "gfx" }, assets: new Map([["fonts/new.woff2", Buffer.from("font")]]) });
