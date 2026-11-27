@@ -1,4 +1,4 @@
-import { clipRange, firstIndex, historyLineage, makeTimeMap, timelineDuration, withHandles, type Change, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { clipRange, firstIndex, historyLineage, makeTimeMap, timelineDuration, withHandles, type Change, type Clip, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Thread } from "./threads.js";
 import { filterSupersededEdits, NAMED_SLACK, savedEdits, type ProjectFiles, type SavedEdit, type ThreadEdit } from "./threadEdits.js";
 
@@ -104,7 +104,29 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     visible,
     projectChanges,
     isAfter,
+    read,
   );
+  const headClips = new Map<string, Clip>();
+  for (const track of head.tracks) for (const clip of track.clips) {
+    if (!headClips.has(clip.id)) headClips.set(clip.id, clip);
+  }
+  const currentClipSpan = (placedClips: SavedEdit["placedClips"]): TimeRange | undefined => {
+    if (!placedClips?.length) return;
+    let start = Infinity, end = -Infinity;
+    for (const placed of placedClips) {
+      const clip = headClips.get(placed.id);
+      if (!clip || clip.enabled === false) continue;
+      if (placed.mediaId !== undefined && (clip.kind !== "media" || clip.mediaId !== placed.mediaId)) continue;
+      try {
+        const r = clipRange(clip);
+        start = Math.min(start, r.start);
+        end = Math.max(end, r.end);
+      } catch { /* ignore invalid clip bounds */ }
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+    const clamped = { start: Math.max(0, start), end: Math.min(duration, end) };
+    return clamped.end > clamped.start ? clamped : undefined;
+  };
   const maps = new Map<string, ReturnType<typeof makeTimeMap> | null>([[head.version, t => t]]);
   const mapFrom = (version: string) => {
     if (!maps.has(version)) {
@@ -275,7 +297,7 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
   const reshaped = new Set<ThreadEdit>();
   /** Places of a save Scarlet named no edit for where the video plays as it did (`quiet`): they finished other edits. */
   const quietly = new Set<ThreadEdit>();
-  for (const { version, named, still, resaved, putBack, markerSays: _markerSays, markerIds: _markerIds, reviewLocation, quiet, ...edit } of edits) {
+  for (const { version, named, still, resaved, putBack, markerSays: _markerSays, markerIds: _markerIds, placedClips, placedSpan, reviewLocation, quiet, ...edit } of edits) {
     const map = mapFrom(version);
     if (!map) continue;
     const mappedBack = putBack ? mapRange(map, putBack) : undefined;
@@ -315,7 +337,8 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     if (point && edit.beforeCut && !edit.rejected && start === null) adrift.push(edit);
     if (start === null || end === null || start > end + 1e-6 || start > duration) continue;
     if (edit.range.end > edit.range.start && end <= start) continue;
-    const range = { start: Math.max(0, start), end: Math.min(duration, Math.max(start, end)) };
+    const mappedRange = { start: Math.max(0, start), end: Math.min(duration, Math.max(start, end)) };
+    const range = (!edit.rejected && !edit.beforeCut && !edit.marker && placedSpan ? currentClipSpan(placedClips) : undefined) ?? mappedRange;
     // A removal has a join but no surviving frames of its own. Audition the join with context.
     const placed: ThreadEdit = range.end === range.start ? { ...edit, at: range.start, range: withHandles(range, 1.5, duration) } : { ...edit, range };
     const review = placeReview(placed, reviewLocation);

@@ -25,11 +25,38 @@ type Op = Record<string, unknown>;
  * `marker`: a marker left on the timeline, which changes nothing the editor sees or hears.
  */
 type Facet = EditKind | "picture" | "marker" | "neutral";
+/** A non-main-picture clip placed or switched to a new media asset by an edit. */
+export interface PlacedClip {
+  id: string;
+  mediaId?: string;
+  trackId?: string;
+  /** Clip's playback range in the change that placed it (used to tell full-clip edits from sub-range edits). */
+  range?: TimeRange;
+}
+
+/** Clip removals, media replacements, enable/disable toggles, track removals, and splits made by a change's ops. */
+export interface ClipMutations {
+  removed: Set<string>;
+  replacedMedia: Map<string, string>;
+  disabled: Set<string>;
+  enabled: Set<string>;
+  removedTracks: Set<string>;
+  splits: Map<string, string[]>;
+}
+
 /**
  * `ask`: what a to-do marker asks of the editor, in its own words. `restated`: this step wrote those words, as against
  * a move of a marker that only still says them.
  */
-type Placed = { facet: Facet; range?: TimeRange; ask?: string; restated?: boolean; markerId?: string };
+type Placed = {
+  facet: Facet;
+  range?: TimeRange;
+  ask?: string;
+  restated?: boolean;
+  markerId?: string;
+  clipId?: string;
+  placedClip?: PlacedClip;
+};
 type MarkerFields = { time?: unknown; text?: unknown; kind?: unknown; resolved?: unknown };
 
 const AUDIO_KEYS = new Set(["volume", "audioFadeIn", "audioFadeOut"]);
@@ -169,7 +196,7 @@ function insertedGaps(ops: Op[], baseVideo: string | undefined, before: Timeline
 }
 
 /** Each op's facet, and where it lands on the finished cut when that can be told. */
-function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
+function opFacets(change: Change, { before, after, media }: Clocks, fallbackPlaced = false): Placed[] {
   const laid = laidFiles(media);
   const mediaById = new Map(media?.map(m => [m.id, m]));
   const ops = (change.ops ?? []) as Op[];
@@ -212,17 +239,32 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
           ? { start: now(op.at), end: now(op.at + op.duration) } : undefined }];
       case "addClip": {
         const clip = op.clip as Clip | undefined;
-        if (clip?.kind === "media" && clip.splitEdit) return splitAt(clip, clip.splitEdit).map(range => ({ facet: "split" as const, range }));
-        return clip ? [{ facet: placed(clip, op.trackId), range: range(clip) }] : [];
+        if (clip?.kind === "media" && clip.splitEdit) return splitAt(clip, clip.splitEdit).map(range => ({ facet: "split" as const, range, clipId: clip.id }));
+        if (!clip) return [];
+        const trackId = typeof op.trackId === "string" ? op.trackId : undefined;
+        let facet = placed(clip, op.trackId);
+        if (facet === "neutral" && fallbackPlaced && !before && !after && clip.kind === "media" && trackId && trackId !== "v1") {
+          facet = laid(clip);
+        }
+        const isOverlay = facet !== "picture" && facet !== "neutral";
+        const span = range(clip);
+        return [{
+          facet,
+          range: span,
+          clipId: clip.id,
+          ...(isOverlay && { placedClip: { id: clip.id, ...(clip.kind === "media" ? { mediaId: clip.mediaId } : {}), ...(trackId && { trackId }), ...(span && { range: span }) } }),
+        }];
       }
       case "removeClip": {
+        const clipId = typeof op.clipId === "string" ? op.clipId : undefined;
         const found = beforeClip(op.clipId);
-        if (!found) return [{ facet: "neutral" }];
+        if (!found) return [{ facet: "neutral", ...(clipId && { clipId }) }];
         // Off the main picture, the length check decides whether it shortened the cut.
         const facet = placed(found.clip, found.track.id);
-        return [{ facet: facet === "picture" ? "neutral" : facet, range: range(found.clip) }];
+        return [{ facet: facet === "picture" ? "neutral" : facet, range: range(found.clip), ...(clipId && { clipId }) }];
       }
       case "updateClip": {
+        const clipId = typeof op.clipId === "string" ? op.clipId : undefined;
         const patch = op.patch && typeof op.patch === "object" ? op.patch as Record<string, unknown> : {};
         const found = afterClip(op.clipId) ?? beforeClip(op.clipId);
         const at = range(found?.clip);
@@ -233,37 +275,51 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         const keys = Object.keys(patch).filter(k => !NEUTRAL_KEYS.has(k));
         if (!keys.length) {
           const retimed = Object.keys(patch).some(k => k === "sourceIn" || k === "sourceOut" || k === "timelineIn" || k === "timelineOut");
-          return [{ facet: retimed ? (isGraphicOverlay ? "graphic" as const : isBrollOverlay ? "broll" as const : "neutral") : "neutral", range: at }];
+          return [{ facet: retimed ? (isGraphicOverlay ? "graphic" as const : isBrollOverlay ? "broll" as const : "neutral") : "neutral", range: at, ...(clipId && { clipId }) }];
         }
         return keys.flatMap((key): Placed | Placed[] => {
           // A split edit is at its join, between where the picture cuts and where the sound now does: one for each end.
           if (key === "splitEdit") return found?.clip.kind === "media"
-            ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range })) : [{ facet: "split" as const, range: at }];
-          if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at };
-          if (key === "volumeKeyframes") return { facet: dips(patch.volumeKeyframes) ? "dip" as const : "audio" as const, range: at };
+            ? splitAt(found.clip, patch.splitEdit as SplitRecord, patch).map(range => ({ facet: "split" as const, range, ...(clipId && { clipId }) }))
+            : [{ facet: "split" as const, range: at, ...(clipId && { clipId }) }];
+          if (AUDIO_KEYS.has(key)) return { facet: "audio" as const, range: at, ...(clipId && { clipId }) };
+          if (key === "volumeKeyframes") return { facet: dips(patch.volumeKeyframes) ? "dip" as const : "audio" as const, range: at, ...(clipId && { clipId }) };
           // Repositioning or animating a graphic Scarlet laid over the picture is still a graphic edit,
           // and Ken Burns motion keyframes on a B-roll still photo are still a B-roll edit, not a camera zoom.
-          if (FRAMING_KEYS.has(key)) return { facet: isGraphicOverlay ? "graphic" as const : isBrollStill && key === "keyframes" ? "broll" as const : framingFacet(patch, key), range: at };
-          if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at };
-          if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at };
-          if (key === "mediaId" && found && found.track.id !== baseVideo) {
-            const next = found.clip.kind === "media" && typeof patch.mediaId === "string" ? { ...found.clip, mediaId: patch.mediaId } : found.clip;
-            return { facet: laid(next), range: at };
+          if (FRAMING_KEYS.has(key)) return { facet: isGraphicOverlay ? "graphic" as const : isBrollStill && key === "keyframes" ? "broll" as const : framingFacet(patch, key), range: at, ...(clipId && { clipId }) };
+          if (TEXT_KEYS.has(key)) return { facet: "text" as const, range: at, ...(clipId && { clipId }) };
+          if (OVERLAY_KEYS.has(key)) return { facet: found && found.track.id !== baseVideo ? laid(found.clip) : "overlay" as const, range: at, ...(clipId && { clipId }) };
+          if (key === "mediaId") {
+            if (found && found.track.id !== baseVideo) {
+              const next = found.clip.kind === "media" && typeof patch.mediaId === "string" ? { ...found.clip, mediaId: patch.mediaId } : found.clip;
+              return {
+                facet: laid(next),
+                range: at,
+                ...(clipId && { clipId }),
+                ...(clipId && typeof patch.mediaId === "string" && { placedClip: { id: clipId, mediaId: patch.mediaId, trackId: found.track.id, ...(at && { range: at }) } }),
+              };
+            }
+            if (!found && fallbackPlaced && clipId && typeof patch.mediaId === "string") {
+              const file = mediaById.get(patch.mediaId);
+              const facet: Facet = file?.kind === "graphic" ? "graphic" : file && (file.kind === "video" || file.source) ? "broll" : "overlay";
+              return { facet, range: at, clipId, placedClip: { id: clipId, mediaId: patch.mediaId } };
+            }
+            return { facet: "other" as const, range: at, ...(clipId && { clipId }) };
           }
-          if (key === "speed") return { facet: "speed" as const, range: at };
+          if (key === "speed") return { facet: "speed" as const, range: at, ...(clipId && { clipId }) };
           // A transition is at its join, the clip's start, not along the clip.
-          if (key === "transitionIn") return { facet: "transition" as const, range: found ? { start: found.clip.timelineIn, end: found.clip.timelineIn } : at };
+          if (key === "transitionIn") return { facet: "transition" as const, range: found ? { start: found.clip.timelineIn, end: found.clip.timelineIn } : at, ...(clipId && { clipId }) };
           if (key === "effects") {
             // An effect only the sound has is a sound edit wherever the clip is: voice cleanup on the camera's own sound.
             const was = beforeClip(op.clipId)?.clip, had = was?.kind === "media" ? was.effects : [];
             const now = Array.isArray(patch.effects) ? patch.effects as EffectFields[] : [];
             const differs = [...now.filter(e => !had.some(h => JSON.stringify(h) === JSON.stringify(e))),
               ...had.filter(h => !now.some(e => JSON.stringify(e) === JSON.stringify(h)))];
-            if (cleansVoice(now) && !cleansVoice(had)) return { facet: "voice" as const, range: at };
+            if (cleansVoice(now) && !cleansVoice(had)) return { facet: "voice" as const, range: at, ...(clipId && { clipId }) };
             const sound = differs.length > 0 && differs.every(e => typeof e?.type === "string" && AUDIO_EFFECTS.has(e.type));
-            return { facet: sound || found?.track.kind === "audio" ? "audio" as const : "overlay" as const, range: at };
+            return { facet: sound || found?.track.kind === "audio" ? "audio" as const : "overlay" as const, range: at, ...(clipId && { clipId }) };
           }
-          return { facet: "other" as const, range: at };
+          return { facet: "other" as const, range: at, ...(clipId && { clipId }) };
         });
       }
       case "updateTrack": {
@@ -271,12 +327,13 @@ function opFacets(change: Change, { before, after, media }: Clocks): Placed[] {
         return patch.every(k => k === "muted" || k === "name") && patch.includes("muted") ? [{ facet: "audio" }] : [{ facet: "neutral" }];
       }
       case "moveClip": {
+        const clipId = typeof op.clipId === "string" ? op.clipId : undefined;
         const found = afterClip(op.clipId) ?? beforeClip(op.clipId);
         if (found && found.track.id !== baseVideo) {
           const over = laid(found.clip);
-          if (over === "graphic" || over === "broll") return [{ facet: over, range: range(found.clip) }];
+          if (over === "graphic" || over === "broll") return [{ facet: over, range: range(found.clip), ...(clipId && { clipId }) }];
         }
-        return [{ facet: "neutral" }];
+        return [{ facet: "neutral", ...(clipId && { clipId }) }];
       }
       case "addTrack": case "splitClip": case "removeTrack":
         return [{ facet: "neutral" }];
@@ -393,11 +450,38 @@ export function editMarkerIds(change: Change, ranges: TimeRange[], clocks: Clock
     verdict === "marker" ? [...new Set(here.flatMap(f => f.markerId ? [f.markerId] : []))] : []);
 }
 
+/**
+ * Non-main-picture clips placed or media-replaced by each edit in `ranges`, only when that edit's own steps
+ * are exclusively about those clip(s) (plus optional markers). Used to retire stale review items when a later
+ * change removes, disables, or replaces the media of every clip this edit placed, and to track trimmed spans.
+ */
+export function editPlacedClips(change: Change, ranges: TimeRange[], clocks: Clocks = {},
+  rippleJoins?: readonly { range: TimeRange; facet?: "restore" }[]): PlacedClip[][] {
+  if (rippleJoins?.length || !change.ops?.length) return ranges.map(() => []);
+  return placeEdits(change, ranges, clocks, rippleJoins, true).map(({ verdict, here }, spot) => {
+    if (verdict === "marker" || verdict === "cut" || verdict === "restore") return [];
+    const target = ranges[spot]!;
+    const overlapsTarget = (r?: TimeRange) => !r
+      || (target.end - target.start <= TOUCH ? r.start <= target.end + 0.5 && r.end >= target.start - 0.5
+        : r.end - r.start <= TOUCH ? r.start >= target.start - TOUCH && r.start <= target.end + TOUCH
+        : Math.min(r.end, target.end) - Math.max(r.start, target.start) > TOUCH);
+    // For single-edit changes, steps that only trimmed a neighboring clip outside this edit's range (to make room
+    // for the new clip) do not prevent tracking the clip this edit actually placed.
+    const own = ranges.length === 1 && target.end > target.start ? here.filter(f => f.placedClip || overlapsTarget(f.range)) : here;
+    const placedById = new Map<string, PlacedClip>();
+    for (const f of own) if (f.placedClip) placedById.set(f.placedClip.id, f.placedClip);
+    if (!placedById.size) return [];
+    // Only claim ownership when every non-marker step for this edit acts on those placed clip(s).
+    if (own.some(f => f.facet !== "marker" && (!f.clipId || !placedById.has(f.clipId)))) return [];
+    return [...placedById.values()];
+  });
+}
+
 function placeEdits(change: Change, ranges: TimeRange[], clocks: Clocks = {},
-  rippleJoins?: readonly { range: TimeRange; facet?: "restore" }[]) {
+  rippleJoins?: readonly { range: TimeRange; facet?: "restore" }[], fallbackPlaced = false) {
   // Known joins stand for the steps, so only the markers are read from them, and only when there are any.
   const marks = rippleJoins && ((change.ops ?? []) as Op[]).some(op => op.op === "addMarker" || op.op === "updateMarker");
-  const steps = !rippleJoins || marks ? opFacets(change, clocks).filter(f => f.facet !== "neutral") : [];
+  const steps = !rippleJoins || marks ? opFacets(change, clocks, fallbackPlaced).filter(f => f.facet !== "neutral") : [];
   const facets: Placed[] = rippleJoins ? [...rippleJoins.map(({ range, facet }) => ({ facet: facet ?? "cut" as const, range })),
     ...steps.filter(f => f.facet === "marker")] : steps;
   const verdict = (here: Placed[], all = false) => ({ verdict: decide(here.map(f => f.facet), clocks, all), here });
@@ -452,4 +536,61 @@ export function touchedMarkerIds(change: Change): string[] {
     }
   }
   return [...ids];
+}
+
+/** Clip removals, media replacements, enable/disable toggles, track removals, and splits made by a change's ops. */
+export function clipMutations(change: Change): ClipMutations | undefined {
+  const ops = (change.ops ?? []) as Op[];
+  if (!ops.length) return;
+  const removed = new Set<string>();
+  const replacedMedia = new Map<string, string>();
+  const disabled = new Set<string>();
+  const enabled = new Set<string>();
+  const removedTracks = new Set<string>();
+  const splits = new Map<string, string[]>();
+  for (const op of ops) {
+    switch (op.op) {
+      case "removeClip":
+        if (typeof op.clipId === "string") {
+          removed.add(op.clipId);
+          replacedMedia.delete(op.clipId);
+          disabled.delete(op.clipId);
+          enabled.delete(op.clipId);
+        }
+        break;
+      case "addClip": {
+        const clip = op.clip as Clip | undefined;
+        if (clip && typeof clip.id === "string" && removed.has(clip.id)) {
+          // Removing and re-adding the same clip ID in one change is a track move if mediaId stayed the same,
+          // or a media replacement if mediaId changed.
+          removed.delete(clip.id);
+          if (clip.kind === "media" && typeof clip.mediaId === "string") replacedMedia.set(clip.id, clip.mediaId);
+          if (clip.enabled === false) disabled.add(clip.id);
+          else enabled.add(clip.id);
+        }
+        break;
+      }
+      case "updateClip": {
+        if (typeof op.clipId === "string" && op.patch && typeof op.patch === "object") {
+          const patch = op.patch as Record<string, unknown>;
+          if (typeof patch.mediaId === "string") replacedMedia.set(op.clipId, patch.mediaId);
+          if (patch.enabled === false) { disabled.add(op.clipId); enabled.delete(op.clipId); }
+          else if (patch.enabled === true) { enabled.add(op.clipId); disabled.delete(op.clipId); }
+        }
+        break;
+      }
+      case "removeTrack":
+        if (typeof op.trackId === "string") removedTracks.add(op.trackId);
+        break;
+      case "splitClip":
+        if (typeof op.clipId === "string" && typeof op.newClipId === "string") {
+          const children = splits.get(op.clipId) ?? [];
+          children.push(op.newClipId);
+          splits.set(op.clipId, children);
+        }
+        break;
+    }
+  }
+  if (!removed.size && !replacedMedia.size && !disabled.size && !enabled.size && !removedTracks.size && !splits.size) return;
+  return { removed, replacedMedia, disabled, enabled, removedTracks, splits };
 }

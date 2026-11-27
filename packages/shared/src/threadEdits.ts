@@ -2,9 +2,9 @@
  * The edits a thread's applied changes made, each in the clock of the version that saved it. `threadTimeline` places
  * them on the working cut.
  */
-import { appliedReviewChange, cutKindRow, intervalCandidates, removedJoins, reviewCutSummaries, timelineDuration, reviewKindRows, reviewReasons, type Change, type CutAssessment, type MediaAsset, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { appliedReviewChange, cutKindRow, intervalCandidates, removedJoins, reviewCutSummaries, timelineDuration, reviewKindRows, reviewReasons, type Change, type Clip, type CutAssessment, type MediaAsset, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Thread } from "./threads.js";
-import { classifyEdits, editMarkerIds, touchedMarkerIds, type EditKind } from "./editKind.js";
+import { classifyEdits, clipMutations, editMarkerIds, editPlacedClips, touchedMarkerIds, type ClipMutations, type EditKind, type PlacedClip } from "./editKind.js";
 import { playsSame } from "./playsSame.js";
 
 export interface EditRef { changeId: string; spot: number }
@@ -111,6 +111,10 @@ export interface SavedEdit extends ThreadEdit {
   markerSays?: string;
   /** Marker ID(s) placed or updated by a marker-only edit, used to detect superseding marker changes. */
   markerIds?: string[];
+  /** Non-main-picture clip(s) placed or media-replaced by this edit, used to retire stale edits and track trimmed spans. */
+  placedClips?: PlacedClip[];
+  /** True when the edit's saved range spanned those exact placed clip(s) rather than a sub-passage inside a longer clip. */
+  placedSpan?: true;
   /**
    * Scarlet named no edit for this place of its save, and the video plays there as it did before (`playsSame`): the
    * save moved a voice to another track or eased a join with a short fade. It only finished the edits round it.
@@ -413,6 +417,7 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
       ...returned.map(range => ({ range, facet: "restore" as const }))]);
     const classified = classifyEdits(change, ranges, clocks, joinsForClassify);
     const markerIdsBySpot = named && classified.markers.some(Boolean) ? editMarkerIds(change, ranges, clocks, joinsForClassify) : undefined;
+    const placedClipsBySpot = !rippleJoins && change.ops?.length ? editPlacedClips(change, ranges, clocks, joinsForClassify) : undefined;
     const fromSteps = classified.kinds;
     // What a built change's steps say is that footage was placed. An edit named on a join where footage was left out is a cut.
     const kinds = built && taken ? fromSteps.map((kind, spot) => taken.some(cut => cut.range.start >= ranges[spot]!.start - NAMED_SLACK &&
@@ -470,6 +475,16 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
         const todo = edit.check ?? classified.asks[spot];
         if (todo) edit.todo = todo;
         if (!edit.check && todo && !classified.restated[spot]) edit.markerSays = todo;
+      } else if (!edit.beforeCut) {
+        const placedClips = placedClipsBySpot?.[spot];
+        if (placedClips?.length) {
+          edit.placedClips = placedClips;
+          if (placedClips.every(p => !!p.range)) {
+            const origStart = Math.min(...placedClips.map(p => p.range!.start));
+            const origEnd = Math.max(...placedClips.map(p => p.range!.end));
+            if (Math.abs(origStart - range.start) <= 0.5 && Math.abs(origEnd - range.end) <= 0.5) edit.placedSpan = true;
+          }
+        }
       }
       if (found && edit.named && kind === "other" && range.start === range.end) edit.still = true;
       if (named && classified.nothing[spot] && kind === "other" && !edit.marker && edit.check) edit.onlyCheck = true;
@@ -485,7 +500,11 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
         : edit.marker && edit.markerIds?.length
           ? edits.findIndex(e => !e.rejected && e.marker && e.changeId !== change.id && !!e.markerIds?.length
             && e.markerIds.every(id => edit.markerIds!.includes(id)))
-          : -1;
+          : edit.placedClips?.length
+            ? edits.findIndex(e => !e.rejected && !e.marker && e.changeId !== change.id && !!e.placedClips?.length
+              && e.placedClips.every(p => p.mediaId !== undefined
+                && edit.placedClips!.some(n => n.id === p.id && n.mediaId !== undefined && n.mediaId !== p.mediaId)))
+            : -1;
       if (prior >= 0) {
         const replaced = edits[prior]!;
         const isRejected = rejects(change);
@@ -563,6 +582,8 @@ export function savedEdits(thread: Pick<Thread, "changes"> & Partial<Pick<Thread
  * - Any edit explicitly replaced (`replaces`) by an active change outside this thread.
  * - Any marker edit whose marker(s) were all updated, resolved, or removed by a strictly later active change
  *   (even when that change did not pass `replaces`, such as updating B-roll To-dos from a follow-up request).
+ * - Any clip-placement edit whose placed clip(s) were all removed, disabled, or switched to a different media file
+ *   by strictly later active changes (even without `replaces`, such as a follow-up replacing a graphic or B-roll clip).
  */
 export function filterSupersededEdits(
   edits: SavedEdit[],
@@ -570,6 +591,7 @@ export function filterSupersededEdits(
   visible: (version: string) => boolean,
   projectChanges: readonly Change[] | undefined,
   isAfter: (candidate: Change, origin: Change) => boolean,
+  read?: (version: string) => Timeline | undefined,
 ): SavedEdit[] {
   if (!edits.length) return edits;
   const allChanges = projectChanges ?? [...thread.changes, ...(thread.flagged ?? [])];
@@ -582,6 +604,8 @@ export function filterSupersededEdits(
   const activeChanges = allChanges.filter(c => c.state === "approved" && !c.revertsVersion && visible(c.appliedVersion ?? c.toVersion));
   const replacedByOutside = new Set<string>();
   const markerTouches: Array<{ change: Change; ids: string[] }> = [];
+  const mutationsByChange = new Map<string, ClipMutations>();
+  let hasFullTimelineSaves = false;
   for (const other of activeChanges) {
     if (!ownChangeIds.has(other.id)) {
       for (const item of other.timelineEdits ?? []) {
@@ -590,11 +614,92 @@ export function filterSupersededEdits(
     }
     const ids = touchedMarkerIds(other);
     if (ids.length) markerTouches.push({ change: other, ids });
+    if (other.ops?.length) {
+      const mut = clipMutations(other);
+      if (mut) mutationsByChange.set(other.id, mut);
+    } else if (read) {
+      hasFullTimelineSaves = true;
+    }
   }
-  if (!replacedByOutside.size && !markerTouches.length) return edits;
-  return edits.filter(edit => {
-    if (edit.rejected) return true;
-    if ([edit, ...edit.previous].some(ref => replacedByOutside.has(`${ref.changeId}:${ref.spot}`))) return false;
+  const hasClipChecks = edits.some(e => !e.rejected && !!e.placedClips?.length) && (mutationsByChange.size > 0 || hasFullTimelineSaves);
+  if (!replacedByOutside.size && !markerTouches.length && !hasClipChecks) return edits;
+  const orderedActive = hasClipChecks
+    ? [...activeChanges].sort((a, b) => isAfter(a, b) ? 1 : isAfter(b, a) ? -1 : 0)
+    : activeChanges;
+  const clipMaps = new WeakMap<Timeline, Map<string, Clip>>();
+  const clipIn = (timeline: Timeline, id: string): Clip | undefined => {
+    let map = clipMaps.get(timeline);
+    if (!map) {
+      map = new Map();
+      for (const track of timeline.tracks) for (const clip of track.clips) {
+        if (!map.has(clip.id)) map.set(clip.id, clip);
+      }
+      clipMaps.set(timeline, map);
+    }
+    return map.get(id);
+  };
+  const survivingClips = (edit: SavedEdit, origin: Change): PlacedClip[] | undefined => {
+    if (!edit.placedClips?.length) return;
+    const surviving: PlacedClip[] = [];
+    for (const placed of edit.placedClips) {
+      const states = new Map<string, "live" | "disabled" | "gone">([[placed.id, "live"]]);
+      for (const other of orderedActive) {
+        if (other.id === origin.id || !isAfter(other, origin)) continue;
+        if (other.ops?.length) {
+          const mut = mutationsByChange.get(other.id);
+          if (!mut) continue;
+          for (const [id, st] of [...states]) {
+            if (st === "gone") continue;
+            for (const child of mut.splits.get(id) ?? []) {
+              if (!states.has(child)) states.set(child, st);
+            }
+          }
+          if (placed.trackId && mut.removedTracks.has(placed.trackId)) {
+            for (const id of states.keys()) states.set(id, "gone");
+            break;
+          }
+          for (const [id, st] of [...states]) {
+            if (st === "gone") continue;
+            if (mut.removed.has(id)) {
+              states.set(id, "gone");
+            } else if (placed.mediaId !== undefined && mut.replacedMedia.has(id) && mut.replacedMedia.get(id) !== placed.mediaId) {
+              states.set(id, "gone");
+            } else if (mut.disabled.has(id)) {
+              states.set(id, "disabled");
+            } else if (st === "disabled" && mut.enabled.has(id)) {
+              states.set(id, "live");
+            }
+          }
+        } else if (read) {
+          const before = read(other.appliedOnto ?? other.fromVersion);
+          const after = read(other.appliedVersion ?? other.toVersion);
+          if (!before || !after || before.tracks === after.tracks) continue;
+          for (const [id, st] of [...states]) {
+            if (st === "gone") continue;
+            const prev = clipIn(before, id);
+            if (!prev) continue;
+            if (placed.mediaId !== undefined && (prev.kind !== "media" || prev.mediaId !== placed.mediaId)) continue;
+            const next = clipIn(after, id);
+            if (!next || (placed.mediaId !== undefined && (next.kind !== "media" || next.mediaId !== placed.mediaId))) {
+              states.set(id, "gone");
+            } else if (next.enabled === false) {
+              states.set(id, "disabled");
+            } else if (st === "disabled") {
+              states.set(id, "live");
+            }
+          }
+        }
+      }
+      for (const [id, st] of states) {
+        if (st === "live") surviving.push({ id, ...(placed.mediaId !== undefined && { mediaId: placed.mediaId }), ...(placed.trackId && { trackId: placed.trackId }) });
+      }
+    }
+    return surviving;
+  };
+  const kept: SavedEdit[] = [];
+  for (const edit of edits) {
+    if (edit.rejected) { kept.push(edit); continue; }
+    if ([edit, ...edit.previous].some(ref => replacedByOutside.has(`${ref.changeId}:${ref.spot}`))) continue;
     if (edit.marker && edit.markerIds?.length) {
       const origin = changeById.get(edit.changeId);
       if (origin) {
@@ -603,16 +708,26 @@ export function filterSupersededEdits(
           if (other.id === origin.id || !isAfter(other, origin)) continue;
           for (const id of ids) touchedAfter.add(id);
         }
-        if (edit.markerIds.every(id => touchedAfter.has(id))) return false;
+        if (edit.markerIds.every(id => touchedAfter.has(id))) continue;
       }
     }
-    return true;
-  });
+    if (hasClipChecks && edit.placedClips?.length) {
+      const origin = changeById.get(edit.changeId);
+      if (origin) {
+        const live = survivingClips(edit, origin);
+        if (!live?.length) continue;
+        kept.push({ ...edit, placedClips: live });
+        continue;
+      }
+    }
+    kept.push(edit);
+  }
+  return kept;
 }
 
 /** A saved edit as it is listed, without what only placing it on the working cut needs. */
 const listed = ({ version: _version, named: _named, still: _still, resaved: _resaved, putBack: _putBack,
-  markerSays: _markerSays, markerIds: _markerIds, reviewLocation: _reviewLocation, quiet: _quiet, ...edit }: SavedEdit): Omit<ThreadEdit, "at"> => edit;
+  markerSays: _markerSays, markerIds: _markerIds, placedClips: _placedClips, placedSpan: _placedSpan, reviewLocation: _reviewLocation, quiet: _quiet, ...edit }: SavedEdit): Omit<ThreadEdit, "at"> => edit;
 
 /** The edits one applied change made, in its own clock, as History lists them under its version. */
 export function changeEdits(change: Change): Omit<ThreadEdit, "at">[] {
