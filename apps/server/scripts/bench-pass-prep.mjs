@@ -33,7 +33,9 @@ globalThis.fetch = async () => { throw new Error("This benchmark runs offline, o
 
 const scratch = await mkdtemp(join(tmpdir(), "scarlet-bench-pass-"));
 const library = join(scratch, "library");
-await mkdir(join(library, "models"), { recursive: true });
+// Private from the start, as the engine requires of a library that already holds files.
+await mkdir(library, { mode: 0o700 });
+await mkdir(join(library, "models"), { mode: 0o700 });
 for (const name of await readdir(process.env.MODELS)) await copyFile(join(process.env.MODELS, name), join(library, "models", name), constants.COPYFILE_FICLONE);
 const started = performance.now();
 const seconds = () => +((performance.now() - started) / 1000).toFixed(1);
@@ -75,6 +77,8 @@ try {
       const pages = ctx.db.prepare("SELECT count(*) AS n FROM dialogue_scan_pages WHERE media_id = ?").get(m.id).n;
       const name = label[m.id], all = pagesOf(m);
       if (t) mark(`${name}: words`);
+      // A pass reads a page with the transcript's word numbers once its words are placed through that page.
+      if (t && (t.through === null || t.through >= Math.min(60, m.duration))) mark(`${name}: words placed through the first page`);
       if (t && t.through === null) mark(`${name}: words placed on the audio`);
       if (pages >= 1) mark(`${name}: first scan page`);
       if (pages >= Math.ceil(all / 2)) mark(`${name}: half the scan pages`);
@@ -89,7 +93,7 @@ try {
   }
   clearInterval(beat);
   mark("everything a pass reads is ready");
-  const notable = log.filter(line => /\[audio\]|\[speakers\]|\[whisper\]|\[dialogue|\[align\]/.test(line));
+  const notable = process.env.BENCH_LOG ? log : log.filter(line => /\[audio\]|\[speakers\]|\[whisper\]|\[dialogue|\[align\]/.test(line));
   if (notable.length) console.log(notable.join("\n"));
   if (out) {
     const transcripts = media.map((m, i) => ({ media: `rec${i + 1}`, segments: ctx.repos.transcripts.select("media_id = ?", [m.id])[0]?.segments }));
