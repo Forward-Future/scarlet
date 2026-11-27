@@ -36,6 +36,18 @@ it("keeps Space as pause while playing, even on a focused button", () => {
   expect(ignorePageShortcut(spaceOn(fit))).toBe(false);
 });
 
+it("leaves Space and Esc to the page when a cut's edge handle has focus", () => {
+  const cutHandle = document.body.appendChild(document.createElement("button"));
+  cutHandle.setAttribute("data-cut-handle", "start");
+  expect(ignorePageShortcut(spaceOn(cutHandle))).toBe(false);
+  expect(ignorePageShortcut(keyOn(cutHandle, "Escape"))).toBe(false);
+
+  const rangeHandle = document.body.appendChild(document.createElement("button"));
+  rangeHandle.setAttribute("data-range-handle", "start");
+  expect(ignorePageShortcut(spaceOn(rangeHandle))).toBe(false);
+  expect(ignorePageShortcut(keyOn(rangeHandle, "Escape"))).toBe(true);
+});
+
 it("runs page shortcuts while a closed picker still has focus", () => {
   const closed = picker(false);
   expect(isEditableTarget(closed)).toBe(false);
