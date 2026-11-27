@@ -6,7 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
-- Editing with AI costs less: Scarlet reads transcripts and its tools' instructions in about half the space, so a first cut uses fewer tokens.
+- A first cut with Gemini costs about a fifth less: Scarlet reads each stretch of the recording in fewer steps, and its tool instructions and replies are shorter.
 
 - Jumping around the timeline shows the picture and starts playing sooner, and the editor stays quick while Scarlet works.
 - While Scarlet looks through frames of a long video, or prepares one after import, the frames you scrub to on a Mac come up sooner.
