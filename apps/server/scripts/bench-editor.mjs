@@ -264,5 +264,7 @@ try {
     const sorted = [...values].sort((a, b) => a - b);
     return [name, {p50: +sorted[Math.ceil(samples * 0.5) - 1].toFixed(2), p95: +sorted[Math.ceil(samples * 0.95) - 1].toFixed(2)}];
   }));
-  console.log(JSON.stringify({samples, clips, cuts, layered, properties: includeProperties, draftResponseBytes, unit: "ms", stats}, null, 2));
+  // SCARLET_BENCH_RAW=1 adds every sample, for runs that pool several invocations.
+  const raw = process.env.SCARLET_BENCH_RAW ? { raw: Object.fromEntries(times) } : {};
+  console.log(JSON.stringify({samples, clips, cuts, layered, properties: includeProperties, draftResponseBytes, unit: "ms", stats, ...raw}, null, 2));
 } finally { await rm(root, { recursive: true, force: true }); }
