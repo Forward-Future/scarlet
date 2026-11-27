@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,7 +18,8 @@ let routes: Record<string, Handler>;
 const open: Array<{ close(): Promise<void> }> = [];
 
 beforeEach(() => {
-  workDir = mkdtempSync(join(tmpdir(), "scarlet-graphics-tools-"));
+  // The tools write under the folder's real path: /private/var on macOS, the long name of an 8.3 TEMP on Windows.
+  workDir = realpathSync.native(mkdtempSync(join(tmpdir(), "scarlet-graphics-tools-")));
   sent = [];
   routes = {};
 });

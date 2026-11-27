@@ -67,7 +67,7 @@ beforeEach(async () => {
   probe.mockReset().mockImplementation((path, signal) => scarletRenderAdapter.probeMedia(path, signal));
   still.fn.mockReset().mockResolvedValue(drawn());
   workspace = createApp({
-    dataDir: directory,
+    dataDir: join(directory, "data"),
     skillsSeedDir: join(directory, "empty-seed"),
     env: { SCARLET_CHROME: chrome },
     render,
@@ -436,7 +436,9 @@ describe("saving a project graphic as a style guide", () => {
     expect(noChrome.instructions).not.toContain("## Palette");
     expect(noChrome.instructions).not.toContain("## Attached assets");
     expect(still.fn).toHaveBeenLastCalledWith(expect.objectContaining({ width: 1920, height: 1080, time: 0.5 }));
-    expect(logged.filter(l => l.includes("[style-guides]"))).toEqual([]);
+    expect(logged.filter(l => l.includes("[style-guides]"))).toEqual([
+      expect.stringMatching(new RegExp(`^\\[style-guides\\] ${noChrome.id} saved from graphic med_plain with 0 files, without a preview, in `)),
+    ]);
 
     still.fn.mockRejectedValueOnce(new Error("page crashed"));
     const crashed = await save("med_plain", "crashed");
@@ -468,7 +470,7 @@ describe("saving a project graphic as a style guide", () => {
     expect(g.instructions.length).toBeLessThan(26_000);
   });
 
-  it.skipIf(process.getuid?.() === 0)("takes the new guide back out when one of the graphic's files can't be copied", async () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("takes the new guide back out when one of the graphic's files can't be copied", async () => {
     const folder = graphic("med_locked", { "index.html": "<p>x</p>", "secret.png": "png" });
     chmodSync(join(folder, "secret.png"), 0o000);
     try {
