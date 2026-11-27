@@ -20,6 +20,6 @@ Cover what's being said with something the viewer can see. Plan in words first; 
 
 - When the editor sends a To do back asking for it, make that one and only that one.
 - For B-roll, use footage in the project's Media, or what the line is about on the web (an article, a post, a site, the part of a video that shows it), framed as the line needs. If neither fits, say what to shoot or find, and leave the To do in place.
-- For a graphic, follow the library's skill for graphics, if it has one.
+- For a graphic, follow the library's skill for graphics, if it has one. Choose deliberately between a transparent overlay on A-cam (for callouts, key stats, short lists, and moments where seeing the speaker helps — keeping the speaker's face and silhouette clear, reframing A-cam smoothly if needed) and a full-screen graphic (for title/end cards or complex animated diagrams and visual explainers that genuinely need the whole frame).
 - Keep the speaker's voice running under B-roll. Never cover the face on the line that carries the point.
 - Hold B-roll about 2 to 5 seconds and come in and out on a beat, not mid-word.
