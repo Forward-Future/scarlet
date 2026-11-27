@@ -3837,11 +3837,11 @@ it("widens the times of a pass's list once one of its rows is past an hour, so a
     const rows = () => lists().flatMap(list => [...list.querySelectorAll<HTMLElement>(":scope > li[data-thread] > button")]);
     // Priority list: flagged wrap (0:11) first, then confident captions (0:00) and music bed (1:02:07).
     expect(rows().map(row => row.querySelector(".simple-pass-time")!.firstChild!.textContent)).toEqual(["0:11", "0:00", "1:02:07"]);
-    // "1:02:07" is two characters longer than "12:34", about 48px of the time's type against 34px. Every row on screen
-    // takes the wider column, so that time, and its amber tint on a row that needs the editor, stay clear of the
-    // words, and the words keep one edge down the block.
-    expect([...lists().map(list => list.className), ...rows().map(row => styled(row, "grid-template-columns")[0])])
-      .toEqual(["simple-pass-list has-hours", ...Array(3).fill("52px minmax(0, 1fr) auto")]);
+    // "1:02:07" is two characters longer than "12:34", about 48px of the time's type against 34px. The list shares
+    // its wider column across every row via subgrid (60px = 52px + 8px button left padding), so that time, and its
+    // amber tint on a row that needs the editor, stay clear of the words and keep one edge down the block.
+    expect([...lists().map(list => [list.className, styled(list, "grid-template-columns")[0]]), ...rows().map(row => styled(row, "grid-template-columns")[0])])
+      .toEqual([["simple-pass-list has-hours", "60px minmax(0, 1fr) auto"], ...Array(3).fill("subgrid")]);
     // Once the safe edits (including the row past an hour) are kept and finish lingering, only the flagged edit remains and keeps the narrow column.
     vi.useFakeTimers();
     try {
@@ -3850,7 +3850,8 @@ it("widens the times of a pass's list once one of its rows is past an hour, so a
     } finally {
       vi.useRealTimers();
     }
-    expect([lists().map(list => list.className), rows().length, styled(rows()[0]!, "grid-template-columns")[0]]).toEqual([["simple-pass-list"], 1, "38px minmax(0, 1fr) auto"]);
+    expect([lists().map(list => [list.className, styled(list, "grid-template-columns")[0]]), rows().length, styled(rows()[0]!, "grid-template-columns")[0]])
+      .toEqual([[["simple-pass-list", "46px minmax(0, 1fr) auto"]], 1, "subgrid"]);
   });
 });
 

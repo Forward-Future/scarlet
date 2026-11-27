@@ -1559,4 +1559,20 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(betaCss).toContain(':not([data-lingering="working"]) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }');
     expect(betaCss).toContain('[data-lingering="working"][data-working="pending"]:not([data-paused])');
   });
+
+  it("aligns version numbers into one vertical column across rows in both default and beta review lists", async () => {
+    const { readFileSync } = await import("node:fs");
+    const simpleCss = readFileSync(`${import.meta.dirname}/../../simple.css`, "utf8");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    // Shared subgrid tracks keep the right-hand tag column uniform across rows (e.g. B-roll, Overlay, Edit, Graphic).
+    expect(simpleCss).toMatch(/\.simple-pass-list\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*46px minmax\(0,\s*1fr\) auto;/);
+    expect(simpleCss).toMatch(/\.simple-pass-list\s*>\s*li\s*>\s*button\s*\{[^}]*grid-template-columns:\s*subgrid;/);
+    expect(simpleCss).toMatch(/\.simple-pass-value,\s*\.simple-edit-value\s*\{[^}]*justify-self:\s*end;/);
+    expect(simpleCss).toMatch(/\.simple-edit-check,\s*\.simple-pass-check\s*\{[^}]*justify-self:\s*end;/);
+    // Title text expands to fill the title track so every row's v2/v3 lands on the same vertical line.
+    expect(simpleCss).toMatch(/:is\(\.simple-pass-label,\s*\.simple-edit-title\):has\(>\s*\.edit-version\)\s*>\s*:is\(\.simple-pass-words,\s*\.simple-edit-words\)\s*\{\s*flex:\s*1 1 auto;\s*\}/);
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail-list\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*46px minmax\(0,\s*1fr\) auto;/);
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail-list\s+\.simple-pass-list\.simple-edits\s*\{[^}]*grid-template-columns:\s*subgrid;/);
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail\s+:is\(\.simple-edit-title,\s*\.simple-pass-label\):has\(>\s*\.edit-version\):not\(:has\(>\s*\.simple-pass-more\)\)\s*>\s*:is\(\.simple-edit-words,\s*\.simple-pass-words\)\s*\{\s*flex:\s*1 1 auto;\s*\}/);
+  });
 });
