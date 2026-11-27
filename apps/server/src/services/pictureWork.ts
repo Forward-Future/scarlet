@@ -25,27 +25,70 @@ export function framePriority(query: string | undefined): PicturePriority {
 }
 const rankOf = (priority: LanePriority = false) => priority === true ? 2 : priority === "timeline" ? 1 : priority === "background" ? -1 : 0;
 
+/** How long after the editor's last picture they still count as looking: the gap between two frames of a scrub. */
+const EDITOR_LOOKING_MS = 5_000;
+
 export class PictureLane {
   private active = 0;
-  private readonly waiting: Array<{ rank: number; start(): void }> = [];
+  /** The agent's decodes let in past `slots` while the editor looks, each on the GPU (`frameDecoder`). */
+  private extraActive = 0;
+  private readonly waiting: Array<{ rank: number; gpu: boolean; start(extra: boolean): void }> = [];
+  private editorRunning = 0;
+  private editorLast = -Infinity;
 
   /**
    * `slots` decodes run at a time, and the editor's own may take `reserved` more. On 2026-11-11 a frame the editor
    * scrubbed to waited two minutes for a slot, each held by a long decode for a pass, and the window's other requests
    * waited behind it.
    */
-  constructor(readonly slots: number, readonly reserved = 1) {}
+  constructor(readonly slots: number, readonly reserved = 1, private readonly now = () => performance.now()) {}
 
   private room(rank: number) { return this.active < this.slots + (rank === 2 ? this.reserved : 0); }
 
-  async run<T>(job: () => Promise<T>, options: { priority?: LanePriority; signal?: AbortSignal } = {}): Promise<T> {
+  /**
+   * Room past the slots for one agent's decode that goes to the GPU while the editor looks. Each takes a little longer
+   * on VideoToolbox than on the CPU and only a little of the cores, so one more at a time keeps the agent's pace: bursts
+   * of 24 frames of a 55-minute 4K recording took 7.3 s at the median against 8.9 s, with the editor's frames among them
+   * as quick (0.34 s against 0.33 s). As many again as the slots took 6.4 s, but the editor's took 0.46 s against 0.37 s
+   * (2026-11-26).
+   */
+  private extraRoom(gpu: boolean) { return gpu && this.extraActive < 1 && this.editorLooking(); }
+
+  /**
+   * Whether the editor is looking at pictures: one of theirs is decoding, or one was in the last few seconds. A decode
+   * of the agent's started meanwhile goes to the GPU where it can (`frameDecoder`), leaving the cores to the editor's.
+   */
+  editorLooking(): boolean {
+    return this.editorRunning > 0 || this.now() - this.editorLast < EDITOR_LOOKING_MS;
+  }
+
+  /**
+   * `gpu`: the job decodes on the GPU while the editor looks, so it may then run past the slots. Only a job that checks
+   * `editorLooking()` as it starts and goes to the GPU when it holds should say so.
+   */
+  async run<T>(job: () => Promise<T>, options: { priority?: LanePriority; signal?: AbortSignal; gpu?: boolean } = {}): Promise<T> {
     const { signal } = options;
     const rank = rankOf(options.priority);
     signal?.throwIfAborted();
+    if (rank === 2) {
+      this.editorRunning++;
+      // The editor has started looking: the agent's waiting GPU decodes can go now.
+      this.admit();
+    }
+    try {
+      return await this.take(job, rank, !!options.gpu && rank === 0, signal);
+    } finally {
+      if (rank === 2) { this.editorRunning--; this.editorLast = this.now(); }
+    }
+  }
+
+  private async take<T>(job: () => Promise<T>, rank: number, gpu: boolean, signal: AbortSignal | undefined): Promise<T> {
+    let extra = false;
     if (this.room(rank)) this.active++;
+    else if (this.extraRoom(gpu)) { this.extraActive++; extra = true; }
     else {
-      await new Promise<void>((resolve, reject) => {
-        const entry = { rank, start: () => { signal?.removeEventListener("abort", cancel); resolve(); } };
+      extra = await new Promise<boolean>((resolve, reject) => {
+        const entry = { rank, gpu, start: (past: boolean) => { signal?.removeEventListener("abort", cancel); resolve(past); } };
         const cancel = () => {
           const index = this.waiting.indexOf(entry);
           if (index >= 0) this.waiting.splice(index, 1);
@@ -62,12 +105,20 @@ export class PictureLane {
       signal?.throwIfAborted();
       return await job();
     } finally {
-      this.active--;
-      // The first in line that has room: the editor's while any slot is free, the others' while one of their own is.
-      for (let index; (index = this.waiting.findIndex(w => this.room(w.rank))) >= 0;) {
-        this.active++;
-        this.waiting.splice(index, 1)[0]!.start();
-      }
+      if (extra) this.extraActive--; else this.active--;
+      this.admit();
+    }
+  }
+
+  /** Start what has room: the editor's while any slot is free, the others' while one of their own is, then GPU decodes past them. */
+  private admit() {
+    for (let index; (index = this.waiting.findIndex(w => this.room(w.rank))) >= 0;) {
+      this.active++;
+      this.waiting.splice(index, 1)[0]!.start(false);
+    }
+    for (let index; (index = this.waiting.findIndex(w => this.extraRoom(w.gpu))) >= 0;) {
+      this.extraActive++;
+      this.waiting.splice(index, 1)[0]!.start(true);
     }
   }
 
@@ -96,4 +147,24 @@ export async function pictureDecoder(accel: HwAccel): Promise<"cuda" | "videotoo
   if (accel === "none") return;
   if (accel === "videotoolbox" || (accel === "auto" && process.platform === "darwin")) return "videotoolbox";
   if (accel === "nvenc" || (accel === "auto" && await resolveVideoEncoder("auto").catch(() => "libx264") === "h264_nvenc")) return "cuda";
+}
+
+/**
+ * The decoder for one source frame. An NVIDIA GPU decodes every frame, as `pictureDecoder` finds it. On a Mac the CPU
+ * is quickest for one frame alone, but a frame of the agent's started while the editor looks at pictures goes to
+ * VideoToolbox: the same JPEG, byte for byte, with the cores left to the editor's. While an agent asked for bursts of
+ * 24 frames of a 55-minute 4K recording (a keyframe every 8 s), the editor's own frames took 1.0 s at the median and
+ * 2.0 s at p95 with every frame on the CPU, and 0.51 s and 1.2 s with the agent's on VideoToolbox (0.4 s alone;
+ * 2026-11-26). Each of the agent's takes a little longer there, so they go back to the CPU once the editor has looked
+ * away. An HDR file's frame stays on the CPU, which tone-maps it.
+ */
+export async function frameDecoder(accel: HwAccel, priority: PicturePriority, lane: PictureLane, hdr?: unknown): Promise<"cuda" | "videotoolbox" | undefined> {
+  const gpu = await pictureDecoder(accel);
+  if (gpu === "cuda") return gpu;
+  if (gpu === "videotoolbox" && priority === false && !hdr && lane.editorLooking()) return gpu;
+}
+
+/** Whether `frameDecoder` sends this frame to a Mac's media engine while the editor looks: the lane's `gpu` option. */
+export async function frameGoesToGpu(accel: HwAccel, priority: PicturePriority, hdr?: unknown): Promise<boolean> {
+  return priority === false && !hdr && await pictureDecoder(accel) === "videotoolbox";
 }
