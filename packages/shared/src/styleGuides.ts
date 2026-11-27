@@ -226,7 +226,7 @@ export function styleGuideCommands(draft: string) {
 /** Unique @style-name slugs referenced in chat text or skill instructions (ignoring emails). */
 export function styleGuideMentions(text: string): string[] {
   const names = Array.from(
-    text.matchAll(/(?:^|[\s(])@([a-z0-9][a-z0-9-]*)(?=[\s.,;:!?)]|$)/gim),
+    text.matchAll(/(?:^|[\s(])[*`"'“‘]*@([a-z0-9][a-z0-9-]*)(?=[\s.,;:!?)*`"'’”]|$)/gim),
     match => match[1]!.toLowerCase(),
   );
   return [...new Set(names)];

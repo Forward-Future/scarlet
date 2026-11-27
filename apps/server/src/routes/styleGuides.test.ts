@@ -407,6 +407,23 @@ describe("prompt resolution priority (chat @mention > skill @mention > default)"
     expect(p3).toContain("@neon-dark");
     expect(p3).toContain("NEON_DARK_RULE");
     expect(p3).not.toContain("DEFAULT_CREAM_RULE");
+
+    // 4. Skill mentioning @neon-dark next to markdown formatting still overrides default.
+    const boldSkillRes = await api("POST", "/skills", {
+      name: "chapter-cards-bold",
+      description: "Builds chapter cards",
+      content: "Always draw chapter cards in **@neon-dark**.",
+    });
+    expect(boldSkillRes.status).toBe(201);
+    const { skill: boldSkill } = await boldSkillRes.json() as { skill: { id: string } };
+    const t4 = (await (await api("POST", `/projects/${project.id}/tasks`, {
+      agent: "claude",
+      instruction: "Run /chapter-cards-bold",
+      context: { skillIds: [boldSkill.id] },
+    })).json() as { task: Task }).task;
+    const p4 = await prompt(t4);
+    expect(p4).toContain("NEON_DARK_RULE");
+    expect(p4).not.toContain("DEFAULT_CREAM_RULE");
     expect(defGuide.id).not.toBe(altGuide.id);
   });
 
