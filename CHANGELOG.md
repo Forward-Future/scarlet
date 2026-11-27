@@ -4,6 +4,10 @@ What changed in Scarlet, newest first, in the words an editor would use. Scarlet
 
 Add one line under today's date for each change an editor would notice. Leave out changes to tests, builds and tooling.
 
+## November 27, 2026
+
+- Simplified edit hover cards in the edits sidebar: dropped clip file names and repeated rationale, and combined live status and model into one short line (such as "Revising with GPT-6.2-Sol").
+
 ## November 26, 2026
 
 - A first cut with Gemini costs about a fifth less: Scarlet reads each stretch of the recording in fewer steps, and its tool instructions and replies are shorter.

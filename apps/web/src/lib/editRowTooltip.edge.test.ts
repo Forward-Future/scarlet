@@ -114,35 +114,16 @@ describe("editRowTooltip", () => {
     });
   });
 
-  it("names an inserted file from the clip the change added, by its label or a helpful file name", () => {
+  it("summarizes an insert without repeating clip filenames", () => {
     const added = (clip: Record<string, unknown>) => change({ ops: [
       { op: "rippleInsertGap", at: 10, duration: 4 },
-      { op: "addClip", trackId: "trk_v1" },
-      { op: "addClip", trackId: "trk_c1", clip: { id: "cap", kind: "caption", timelineIn: 10, timelineOut: 14, text: "Hi" } },
-      { op: "addClip", trackId: "trk_v1", clip: mediaClip({ id: "far", mediaId: "med_broll", timelineIn: 80 }) },
       { op: "addClip", trackId: "trk_v1", clip },
     ] } as Partial<Change>);
     const row = edit({ label: "Insert demo", kind: "insert", range: { start: 10, end: 10 } });
-    expect(editRowTooltip(row, { change: added(mediaClip({ id: "c1", label: " Product demo " })), media }).meta).toBe("Inserted Product demo · +4.0 s");
-    expect(editRowTooltip(row, { change: added(mediaClip({ id: "c1", mediaId: "med_broll" })), media }).meta).toBe("Inserted city-skyline · +4.0 s");
-    // A camera's own file name says nothing, and nor does a file that isn't in the project.
-    expect(editRowTooltip(row, { change: added(mediaClip({ id: "c1", mediaId: "med_raw" })), media }).meta).toBe("Insert · +4.0 s");
-    expect(editRowTooltip(row, { change: added(mediaClip({ id: "c1", mediaId: "med_gone" })), media }).meta).toBe("Insert · +4.0 s");
-    expect(editRowTooltip({ ...row, rejected: true }, { change: added(mediaClip({ id: "c1", mediaId: "med_broll" })), media }).meta).toBe("Rejected · Inserted city-skyline · +4.0 s");
-  });
-
-  it("names an inserted file from the main track's clip that lines up with the edit, passing over other clips", () => {
-    const timeline = timelineOf(
-      { id: "trk_c1", kind: "caption", clips: [{ id: "cap", kind: "caption", timelineIn: 20, timelineOut: 24, text: "Hi" }] },
-      mainTrack(
-        { id: "col", kind: "color", color: "#000", timelineIn: 20, timelineOut: 24 },
-        mediaClip({ id: "raw", mediaId: "med_raw", timelineIn: 20 }),
-        mediaClip({ id: "named", label: "Screen demo", timelineIn: 20 }),
-      ),
-    );
-    expect(editRowTooltip(edit({ label: "Insert", kind: "insert", range: { start: 20, end: 24 } }), { timeline, media }).meta).toBe("Inserted Screen demo · +4.0 s");
-    expect(editRowTooltip(edit({ label: "Insert", kind: "insert", range: { start: 30, end: 34 } }), { timeline, media }).meta).toBe("Insert · +4.0 s");
-    expect(editRowTooltip(edit({ label: "Insert", kind: "insert", range: { start: 30, end: 30 } }), { timeline: timelineOf({ id: "trk_a1", kind: "audio", clips: [] }) })).toEqual({ tip: "Insert", meta: "Insert" });
+    expect(editRowTooltip(row, { change: added(mediaClip({ id: "c1", label: " Product demo " })), media }).meta).toBe("Insert · +4.0 s");
+    expect(editRowTooltip(row, { change: added(mediaClip({ id: "c1", mediaId: "med_broll" })), media }).meta).toBe("Insert · +4.0 s");
+    expect(editRowTooltip({ ...row, rejected: true }, { change: added(mediaClip({ id: "c1", mediaId: "med_broll" })), media }).meta).toBe("Rejected · Insert · +4.0 s");
+    expect(editRowTooltip(edit({ label: "Insert", kind: "insert", range: { start: 30, end: 30 } }))).toEqual({ tip: "Insert", meta: "Insert" });
   });
 
   it("says a marker is to do and a spot Scarlet only flagged needs a look, with how many places and the row's status", () => {
@@ -157,13 +138,13 @@ describe("editRowTooltip", () => {
     expect(editRowTooltip(edit({ label: "Find a cutaway.", marker: true, todo: "find a  cutaway" }))).toEqual({ tip: "Find a cutaway.", meta: "To do" });
   });
 
-  it("prefers what the review says over the bare check while it waits, and drops a revision's or a finished row's check", () => {
+  it("prefers what the review says over the bare check while it waits, and drops checks and general reasons when revised or done", () => {
     const row = edit({ label: "Tightened", kind: "cut", check: "Listen at the join", reviewSays: "The breath might clip", reason: "Long breath", beforeCut: { version: "v1", removed: { start: 10, end: 11 } } });
     expect(editRowTooltip(row).detail).toBe("The breath might clip");
-    expect(editRowTooltip(row, { status: "Done" })).toEqual({ tip: "Tightened", meta: "Cut · −1.0 s · Done", detail: "Long breath" });
-    expect(editRowTooltip({ ...row, check: "Revised", reviewSays: undefined }).detail).toBe("Long breath");
+    expect(editRowTooltip(row, { status: "Done" })).toEqual({ tip: "Tightened", meta: "Cut · −1.0 s · Done" });
+    expect(editRowTooltip({ ...row, check: "Revised", reviewSays: undefined })).toEqual({ tip: "Tightened", meta: "Cut · −1.0 s" });
     expect(editRowTooltip({ ...row, rejected: true }).meta).toBe("Rejected cut · −1.0 s");
-    // A reason is the title when there's a summary, so it is never repeated underneath.
+    // A reason is the title when there's a summary, and never repeated underneath.
     expect(editRowTooltip(edit({ label: "Row", summary: "Cut the aside", reason: "Cut the aside." }))).toEqual({ tip: "Cut the aside", meta: "Lasts 4.0 s" });
     // A reason of only spaces still makes the summary the title, and says nothing underneath.
     expect(editRowTooltip(edit({ label: "Row", summary: "Cut the aside", reason: "  " }))).toEqual({ tip: "Cut the aside", meta: "Lasts 4.0 s" });
@@ -192,15 +173,15 @@ describe("editRowTooltip", () => {
       expect(keyed("zoom", 1.3, 1).meta).toBe("Zooms out to 100%");
       expect(keyed("zoom", 1.2, 1.5).meta).toBe("Zooms 120% to 150%");
       expect(keyed("reframe", 1, 0.5).meta).toBe("Scales to 50%");
-      expect(editRowTooltip(edit({ label: "Zoom", kind: "zoom" }), ctx(update("clp_main", { opacity: 0.5 }))).meta).toBe("Zoom · Interview at 50% opacity");
-      expect(editRowTooltip(edit({ label: "Frame", kind: "reframe" }), ctx(update("clp_main", { opacity: 0.5 }))).meta).toBe("Reframe · Interview at 50% opacity");
+      expect(editRowTooltip(edit({ label: "Zoom", kind: "zoom" }), ctx(update("clp_main", { opacity: 0.5 }))).meta).toBe("Zoom · 50% opacity");
+      expect(editRowTooltip(edit({ label: "Frame", kind: "reframe" }), ctx(update("clp_main", { opacity: 0.5 }))).meta).toBe("Reframe · 50% opacity");
     });
 
     it("says a speed change as faster, slower or normal", () => {
       const speed = (rate: unknown) => editRowTooltip(edit({ label: "Speed", kind: "speed" }), ctx(update("clp_main", { speed: rate }))).meta;
       expect(speed(0.5)).toBe("0.5× slower");
       expect(speed(1)).toBe("Normal speed · 4.0 s");
-      expect(editRowTooltip(edit({ label: "Speed", kind: "speed" }), ctx(update("clp_main", { opacity: 0.25 }))).meta).toBe("Speed · Interview at 25% opacity");
+      expect(editRowTooltip(edit({ label: "Speed", kind: "speed" }), ctx(update("clp_main", { opacity: 0.25 }))).meta).toBe("Speed · 25% opacity");
     });
 
     it("says a transition without a length, and leaves words that already say transition alone", () => {
@@ -214,45 +195,39 @@ describe("editRowTooltip", () => {
       expect(editRowTooltip(edit({ label: "Caption", kind: "text" }), ctx(caption)).meta).toBe("Caption: “Hello · 4.0 s");
     });
 
-    it("says a voice cleanup's mix in brackets", () => {
-      expect(editRowTooltip(edit({ label: "Clean", kind: "voice" }), ctx(update("clp_main", { effects: [{ type: "voiceCleanup", params: { mix: 0.4 } }] }))).meta).toBe("Voice cleanup on Interview (40%)");
+    it("says a voice cleanup's mix in brackets without the clip filename", () => {
+      expect(editRowTooltip(edit({ label: "Clean", kind: "voice" }), ctx(update("clp_main", { effects: [{ type: "voiceCleanup", params: { mix: 0.4 } }] }))).meta).toBe("Voice cleanup (40%)");
     });
 
-    it("says a sound's level as lowered, raised, louder, quieter, muted or full volume", () => {
+    it("says a sound's level as lowered, raised, louder, quieter, muted or full volume without clip filenames", () => {
       const audio = (patch: Record<string, unknown>, clipId = "clp_music") => editRowTooltip(edit({ label: "Sound", kind: "audio" }), ctx(update(clipId, patch))).meta;
-      expect(audio({ volume: 2 })).toBe("Audio · Warm bed louder (+6 dB)");
-      expect(audio({ volume: 1.01 })).toBe("Audio · Warm bed at full volume · 4.0 s");
-      expect(audio({ volume: 0 }, "clp_gone")).toBe("Audio · Muted · 4.0 s");
+      expect(audio({ volume: 2 })).toBe("Audio · louder (+6 dB)");
+      expect(audio({ volume: 1.01 })).toBe("Audio · at full volume · 4.0 s");
+      expect(audio({ volume: 0 }, "clp_gone")).toBe("Audio · muted · 4.0 s");
       expect(audio({ volume: 0.5 }, "clp_gone")).toBe("Audio · quieter (−6 dB)");
-      expect(audio({ volumeKeyframes: [{ time: 0, db: 0 }, { time: 1, db: 6 }, { time: 2, db: 0 }] })).toBe("Audio · Warm bed raised to +6 dB");
+      expect(audio({ volumeKeyframes: [{ time: 0, db: 0 }, { time: 1, db: 6 }, { time: 2, db: 0 }] })).toBe("Audio · raised to +6 dB");
       expect(audio({ volumeKeyframes: [{ time: 0, db: -12 }] }, "clp_gone")).toBe("Audio · lowered to −12 dB");
       expect(editRowTooltip(edit({ label: "Dip", kind: "dip" }), ctx(update("clp_music", { volumeKeyframes: [{ time: 0, db: -6 }, { time: 1, db: 0 }, { time: 2, db: -6 }] }))).meta)
-        .toBe("Music dip · Warm bed lowered to −6 dB");
-      expect(audio({ volumeKeyframes: [] })).toBe("Audio · Warm bed back to a steady level · 4.0 s");
+        .toBe("Music dip · lowered to −6 dB");
+      expect(audio({ volumeKeyframes: [] })).toBe("Audio · back to a steady level · 4.0 s");
     });
 
-    it("says a sound file the change added to an audio track, at its level", () => {
+    it("summarizes added audio clips by level and length without clip filenames", () => {
       const added = (volume?: number, mediaId = "med_music") => editRowTooltip(edit({ label: "Music", kind: "audio" }), ctx(change({ ops: [
         { op: "addClip", trackId: "trk_a1", clip: mediaClip({ id: "new", mediaId, ...(volume !== undefined && { volume }) }) },
       ] } as Partial<Change>))).meta;
-      expect(added()).toBe("Audio · Added Warm bed · 4.0 s");
-      expect(added(0)).toBe("Audio · Added Warm bed (muted) · 4.0 s");
-      expect(added(1.01)).toBe("Audio · Added Warm bed · 4.0 s");
-      expect(added(0, "med_raw")).toBe("Audio · Added sound (muted) · 4.0 s");
+      expect(added()).toBe("Audio · 4.0 s");
+      expect(added(0)).toBe("Audio · muted · 4.0 s");
+      expect(added(1.01)).toBe("Audio · 4.0 s");
+      expect(added(0.5)).toBe("Audio · quieter (−6 dB)");
     });
 
-    it("says a sound file the change added at a set level in brackets", () => {
-      expect(editRowTooltip(edit({ label: "Music", kind: "audio" }), ctx(change({ ops: [
-        { op: "addClip", trackId: "trk_a1", clip: mediaClip({ id: "new", mediaId: "med_music", volume: 0.5 }) },
-      ] } as Partial<Change>))).meta).toBe("Audio · Added Warm bed (−6 dB)");
-    });
-
-    it("says an overlay's opacity in brackets and reads a b-roll as an overlay", () => {
+    it("says an overlay's opacity cleanly and reads a b-roll as an overlay without clip filenames", () => {
       const timelineWithOverlay = timelineOf(mainTrack(), { id: "trk_v2", kind: "video", clips: [mediaClip({ id: "clp_o", mediaId: "med_broll" })] });
       expect(editRowTooltip(edit({ label: "Over", kind: "overlay" }), { change: update("clp_o", { opacity: 0.5 }), timeline: timelineWithOverlay, media }).meta)
-        .toBe("Overlay · city-skyline (50% opacity)");
+        .toBe("Overlay · 50% opacity · 4.0 s");
       expect(editRowTooltip(edit({ label: "Broll", kind: "broll" }), { change: update("clp_o", { opacity: 0.5 }), timeline: timelineWithOverlay, media }).meta)
-        .toBe("B-roll · city-skyline (50% opacity) · 4.0 s");
+        .toBe("B-roll · 50% opacity · 4.0 s");
     });
   });
 
@@ -270,22 +245,22 @@ describe("editRowTooltip", () => {
         ] }),
         media,
       }).meta;
-      expect(audio({ volume: 0.5, volumeKeyframes: [{ time: 2, db: 0 }, { time: 1, db: -12 }, { time: 3, db: -12 }, { db: 40 }] }, "dip")).toBe("Music dip · Warm bed lowered to −18 dB");
-      expect(audio({ volumeKeyframes: [{ time: 0, db: 0 }, { time: 1, db: 3 }] })).toBe("Audio · Warm bed raised to +3 dB");
-      expect(audio({ volume: 0, volumeKeyframes: [{ time: 0, db: 0 }, { time: 1, db: 0 }] })).toBe("Audio · Warm bed muted · 4.0 s");
+      expect(audio({ volume: 0.5, volumeKeyframes: [{ time: 2, db: 0 }, { time: 1, db: -12 }, { time: 3, db: -12 }, { db: 40 }] }, "dip")).toBe("Music dip · lowered to −18 dB");
+      expect(audio({ volumeKeyframes: [{ time: 0, db: 0 }, { time: 1, db: 3 }] })).toBe("Audio · raised to +3 dB");
+      expect(audio({ volume: 0, volumeKeyframes: [{ time: 0, db: 0 }, { time: 1, db: 0 }] })).toBe("Audio · muted · 4.0 s");
       expect(audio({ mediaId: "med_raw", volume: 2, volumeKeyframes: "loud" })).toBe("Audio · louder (+6 dB)");
       expect(audio({ mediaId: "med_raw", volumeKeyframes: [{ time: 0, db: -6 }, { time: 1, db: 0 }, { time: 2, db: -6 }] })).toBe("Audio · lowered to −6 dB");
-      expect(audio({ volume: 1.01 })).toBe("Audio · Warm bed at full volume · 4.0 s");
-      expect(audio({})).toBe("Audio · Warm bed · 4.0 s");
+      expect(audio({ volume: 1.01 })).toBe("Audio · at full volume · 4.0 s");
+      expect(audio({})).toBe("Audio · 4.0 s");
       expect(audio({ mediaId: "med_raw" })).toBe("Audio · 4.0 s");
       expect(audio({ mediaId: "med_raw", volumeKeyframes: [{ time: 0, db: 0 }] })).toBe("Audio · 4.0 s");
       // Keys without a time or level move nothing; a dip back to the clip's own raised level reads as 0 dB.
       expect(audio({ mediaId: "med_raw", volumeKeyframes: [{ db: -6 }, { time: 1 }, null] })).toBe("Audio · 4.0 s");
-      expect(audio({ volume: 2, volumeKeyframes: [{ time: 0, db: -6 }] })).toBe("Audio · Warm bed lowered to 0 dB");
+      expect(audio({ volume: 2, volumeKeyframes: [{ time: 0, db: -6 }] })).toBe("Audio · lowered to 0 dB");
       expect(audio({ mediaId: "med_gone" })).toBe("Audio · 4.0 s");
     });
 
-    it("finds the voice cleanup on a clip under the edit, its mix and the clip's name", () => {
+    it("finds the voice cleanup on a clip under the edit and its mix without filenames", () => {
       const voice = (clip: Record<string, unknown>) => editRowTooltip(edit({ label: "Clean", kind: "voice" }), {
         timeline: timelineOf(mainTrack(
           { id: "cap", kind: "caption", timelineIn: 10, timelineOut: 14, text: "x" },
@@ -295,20 +270,20 @@ describe("editRowTooltip", () => {
         )),
         media,
       }).meta;
-      expect(voice({ label: "Host", effects: [{ type: "voiceCleanup", params: { mix: -0.5 } }] })).toBe("Voice cleanup on Host (0%)");
+      expect(voice({ label: "Host", effects: [{ type: "voiceCleanup", params: { mix: -0.5 } }] })).toBe("Voice cleanup (0%)");
       expect(voice({ mediaId: "med_raw", effects: [{ type: "eq" }, { type: "voiceCleanup" }] })).toBe("Voice cleanup · 4.0 s");
-      expect(voice({ effects: [{ type: "voiceCleanup", params: { mix: 1 } }] })).toBe("Voice cleanup on Interview · 4.0 s");
+      expect(voice({ effects: [{ type: "voiceCleanup", params: { mix: 1 } }] })).toBe("Voice cleanup · 4.0 s");
     });
 
-    it("finds the clip over the main picture for a b-roll, graphic or overlay", () => {
+    it("finds the clip over the main picture for a b-roll, graphic or overlay without filenames", () => {
       const over = (kind: "broll" | "graphic" | "overlay", clip: Record<string, unknown>) => editRowTooltip(edit({ label: "Over", kind }), {
         timeline: timelineOf(mainTrack(), { id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "music", mediaId: "med_music" })] },
           { id: "trk_v2", kind: "video", clips: [mediaClip({ id: "early", timelineIn: 0, sourceOut: 2 }), mediaClip({ id: "raw", mediaId: "med_raw" }), clip] }),
         media,
       }).meta;
-      expect(over("graphic", { id: "card", kind: "color", color: "#111", timelineIn: 10, timelineOut: 14 })).toBe("Graphic · A colour card · 4.0 s");
-      expect(over("overlay", mediaClip({ id: "o", mediaId: "med_broll", opacity: 0.4 }))).toBe("Overlay · city-skyline (40% opacity)");
-      expect(over("broll", mediaClip({ id: "o", mediaId: "med_broll", opacity: 1 }))).toBe("B-roll · city-skyline · 4.0 s");
+      expect(over("graphic", { id: "card", kind: "color", color: "#111", timelineIn: 10, timelineOut: 14 })).toBe("Graphic · Colour card · 4.0 s");
+      expect(over("overlay", mediaClip({ id: "o", mediaId: "med_broll", opacity: 0.4 }))).toBe("Overlay · 40% opacity · 4.0 s");
+      expect(over("broll", mediaClip({ id: "o", mediaId: "med_broll", opacity: 1 }))).toBe("B-roll · 4.0 s");
       expect(over("overlay", mediaClip({ id: "o", mediaId: "med_raw" }))).toBe("Overlay · 4.0 s");
     });
 
@@ -348,14 +323,14 @@ describe("editRowTooltip", () => {
 
     it("reads an unclassified edit as the caption, sound or overlay that lines up with it exactly", () => {
       const other = (tracks: Track[], range = { start: 10, end: 14 }) => editRowTooltip(edit({ label: "Saved", kind: "other", range }), { timeline: timelineOf(mainTrack(), ...tracks), media });
-      expect(other([{ id: "trk_v2", kind: "video", clips: [{ id: "c", kind: "color", color: "#fff", timelineIn: 10, timelineOut: 14 }] }])).toEqual({ tip: "Saved", meta: "Overlay · A colour card · 4.0 s" });
-      expect(other([{ id: "trk_v2", kind: "video", clips: [mediaClip({ id: "o", mediaId: "med_broll" })] }])).toEqual({ tip: "Saved", meta: "Overlay · city-skyline · 4.0 s" });
-      expect(other([{ id: "trk_v2", kind: "video", clips: [mediaClip({ id: "o", mediaId: "med_raw" })] }])).toEqual({ tip: "Saved", meta: "Lasts 4.0 s" });
-      expect(other([{ id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "m", mediaId: "med_music", volumeKeyframes: [{ time: 0, db: -9 }] })] }])).toEqual({ tip: "Saved", meta: "Audio · Warm bed lowered to −9 dB" });
+      expect(other([{ id: "trk_v2", kind: "video", clips: [{ id: "c", kind: "color", color: "#fff", timelineIn: 10, timelineOut: 14 }] }])).toEqual({ tip: "Saved", meta: "Overlay · Colour card · 4.0 s" });
+      expect(other([{ id: "trk_v2", kind: "video", clips: [mediaClip({ id: "o", mediaId: "med_broll" })] }])).toEqual({ tip: "Saved", meta: "Overlay · 4.0 s" });
+      expect(other([{ id: "trk_v2", kind: "video", clips: [mediaClip({ id: "o", mediaId: "med_raw" })] }])).toEqual({ tip: "Saved", meta: "Overlay · 4.0 s" });
+      expect(other([{ id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "m", mediaId: "med_music", volumeKeyframes: [{ time: 0, db: -9 }] })] }])).toEqual({ tip: "Saved", meta: "Audio · lowered to −9 dB" });
       expect(other([{ id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "m", mediaId: "med_raw", volume: 0.5 })] }])).toEqual({ tip: "Saved", meta: "Audio · quieter (−6 dB)" });
       expect(other([{ id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "m", mediaId: "med_raw", volumeKeyframes: [{ time: 0, db: 4 }] })] }])).toEqual({ tip: "Saved", meta: "Audio · raised to +4 dB" });
-      expect(other([{ id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "m", label: "Theme", volume: 0 })] }])).toEqual({ tip: "Saved", meta: "Audio · Theme muted · 4.0 s" });
-      expect(other([{ id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "m", mediaId: "med_raw" })] }])).toEqual({ tip: "Saved", meta: "Lasts 4.0 s" });
+      expect(other([{ id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "m", label: "Theme", volume: 0 })] }])).toEqual({ tip: "Saved", meta: "Audio · muted · 4.0 s" });
+      expect(other([{ id: "trk_a1", kind: "audio", clips: [mediaClip({ id: "m", mediaId: "med_raw" })] }])).toEqual({ tip: "Saved", meta: "Audio · 4.0 s" });
       // A caption of only spaces quotes nothing; one that doesn't line up isn't this edit's.
       expect(other([{ id: "trk_c1", kind: "caption", clips: [{ id: "cap", kind: "caption", timelineIn: 10, timelineOut: 14, text: "   " }] }])).toEqual({ tip: "Saved", meta: "Lasts 4.0 s" });
       expect(other([{ id: "trk_c1", kind: "caption", clips: [{ id: "cap", kind: "caption", timelineIn: 10, timelineOut: 12, text: "Hi" }] }])).toEqual({ tip: "Saved", meta: "Lasts 4.0 s" });
@@ -399,13 +374,13 @@ describe("callRowTooltip", () => {
 });
 
 describe("decidedCallRowTooltip", () => {
-  it("leaves out a missing length and a note that only repeats the label", () => {
+  it("leaves out a missing length and omits old notes", () => {
     expect(decidedCallRowTooltip({ label: "Aside", note: "aside.", approved: true })).toEqual({ tip: "Aside", meta: "Kept cut" });
   });
 });
 
 describe("momentRowTooltip", () => {
-  it("names up to three distinct kinds once, adds the status, and lists members only when there are several", () => {
+  it("names up to three distinct kinds once, adds the status, and lists only additional members when there are several", () => {
     expect(momentRowTooltip("Moment", [
       { label: "A", kind: "Zoom" }, { label: "B", kind: "Zoom" }, { label: "C", value: "Edit" },
       { label: "D", kind: "Audio" }, { label: "E", kind: "Text" }, { label: "F", kind: "Speed" },
