@@ -44,6 +44,8 @@ import { wordDigest } from "./transcript-digest.js";
  */
 const EDGE_WAIT_MS = 40_000;
 const CHUNK = 300;
+/** The most source seconds the engine reads voice activity for in one waveform request (`bad_speech_range`). */
+const SPEECH_READ_SECONDS = 60;
 /** The most words and gaps the engine reads in one other-input request (`/media/:id/other-input`). */
 const OTHER_INPUT_WORDS = 5000, OTHER_INPUT_GAPS = 2000;
 
@@ -361,9 +363,24 @@ export function createMediaSession(deps: MediaSessionDeps) {
       "Read the passage again (transcript_get, timeline_transcript or dialogue_scan) and give the indices it shows.");
   }
 
-  /** A waveform window with 10 ms buckets and voice activity, for edge evidence. */
-  function readLevels(mediaId: string, from: number, to: number): Promise<WaveformResponse> {
-    return readPrepared(mediaId, "waveform", () => client.waveform(mediaId, from, to, levelPoints(from, to), true, true));
+  /**
+   * A waveform window with 10 ms buckets and voice activity, for edge evidence. The engine reads voice activity for up
+   * to a minute inside the recording and refuses anything else (`bad_speech_range`), and that refusal, thrown from an
+   * edge measurement, used to lose a whole dialogue_apply_cuts batch (2026-11-19 to 2026-11-26). So the window is kept
+   * inside the recording, a longer one is read a minute at a time, and an empty one reads as no evidence.
+   */
+  async function readLevels(mediaId: string, from: number, to: number): Promise<WaveformResponse> {
+    const end = await recordingEnd(mediaId).catch(() => undefined);
+    const lo = Math.max(0, from), hi = end === undefined ? to : Math.min(to, end);
+    if (!(hi > lo)) return { mediaId, from: lo, to: lo, peaks: [], rms: [], speechActivity: [] };
+    const read = (a: number, b: number) => readPrepared(mediaId, "waveform", () => client.waveform(mediaId, a, b, levelPoints(a, b), true, true));
+    if (hi - lo <= SPEECH_READ_SECONDS) return read(lo, hi);
+    const parts: Array<Promise<WaveformResponse>> = [];
+    for (let a = lo; a < hi - 1e-6; a += SPEECH_READ_SECONDS) parts.push(read(a, Math.min(hi, a + SPEECH_READ_SECONDS)));
+    const windows = await Promise.all(parts);
+    return { mediaId, from: lo, to: hi, peaks: windows.flatMap(w => w.peaks),
+      ...(windows.every(w => w.rms) && { rms: windows.flatMap(w => w.rms!) }),
+      ...(windows.every(w => w.speechActivity) && { speechActivity: windows.flatMap(w => w.speechActivity!) }) };
   }
 
   /**

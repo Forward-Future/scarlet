@@ -1095,6 +1095,14 @@ describe("tool annotations", () => {
         }
       };
       for (const t of tools) walk(t.inputSchema, t.name);
+      // Gemini reads each parameter as a line of tool_help: one written as `any` or as raw JSON schema reads untyped.
+      const lines = (node: { properties?: Record<string, { type?: string }> }, path: string): void => {
+        for (const [name, field] of Object.entries(node.properties ?? {})) {
+          if (!field.type) untyped.push(`${path}.${name} has no type in tool_help`);
+          lines(field, `${path}.${name}`);
+        }
+      };
+      if (agent === "gemini") for (const t of tools) lines(t.inputSchema as Parameters<typeof lines>[0], t.name);
       expect(untyped).toEqual([]);
     } finally { await c.close(); }
   });

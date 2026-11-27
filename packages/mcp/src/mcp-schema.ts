@@ -29,6 +29,16 @@ export function unsharedShape<Shape extends z.ZodRawShape>(shape: Shape): Shape 
   return Object.fromEntries(Object.entries(shape).map(([key, value]) => [key, unshared(value)])) as Shape;
 }
 
+/**
+ * The same fields without their descriptions, for a list whose items are given as the tool's own fields are: the model
+ * reads each field's description once. dialogue_check_join's `cuts` repeated its word and pause references' 1.6 KB
+ * of descriptions (2026-11-27).
+ */
+export function undescribed<Shape extends z.ZodRawShape>(shape: Shape): Shape {
+  return Object.fromEntries(Object.entries(shape).map(([key, value]) =>
+    [key, new (value.constructor as new (def: unknown) => z.ZodTypeAny)({ ...value._def, description: undefined })])) as Shape;
+}
+
 type CallTool = (request: { method: "tools/call"; params: { name: string; arguments?: unknown } }, extra: unknown) => Promise<ToolResult>;
 
 /**
@@ -73,50 +83,50 @@ export const timelineEditsInput = z.array(z.object({
   range: z.object({ start: z.number().nonnegative(), end: z.number().nonnegative() }).describe("Seconds in the resulting timeline. For a cut, give the point where it joins with start equal to end. For any other edit, give all the footage as it plays, from its first second to its last."),
   summary: z.string().trim().min(1).max(SUMMARY_MAX).optional().describe("A short sentence for the chat about what this edit changed, including notable side effects"),
   reason: editReasonInput.describe("One short, simple sentence for the card saying why you made this edit, in plain everyday words. Supply one for every item; for a To do marker, keep it brief and don't repeat the marker's text."),
-  check: z.string().trim().min(1).max(120).optional().describe("A few words naming a doubt the editor must settle by listening or looking. Marks the edit as needing the editor until they keep it. The card plays the edit's range: for a doubt about a few seconds of a longer edit, flag those seconds with edit_flag once it is saved instead."),
+  check: z.string().trim().min(1).max(120).optional().describe("A few words naming a doubt the editor must settle by listening or looking, which holds the edit for them until they keep it. The card plays the whole range: for a few seconds of a longer edit, flag those with edit_flag once saved instead."),
   replaces: z.object({ changeId: z.string(), spot: z.number().int().nonnegative() }).optional(),
-})).optional().describe("List each individual edit this save makes and its exact playback range in the resulting timeline — never bundle separate edits across untouched stretches into one spanning range (only edits acting on the same time range share a range). Give each edit its own specific title. A passage it leaves as it was is not an edit, even one you checked. Keep overlapping edits separate. For a revision set replaces to the original change ID and zero-based edit index, and give the full updated range and reason.");
+})).optional().describe("Each edit this save makes, with its own specific title and exact range in the resulting timeline: never one range spanning separate edits across untouched footage (only edits acting on the same time range share one), and overlapping edits stay separate. A passage left as it was is not an edit, even one you checked. For a revision, set replaces to the original change id and zero-based edit index, with the full updated range and reason.");
 
 export function makeIntentInput(hasTaskId: boolean) {
   const intent = z.enum(["requested", "suggestion", "alternative"]);
   return (hasTaskId ? intent : intent.optional()).describe(
-    "Use requested only for edits the editor asked you to make. Choose suggestion for extra ideas or previews, and alternative for each option offered. Omitting intent leaves the edit in review.",
+    "requested only for edits the editor asked you to make; suggestion for extra ideas or previews; alternative for each option offered. Omitted, the edit waits in review.",
   );
 }
 
 export const WordRef = {
-  mediaId: z.string().optional().describe("The mediaId shown with the word indices in timeline_transcript or transcript_get"),
+  mediaId: z.string().optional().describe("The recording the word indices are from"),
   fromWord: z.number().int().nonnegative().optional().describe("Word reference: first removed word index"),
   toWord: z.number().int().nonnegative().optional().describe("Word reference: last removed word index"),
 };
 
 export const PauseRef = {
-  afterWord: z.number().int().nonnegative().optional().describe("Pause reference, with mediaId: the transcript_get index of the word the pause follows. Scarlet trims the pause between it and the next word, both edges in the measured quiet."),
-  leave: z.number().finite().min(0.05).max(10).optional().describe(`Seconds of pause that should still play, word to word, as the editor hears it. Required with afterWord: how long a pause plays is yours to judge, by the delivery around it and the pace the skill asks for. Optional with fromWord/toWord: the pause the join plays, which is pace's after and before together when omitted (${PAUSE_BEAT} s by default). Optional with start/end: each edge that sits in measured quiet moves within that quiet so the join plays this pause, from the sound before it to the sound after, as on a word reference; an edge on sound is placed as without it. Leave it off where the quiet beside an edge is something to watch, such as a result appearing.`),
-  voiceIn: z.number().finite().min(LEAST_VOICE_IN).max(2).optional().describe(`With a word or pause reference, or start/end: seconds of quiet between the cut and the next word, as the editor hears it, which is how soon the voice comes in once the picture cuts. pace's before when omitted (${AIR_BEFORE_SPEECH} s by default), and 0 puts the cut on the word's first sound, kept whole. A voice takes about 0.04 s more to reach speaking level, so 0.03 plays as about two frames from the cut to the voice. The rest of the pause plays before the cut. Yours to judge at each cut, by the delivery, what the line begins and the pace the skill and the editor ask for.`),
+  afterWord: z.number().int().nonnegative().optional().describe("Pause reference, with mediaId: the index of the word the pause follows. Scarlet trims the pause to the next word within the measured quiet."),
+  leave: z.number().finite().min(0.05).max(10).optional().describe(`Seconds of pause the join plays, word to word; yours to judge by the delivery and the skill's pace. Required with afterWord. With fromWord/toWord, omitted: pace's after and before (${PAUSE_BEAT} s by default). With start/end: an edge in measured quiet moves within it to play this pause; one on sound stays. Leave it off where the quiet beside an edge matters, such as a result appearing.`),
+  voiceIn: z.number().finite().min(LEAST_VOICE_IN).max(2).optional().describe(`Seconds of quiet from the cut to the next word (with a word or pause reference, or start/end); the rest of the pause plays before the cut. pace's before when omitted (${AIR_BEFORE_SPEECH} s by default); 0 cuts on the word's first sound. A voice takes about 0.04 s more to reach speaking level, so 0.03 plays as about two frames. Yours to judge at each cut.`),
 };
 
 export const paceInput = z.object({
-  after: z.number().finite().min(0.01).max(2).describe("Seconds of room tone after the last kept word, as the editor hears it"),
-  before: z.number().finite().min(0.01).max(2).describe("Seconds of room tone before speech resumes, as the editor hears it"),
-}).optional().describe(`The room tone a join leaves either side when Scarlet places its edges in the quiet: the pause a word cut plays when it gives no leave, the quiet a leave keeps between the cut and the next word (the rest of it plays before the cut), and where an edge moved off sound settles. A pace for every join of this call, from the skill and the editor. Omitted: ${AIR_AFTER_SPEECH} s after and ${AIR_BEFORE_SPEECH} s before.`);
+  after: z.number().finite().min(0.01).max(2).describe("Seconds of room tone after the last kept word"),
+  before: z.number().finite().min(0.01).max(2).describe("Seconds of room tone before speech resumes"),
+}).optional().describe(`Room tone either side of each join of this call whose edges Scarlet places in the quiet, and where an edge moved off sound settles; from the skill and the editor. Omitted: ${AIR_AFTER_SPEECH} s after and ${AIR_BEFORE_SPEECH} s before.`);
 
 /** What a cut Scarlet starts after the last kept word does with a breath between that word and the quiet (`wordCutRange`). */
-export const breathInput = (refs: string, found: string) => z.enum(["cut", "keep"]).optional().describe(`A breath after the last kept word, before the quiet, where Scarlet starts a cut from words (${refs}): cut (the default) starts it right after the word, so the breath goes; keep starts it after the breath, so it plays. ${found} Your skill says which.`);
-export const unsureJoinsInput = z.enum(["ask", "cut"]).optional().describe("A cut you decided whose join Scarlet can't place cleanly: no measured quiet at an edge, an edge that has to move more than a few frames, both edges inside running speech, a production aside with no silence at its edges, or a restart joined where the take resumes on the word it broke off on, placed by matching the two deliveries on their sound with nothing measured to say how it plays. ask (the default) stages it for the editor with what Scarlet measured; cut applies it where Scarlet placed it and reports the evidence to you. Your skill says which.");
+export const breathInput = (refs: string, found: string) => z.enum(["cut", "keep"]).optional().describe(`A breath after the last kept word, before the quiet, on a cut placed from words (${refs}): cut (the default) takes it out; keep plays it. ${found} Your skill says which.`);
+export const unsureJoinsInput = z.enum(["ask", "cut"]).optional().describe("A cut whose join Scarlet can't place cleanly (no quiet at an edge, an edge moving more than a few frames, both edges in running speech, a production aside with no silence at its edges, a restart resuming on the word it broke off on): ask (the default) stages it for the editor with what Scarlet measured; cut applies it as placed and reports the evidence. Your skill says which.");
 
-export const cutCoordinates = `To have Scarlet place the edges, give mediaId and the first and last removed word indices (fromWord/toWord), or mediaId and the word before a pause (afterWord, with leave: the seconds it should still play). Measured word edges leave the room tone of pace after kept speech and before it resumes, and a pause you give as leave plays before the cut but for pace's before (or the voiceIn you give). For edges you place yourself, give start/end in TIMELINE seconds. The edge check preserves that padding where those times are already quiet, unless you give leave: then an edge in quiet goes where that pause puts it.`;
+export const cutCoordinates = `Give edges as word indices with mediaId (fromWord/toWord, the first and last removed words; or afterWord, the word before a pause, with leave), and Scarlet places them in the measured quiet with pace's room tone either side. Or give start/end in TIMELINE seconds: an edge already in quiet keeps that padding.`;
 
 export const crossfadeFrames = CrossfadeFrames.optional()
-  .describe("Total audio-only overlap at the new dialogue joins, in project frames. Zero or omitted makes a straight cut.");
+  .describe("Total audio-only overlap at the new dialogue joins, in project frames; 0 or omitted cuts straight.");
 
 export const repeatedPhrase = z.string().trim().min(1);
 
-export const resumeWith = z.string().trim().min(1).max(240).optional().describe("For a retake, quote the first consecutive words to keep immediately after the removal. Include the continuation that distinguishes this delivery. When the scan reads other words there, the result says which.");
+export const resumeWith = z.string().trim().min(1).max(240).optional().describe("For a retake: quote the first words kept right after the removal, enough to tell this delivery apart. When the scan reads other words there, the result says which.");
 
 /**
  * A cut's row in the chat, where the editor reads what Scarlet wants them to approve. Passes wrote what they had done
  * to check it ("Reviewed the restart…", "Kept the stronger reveal") and the editor couldn't tell what the change was
  * (2026-11-20).
  */
-export const cutRow = "Its row in the editor's list of edits: say plainly what the change does to the video, by the words it takes out or the words beside it (\"Cut the repeated start before ‘just explain’\", \"Cut the first ‘But first, the benchmarks’\", \"Shortened the pause after ‘okay’\"). Name the change, not your checking (\"Reviewed…\") or what stays (\"Kept…\"), and never why: the reason says why. Rows read in a list, so no two alike.";
+export const cutRow = "Its row in the editor's list of edits: what the change does to the video, by the words it takes out or beside it (\"Shortened the pause after ‘okay’\"). Name the change, not your checking (\"Reviewed…\"), what stays (\"Kept…\") or why (the reason says why). No two rows alike.";
