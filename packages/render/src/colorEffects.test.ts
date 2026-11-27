@@ -10,7 +10,7 @@ let mediaRoot: string;
 let styleGuidesRoot: string;
 
 beforeAll(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "scarlet-color-effects-"));
+  dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "scarlet-color-effects-")));
   mediaRoot = path.join(dir, "media");
   styleGuidesRoot = path.join(dir, "style-guides");
   await fs.mkdir(mediaRoot, { recursive: true });
