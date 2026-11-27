@@ -107,7 +107,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const media = useProjectStore(s => s.current?.media);
   const createTask = useProjectStore((s) => s.createTask);
   const createNote = useProjectStore((s) => s.createNote);
-  const createVoiceNote = useProjectStore((s) => s.createVoiceNote);
   const revise = useProjectStore((s) => s.revise);
   const context = useUiStore((s) => s.agentContext);
   const setContext = useUiStore((s) => s.setAgentContext);
@@ -117,9 +116,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const dismissFirstEditHint = useUiStore(s => s.dismissFirstEditHint);
   const owner = useUiStore(s => s.draftOwner);
   const clearSentDraft = useUiStore(s => s.clearSentDraft);
-  const keepUnsent = useUiStore(s => s.keepUnsent);
-  // What was said into the mic waits in the box to be read and sent (Settings → General), or goes at once.
-  const reviewDictation = useUiStore(s => s.reviewDictation);
+  // What was said into the mic always waits in the message box to be read and sent.
   const dictate = useUiStore(s => s.dictate);
   const answerTask = useProjectStore((s) => s.answerTask);
   const focusTick = useUiStore((s) => s.composerFocus);
@@ -132,8 +129,6 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const unavailableReason = useModelsConnecting(availability) ? CONNECTING_REASON : availability.unavailableReason;
   const [busy, setBusy] = useState(false);
   const voiceAnchor = useRef<AgentContext | null | undefined>(undefined);
-  // The recording being written down is one to read before sending: its words go into the box, not out.
-  const voiceReview = useRef(false);
   // Dictated words that just landed in the box: the cursor goes after them once the box shows them.
   const caretToEnd = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -242,7 +237,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   });
   /** Continue the focused thread, start a note at a moment, or start a new request. */
   /** Sends the message, and says whether the files attached to it went with it. An answer to Scarlet's question carries them as any other message does. */
-  const send = async (text: string, voiceTranscript?: string, anchor = displayAnchor, skillIds?: string[], files?: TaskAttachment[], drawn?: PictureMarks, styleGuideIds?: string[]): Promise<boolean> => {
+  const send = async (text: string, anchor = displayAnchor, skillIds?: string[], files?: TaskAttachment[], drawn?: PictureMarks, styleGuideIds?: string[]): Promise<boolean> => {
     const attachments = files?.length ? files : undefined;
     const carried = attachments && { attachments, ...(drawn && { pictureMarks: drawn }) };
     const guides = styleGuideIds?.length ? { styleGuideIds } : undefined;
@@ -263,7 +258,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       const position = anchor && { ...requestPosition(anchor), ...stoppedAt() };
       // A revision takes no files, so one that carries some is a request in the thread, as a reply is.
       if (revising && !attachments) {
-        const task = await revise(revising.id, { text, skillIds, voiceTranscript, ...assignment(effective), ...(position && { position }) });
+        const task = await revise(revising.id, { text, skillIds, ...assignment(effective), ...(position && { position }) });
         recordEditReview(project.id, anchor, "revise");
         if (task) recordRevision(task);
         return true;
@@ -275,13 +270,13 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
       // A note at a moment takes no files, so a message that carries some is a request about that moment.
       context = { skillIds, ...guides, version: anchor.version ?? head, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, markedRange: anchor.markedRange, ...carried };
     } else if (anchor) {
-      const { task } = await createNote(project.id, { skillIds, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, text, voiceTranscript, version: anchor.version ?? head, ...assignment(effective) });
+      const { task } = await createNote(project.id, { skillIds, time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, text, version: anchor.version ?? head, ...assignment(effective) });
       if (task) onCreated?.(task);
       return true;
     } else {
       context = { skillIds, ...guides, version: head, ...carried };
     }
-    const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, voiceTranscript, context });
+    const task = await createTask(project.id, { kind: "edit", ...effective, instruction: text, context });
     // A reply stays in its thread; anything else is a new request the page goes to.
     if (replying) {
       recordEditReview(project.id, anchor, "revise");
@@ -357,7 +352,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     try {
       const [skillIds, styleGuideIds] = await Promise.all([commandSkillIds(draft), commandStyleGuideIds(draft)]);
       const { files, drawn, done } = await filesFor();
-      done(await send(text, undefined, displayAnchor, skillIds, files, drawn, styleGuideIds));
+      done(await send(text, displayAnchor, skillIds, files, drawn, styleGuideIds));
       clearSentDraft(owner, { agentDraft: draft, agentContext: context });
       if (boxIsFree()) onSent?.();
     } catch (e) {
@@ -379,7 +374,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     setBusy(true);
     try {
       const { files, drawn, done } = await filesFor();
-      done(await send(choice, undefined, displayAnchor, undefined, files, drawn));
+      done(await send(choice, displayAnchor, undefined, files, drawn));
       if (boxIsFree()) onSent?.();
     } catch (e) {
       requestLog("send-failed", { how: "choice", ...failure(e) }, "warn");
@@ -389,49 +384,26 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     }
   };
 
-  // Voice: notes at a moment keep the recording; everything else is just text. With review on, it is all text,
-  // and it waits in the box.
-  // A message typed but not sent stays in the box, still aimed where it was, even one typed while the spoken one was on its way.
-  const clearVoiceTarget = (anchor: AgentContext | null) => {
-    const box = useUiStore.getState();
-    if (box.draftOwner === owner && box.agentDraft) return;
-    clearSentDraft(owner, { agentDraft: "", agentContext: anchor ?? context ?? (replying ? "whole" : null) });
-    if (boxIsFree()) onSent?.();
-  };
+  // Voice always lands in the message box so the editor can read and fix it before sending.
   const speech = useSpeech(async (text) => {
     // Said while the box held a queued request's words: what was said takes their place in the box, and waits there
     // as typed words do. The tick saves it and Esc leaves the request as it was. Words the editor put back meanwhile
-    // stay as they were, and what was said for them is not sent as a new request.
+    // stay as they were, and what was said for them is not put into the draft.
     if (voiceReword.current) {
       voiceReword.current.request?.onChange(text);
       inputRef.current?.focus();
       return;
     }
     const anchor = voiceAnchor.current === undefined ? displayAnchor : voiceAnchor.current;
-    // To be read first: the words go at the end of what is being written, aimed where the message would have gone,
-    // with the cursor after them. Enter sends them as typed words; nothing goes on its own.
-    if (voiceReview.current) {
-      requestLog("dictated", { chars: text.length, aim: aimKind(anchor), project: project.id, thread: thread?.id });
-      caretToEnd.current = true;
-      if (!dictate(owner, text, anchor ?? (replying ? "whole" : null))) caretToEnd.current = false;
-      return;
-    }
-    requestLog("send", sendFields("voice", text.length, anchor));
-    try {
-      const { files, drawn, done } = await filesFor();
-      done(await send(text, text, anchor, undefined, files, drawn));
-    } catch (e) {
-      requestLog("send-failed", { how: "voice", chars: text.length, ...failure(e) }, "warn");
-      // What was said isn't lost with the failed send: it waits in the box it was said into, which is kept through a
-      // quit, still aimed where it was sent. Another request's box the editor turned to meanwhile is left as it is.
-      keepUnsent(owner, { agentDraft: text, agentContext: anchor ?? context ?? null });
-      throw e;
-    }
-    clearVoiceTarget(anchor);
+    // What was said goes at the end of what is being written, aimed where the message would have gone,
+    // with the cursor after it. Enter sends the words; nothing goes on its own.
+    requestLog("dictated", { chars: text.length, aim: aimKind(anchor), project: project.id, thread: thread?.id });
+    caretToEnd.current = true;
+    if (!dictate(owner, text, anchor ?? (replying ? "whole" : null))) caretToEnd.current = false;
   }, setError);
-  // A spoken message is in the box from the moment the microphone is asked for until it is sent or dropped. The page
+  // A spoken message is in the box from the moment the microphone is asked for until it lands in the draft or is dropped. The page
   // keeps the box aimed where it was meanwhile, as it does for typed words: aiming it elsewhere builds the box again,
-  // which would drop the recording, or send the rest of what is said to whatever the box is aimed at then.
+  // which would drop the recording, or put the rest of what is said into whatever the box is aimed at then.
   const [recording, setRecording] = useState(false);
   const [heard, setHeard] = useState(false);
   const setSpeaking = useUiStore(s => s.setSpeaking);
@@ -445,29 +417,10 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     field.setSelectionRange(field.value.length, field.value.length);
   }, [value]);
   const onVoice = async (r: RecorderResult) => {
-    const anchor = voiceAnchor.current === undefined ? displayAnchor : voiceAnchor.current;
     setError("");
     setHeard(true);
     try {
-      // A note at a moment takes no files or picture marks, so a spoken message that carries any goes through send as a request.
-      const carriesFiles = Boolean(
-        useAttachmentsStore.getState().byProject[project.id]?.some(a => a.state !== "failed")
-        || usePictureMarksStore.getState().byProject[project.id]?.marks.length,
-      );
-      voiceReview.current = !voiceReword.current && useUiStore.getState().reviewDictation;
-      if (voiceReview.current || voiceReword.current || replying || !anchor || anchor.mediaId || !effective || carriesFiles) return await speech.handle(r);
-      requestLog("send", { ...sendFields("voice-note", 0, anchor), bytes: r.blob.size });
-      setBusy(true);
-      try {
-        const { task } = await createVoiceNote(project.id, r.blob, { time: anchor.time, end: anchor.end, clipIds: anchor.clipIds, version: anchor.version ?? head, ...assignment(effective) });
-        if (task) onCreated?.(task);
-        clearVoiceTarget(anchor);
-      } catch (e) {
-        requestLog("send-failed", { how: "voice-note", bytes: r.blob.size, ...failure(e) }, "warn");
-        setError(errorMessage(e));
-      } finally {
-        setBusy(false);
-      }
+      return await speech.handle(r);
     } finally {
       setHeard(false);
     }
@@ -745,7 +698,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
             rangeTakenOff.current = undefined;
             voiceReword.current = rewording ? rewordSession : undefined;
             if (!voiceReword.current) voiceAnchor.current = captureTarget();
-          }} onRecording={setRecording} onError={setError} followHold review={reviewDictation} disabled={unavailable || busy || speech.busy} disabledReason={unavailable ? unavailableReason : undefined} label="Talk to Scarlet" />
+          }} onRecording={setRecording} onError={setError} followHold review disabled={unavailable || busy || speech.busy} disabledReason={unavailable ? unavailableReason : undefined} label="Talk to Scarlet" />
           {(busy || speech.busy) && <Spinner className="size-3.5 shrink-0" />}
           {/* Shown once there's something to send (Enter sends too). Stopping an edit is on its card, where its progress is. */}
           {value.trim() && !onlyTime && <button type="button" className={rewording ? "btn-primary composer-send is-save shrink-0" : "btn-primary composer-send shrink-0"} data-log-control={rewording ? "save-queued-request" : "send-request"} aria-label={saveLabel} title={saveLabel}

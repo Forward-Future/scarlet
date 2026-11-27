@@ -32,7 +32,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     stubMedia();
     localStorage.clear();
-    useUiStore.setState({ ...oldUi, newLayout: false }, true);
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
@@ -48,25 +48,39 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     vi.unstubAllGlobals();
   });
 
-  it("defaults to off, toggles on/off in Settings, and persists to localStorage", async () => {
-    expect(useUiStore.getState().newLayout).toBe(false);
+  it("uses the new workspace layout by default, toggles classic layout on/off in Settings, and persists to localStorage", async () => {
+    expect(useUiStore.getState().newLayout).toBe(true);
     await act(async () => root.render(<WorkspaceLayoutSettings />));
+    expect(container.querySelector('section[aria-label="Workspace layout"]')?.textContent).toContain("Classic workspace layout");
     const toggle = container.querySelector<HTMLButtonElement>('button[role="switch"]')!;
+    expect(toggle.getAttribute("aria-label")).toBe("Classic workspace layout");
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(localStorage.getItem("scarlet.newLayout")).toBeNull();
 
-    await act(async () => toggle.click());
-    expect(useUiStore.getState().newLayout).toBe(true);
-    expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(localStorage.getItem("scarlet.newLayout")).toBe("1");
-
+    // Turning on Classic workspace layout switches to the previous two-column layout and persists across restarts.
     await act(async () => toggle.click());
     expect(useUiStore.getState().newLayout).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(localStorage.getItem("scarlet.newLayout")).toBe("0");
+    vi.resetModules();
+    const { useUiStore: relaunchedClassic } = await import("../../stores/ui");
+    expect(relaunchedClassic.getState().newLayout).toBe(false);
+
+    // An earlier beta opt-in ("1") also stays on the default three-column layout.
+    localStorage.setItem("scarlet.newLayout", "1");
+    vi.resetModules();
+    const { useUiStore: relaunchedLegacyOptIn } = await import("../../stores/ui");
+    expect(relaunchedLegacyOptIn.getState().newLayout).toBe(true);
+    localStorage.setItem("scarlet.newLayout", "0");
+
+    // Turning Classic workspace layout back off restores the default layout and clears the override.
+    await act(async () => toggle.click());
+    expect(useUiStore.getState().newLayout).toBe(true);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(localStorage.getItem("scarlet.newLayout")).toBeNull();
   });
 
-  it("renders the previous two-column workspace by default and switches live to the three-column beta layout", async () => {
+  it("renders the three-column workspace by default and switches live to the classic two-column layout", async () => {
     const db = buildDb();
     const project = db.projects.find(p => p.id === PRJ)!;
     const asking = Task.parse({
@@ -117,14 +131,7 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
     await act(async () => {});
 
-    // Default (beta off): two-column legacy layout, no review rail, no data-new-layout attribute.
-    expect(container.querySelector("[data-new-layout]")).toBeNull();
-    expect(container.querySelector(".review-rail")).toBeNull();
-    expect(container.querySelector(".composer-ask")).toBeNull();
-
-    // Flip beta toggle on: switches live to three-column layout with bubbles, question panel, and unified Priority list.
-    await act(async () => useUiStore.getState().setNewLayout(true));
-    await act(async () => {});
+    // Default: three-column layout with bubbles, question panel, and unified Priority list.
     expect(container.querySelector("[data-new-layout]")).not.toBeNull();
     expect(container.querySelector(".review-rail")).not.toBeNull();
     expect(container.querySelector(".review-rail-head .review-head-keep")).toBeNull();
@@ -169,11 +176,18 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     // No pinned overlay sits between the scrollable chat and composer in desktop 3-column mode.
     expect(container.querySelector(".simple-pin")).toBeNull();
 
-    // Flip back off: returns immediately to the previous default layout.
+    // Switch to classic two-column layout: switches live without review rail or data-new-layout.
     await act(async () => useUiStore.getState().setNewLayout(false));
     await act(async () => {});
     expect(container.querySelector("[data-new-layout]")).toBeNull();
     expect(container.querySelector(".review-rail")).toBeNull();
+    expect(container.querySelector(".composer-ask")).toBeNull();
+
+    // Switch back to the default three-column layout: returns immediately.
+    await act(async () => useUiStore.getState().setNewLayout(true));
+    await act(async () => {});
+    expect(container.querySelector("[data-new-layout]")).not.toBeNull();
+    expect(container.querySelector(".review-rail")).not.toBeNull();
   });
 
   it("covers beta pass polish: kept edit lingers in place before smoothly moving to Done, low-risk auto-unfolds, working card shows Stop, paused queue drops Up next, and question names its edit", async () => {

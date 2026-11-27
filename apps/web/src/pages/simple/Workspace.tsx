@@ -103,9 +103,10 @@ export const WORKING_HIGHLIGHT_MS = 3000;
  * The workspace: speak or type an edit, then watch each change with Before and After.
  * Every request is in one conversation, oldest first. The player on the right shows whatever the chat points at.
  *
- * `beta` is the new layout (Settings → General → "New workspace layout (Beta)"): the chat, a column of edits, then the
- * player, scoped under `[data-new-layout]`. The default layout keeps its lists in a dock under the chat instead. The
- * two share everything else; where they differ, `beta` says which way. It is fixed for a mount: the caller keys on it.
+ * `beta` is the default three-column layout: the chat, a column of edits, then the player, scoped under
+ * `[data-new-layout]`. The classic layout (Settings → General → "Classic workspace layout") keeps its lists in a dock
+ * under the chat instead. The two share everything else; where they differ, `beta` says which way. It is fixed for a
+ * mount: the caller keys on it.
  */
 export function Workspace({ beta = false }: { beta?: boolean }) {
   const current = useProjectStore(useShallow(s => {
