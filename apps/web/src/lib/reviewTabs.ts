@@ -150,6 +150,7 @@ export class ReviewLinger {
     rows: readonly { key: string; place: RowPlace; was?: readonly string[]; busy?: boolean }[],
     optionalShown: boolean,
     doneShown = false,
+    preserve?: (key: string) => boolean,
   ) {
     const next = new Map<string, RowPlace | "unseen">();
     for (const { key, place, was = [], busy = false } of rows) {
@@ -181,6 +182,11 @@ export class ReviewLinger {
         // window so the editor sees it actively working for a full moment before it fades out.
         this.drop(key);
         this.hold(key, current.from, true);
+      }
+    }
+    if (preserve) {
+      for (const [key, prev] of this.places) {
+        if (!next.has(key) && preserve(key)) next.set(key, prev);
       }
     }
     for (const key of [...this.held.keys()]) if (!next.has(key)) this.drop(key);

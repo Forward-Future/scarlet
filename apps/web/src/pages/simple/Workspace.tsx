@@ -2181,7 +2181,15 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   function moveOnFromRevised() {
     if (beta) {
       if (reviewingEdit) {
-        if ((openSectionBeforeWork.current.section ?? openRailRow?.section ?? tabShown(focusList)) === "you") { moveOnFromShown(); return; }
+        const section = openSectionBeforeWork.current.section ?? openRailRow?.section ?? tabShown(focusList);
+        if (section === "you" || section === "low") {
+          if (openBatchItems && openBatchIndex >= 0) {
+            const nextInBatch = openBatchItems[openBatchIndex + 1] ?? openBatchItems[openBatchIndex - 1];
+            if (nextInBatch?.open) { nextInBatch.open(); return; }
+          }
+          moveOnFromShown();
+          return;
+        }
         const key = `edit:${editKey(reviewingEdit.previous[0] ?? reviewingEdit)}`;
         setAutoClearWorking(was => ({ key, seq: (was?.seq ?? 0) + 1 }));
         return;

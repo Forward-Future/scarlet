@@ -294,7 +294,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
         const leaving = !!row.leaving;
         const arriving = !!row.arriving;
         const lingerKind = row.lingerFrom
-          ? (row.place === "working" ? "working" : row.decided ? "done" : undefined)
+          ? (row.place === "working" ? "working" : (row.decided || row.rejected || row.skipped) ? "done" : undefined)
           : undefined;
         const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
         const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);

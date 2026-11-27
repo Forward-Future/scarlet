@@ -618,6 +618,64 @@ describe("RailStore", () => {
       expect(store.view().display.done).toBe(2);
       store.dispose();
     });
+
+    it("preserves lingers across a transient listLoaded=false refetch when rejecting flagged and safe edits", () => {
+      vi.useFakeTimers();
+      const store = new RailStore();
+      store.setLowOpen(true);
+      store.report("t1", {
+        you: 2, optional: 1, working: 0, done: 0, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "f/keep", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged keep", place: "you", needs: true }),
+          makeRow({ key: "f/rej", threadId: "t1", threadOrder: 0, at: 10, label: "Flagged reject", place: "you", needs: true }),
+          makeRow({ key: "s/rej", threadId: "t1", threadOrder: 0, at: 15, label: "Safe reject", place: "optional" }),
+        ],
+      });
+      // Keep the first flagged edit so it begins lingering.
+      store.report("t1", {
+        you: 1, optional: 1, working: 0, done: 1, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "f/keep", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged keep", place: "done", decided: true, decision: "Kept" }),
+          makeRow({ key: "f/rej", threadId: "t1", threadOrder: 0, at: 10, label: "Flagged reject", place: "you", needs: true }),
+          makeRow({ key: "s/rej", threadId: "t1", threadOrder: 0, at: 15, label: "Safe reject", place: "optional" }),
+        ],
+      });
+      expect(store.view().display.sections.you.map(r => r.label)).toEqual(["Flagged keep", "Flagged reject"]);
+
+      // Transient head bump while /thread-edits refetches after rejecting flagged + safe edits.
+      store.report("t1", {
+        you: 1, optional: 1, working: 0, done: 1, threadOrder: 0, listLoaded: false,
+        rows: [
+          makeRow({ key: "f/keep", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged keep", place: "done", decided: true, decision: "Kept" }),
+          makeRow({ key: "f/rej", threadId: "t1", threadOrder: 0, at: 10, label: "Flagged reject", place: "you", needs: true }),
+          makeRow({ key: "s/rej", threadId: "t1", threadOrder: 0, at: 15, label: "Safe reject", place: "optional" }),
+        ],
+      });
+
+      // Refetch settles with both rejected rows carrying `was` back to their original keys.
+      store.report("t1", {
+        you: 0, optional: 0, working: 0, done: 3, threadOrder: 0, listLoaded: true,
+        rows: [
+          makeRow({ key: "f/keep", threadId: "t1", threadOrder: 0, at: 5, label: "Flagged keep", place: "done", decided: true, decision: "Kept" }),
+          makeRow({ key: "r/f", was: ["f/rej"], threadId: "t1", threadOrder: 0, at: 10, label: "Flagged reject", place: "done", decided: true, rejected: true, decision: "Rejected" }),
+          makeRow({ key: "r/s", was: ["s/rej"], threadId: "t1", threadOrder: 0, at: 15, label: "Safe reject", place: "done", decided: true, rejected: true, decision: "Rejected" }),
+        ],
+      });
+      expect(store.view().display.sections.you.map(r => [r.label, r.lingerFrom])).toEqual([
+        ["Flagged keep", "you"],
+        ["Flagged reject", "you"],
+      ]);
+      expect(store.view().display.sections.low.map(r => [r.label, r.lingerFrom])).toEqual([
+        ["Safe reject", "optional"],
+      ]);
+      expect(store.view().display.done).toBe(0);
+
+      vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS);
+      expect(store.view().display.sections.you).toHaveLength(0);
+      expect(store.view().display.sections.low).toHaveLength(0);
+      expect(store.view().display.done).toBe(3);
+      store.dispose();
+    });
   });
 
   describe("continuous B-roll sections", () => {
