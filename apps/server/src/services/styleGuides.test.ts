@@ -67,7 +67,7 @@ beforeEach(async () => {
   probe.mockReset().mockImplementation((path, signal) => scarletRenderAdapter.probeMedia(path, signal));
   still.fn.mockReset().mockResolvedValue(drawn());
   workspace = createApp({
-    dataDir: directory,
+    dataDir: join(directory, "data"),
     skillsSeedDir: join(directory, "empty-seed"),
     env: { SCARLET_CHROME: chrome },
     render,
@@ -470,7 +470,7 @@ describe("saving a project graphic as a style guide", () => {
     expect(g.instructions.length).toBeLessThan(26_000);
   });
 
-  it.skipIf(process.getuid?.() === 0)("takes the new guide back out when one of the graphic's files can't be copied", async () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("takes the new guide back out when one of the graphic's files can't be copied", async () => {
     const folder = graphic("med_locked", { "index.html": "<p>x</p>", "secret.png": "png" });
     chmodSync(join(folder, "secret.png"), 0o000);
     try {

@@ -166,7 +166,9 @@ it("reads an older plain token file and encrypts it on the next save", async () 
   expect(JSON.parse(raw).v).toBe(2);
   expect(raw).not.toContain("ya29.legacy");
   expect(raw).not.toContain("secret-xyz");
-  expect(statSync(app.ctx.paths.youtubeAuth).mode & 0o077).toBe(0);
+  if (process.platform !== "win32") {
+    expect(statSync(app.ctx.paths.youtubeAuth).mode & 0o077).toBe(0);
+  }
 });
 
 it("gives an older token file without an expiry an hour and treats odd channel data as no channel", async () => {
@@ -190,7 +192,9 @@ it("treats an unreadable, odd, tampered or keyless credential file as signed out
   writeFileSync(file, "{}");
   chmodSync(file, 0o644);
   getYouTubeStatus(app.ctx);
-  expect(statSync(file).mode & 0o077).toBe(0);
+  if (process.platform !== "win32") {
+    expect(statSync(file).mode & 0o077).toBe(0);
+  }
 
   await connect(app);
   expect(getYouTubeStatus(app.ctx).state).toBe("connected");
