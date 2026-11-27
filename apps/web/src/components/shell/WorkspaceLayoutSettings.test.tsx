@@ -1578,4 +1578,90 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(simpleCss).toMatch(/\.edit-version\s*\{[^}]*color:\s*var\(--color-dim\);[^}]*opacity:\s*\.65;/);
     expect(simpleCss).toMatch(/\.edit-version\.is-new\s*\{[^}]*color:\s*var\(--color-muted\);[^}]*opacity:\s*1;/);
   });
+
+  it("treats a continuous multi-clip B-roll section across requests as one line item, highlights the full section, and keeps all shots together", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const brollMedia = [
+      { id: "med_flyer_1", kind: "video" as const, name: "Wright Flyer ground.mp4", path: "media/wf1.mp4", hash: "wf1", duration: 10, source: { url: "https://example.com/wf1", capturedAt: "2026-11-26T00:00:00Z" } },
+      { id: "med_flyer_2", kind: "image" as const, name: "Wright Flyer flight.jpg", path: "media/wf2.jpg", hash: "wf2", duration: 10, source: { url: "https://example.com/wf2", capturedAt: "2026-11-26T00:00:00Z" } },
+      { id: "med_flyer_3", kind: "video" as const, name: "China Clipper.mp4", path: "media/wf3.mp4", hash: "wf3", duration: 10, source: { url: "https://example.com/wf3", capturedAt: "2026-11-26T00:00:00Z" } },
+    ];
+    const baseTimeline = structuredClone(db.timelines[project.head!]!);
+    const leadClip = baseTimeline.tracks[0]!.clips[0]!;
+    if (leadClip.kind === "media") leadClip.sourceOut = leadClip.sourceIn + 240;
+    baseTimeline.tracks.push({
+      id: "v_broll", kind: "video", name: "B-roll", muted: false, hidden: false,
+      clips: [
+        { id: "clip_wf_1", kind: "media", mediaId: "med_flyer_1", sourceIn: 0, sourceOut: 4, timelineIn: 10, speed: 1, opacity: 1, volume: 0, audioFadeIn: 0, audioFadeOut: 0, videoFadeIn: 0, videoFadeOut: 0, effects: [], enabled: true },
+        { id: "clip_wf_2", kind: "media", mediaId: "med_flyer_2", sourceIn: 0, sourceOut: 4, timelineIn: 14, speed: 1, opacity: 1, volume: 0, audioFadeIn: 0, audioFadeOut: 0, videoFadeIn: 0, videoFadeOut: 0, effects: [], enabled: true },
+        { id: "clip_wf_3", kind: "media", mediaId: "med_flyer_3", sourceIn: 0, sourceOut: 4, timelineIn: 18, speed: 1, opacity: 1, volume: 0, audioFadeIn: 0, audioFadeOut: 0, videoFadeIn: 0, videoFadeOut: 0, effects: [], enabled: true },
+      ],
+    });
+    const baseApproved = db.changes.find(c => c.state === "approved") ?? db.changes[0]!;
+    const chg1 = { ...baseApproved, id: "chg_wf_1", state: "approved" as const, taskId: "task_wf_1", appliedVersion: project.head!, appliedReview: undefined, approvedSpots: undefined, cutChoices: undefined, noteIds: [], createdAt: "2026-11-26T10:00:00.000Z", description: "Added Wright Flyer launch rail B-roll.", ops: [] };
+    const chg2 = { ...baseApproved, id: "chg_wf_2", state: "approved" as const, taskId: "task_wf_2", appliedVersion: project.head!, appliedReview: undefined, approvedSpots: undefined, cutChoices: undefined, noteIds: [], createdAt: "2026-11-26T10:05:00.000Z", description: "Extended Wright Flyer sequence.", ops: [] };
+    const task1 = Task.parse({ id: "task_wf_1", projectId: PRJ, kind: "edit", agent: "claude", instruction: "Add B-roll", state: "done", createdBy: { type: "human", name: "Editor" }, changeIds: [chg1.id], createdAt: "2026-11-26T10:00:00.000Z" });
+    const task2 = Task.parse({ id: "task_wf_2", projectId: PRJ, kind: "edit", agent: "claude", instruction: "Add more aviation shots", state: "done", createdBy: { type: "human", name: "Editor" }, changeIds: [chg2.id], createdAt: "2026-11-26T10:05:00.000Z" });
+    const threads = buildThreads({ changes: [chg1, chg2], tasks: [task1, task2], notes: [] });
+    const [t1, t2] = threads;
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: baseTimeline,
+      media: [...project.media, ...brollMedia],
+      changes: [chg1, chg2],
+      notes: [],
+      renders: db.renders,
+      tasks: [task1, task2],
+      taskEvents: {},
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "summarizeBatches").mockResolvedValue({ summaries: {}, pending: [] });
+    const keepSpy = vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === t1!.id
+        ? [{ changeId: chg1.id, spot: 0, label: "Wright Flyer on launch rail", range: { start: 10, end: 14 }, kind: "broll", previous: [], check: "Revised" }]
+        : threadId === t2!.id
+          ? [
+            { changeId: chg2.id, spot: 0, label: "Wright Flyer lifts off", range: { start: 14, end: 18 }, kind: "broll", previous: [], check: "Revised" },
+            { changeId: chg2.id, spot: 1, label: "China Clipper over water", range: { start: 18, end: 22 }, kind: "broll", previous: [] },
+          ]
+          : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // All three back-to-back clips across both requests collapse into ONE Needs review line item at 0:10 with zero leftover Safe edits.
+    const needRows = [...container.querySelectorAll<HTMLButtonElement>('.review-rail-list ol[aria-label="Edits that need you"] > li > button')];
+    expect(needRows).toHaveLength(1);
+    expect(needRows[0]!.querySelector(".edit-row-time")?.textContent).toBe("0:10");
+    expect(needRows[0]!.querySelector(".simple-pass-words")?.textContent).toBe("Wright Flyer on launch rail");
+    expect(needRows[0]!.querySelector(".simple-edit-value")?.textContent).toBe("B-roll");
+    expect(container.querySelector('.review-low-body[aria-label="Safe edits"] ol > li')).toBeNull();
+
+    // Clicking the one row opens it with one B-roll band and keeping it keeps BOTH threads' edits together.
+    await act(async () => needRows[0]!.click());
+    await act(async () => {});
+    const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")].find(b => b.textContent?.trim() === "Keep")!;
+    expect(keepBtn).toBeTruthy();
+    await act(async () => keepBtn.click());
+    await act(async () => {});
+    expect(keepSpy).toHaveBeenCalledTimes(2);
+  });
 });

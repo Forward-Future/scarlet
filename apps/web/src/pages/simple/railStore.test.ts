@@ -619,4 +619,99 @@ describe("RailStore", () => {
       store.dispose();
     });
   });
+
+  describe("continuous B-roll sections", () => {
+    it("combines contiguous same-request and cross-request B-roll rows (including multiple flagged shots) into one line item", () => {
+      const store = new RailStore();
+      // Thread 0: flagged opening 747 clip (3:06..3:10)
+      store.report("t1", {
+        you: 1, optional: 0, working: 0, done: 0, threadOrder: 0,
+        rows: [makeRow({
+          key: "c1/0", threadId: "t1", threadOrder: 0, at: 186.62, label: "Added a Boeing 747 taking off.",
+          place: "you", editKind: "broll", value: "B-roll", version: 2,
+          stretch: { start: 186.62, end: 190.42 }, overlayClipIds: ["clip_747_1"], brollSectionId: "broll:186620:204053",
+        })],
+      });
+      // Thread 1: flagged middle 747 clip (3:10..3:18) + safe end clip
+      store.report("t2", {
+        you: 1, optional: 1, working: 0, done: 0, threadOrder: 1,
+        rows: [
+          makeRow({
+            key: "c2/0", threadId: "t2", threadOrder: 1, at: 190.42, label: "747 climbs into the sky",
+            place: "you", editKind: "broll", value: "B-roll", version: 2,
+            stretch: { start: 190.42, end: 197.96 }, overlayClipIds: ["clip_747_2"], brollSectionId: "broll:186620:204053",
+          }),
+          makeRow({
+            key: "c2/1", threadId: "t2", threadOrder: 1, at: 197.96, label: "Inside the 747 cockpit",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 197.96, end: 204.05 }, overlayClipIds: ["clip_747_3"], brollSectionId: "broll:186620:204053",
+          }),
+        ],
+      });
+      // Thread 2: three more contiguous safe shots at the tail + one separate B-roll removal right after the section ends (`brollSectionId: null`).
+      store.report("t3", {
+        you: 0, optional: 4, working: 0, done: 0, threadOrder: 2,
+        rows: [
+          makeRow({
+            key: "c3/0", threadId: "t3", threadOrder: 2, at: 197.96, label: "747 analog flight deck",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 197.96, end: 200.0 }, overlayClipIds: ["clip_747_4"], brollSectionId: "broll:186620:204053",
+          }),
+          makeRow({
+            key: "c3/1", threadId: "t3", threadOrder: 2, at: 200.0, label: "747 cockpit panel",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 200.0, end: 202.04 }, overlayClipIds: ["clip_747_3"], brollSectionId: "broll:186620:204053",
+          }),
+          makeRow({
+            key: "c3/2", threadId: "t3", threadOrder: 2, at: 202.04, label: "747 flight crew",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 202.04, end: 204.05 }, overlayClipIds: ["clip_747_5"], brollSectionId: "broll:186620:204053",
+          }),
+          makeRow({
+            key: "c3/3", threadId: "t3", threadOrder: 2, at: 204.05, label: "Original return to you",
+            place: "optional", editKind: "broll", value: "B-roll",
+            stretch: { start: 204.05, end: 206.0 }, brollSectionId: null,
+          }),
+        ],
+      });
+
+      const view = store.view();
+      // All 6 contiguous 747 shots collapse into ONE Needs review line item at 3:06 spanning 186.62..204.05.
+      expect(view.need).toBe(1);
+      expect(view.sections.you).toHaveLength(1);
+      const brollRow = view.sections.you[0]!;
+      expect(brollRow.label).toBe("Added a Boeing 747 taking off.");
+      expect(brollRow.at).toBeCloseTo(186.62, 2);
+      expect(brollRow.displayAt).toBeCloseTo(186.62, 2);
+      expect(brollRow.stretch).toEqual({ start: 186.62, end: 204.05 });
+      expect(brollRow.continuousBroll).toBe(true);
+      expect(brollRow.value).toBe("B-roll");
+      expect(brollRow.version).toBe(2);
+      expect(brollRow.members).toHaveLength(6);
+      expect(brollRow.threadIds).toEqual(["t1", "t2", "t3"]);
+      // The B-roll removal right after the section (where camera returned) stays separate in Safe edits.
+      expect(view.optional).toBe(1);
+      expect(view.sections.low[0]!.label).toBe("Original return to you");
+    });
+
+    it("merges contiguous B-roll transitively when a middle shot bridges two earlier shots, and keeps gapped sections apart", () => {
+      const store = new RailStore();
+      store.report("t1", {
+        you: 0, optional: 3, working: 0, done: 0, threadOrder: 0,
+        rows: [
+          makeRow({ key: "a/0", threadId: "t1", threadOrder: 0, at: 10, label: "Shot A", place: "optional", editKind: "broll", value: "B-roll", stretch: { start: 10, end: 13 } }),
+          makeRow({ key: "a/1", threadId: "t1", threadOrder: 0, at: 16, label: "Shot C", place: "optional", editKind: "broll", value: "B-roll", stretch: { start: 16, end: 19 } }),
+          makeRow({ key: "a/2", threadId: "t1", threadOrder: 0, at: 13, label: "Shot B", place: "optional", editKind: "broll", value: "B-roll", stretch: { start: 13, end: 16 } }),
+        ],
+      });
+      const view = store.view();
+      // One continuous section (10..19) renders as one plain line item, NOT a +3 batch.
+      expect(view.optional).toBe(1);
+      expect(view.sections.low).toHaveLength(1);
+      expect(view.sections.low[0]!.batch).toBeUndefined();
+      expect(view.sections.low[0]!.continuousBroll).toBe(true);
+      expect(view.sections.low[0]!.stretch).toEqual({ start: 10, end: 19 });
+      expect(view.sections.low[0]!.members).toHaveLength(3);
+    });
+  });
 });

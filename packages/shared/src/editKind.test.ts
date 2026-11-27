@@ -274,6 +274,28 @@ describe("telling what an applied edit did", () => {
     expect(editKinds(batch, [1, 10, 20].map(start => ({ start, end: start + 1 })), { after: historical }))
       .toEqual(["zoom", "other", "audio"]);
   });
+
+  it("keeps retimed, moved, and Ken-Burns-keyframed B-roll overlay clips classified as broll", () => {
+    const media = [
+      { id: "interview", kind: "video" as const },
+      { id: "flyer_vid", kind: "video" as const, source: { url: "https://example.com/v", capturedAt: "2026-11-26T00:00:00Z" } },
+      { id: "flyer_still", kind: "image" as const, source: { url: "https://example.com/i", capturedAt: "2026-11-26T00:00:00Z" } },
+    ];
+    const withBroll = after(t => {
+      t.tracks.push({
+        ...upper,
+        clips: [
+          makeMediaClip("flyer_vid", 0, 4, 10, { id: "bv" }),
+          makeMediaClip("flyer_still", 0, 4, 14, { id: "bs" }),
+        ],
+      });
+    });
+    expect(editKinds(change([{ op: "updateClip", clipId: "bv", patch: { timelineIn: 10, sourceOut: 3.5 } }]), [{ start: 10, end: 13.5 }], { before: withBroll, after: withBroll, media })).toEqual(["broll"]);
+    expect(editKinds(change([{ op: "moveClip", clipId: "bv", timelineIn: 11 }]), [{ start: 11, end: 15 }], { before: withBroll, after: withBroll, media })).toEqual(["broll"]);
+    expect(editKinds(change([{ op: "updateClip", clipId: "bs", patch: { keyframes: [{ time: 0, transform: { scale: 1.0 } }, { time: 4, transform: { scale: 1.08 } }] } }]), [{ start: 14, end: 18 }], { before: withBroll, after: withBroll, media })).toEqual(["broll"]);
+    // Framing keyframes on a video overlay (such as a screen recording zoom) still classify as zoom.
+    expect(editKinds(change([{ op: "updateClip", clipId: "bv", patch: { keyframes: [{ time: 0, transform: { scale: 1.0 } }, { time: 4, transform: { scale: 1.5 } }] } }]), [{ start: 10, end: 14 }], { before: withBroll, after: withBroll, media })).toEqual(["zoom"]);
+  });
 });
 
 describe("telling an edit that only left a marker for the editor", () => {

@@ -127,6 +127,8 @@ interface PreviewProps {
     holdPassage?: boolean;
     /** Passage a pending check asks the editor to see on the working cut. */
     reviewRange?: TimeRange;
+    /** Full range and earliest change when a continuous B-roll section combines multiple edits into one line item. */
+    editSection?: { range: TimeRange; beforeChange?: Change };
     /** A revision was requested from the open card. Its message box is outside the player. */
     writeRequest?: number;
     /**
@@ -405,13 +407,15 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const framing = threadView?.framing;
   const cutReview = threadView?.cutReview;
   const selectedEdit = threadView?.selected;
-  // A moment of a pass's list plays across all of its edits, once.
+  // A moment of a pass's list (or a combined continuous B-roll section) plays across all of its edits, once.
   const selectedMoment = threadView?.selectedMoment;
+  const sectionRange = simple.editSection?.range;
+  const selectedRange = selectedMoment ? momentRange(selectedMoment) : sectionRange ?? selectedEdit?.range;
   const selectedPassage = selectedEdit && (!selectedEdit.beforeCut && selectedEdit.at === undefined
-    ? editPlaybackRange(selectedMoment ? momentRange(selectedMoment) : selectedEdit.range, duration) : selectedEdit.range);
-  const originalChange = threadView?.originalChange;
+    ? editPlaybackRange(selectedRange!, duration) : selectedEdit.range);
+  const originalChange = simple.editSection?.beforeChange ?? threadView?.originalChange;
   // A marker left for the editor changed nothing in the video, so it has no Before to read.
-  const compared = selectedEdit?.marker ? undefined : selectedEdit;
+  const compared = selectedEdit?.marker ? undefined : selectedEdit && sectionRange ? { ...selectedEdit, range: sectionRange } : selectedEdit;
   const original = useEditBefore(current.id, displayedTimeline, compared, compared && originalChange, fps, !!framing, selectedPassage);
   const cutIndex = cutReview && selectedEdit ? cutReview.cuts.indexOf(selectedEdit) : -1;
   // Before belongs to the edit that's open: it holds while that edit is played again from its top, and the next edit
