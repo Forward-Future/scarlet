@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 27, 2026
 
+- In the beta layout, single-edit revisions now stay visible in the chat in chronological order while queued, working, and finished, with a clickable target header naming the edit, timestamp, and version (matching the `Revising` bar above the message box).
 - A continuous B-roll section made of back-to-back clips now appears as one item in the edit list and highlights the whole section on the timeline.
 - Space plays the video again right after you drag or click the edge of a cut or edit on the timeline.
 - The sound on the timeline now shows the audio track you picked in Media straight away, and stays steady while other files are added.

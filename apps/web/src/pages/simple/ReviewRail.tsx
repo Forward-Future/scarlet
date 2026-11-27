@@ -356,7 +356,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
               aria-label={`Unkeep ${row.label}`} title={unkeepTip}
               onClick={letGo(() => { const fresh = freshRow(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
           </span>}
-          <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span></AimRow>
+          <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span>{activeRow.version > 0 && <EditVersion n={activeRow.version} />}</AimRow>
           {row.nests.map(nest => nest.node)}
           {moment?.unfolded && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
             {moment.subRows.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined} data-working={m.busy && !m.asks ? "busy" : undefined}>
