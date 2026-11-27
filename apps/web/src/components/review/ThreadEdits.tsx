@@ -261,15 +261,17 @@ export function ThreadEdits({ projectId, thread, edits, rejected = noEdits, show
   const goneAfter = (from: number, to: number) => goneBetween(from, to).map(e => {
     // Lit for the edit it was, too, while that one is still on its card, leaving.
     const on = !!showing && (matchesEdit(showing, e) || matchesEdit(e, showing));
-    return <li key={editKey(e)} className={leaving?.(e) ? "is-leaving" : undefined}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
+    const rowTime = clockLabel((e as ThreadEdit).at ?? e.range.start);
+    const lead = <span className="edit-row-time simple-pass-time">{rowTime}</span>;
+    return <li key={editKey(e)} className={leaving?.(e) ? "is-leaving" : undefined} data-lingering={lingering?.(e)}><button type="button" className={on ? "simple-edit is-rejected is-on" : "simple-edit is-rejected"} aria-current={on || undefined}
       data-log-control="open-edit" data-log-label="Rejected edit" aria-label={`${e.label}, rejected`}
       title={inRail ? undefined : e.label} data-row-tip={inRail ? e.label : undefined}
       onClick={event => { blurOnPointerClick(event); onPlay(e); }}>
-      <span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span>
-      <span className="simple-edit-title"><span className="simple-edit-words">{e.label}</span></span>
+      {lead}
+      <span className="simple-edit-title"><RejectedMark /><span className="simple-edit-words">{e.label}</span></span>
       <span className="simple-edit-value">Rejected</span>
     </button>
-      <AimRow on={on}><span className="edit-badge is-rejected" aria-hidden="true"><Icon name="x" size={9} /></span><span className="composer-aim-words">{e.label}</span></AimRow></li>;
+      <AimRow on={on}>{lead}<span className="composer-aim-words">{e.label}</span></AimRow></li>;
   });
   return <ol ref={list} className="simple-edits" aria-label={label ?? (only ? "Edits that need you" : "Edits in this thread")}>
     {goneAfter(-1, firstOf(0))}

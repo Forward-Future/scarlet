@@ -388,11 +388,12 @@ describe("spawnLines log", { timeout: 20_000 }, () => {
     const outcome = await node(`process.stdin.resume();process.stdin.on("end",()=>{console.error("boom");process.exit(3)})`,
       { stdin: secret, log: (line) => all.push(line), task: "tsk_abcdefghijkl" }).done;
     expect(outcome.code).toBe(3);
-    // An earlier test's folder for noting CLIs is gone by now, which is logged too.
+    // An earlier test's folder for noting CLIs is gone by now, which is logged too, and can reach stderr before or after
+    // the CLI's own words.
     const log = all.filter((line) => !line.startsWith("could not note"));
     expect(log).toHaveLength(2);
     expect(log[0]).toMatch(/^task tsk_abcdefghijkl: node \(pid \d+\) started from .+ with 2 args \(-e\) in /);
-    expect(log[1]).toMatch(/^task tsk_abcdefghijkl: node \(pid \d+\) exited with code 3 after \d+m?s; stderr: (.* \| )?boom$/);
+    expect(log[1]).toMatch(/^task tsk_abcdefghijkl: node \(pid \d+\) exited with code 3 after \d+m?s; stderr: (.* \| )?boom( \| could not note the CLI for the next launch: .*)?$/);
     expect(all.join("\n")).not.toContain(secret);
   });
 

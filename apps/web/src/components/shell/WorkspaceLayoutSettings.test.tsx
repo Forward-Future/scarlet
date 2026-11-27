@@ -1997,4 +1997,197 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
     expect(betaCss).toContain('.review-sec-body[aria-label="Working"] :is(.simple-pass-list > li > button, .simple-edit) { transition: background-color .3s ease; }');
   });
+
+  it("matches Keep, Revise (paused Queued), and engine Reject look and linger behavior across Needs review and safe edits in both layouts", async () => {
+    const { readFileSync } = await import("node:fs");
+    const simpleCss = readFileSync(`${import.meta.dirname}/../../simple.css`, "utf8");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    const styleEl = document.createElement("style");
+    styleEl.textContent = `:root { --color-fg: rgb(241, 241, 241); --color-muted: rgb(178, 178, 178); --color-dim: rgb(146, 146, 146); --color-ok: rgb(126, 212, 179); --color-bad: rgb(255, 160, 156); --color-warn: rgb(237, 194, 133); --color-line: rgb(50, 50, 50); --color-raised: rgb(36, 36, 36); }\n${simpleCss}\n${betaCss}`;
+    document.head.appendChild(styleEl);
+
+    try {
+      for (const newLayout of [true, false]) {
+        const db = buildDb();
+        const project = db.projects.find(p => p.id === PRJ)!;
+        const change = db.changes.find(c => c.id === "chg_approved_2") ?? db.changes[0]!;
+        const ownerThreadId = buildThreads({ changes: db.changes, tasks: db.tasks, notes: db.notes })
+          .find(t => t.changes.some(c => c.id === change.id))!.id;
+        const baseEdits = [
+          { changeId: change.id, spot: 0, label: "Flagged keep", kind: "cut" as const, range: { start: 1, end: 2 }, previous: [], check: "Check A." },
+          { changeId: change.id, spot: 1, label: "Flagged revise", kind: "zoom" as const, range: { start: 4, end: 6 }, previous: [], check: "Check B." },
+          { changeId: change.id, spot: 2, label: "Flagged reject", kind: "cut" as const, range: { start: 8, end: 9 }, previous: [], check: "Check C." },
+          { changeId: change.id, spot: 3, label: "Safe keep", kind: "overlay" as const, range: { start: 2, end: 5 }, previous: [] },
+          { changeId: change.id, spot: 4, label: "Safe revise", kind: "audio" as const, range: { start: 6, end: 10 }, previous: [] },
+          { changeId: change.id, spot: 5, label: "Safe reject", kind: "cut" as const, range: { start: 11, end: 12 }, previous: [] },
+        ];
+        let liveEdits: typeof baseEdits | Array<(typeof baseEdits)[number] | { changeId: string; spot: number; label: string; range: { start: number; end: number }; previous: { changeId: string; spot: number }[]; rejected: true; wasCheck?: boolean }> = [...baseEdits];
+        let currentHead = project.head!;
+        let currentData: ProjectData = {
+          id: PRJ,
+          project: { ...project, head: currentHead, editingPaused: true },
+          timeline: { ...db.timelines[project.head!]!, version: currentHead },
+          media: project.media,
+          changes: db.changes,
+          notes: db.notes,
+          renders: db.renders,
+          tasks: db.tasks.filter(t => t.state !== "waiting_for_user" && t.state !== "running"),
+          taskEvents: db.taskEvents,
+          versions: db.versions[PRJ]!,
+          fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+        };
+
+        vi.restoreAllMocks();
+        localStorage.clear();
+        vi.spyOn(window, "matchMedia").mockImplementation(query => ({
+          matches: false, media: query, onchange: null,
+          addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+        } as unknown as MediaQueryList));
+        useUiStore.setState({ ...oldUi, newLayout }, true);
+        useProjectStore.setState({
+          current: currentData,
+          status: "ready",
+          load: vi.fn(),
+          refreshHead: vi.fn(),
+          loadTaskEvents: vi.fn().mockResolvedValue(undefined),
+        });
+        vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+        vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+        vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+        vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+        vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+        vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+        vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+        vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+        vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+        vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+        vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+        vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+          version: currentHead,
+          edits: threadId === ownerThreadId ? (liveEdits as never) : [],
+        }));
+
+        await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+        await act(async () => {});
+
+        // In the three-column layout Safe edits starts folded; unfold it so safe rows are on screen.
+        if (newLayout) {
+          const toggle = container.querySelector<HTMLButtonElement>(".review-tier-toggle");
+          expect(toggle).not.toBeNull();
+          await act(async () => toggle!.click());
+          await act(async () => {});
+        }
+
+        vi.useFakeTimers();
+        try {
+          // 1) Keep one flagged edit and one safe edit.
+          const { keepEdits } = await import("../../lib/keptEdits");
+          await act(async () => {
+            keepEdits(PRJ, ownerThreadId, [baseEdits[0]!], currentHead);
+            keepEdits(PRJ, ownerThreadId, [baseEdits[3]!], currentHead);
+          });
+          await act(async () => {});
+
+          // 2) Revise one flagged edit and one safe edit (while paused -> Queued), AND
+          // 3) Reject one flagged edit and one safe edit via engine put-back (head updates -> /thread-edits refetches!).
+          const now = new Date().toISOString();
+          const baseTask = db.tasks.find(t => t.id === "task_done") ?? db.tasks[0]!;
+          currentHead = `${project.head!}_after_reject`;
+          liveEdits = [
+            baseEdits[0]!,
+            baseEdits[1]!,
+            { changeId: "chg_rej_flagged", spot: 0, label: "Flagged reject", range: { start: 8, end: 9 }, previous: [{ changeId: change.id, spot: 2 }], rejected: true, wasCheck: true },
+            baseEdits[3]!,
+            baseEdits[4]!,
+            { changeId: "chg_rej_safe", spot: 0, label: "Safe reject", range: { start: 11, end: 12 }, previous: [{ changeId: change.id, spot: 5 }], rejected: true },
+          ];
+          currentData = {
+            ...currentData,
+            project: { ...currentData.project, head: currentHead, editingPaused: true },
+            timeline: { ...currentData.timeline!, version: currentHead },
+            tasks: [
+              ...currentData.tasks,
+              Task.parse({
+                ...baseTask, id: "task_rev_flagged", kind: "edit", state: "queued",
+                createdAt: now, startedAt: undefined, finishedAt: undefined, summary: null, changeIds: [],
+                instruction: "Tighten", context: { changeId: change.id, editIndex: 1, threadId: ownerThreadId, message: "Tighten" },
+              }),
+              Task.parse({
+                ...baseTask, id: "task_rev_safe", kind: "edit", state: "queued",
+                createdAt: now, startedAt: undefined, finishedAt: undefined, summary: null, changeIds: [],
+                instruction: "Softer", context: { changeId: change.id, editIndex: 4, threadId: ownerThreadId, message: "Softer" },
+              }),
+            ],
+          };
+          await act(async () => { useProjectStore.setState({ current: currentData }); });
+          await act(async () => {});
+          await act(async () => {});
+
+          const listRoot = container.querySelector<HTMLElement>(newLayout ? ".review-rail-list" : ".simple-review-dock")!;
+          // Divider never displays "(0)" while all remaining safe edits are lingering.
+          expect(listRoot.querySelector(".review-tier-sep")?.textContent?.trim()).toBe("Safe edits");
+          // No legacy circle .edit-badge anywhere in either layout.
+          expect(listRoot.querySelector(".edit-badge")).toBeNull();
+
+          const rowOf = (label: string) => [...listRoot.querySelectorAll<HTMLLIElement>("li")]
+            .find(li => li.textContent?.includes(label))!;
+          const inspect = (label: string) => {
+            const li = rowOf(label);
+            expect(li, `missing lingering row ${label} (newLayout=${newLayout})`).toBeTruthy();
+            const btn = li.querySelector<HTMLButtonElement>("button")!;
+            const words = li.querySelector<HTMLElement>(".simple-edit-words, .simple-pass-words")!;
+            const tick = li.querySelector<HTMLElement>(".simple-pass-tick");
+            const time = li.querySelector<HTMLElement>(".simple-pass-time, .edit-row-time");
+            const trail = li.querySelector<HTMLElement>(".simple-edit-check, .simple-pass-check, .simple-edit-value, .simple-pass-value");
+            return {
+              lingering: li.dataset.lingering,
+              working: li.dataset.working,
+              paused: li.hasAttribute("data-paused"),
+              hasTime: !!time?.textContent?.trim(),
+              tickClass: tick?.className ?? null,
+              tickColor: tick ? getComputedStyle(tick).color : null,
+              btnColor: getComputedStyle(btn).color,
+              wordsColor: getComputedStyle(words).color,
+              trailColor: trail ? getComputedStyle(trail).color : null,
+            };
+          };
+
+          // Keep looks identical in Needs review and Safe edits.
+          expect(inspect("Safe keep")).toEqual(inspect("Flagged keep"));
+          expect(inspect("Safe keep").lingering).toBe("done");
+          expect(inspect("Safe keep").tickColor).toBe("rgb(126, 212, 179)");
+
+          // Revise (paused / Queued) looks identical in Needs review and Safe edits (bright white title).
+          expect(inspect("Safe revise")).toEqual(inspect("Flagged revise"));
+          expect(inspect("Safe revise").lingering).toBe("working");
+          expect(inspect("Safe revise").btnColor).toBe("rgb(241, 241, 241)");
+
+          // Reject (engine put-back after refetch) lingers and looks identical in Needs review and Safe edits.
+          expect(inspect("Safe reject")).toEqual(inspect("Flagged reject"));
+          expect(inspect("Safe reject")).toMatchObject({
+            lingering: "done",
+            hasTime: true,
+            tickClass: "simple-pass-tick is-rejected",
+            tickColor: "rgb(255, 160, 156)",
+            trailColor: "rgb(146, 146, 146)",
+          });
+
+          // All 6 rows enter their fade-out phase together after LINGER_MS and leave cleanly after LINGER_FADE_MS.
+          await act(async () => { vi.advanceTimersByTime(LINGER_MS); });
+          for (const label of ["Flagged keep", "Flagged revise", "Flagged reject", "Safe keep", "Safe revise", "Safe reject"]) {
+            expect(rowOf(label).classList.contains("is-leaving")).toBe(true);
+          }
+          await act(async () => { vi.advanceTimersByTime(LINGER_FADE_MS); });
+          for (const label of ["Flagged keep", "Flagged revise", "Flagged reject", "Safe keep", "Safe revise", "Safe reject"]) {
+            expect(rowOf(label)).toBeUndefined();
+          }
+        } finally {
+          vi.useRealTimers();
+        }
+        await act(async () => root.render(<></>));
+      }
+    } finally {
+      styleEl.remove();
+    }
+  });
 });
