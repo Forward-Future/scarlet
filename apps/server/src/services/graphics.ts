@@ -16,7 +16,7 @@ import type { Ctx } from "../context.js";
 import { now } from "../db.js";
 import { badRequest, conflict, HttpError, notFound } from "../errors.js";
 import { actorFor, logActivity, quote } from "./activity.js";
-import { logId } from "../logText.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import { errorMessage } from "../util.js";
 import { ingestMedia } from "./ingest.js";
 import { safeFileName } from "./fileName.js";
@@ -87,8 +87,11 @@ export async function checkAttachments(ctx: Ctx, projectId: string, attachments:
 
 const MIME: Record<string, string> = {
   ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown", ".html": "text/html", ".htm": "text/html", ".css": "text/css",
-  ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+  ".json": "application/json", ".yaml": "text/yaml", ".yml": "text/yaml", ".toml": "text/plain", ".xml": "text/xml", ".csv": "text/csv",
+  ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
   ".gif": "image/gif", ".ttf": "font/ttf", ".otf": "font/otf", ".woff": "font/woff", ".woff2": "font/woff2",
+  ".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg", ".flac": "audio/flac",
+  ".cube": "text/plain", ".3dl": "text/plain",
 };
 export const mimeFor = (name: string): string | undefined => MIME[extname(name).toLowerCase()];
 
@@ -107,7 +110,7 @@ export async function saveStyleGuide(ctx: Ctx, projectId: string, body: SaveStyl
     try {
       await mkdir(staging, { recursive: true, mode: 0o700 });
       await cp(found.path, join(staging, found.attachment.name));
-      await swapInFolder(staging, folder);
+      await swapInFolder(staging, folder, line => ctx.log(`[graphics] style guide of ${logId(projectId)}: ${line}`));
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
@@ -133,7 +136,7 @@ export async function removeStyleGuide(ctx: Ctx, projectId: string, user: User |
  * Put a folder made beside `folder` in its place. The folder there before is moved aside first and put back if the new
  * one can't go in, so `folder` is never left missing while the database points at it. The one aside is then removed.
  */
-export async function swapInFolder(staging: string, folder: string) {
+export async function swapInFolder(staging: string, folder: string, log?: (line: string) => void) {
   const aside = `${folder}.old-${randomUUID()}`;
   const hadOld = await rename(folder, aside).then(() => true, (error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return false;
@@ -142,7 +145,13 @@ export async function swapInFolder(staging: string, folder: string) {
   try {
     await rename(staging, folder);
   } catch (error) {
-    if (hadOld) await rename(aside, folder).catch(() => undefined);
+    log?.(`the new ${basename(folder)} folder couldn’t go in${hadOld ? ", the old one is put back" : ""}: ${clip(errorMessage(error))}`);
+    if (hadOld) {
+      await rename(aside, folder).catch((undo: unknown) => {
+        // The database points at a folder that is now missing: the old one is kept aside, not removed.
+        log?.(`the old ${basename(folder)} folder couldn’t be put back and is left at ${basename(aside)}: ${clip(errorMessage(undo))}`);
+      });
+    }
     throw error;
   }
   if (hadOld) await rm(aside, { recursive: true, force: true }).catch(() => undefined);
@@ -312,8 +321,13 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
           const at = checkAt + t;
           const range = { start: at, end: at + 1 / project.settings.fps };
           const root = ctx.paths.media(project.id);
-          background = await renderTimelineFrame(project, timeline, range, root, signal, 960, { pictureSource: previewPictures(root, { signal }) })
-            .catch(() => renderTimelineFrame(project, timeline, range, root, signal, 960)).catch((error: unknown) => {
+          const lutRoots = [ctx.paths.styleGuidesLibrary];
+          const fontDirs = [ctx.paths.styleGuidesLibrary, ctx.paths.attachments(project.id)];
+          background = await renderTimelineFrame(project, timeline, range, root, signal, 960, { pictureSource: previewPictures(root, { signal }), lutRoots, fontDirs })
+            .catch((error: unknown) => {
+              if (!signal.aborted) ctx.log(`[graphics] check-picture-fallback stage=background task=${input.taskId ? logId(input.taskId) : "none"} project=${logId(project.id)} at=${t.toFixed(2)} preview pictures failed, drawn from the originals: ${clip(errorMessage(error))}`);
+              return renderTimelineFrame(project, timeline, range, root, signal, 960, { lutRoots, fontDirs });
+            }).catch((error: unknown) => {
               if (!signal.aborted) checkPictureFailed("background", t, error);
               return null;
             });
@@ -327,7 +341,11 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
     const checks = coverage.map((c, i) => ({ ...c, ...(pictures[i] && { jpeg: pictures[i]!.toString("base64") }) }));
     const base = { missingFonts: drawn.missingFonts, ...(drawn.installedFonts.length && { installedFonts: drawn.installedFonts }), problems: drawn.problems, checks, ...(checkAt !== undefined && { checkAt }),
       width, height, fps, duration, renderMs: drawn.elapsedMs };
-    if (drawn.missingFonts.length) return base;
+    const drawnLine = `task=${input.taskId ? logId(input.taskId) : "none"} project=${logId(project.id)} ${duration}s ${width}x${height}@${fps} drawn in ${humanDuration(drawn.elapsedMs)}${drawn.problems.length ? ` problems=${drawn.problems.length}` : ""}`;
+    if (drawn.missingFonts.length) {
+      ctx.log(`[graphics] graphic-not-added ${drawnLine} missing-fonts=${drawn.missingFonts.length}: the editor chooses a font`);
+      return base;
+    }
 
     const source = relative(ctx.paths.project(project.id), page).split(sep).join("/");
     const name = o.name ?? "Graphic";
@@ -348,6 +366,7 @@ export async function renderProjectGraphic(ctx: Ctx, project: Project, input: Gr
       return stored;
     }, "immediate")();
     kept = true;
+    ctx.log(`[graphics] graphic-added ${drawnLine} media=${logId(saved.id)}${based ? ` based-on=${logId(based.media.id)}` : ""}`);
     return { ...base, media: await ready(ctx, saved.id) ?? saved, source: page };
   } finally {
     if (!kept) await rm(folder, { recursive: true, force: true });

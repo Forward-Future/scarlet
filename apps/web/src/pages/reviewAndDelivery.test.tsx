@@ -1398,6 +1398,10 @@ it("closes Export automatically when a folder, video, or caption export finishes
   expect(onClose).not.toHaveBeenCalled();
   expect(container.querySelector("dialog[open]")?.textContent).toContain("Interview");
   expect(buttonByText("Show in folder")).toBeTruthy();
+  // The folder for another app is still offered once this version is exported, and Back from it.
+  await click(buttonByText("For Resolve, Final Cut or Premiere…")!);
+  await click(buttonByText("Back")!);
+  expect(container.querySelector("#export-range")).not.toBeNull();
 
   // 2. MP4 export closes the dialog and combines completion + Star on GitHub into a single notice strip.
   choose.mockResolvedValueOnce({ ticket: 8, path: "/Users/me/Movies/Interview.mp4" });

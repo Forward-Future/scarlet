@@ -5,7 +5,7 @@
  */
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { availableParallelism, homedir } from "node:os";
+import { availableParallelism, homedir, loadavg } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import { isSea } from "node:sea";
 
@@ -38,6 +38,16 @@ export const INDEXED_MP4_INPUT = ["-nofind_stream_info", "-f", "mov"] as const;
 // Eight AVC decode threads beat VideoToolbox on the 4K fixture. Restrict the
 // auto policy to high-core Macs where dialogue analysis can run alongside it.
 export const threadedAvcPreview = process.platform === "darwin" && process.arch === "arm64" && availableParallelism() >= 16;
+
+/**
+ * Whether the machine has twice as much work as cores or more, by the last minute's load. A 4K decode on the CPU then
+ * gets a share of its cores, while the GPU's decoder is not shared the same way: at five times as much work as cores, ten seconds of a
+ * 4K recording took 17.4 s on the CPU and 5.0 s with VideoToolbox, against 0.5 s and 2.6 s on an idle machine
+ * (M-series, 2026-11-22 and 2026-11-13). Windows reports no load, so it never counts as busy.
+ */
+export function machineBusy(load = loadavg()[0]!, cores = availableParallelism()): boolean {
+  return load > 2 * cores;
+}
 
 /** Some containers need a packet scan even when their catalog entry has an
  * index. Retry using FFmpeg's ordinary stream discovery in that case.
@@ -216,6 +226,65 @@ export interface CaptureResult {
  */
 export const spawnObserver: { spawned?: (child: ChildProcess) => void } = {};
 
+/**
+ * Where this package writes its diagnostic lines, in the engine log's voice ("[render] …"). Unset, they go nowhere.
+ * One per process, as `spawnObserver` is: the engine sets it once at startup.
+ */
+export const renderLog: { log?: (line: string) => void } = {};
+
+const repeatedLines = new Map<string, { at: number; more: number }>();
+
+/**
+ * Write one diagnostic line to `renderLog`. With `key`, a line that can repeat (a failure on every scrub) is written at
+ * most once a minute for that key, with a count of the ones in between. Never throws.
+ */
+export function logRender(line: string | (() => string), key?: string): void {
+  const log = renderLog.log;
+  if (!log) return;
+  try {
+    let text = typeof line === "function" ? line() : line;
+    if (key !== undefined) {
+      const now = Date.now();
+      const seen = repeatedLines.get(key);
+      if (seen && now - seen.at < 60_000) { seen.more++; return; }
+      repeatedLines.delete(key);
+      repeatedLines.set(key, { at: now, more: 0 });
+      for (const [old, entry] of repeatedLines) {
+        if (repeatedLines.size <= 200 && now - entry.at < 60_000) break;
+        repeatedLines.delete(old);
+      }
+      if (seen?.more) text += ` (and ${seen.more} more like it)`;
+    }
+    log(text);
+  } catch {
+    // A diagnostic never changes what it describes.
+  }
+}
+
+/** Elapsed time for a log line, as the engine writes it: "850ms", "12s", "45m 2s", "1h 3m". */
+export function logElapsed(ms: number): string {
+  const secs = Math.floor(ms / 1000);
+  if (secs <= 0) return `${Math.max(0, Math.round(ms))}ms`;
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+  if (h) return m ? `${h}h ${m}m` : `${h}h`;
+  if (m) return s ? `${m}m ${s}s` : `${m}m`;
+  return `${s}s`;
+}
+
+/** Why something failed, in one short line for the log: `failureReason`, with folders left off any file path. */
+export function logReason(error: unknown, max = 200): string {
+  const line = failureReason(error).replace(/(?<=^|[\s'"(=])(?:[A-Za-z]:)?[\\/](?:[^\\/\n:'"]+[\\/])+/g, "");
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+
+/** A media tool's name for the log, without its folder: "ffmpeg", "ffprobe". */
+function toolName(bin: string): string {
+  return basename(bin).replace(/\.exe$/i, "");
+}
+
+/** A process that runs this long leaves a line when it ends, whatever the outcome. */
+const LONG_RUN_MS = 60_000;
+
 function countSpawn(bin: string): void {
   if (/ffprobe/i.test(bin)) spawnStats.ffprobe++;
   else spawnStats.ffmpeg++;
@@ -227,6 +296,8 @@ interface ManagedHooks<T> {
   /** Awaited after process close before resolving or rejecting (including aborts). */
   onSettled?: () => Promise<void>;
   onClose: (code: number | null) => T | Promise<T>;
+  /** True when the caller killed the process itself (output over its limit), so a signal says nothing new. */
+  stoppedByCaller?: () => boolean;
 }
 
 /** Shared subprocess lifecycle: abort check, spawn counting/observer, error wrapping, and cleanup. */
@@ -240,6 +311,7 @@ function spawnManaged<T>(
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new AbortError());
     countSpawn(bin);
+    const started = Date.now();
     const child = spawn(bin, args, { stdio, windowsHide: true });
     spawnObserver.spawned?.(child);
     let aborted = false;
@@ -249,12 +321,20 @@ function spawnManaged<T>(
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     hooks.onSpawn?.(child);
-    child.on("error", (e) => {
+    child.on("error", (e: NodeJS.ErrnoException) => {
       signal?.removeEventListener("abort", onAbort);
+      logRender(() => `[render] ${toolName(bin)} couldn't start: ${e.code ?? logReason(e)}`, `start:${bin}`);
       reject(new FfmpegError(mediaToolLaunchError(bin, e, `failed to start ${bin}: ${e.message}`), bin, args, null, hooks.getStderr(), false));
     });
-    child.on("close", (code) => {
+    child.on("close", (code, killedBy) => {
       signal?.removeEventListener("abort", onAbort);
+      const ms = Date.now() - started;
+      // Something outside Scarlet (the system running out of memory, a user's task manager) stopped it.
+      if (killedBy && !aborted && !hooks.stoppedByCaller?.()) {
+        logRender(() => `[render] ${toolName(bin)} was stopped by ${killedBy} after ${logElapsed(ms)}`, `signal:${bin}:${killedBy}`);
+      } else if (ms >= LONG_RUN_MS) {
+        logRender(() => `[render] ${toolName(bin)} ${aborted ? "cancelled" : code === 0 ? "finished" : `exited with code ${code ?? killedBy}`} after ${logElapsed(ms)}`);
+      }
       Promise.resolve()
         .then(() => hooks.onSettled?.())
         .then(() => {
@@ -286,6 +366,7 @@ export function runCapture(bin: string, args: string[], opts: CaptureOptions = {
   return spawnManaged(bin, args, [opts.stdin ? "pipe" : "ignore", "pipe", "pipe"], opts.signal, {
     getStderr: () => err,
     onSettled: () => chunkWork,
+    stoppedByCaller: () => !!failure,
     onSpawn(child) {
       if (child.stdin && opts.stdin) {
         // FFmpeg can close its input early on failure or cancellation. Its exit reports the cause.

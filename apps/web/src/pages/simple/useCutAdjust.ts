@@ -9,7 +9,7 @@ import { errorMessage } from "../../lib/client";
 import type { Call, CutChoice } from "../../lib/passCalls";
 import type { Thread } from "../../lib/threads";
 import { recordUndo, useUndoStore } from "../../lib/undo";
-import { appLog } from "../../lib/appLog";
+import { appLog, errorName } from "../../lib/appLog";
 import { player } from "../../lib/player";
 import { useProjectStore } from "../../stores/project";
 import type { AppliedCutSide } from "./useAppliedCut";
@@ -41,7 +41,7 @@ interface UseCutAdjustInputs {
   onAppliedRejected(version: string): void;
   onEngineLeave?(asked: boolean): void;
   cutName?: string;
-  // Waiting dialogue-pass call context
+  // Waiting dialogue pass call context
   pass?: Change;
   openCall?: Call;
   listening?: Listening;
@@ -84,7 +84,7 @@ function clipIdsOf(change: Change | undefined): string[] | undefined {
  * Provides quiet hover-only timeline edge-drag adjustment for any open edit that can be updated directly by the engine
  * without asking the AI model again:
  * - An applied cut (`adjustCut`, zero model round-trip, ⌘Z undo)
- * - A waiting dialogue-pass call (`reviseStagedCut`, ⌘Z undo)
+ * - A waiting dialogue pass call (`reviseStagedCut`, ⌘Z undo)
  * - Any timed non-cut edit (`adjustEdit`: captions, B-roll, graphics, overlays, added audio clips, split-clip zooms/reframes/voice edits, music dips, J/L split edits)
  * Returns `undefined` whenever no edit is open, another edit spans a cut join, or the edit needs Scarlet to rethink.
  */
@@ -185,6 +185,8 @@ export function useCutAdjust({
     const ownRemoved = reviewingEdit.beforeCut.removed;
     const ownLen = ownRemoved.end - ownRemoved.start;
     if (ownLen <= 0.5 / fps) return;
+    // A rearranged interior cut that mapped onto 0:00 isn't an opening cut: its `before` footage doesn't start at 0:00.
+    if (reviewingEdit.at <= 0.5 / fps && ownRemoved.start > 1 / fps) return;
     const raw = cutAdjustBounds(timeline, reviewingEdit.at, ownLen, fps, media);
     if (!raw) return;
     const beforeDur = timelineDuration(beforeTimeline);
@@ -208,7 +210,7 @@ export function useCutAdjust({
     return editAdjustBounds(timeline, reviewingEdit.range, fps, media, { kind: reviewingEdit.kind, clipIds });
   }, [activeMode, timeline, reviewingEdit, shownChange, fps, media]);
 
-  // 3. Waiting dialogue-pass call bounds (clamped between neighboring staged cuts and any already-applied cuts).
+  // 3. Waiting dialogue pass call bounds (clamped between neighboring staged cuts and any already-applied cuts).
   const callBounds = useMemo(() => {
     if (activeMode !== "call" || !pass || !openCall || !heard || !displayedTimeline || !displayedBand || !passRemovals) return;
     const dur = timelineDuration(displayedTimeline);
@@ -305,6 +307,7 @@ export function useCutAdjust({
       }
       appLog("action", "adjust-cut", { change: reviewingEdit.changeId, spot: reviewingEdit.spot, rejected: res.rejected });
     } catch (e) {
+      appLog("action", "adjust-cut-failed", { change: reviewingEdit.changeId, spot: reviewingEdit.spot, name: errorName(e) }, { level: "warn" });
       if (pullsToZero) onEngineLeave?.(false);
       useUndoStore.setState({ error: { projectId, text: errorMessage(e) } });
     } finally {
@@ -358,6 +361,7 @@ export function useCutAdjust({
       }
       appLog("action", "adjust-edit", { change: reviewingEdit.changeId, spot: reviewingEdit.spot, kind: reviewingEdit.kind, rejected: res.rejected });
     } catch (e) {
+      appLog("action", "adjust-edit-failed", { change: reviewingEdit.changeId, spot: reviewingEdit.spot, kind: reviewingEdit.kind, name: errorName(e) }, { level: "warn" });
       if (pullsToZero) onEngineLeave?.(false);
       useUndoStore.setState({ error: { projectId, text: errorMessage(e) } });
     } finally {
@@ -404,6 +408,7 @@ export function useCutAdjust({
       }));
       appLog("action", "adjust-call", { change: revised.id, cut: newIndex, start: nextWorking.start, end: nextWorking.end });
     } catch (e) {
+      appLog("action", "adjust-call-failed", { change: pass.id, cut: openCall.index, name: errorName(e) }, { level: "warn" });
       useUndoStore.setState({ error: { projectId, text: errorMessage(e) } });
     } finally {
       busy.current = false;

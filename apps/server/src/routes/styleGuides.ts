@@ -1,12 +1,14 @@
 import { parseMultipartRequest } from "@remix-run/multipart-parser/future";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod/v3";
 import {
+  BUILT_IN_STYLE_SOUNDS,
   CreateStyleGuideRequest,
   EditStyleGuideRequest,
+  ImportStyleGuideSoundRequest,
   StyleGuideFromGraphicRequest,
   StyleGuidePreviewRenderRequest,
   TaskStyleGuideDraft,
@@ -21,21 +23,26 @@ import { serveOriginal } from "../files.js";
 import { actorFor, agentName, logActivity, quote } from "../services/activity.js";
 import { MAX_ATTACHMENT_BYTES, MAX_DOCUMENT_PAGES, mimeFor } from "../services/graphics.js";
 import {
+  builtInStyleSoundWav,
   createStyleGuide,
   createStyleGuideFromGraphic,
   deleteStyleGuide,
+  deleteStyleGuideAsset,
   findStyleGuideAsset,
+  importStyleGuideDefinition,
+  importStyleGuideSoundToProject,
   latestStyleGuideEdit,
   listStyleGuides,
   readStyleGuideAssetDocument,
   renderStyleGuidePreview,
+  resolveActiveStyleGuides,
   saveStyleGuideAsset,
   styleGuideEdits,
   styleGuidePreviewImagePath,
   styleGuidePreviewSource,
   updateStyleGuide,
 } from "../services/styleGuides.js";
-import { requestAttempt, requireActiveAttempt } from "../services/taskAttempt.js";
+import { requestAttempt, requireActiveAttempt, requireProjectLocalPauseTarget } from "../services/taskAttempt.js";
 import { createTask, FINISHED_TASK, saveTask } from "../services/tasks.js";
 import { jsonBody, multipartError, requireProjectHeader, requireScoped } from "./util.js";
 
@@ -47,6 +54,12 @@ export function styleGuideRoutes(ctx: Ctx) {
 
   r.get("/style-guides", (c) => {
     return c.json({ styleGuides: listStyleGuides(ctx) });
+  });
+
+  r.get("/style-guides/active", (c) => {
+    const projectId = c.req.query("projectId") || undefined;
+    const taskId = c.req.query("taskId") || undefined;
+    return c.json({ styleGuides: resolveActiveStyleGuides(ctx, { projectId, taskId }) });
   });
 
   r.post("/style-guides", async (c) => {
@@ -65,6 +78,96 @@ export function styleGuideRoutes(ctx: Ctx) {
       AbortSignal.any([ctx.shutdown, c.req.raw.signal]),
     );
     return c.json({ styleGuide }, 201);
+  });
+
+  // Import a portable JSON file defining a style guide's full settings (graphics, transitions, sounds, color look).
+  // Returns `{ imported: false }` if the file isn't a structured style guide definition so callers can pass it to Scarlet in chat.
+  r.post("/style-guides/import-file", async (c) => {
+    const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+    const tooLarge = () => new HttpError(413, "attachment_too_large", "A style definition file can be up to 5 MB.");
+    const queryStyleGuideId = c.req.query("styleGuideId") || undefined;
+
+    let rawText = "";
+    let fileName = "style-guide.json";
+    let styleGuideId = queryStyleGuideId;
+
+    if (c.req.header("content-type")?.startsWith("application/json")) {
+      const body = await jsonBody(c, z.object({
+        path: z.string().min(1).max(4096),
+        styleGuideId: z.string().min(1).max(120).optional(),
+      }));
+      styleGuideId = body.styleGuideId ?? styleGuideId;
+      const info = isAbsolute(body.path) ? await stat(body.path).catch(() => null) : null;
+      if (!info?.isFile()) throw notFound("file");
+      if (info.size > MAX_IMPORT_BYTES) return c.json({ imported: false as const });
+      fileName = basename(body.path);
+      rawText = await readFile(body.path, "utf8");
+    } else {
+      if (Number(c.req.header("content-length")) > MAX_IMPORT_BYTES + 64 * 1024) return c.json({ imported: false as const });
+      let found = false;
+      try {
+        for await (const part of parseMultipartRequest(c.req.raw, { maxFileSize: MAX_IMPORT_BYTES, maxParts: 8 })) {
+          if (part.name !== "file" || !part.isFile) continue;
+          found = true;
+          fileName = part.filename || fileName;
+          const chunks: Uint8Array[] = [];
+          let total = 0;
+          for await (const chunk of part) {
+            total += chunk.byteLength;
+            if (total > MAX_IMPORT_BYTES) throw tooLarge();
+            chunks.push(chunk);
+          }
+          rawText = Buffer.concat(chunks).toString("utf8");
+          break;
+        }
+      } catch (error) {
+        multipartError(error, { tooLarge, invalid: () => badRequest("bad_upload", "Incomplete or invalid upload. Please try again.") });
+      }
+      if (!found) throw badRequest("missing_file", "multipart field `file` is required");
+    }
+
+    const result = importStyleGuideDefinition(ctx, c.var.user, rawText, fileName, { styleGuideId });
+    return c.json(result, result.imported ? (styleGuideId ? 200 : 201) : 200);
+  });
+
+  r.get("/style-guides/sounds/builtin", (c) => {
+    return c.json({ sounds: BUILT_IN_STYLE_SOUNDS });
+  });
+
+  r.get("/style-guides/sounds/builtin/:soundId", (c) => {
+    const wav = builtInStyleSoundWav(c.req.param("soundId"));
+    if (!wav) throw notFound("built-in sound");
+    const total = wav.byteLength;
+    const rangeHeader = c.req.header("range");
+    const headers: Record<string, string> = {
+      "Content-Type": "audio/wav",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=31536000, immutable",
+    };
+    if (rangeHeader) {
+      const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+      if (m) {
+        // "bytes=-N" asks for the last N bytes; "bytes=A-" from A to the end.
+        const suffix = !m[1] && !!m[2];
+        const start = suffix ? Math.max(0, total - Number(m[2])) : m[1] ? Number(m[1]) : 0;
+        const end = m[2] && !suffix ? Math.min(total - 1, Number(m[2])) : total - 1;
+        if (start >= 0 && start <= end && end < total) {
+          const slice = wav.subarray(start, end + 1);
+          return new Response(Buffer.from(slice), {
+            status: 206,
+            headers: {
+              ...headers,
+              "Content-Range": `bytes ${start}-${end}/${total}`,
+              "Content-Length": String(slice.byteLength),
+            },
+          });
+        }
+      }
+    }
+    return new Response(Buffer.from(wav), {
+      status: 200,
+      headers: { ...headers, "Content-Length": String(total) },
+    });
   });
 
   r.get("/style-guides/:styleGuideId", (c) => {
@@ -140,9 +243,18 @@ export function styleGuideRoutes(ctx: Ctx) {
     return c.json({ task }, 201);
   });
 
-  // Save updated description/instructions from an authorized style_guide_edit task.
+  // Save updated style guide sections from an authorized style_guide_edit task.
   r.post("/projects/:id/tasks/:taskId/style-guide-edit", async (c) => {
     const body = await jsonBody(c, TaskStyleGuideDraft.extend({ styleGuideId: z.string(), hostId: z.string() }).strict());
+    if (
+      body.description === undefined &&
+      body.instructions === undefined &&
+      body.transitions === undefined &&
+      body.sounds === undefined &&
+      body.colorLook === undefined
+    ) {
+      throw badRequest("empty_update", "Provide at least one style guide field to update.");
+    }
     const projectId = c.req.param("id");
     const styleGuide = ctx.db.transaction(() => {
       const task = ctx.repos.tasks.get(c.req.param("taskId"));
@@ -159,7 +271,11 @@ export function styleGuideRoutes(ctx: Ctx) {
         guide,
         {
           ...(body.description !== undefined && { description: body.description }),
-          instructions: body.instructions,
+          ...(body.instructions !== undefined && { instructions: body.instructions }),
+          ...(body.captionStyle !== undefined && { captionStyle: body.captionStyle }),
+          ...(body.transitions !== undefined && { transitions: body.transitions }),
+          ...(body.sounds !== undefined && { sounds: body.sounds }),
+          ...(body.colorLook !== undefined && { colorLook: body.colorLook }),
         },
         { author: { type: "agent", id: task.agent, name: task.agent, model: task.model } },
       );
@@ -167,6 +283,20 @@ export function styleGuideRoutes(ctx: Ctx) {
       return saved;
     }, "immediate")();
     return c.json({ styleGuide });
+  });
+
+  // Import a built-in starter SFX or style guide sound effect into a project's media library.
+  r.post("/projects/:id/media/from-style-sound", async (c) => {
+    const projectId = c.req.param("id");
+    requireProjectHeader(ctx, projectId);
+    const attempt = requestAttempt(c.req.raw);
+    requireProjectLocalPauseTarget(ctx, attempt, projectId);
+    const body = await jsonBody(c, ImportStyleGuideSoundRequest);
+    const imported = await importStyleGuideSoundToProject(ctx, projectId, c.var.user, body, {
+      signal: AbortSignal.any([ctx.shutdown, c.req.raw.signal]),
+      checkAttempt: () => { requireProjectLocalPauseTarget(ctx, attempt, projectId); },
+    });
+    return c.json(imported, 201);
   });
 
   // -- assets ---------------------------------------------------------------
@@ -208,6 +338,17 @@ export function styleGuideRoutes(ctx: Ctx) {
       cacheControl: "private, no-cache",
       ...(active && { downloadName: found.asset.name }),
     });
+  });
+
+  r.delete("/style-guides/:styleGuideId/assets/:assetId", (c) => {
+    const id = c.req.param("styleGuideId");
+    const assetId = c.req.param("assetId");
+    requireStyleGuide(id);
+    const styleGuide = ctx.db.transaction(
+      () => deleteStyleGuideAsset(ctx, c.var.user, id, assetId),
+      "immediate",
+    )();
+    return c.json({ styleGuide });
   });
 
   r.post("/style-guides/:styleGuideId/assets/:assetId/read", async (c) => {

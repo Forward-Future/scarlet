@@ -63,8 +63,11 @@ try {
   const sourceProject = join(library, "projects", id), copyProject = join(data, "projects", id);
   for (const name of ["media", "waveforms", "renders", "segments", "proxies", "notes"]) await mkdir(join(copyProject, name), { recursive: true });
   target = openDb(join(data, "scarlet.db"));
+  // A library written by a newer engine can carry columns this engine doesn't know yet. Copy the ones it does.
+  const columns = new Map();
   const insert = (table, obj) => {
-    const keys = Object.keys(obj);
+    if (!columns.has(table)) columns.set(table, new Set(target.prepare(`SELECT name FROM pragma_table_info('${table}')`).all().map(c => c.name)));
+    const keys = Object.keys(obj).filter(k => columns.get(table).has(k));
     target.prepare(`INSERT INTO ${table} (${keys.map(k => '"' + k + '"').join(",")}) VALUES (${keys.map(() => "?").join(",")})`).run(...keys.map(k => obj[k]));
   };
   insert("projects", { ...row, name: "Native playback fixture", head: selected.version, deleted_at: null, archived: 0, media_paused: 1 });

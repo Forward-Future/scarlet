@@ -6,9 +6,15 @@ Packaged releases send these events to the Scarlet project in PostHog US Cloud. 
 
 ## Turning it off
 
-In **Settings → About**, turn off **Send usage reports**. Scarlet saves this preference with the library and applies it immediately. Turning it off discards queued events and cancels sends in progress. Turning it back on starts collecting new events.
+In **Settings → About**, turn off **Send usage reports**. Scarlet saves this preference with the library and applies it immediately. Turning it off discards queued events, cancels sends in progress and deletes the installation ID (`telemetry-id`), so a problem report sent meanwhile isn't tied to earlier usage. Turning it back on starts collecting new events under a new ID.
 
-To disable reporting before the first launch, set `SCARLET_TELEMETRY_ENABLED=false` in the engine environment. `0`, `no` and `off` work too. This overrides the saved preference and prevents creation of the telemetry ID on a fresh installation.
+To disable reporting before the first launch, set `SCARLET_TELEMETRY_ENABLED=false` in the engine environment. `0`, `no` and `off` work too. This overrides the saved preference, prevents creation of the telemetry ID on a fresh installation and deletes one left by an earlier launch. The desktop app passes its own environment to the engine, and on macOS an app opened from the Dock or Finder doesn't see variables set in a shell profile: use `launchctl setenv SCARLET_TELEMETRY_ENABLED false` and restart Scarlet. Each library keeps its own preference, so a separate library or review app starts with reporting on.
+
+## The agent tools' own telemetry
+
+Claude Code, Codex and Gemini each report usage to their makers by default. Scarlet always turns that off for every copy it starts, whatever the setting above: Claude Code gets `DISABLE_TELEMETRY=1` and `DISABLE_ERROR_REPORTING=1`, Codex `analytics.enabled=false`, and Gemini `--disable-telemetry`, including when signing in. Runs through Ollama, LM Studio or OpenRouter also turn off Claude Code's other background traffic. The headless Chrome Scarlet renders graphics with runs with crash reporting, pings, metrics and background networking off, in a fresh profile each time. The bundled speech model runs offline with Hugging Face telemetry off.
+
+Some requests aren't usage reports and don't depend on the setting: checking GitHub for a Scarlet update, checking for new versions of the agent tools, the model price list, and downloading transcription models or FFmpeg when asked.
 
 ## What is sent
 
@@ -18,9 +24,10 @@ To disable reporting before the first launch, set `SCARLET_TELEMETRY_ENABLED=fal
 | `feature.used` | A listed request succeeds | `feature` |
 | `task.requested` | A request is queued | `kind`, `agent`, `fast` |
 | `task.finished` | A request is done, failed or cancelled | `kind`, `agent`, `state`, `changeCount`, `interrupted`, `durationMs` (omitted if a queued transcription ended before starting), `failureReason` (failed only; clean pauses, project deletes and quits are reported as `cancelled` with `interrupted: true`) |
-| `edit.reviewed` | An editor explicitly keeps an applied edit or successfully submits a revision or Undo edit request about it | `decision` (keep, revise, undo), `editId` |
+| `edit.reviewed` | An editor explicitly keeps or rejects an applied edit, or successfully submits a revision request about it | `decision` (keep, revise, undo), `editId` |
 | `render.finished` | An export is done, failed or cancelled | `kind`, `state`, `quality`, `failureReason` (failed only) |
-| `export.finished` | An export succeeds: a rendered video, a handoff folder, a timeline or captions | `route` (render, handoff, otio, srt, vtt), `firstExport` |
+| `export.finished` | An export succeeds: a rendered video, a handoff folder, a timeline, captions or a YouTube upload | `route` (render, handoff, otio, srt, vtt, youtube), `firstExport` |
+| `youtube.upload_finished` | A YouTube upload is done, failed or cancelled | `state`, `visibility` (public, unlisted, private), `reusedRender`, `failureCode` (failed only: the engine's own code, such as `youtube_quota_exceeded`) |
 | `media.added` | A file is added to a project and Scarlet has read its length | `kind` (video, audio, image, graphic), `durationBucket` (video and audio only), `addedBy` (editor, scarlet) |
 
 Every event also carries its capture time, a random UUID for delivery deduplication, `installId`, `platform`, `arch`, `scarletVersion` and `channel`. The installation ID is also the PostHog distinct ID.
@@ -53,11 +60,11 @@ Every event also carries its capture time, a random UUID for delivery deduplicat
 
 `durationBucket` is `lt_1m`, `1_10m`, `10_30m`, `30_60m` or `gt_60m`. The exact length, the file's name and its path are not sent. `addedBy` is `scarlet` for footage, pictures and graphics an agent added.
 
-`feature` is one of a fixed list of names such as `project.create` or `change.approve`. The list is in `packages/shared/src/telemetry.ts`. It covers things an editor or an agent chose to do. Polling, host housekeeping and agent tooling are not counted.
+`feature` is one of a fixed list of names such as `project.create` or `change.approve`. The list is in `packages/shared/src/telemetry.ts`. It covers things an editor or an agent chose to do. Polling, host housekeeping and agent tooling are not counted. A test in `apps/server/src/telemetry/featureUsage.test.ts` fails when a new request that changes something is neither counted nor listed as left out on purpose.
 
 `task.requested` also counts transcriptions the engine starts on its own (`agent` is `api`) and runs that resume an earlier request.
 
-An explicit Keep is counted once when it marks that version as reviewed. Revise includes typed or spoken requests submitted about an applied edit. Undo means the editor used Undo edit and Scarlet accepted the request. Either request can still fail or be cancelled later. Opening Revise, discarding a draft, leaving an edit alone, approving a proposed cut and automatic retries do not produce review decisions.
+An explicit Keep is counted once when it marks that version as reviewed. Revise includes typed or spoken requests submitted about an applied edit. Undo means the editor rejected the edit (Reject edit, or X) and Scarlet put it back or accepted the request to. A revision or reject request can still fail or be cancelled later. Opening Revise, discarding a draft, leaving an edit alone, approving a proposed cut and automatic retries do not produce review decisions.
 
 The engine generates `editId` using HMAC-SHA-256 with the installation’s private random ID as its key and the original local edit reference as input. The same edit on another installation gets a different code. The dashboard uses the most recent reported choice per reviewed edit in the reporting period. Edits without a decision are outside that denominator.
 
@@ -91,11 +98,11 @@ It goes to the same PostHog project and host as usage reports (`SCARLET_POSTHOG_
 
 Words the editor adds afterwards with **Add details** go as a `bug.details` event with the report's `reportId` and `reference` and their `description`, and nothing else beyond the fields every report has.
 
-Plus `installId` (when the engine has made one, so a report can be read beside usage), `platform`, `arch`, `scarletVersion` and `channel`. The log is the one Export logs saves: the same allowlist of operations and fields, with keys and tokens removed. Unlike usage reports, a problem report can carry the editor's own words, the error text on screen and the raw IDs in the log. It never carries media, frames, audio, transcripts, prompts or sign-ins. If it can't be sent, the editor can save the same report as a `.zip` in Downloads.
+Plus `installId` (only while usage reports are on, so a report can be read beside usage), `platform`, `arch`, `scarletVersion` and `channel`. The log is the one Export logs saves: the same allowlist of operations and fields, with keys and tokens removed. Unlike usage reports, a problem report can carry the editor's own words, the error text on screen and the raw IDs in the log. It never carries media, frames, audio, transcripts, prompts or sign-ins. If it can't be sent, the editor can save the same report as a `.zip` in Downloads.
 
 ## Identity
 
-On first use the engine writes a random id to `telemetry-id` in the Scarlet data folder, next to `scarlet.db`. It is not derived from the machine, the account or the library. Events carry the SHA-256 of that id as `installId`, never the id itself. Delete the file to start over as a new install. The empty `telemetry-exported` file beside it only records that this install has exported.
+On first use the engine writes a random id to `telemetry-id` in the Scarlet data folder, next to `scarlet.db`. It is not derived from the machine, the account or the library. Events carry the SHA-256 of that id as `installId`, never the id itself. Delete the file to start over as a new install. Turning reports off deletes it too. The empty `telemetry-exported` file beside it only records that this install has exported.
 
 No person profile is created for an install.
 

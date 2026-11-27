@@ -61,7 +61,11 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, ti
   const activeSkill: Skill | undefined = mode === "skill" ? skillMatches[activeIndex] : undefined;
   const activeStyle: StyleGuideRecord | undefined = mode === "style" ? styleMatches[activeIndex] : undefined;
   const activeName = activeStyle?.name ?? activeSkill?.name;
-  const activeId = index === "create"
+  // When no style guides exist yet and the editor types bare "@", pre-highlight "+ Create a style guide"
+  // so pressing Enter opens the style guide creator instead of doing nothing or sending bare "@".
+  const defaultToCreate = mode === "style" && styleStatus === "ready" && matchCount === 0 && !query;
+  const createSelected = index === "create" || defaultToCreate;
+  const activeId = createSelected
     ? `${listId}-create-action`
     : activeName ? `${listId}-${mode}-${activeName}` : undefined;
 
@@ -106,7 +110,7 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, ti
     <div className="composer-message">
       <span aria-hidden="true">{value || placeholder}{"​"}</span>
       <textarea id={id} ref={inputRef} rows={1} className="placeholder:text-dim" disabled={disabled} aria-label={ariaLabel}
-        placeholder={placeholder} aria-description={plain ? undefined : "Type / to choose an editing skill."}
+        placeholder={placeholder} aria-description={plain ? undefined : "Type / to choose an editing skill, or @ to choose a style guide."}
         aria-autocomplete="list" aria-haspopup="listbox" aria-controls={open ? listId : undefined}
         aria-activedescendant={activeId} value={value}
         onScroll={e => { if (overlay.current) overlay.current.scrollTop = e.currentTarget.scrollTop; }}
@@ -123,17 +127,17 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, ti
           if (isComposing(e)) return;
           if (open && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
             if (list.navigate(e, matchCount)) return;
-            if (e.key === "Enter" || (e.key === "Tab" && (activeSkill || activeStyle))) {
+            if (e.key === "Enter" || (e.key === "Tab" && (activeSkill || activeStyle || createSelected))) {
               e.preventDefault();
-              if (index === "create") {
+              if (createSelected) {
                 if (!e.repeat) createAction();
               } else if (e.key === "Enter" && activeName === query && caret === token?.end) onSubmit();
               else if (activeSkill) chooseSkill(activeSkill);
               else if (activeStyle) chooseStyle(activeStyle);
               else if (mode === "skill" && status === "error") void load();
               else if (mode === "style" && styleStatus === "error") void loadStyleGuides();
-              // A command no row matches still sends: the send says when no skill has that name, and a shortcut such
-              // as /dialogue-pass goes to the skill it stands for.
+              // A command no row matches still sends: the send says when no skill has that name, and one of Scarlet's
+              // built-in commands runs with or without a skill that guides it.
               else if (e.key === "Enter" && caret === token?.end && !e.repeat) onSubmit();
               return;
             }
@@ -150,7 +154,15 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, ti
       </div>}
     </div>
     {open && mode === "skill" && <div className="composer-skills" role="listbox" id={listId} aria-label="Editing skills" data-shortcut-overlay>
-      <div className="eyebrow px-2 py-1">Skills</div>
+      <div className="composer-skill-head">
+        <div className="eyebrow">Skills</div>
+        <button type="button" className="composer-skill-switch" tabIndex={-1}
+          title="Switch to @ style guides for captions, lower thirds, boxes, and graphics"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => list.replaceToken(token, "@", false)}>
+          <span className="font-mono">@</span> Style guides
+        </button>
+      </div>
       <div className="composer-skill-list">
         {skillMatches.map(skill => <button key={skill.name} type="button" role="option" tabIndex={-1}
           id={`${listId}-skill-${skill.name}`} aria-selected={skill === activeSkill} ref={skill === activeSkill ? activeRow : undefined}
@@ -171,7 +183,14 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, ti
       </div>
     </div>}
     {open && mode === "style" && <div className="composer-skills" role="listbox" id={listId} aria-label="Style guides" data-shortcut-overlay>
-      <div className="eyebrow px-2 py-1">Style guides</div>
+      <div className="composer-skill-head">
+        <div className="eyebrow">Style guides</div>
+        {styleGuides.length > 0 && <button type="button" className="composer-skill-switch" tabIndex={-1}
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { list.close(); navigate("/settings/style-guides"); }}>
+          Manage
+        </button>}
+      </div>
       <div className="composer-skill-list">
         {styleMatches.map(guide => <button key={guide.id} type="button" role="option" tabIndex={-1}
           id={`${listId}-style-${guide.name}`} aria-selected={guide === activeStyle} ref={guide === activeStyle ? activeRow : undefined}
@@ -185,10 +204,10 @@ export function SkillCommandInput({ inputRef, value, skills, id, placeholder, ti
       </div>
       {!styleMatches.length && <div role="status" className="px-2 py-1 text-muted text-[12px]">
         {styleStatus === "error" ? <>Couldn’t load style guides. <button type="button" className="underline" onMouseDown={e => e.preventDefault()} onClick={() => void loadStyleGuides()} title="Press Enter to retry">Retry</button></>
-          : styleStatus !== "ready" ? "Loading style guides…" : query ? "No matching style guides." : "No style guides yet."}
+          : styleStatus !== "ready" ? "Loading style guides…" : query ? "No matching style guides." : "No style guides yet. Set the look for captions, lower thirds, boxes, and graphics."}
       </div>}
       <div className="composer-skill-footer">
-        <button type="button" role="option" tabIndex={-1} id={`${listId}-create-action`} aria-selected={index === "create"}
+        <button type="button" role="option" tabIndex={-1} id={`${listId}-create-action`} aria-selected={createSelected}
           onMouseDown={e => e.preventDefault()} onClick={createAction}>
           <Icon name="plus" size={14} /> Create a style guide
         </button>

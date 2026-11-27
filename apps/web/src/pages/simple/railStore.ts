@@ -1,8 +1,8 @@
-import { matchesEdit, type BatchSummaryItem, type EditKind, type EditRef, type ThreadEdit } from "@scarlet/shared";
+import { BROLL_CONTIGUOUS_GAP, matchesEdit, stretchesContiguous, type BatchSummaryItem, type EditKind, type EditRef, type ThreadEdit } from "@scarlet/shared";
 import { cutKindOfRow, cutSummary, type TimeRange } from "@scarlet/timeline";
 import { createContext, useContext, useSyncExternalStore } from "react";
 import { editKey } from "../../lib/editMoments";
-import { removedSeconds as formatRemovedSeconds } from "../../lib/format";
+import { lengthLabel, removedSeconds as formatRemovedSeconds } from "../../lib/format";
 import { ReviewLinger, type HeldFrom, type RowPlace } from "./beta/reviewTabsBeta";
 import type { HoveredReviewRow, Nest } from "./types";
 
@@ -73,6 +73,12 @@ export interface RailRow {
   /** All clip IDs touched by this edit's ops, and subset on overlay/caption tracks above the base video track. */
   clipIds?: readonly string[];
   overlayClipIds?: readonly string[];
+  /** Continuous B-roll section ID on the current timeline (`null` when checked and no active B-roll plays here). */
+  brollSectionId?: string | null;
+  /** Full timeline range of the active continuous B-roll section, when known from the timeline. */
+  brollSectionRange?: TimeRange;
+  /** True when multiple contiguous B-roll edits combined into one continuous section row. */
+  continuousBroll?: boolean;
   /** Whether this row can combine across requests with another edit touching the same clip or exact stretch. */
   combinable?: boolean;
   /** Trailing value text ("−1.2 s", "Graphic", "Kept", "Rejected", "Check"); undefined when hidden generic "Edit". */
@@ -246,6 +252,49 @@ function stretchOverlap(a?: TimeRange, b?: TimeRange): number {
 
 const isActiveRow = (row: RailRow) => row.needs || row.asks || row.pending || row.hasNeedNest;
 
+function isContinuousBrollRow(row: RailRow): boolean {
+  return !!row.combinable && !row.rejected && !row.skipped && !row.isCall && !row.isMarker
+    && row.editKind === "broll" && row.brollSectionId !== null;
+}
+
+/** Whether two B-roll rows belong to the same continuous B-roll section (no gap back to the main picture). */
+function sameContinuousBroll(a: RailRow, b: RailRow): boolean {
+  if (!isContinuousBrollRow(a) || !isContinuousBrollRow(b)) return false;
+  if (a.brollSectionId && b.brollSectionId) return a.brollSectionId === b.brollSectionId;
+  if (a.brollSectionId || b.brollSectionId) return false;
+  return stretchesContiguous(a.stretch, b.stretch, BROLL_CONTIGUOUS_GAP);
+}
+
+function brollSectionTipDetail(group: readonly RailRow[]): string | undefined {
+  const ordered = [...group].sort((a, b) => a.at - b.at || b.threadOrder - a.threadOrder);
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  for (const row of ordered) {
+    const names = row.members.length > 1
+      ? row.members.map(m => ((m.edit.reason && m.edit.summary) || m.edit.label).trim())
+      : [(row.rawLabel ?? row.label).trim()];
+    for (const name of names) {
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      labels.push(name);
+    }
+  }
+  if (labels.length <= 1) return undefined;
+  if (labels.length <= 3) return labels.join("\n");
+  return `${labels[0]}\n${labels[1]}\nand ${labels.length - 2} more`;
+}
+
+function pickContinuousBrollLead<T extends RailRow & { sourceOrder: number }>(group: readonly T[]): T {
+  const asks = group.filter(r => r.asks);
+  const needs = group.filter(r => r.needs);
+  const pending = group.filter(r => r.pending);
+  const needNest = group.filter(r => r.hasNeedNest);
+  const pool = asks.length ? asks : needs.length ? needs : pending.length ? pending : needNest.length ? needNest : group;
+  return [...pool].sort((a, b) => a.at - b.at || b.threadOrder - a.threadOrder || a.sourceOrder - b.sourceOrder)[0]!;
+}
+
 /** Whether an earlier request's edit (`prev`) and a later request's edit (`next`) modify the same underlying edit. */
 function rowsMatch(prev: RailRow, next: RailRow): boolean {
   // 1. Both touch the same overlay or caption clip (handles repositioned, re-rendered, extended, or shifted graphics).
@@ -297,11 +346,21 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
     };
   }
   // Group is already in chronological order (oldest first, newest last).
-  const lead = group.find(r => r.asks)
-    ?? group.find(r => r.needs)
-    ?? group.find(r => r.pending)
-    ?? group.find(r => r.hasNeedNest)
-    ?? group.at(-1)!;
+  const stretches = group.map(r => r.stretch).filter((s): s is TimeRange => !!s);
+  const unionStretch: TimeRange | undefined = stretches.length
+    ? { start: Math.min(...stretches.map(s => s.start)), end: Math.max(...stretches.map(s => s.end)) }
+    : undefined;
+  const distinctBrollSpans = stretches.length > 1 && stretches.some(s => !sameStretch(s, stretches[0]!));
+  const distinctOverlayClips = new Set(group.flatMap(r => r.overlayClipIds ?? [])).size > 1;
+  const continuousBroll = group.some(r => r.continuousBroll)
+    || (group.filter(isContinuousBrollRow).length >= 2 && (distinctBrollSpans || distinctOverlayClips || group.some(r => !!r.brollSectionId)));
+  const lead = continuousBroll
+    ? pickContinuousBrollLead(group)
+    : group.find(r => r.asks)
+      ?? group.find(r => r.needs)
+      ?? group.find(r => r.pending)
+      ?? group.find(r => r.hasNeedNest)
+      ?? group.at(-1)!;
   const place: RowPlace = group.some(r => r.needs || r.asks || r.hasNeedNest) ? "you"
     : group.some(r => r.pending) ? "working"
     : group.every(r => r.decided || r.rejected) ? "done"
@@ -314,13 +373,17 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
   const word = askingRow?.word ?? pendingRow?.word ?? lead.word;
   const isSpecificValue = (v?: string) => !!v && !isDecisionWord(v) && v !== "Edit";
   const isSpecificKind = (k?: EditKind) => !!k && k !== "other";
-  const editKind = isSpecificKind(lead.editKind)
-    ? lead.editKind
-    : [...group].reverse().find(r => isSpecificKind(r.editKind))?.editKind ?? lead.editKind;
-  const kindValue = isSpecificValue(lead.value)
-    ? lead.value
-    : [...group].reverse().find(r => isSpecificValue(r.value))?.value
-      ?? (lead.value && !isDecisionWord(lead.value) ? lead.value : [...group].reverse().find(r => r.value && !isDecisionWord(r.value))?.value);
+  const editKind = continuousBroll
+    ? "broll" as const
+    : isSpecificKind(lead.editKind)
+      ? lead.editKind
+      : [...group].reverse().find(r => isSpecificKind(r.editKind))?.editKind ?? lead.editKind;
+  const kindValue = continuousBroll
+    ? "B-roll"
+    : isSpecificValue(lead.value)
+      ? lead.value
+      : [...group].reverse().find(r => isSpecificValue(r.value))?.value
+        ?? (lead.value && !isDecisionWord(lead.value) ? lead.value : [...group].reverse().find(r => r.value && !isDecisionWord(r.value))?.value);
   const value = place === "done" ? (decision ?? lead.value) : kindValue;
   const members: RailEditMember[] = [];
   const seenMembers = new Set<string>();
@@ -337,10 +400,26 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
     `${r.threadId}:${r.key}`,
     ...(r.was ?? []).map(w => `${r.threadId}:${w}`),
   ]).filter(k => k !== key))];
+  const mergedClipIds = [...new Set(group.flatMap(r => r.clipIds ?? []))];
+  const mergedOverlayIds = [...new Set(group.flatMap(r => r.overlayClipIds ?? []))];
+  const sectionStart = continuousBroll ? (unionStretch?.start ?? Math.min(...group.map(r => r.at))) : undefined;
+  const brollTipMeta = continuousBroll
+    ? [
+      "B-roll",
+      unionStretch && unionStretch.end > unionStretch.start ? lengthLabel(unionStretch.end - unionStretch.start) : undefined,
+      decided ? (decision ?? "Kept") : undefined,
+    ].filter(Boolean).join(" · ")
+    : undefined;
+  const brollTipDetail = continuousBroll ? brollSectionTipDetail(group) : undefined;
   return {
     ...lead,
     key,
     was: was.length ? was : undefined,
+    ...(sectionStart !== undefined && { at: sectionStart, displayAt: sectionStart, mark: sectionStart }),
+    ...(continuousBroll && unionStretch && { stretch: unionStretch }),
+    ...(continuousBroll && { continuousBroll: true }),
+    ...(mergedClipIds.length > 0 && { clipIds: mergedClipIds }),
+    ...(mergedOverlayIds.length > 0 && { overlayClipIds: mergedOverlayIds }),
     place,
     section,
     sourceOrder: lead.sourceOrder,
@@ -372,8 +451,8 @@ function synthesizeRow(group: readonly (RailRow & { sourceOrder: number })[]): U
     version: Math.max(...group.map(r => r.version)),
     fresh: group.some(r => r.fresh),
     spent: lead.spent ?? [...group].reverse().find(r => r.spent)?.spent,
-    tipMeta: lead.tipMeta ?? [...group].reverse().find(r => r.tipMeta)?.tipMeta,
-    tipDetail: lead.tipDetail ?? [...group].reverse().find(r => r.tipDetail)?.tipDetail,
+    tipMeta: brollTipMeta ?? lead.tipMeta ?? [...group].reverse().find(r => r.tipMeta)?.tipMeta,
+    tipDetail: brollTipDetail ?? lead.tipDetail ?? [...group].reverse().find(r => r.tipDetail)?.tipDetail,
     removedSeconds: lead.removedSeconds ?? [...group].reverse().find(r => r.removedSeconds !== undefined)?.removedSeconds,
     hadCheck: group.some(r => r.hadCheck),
     members,
@@ -775,6 +854,27 @@ function synthesizeUnifiedRows(infos: ReadonlyMap<string, RailInfo>): UnifiedRai
       groups.push({ rows: [row] });
       continue;
     }
+    // Contiguous B-roll edits belonging to the same continuous B-roll section always collapse into one line item,
+    // even within the same request or when multiple shots are flagged, and merge transitively when a middle shot bridges them.
+    if (isContinuousBrollRow(row)) {
+      const brollMatches: { rows: (RailRow & { sourceOrder: number })[] }[] = [];
+      for (const candidate of groups) {
+        if (!candidate.rows[0]!.combinable) continue;
+        if (candidate.rows.some(prev => sameContinuousBroll(prev, row))) brollMatches.push(candidate);
+      }
+      if (brollMatches.length) {
+        const target = brollMatches[0]!;
+        for (let k = 1; k < brollMatches.length; k++) {
+          const extra = brollMatches[k]!;
+          target.rows.push(...extra.rows);
+          const idx = groups.indexOf(extra);
+          if (idx >= 0) groups.splice(idx, 1);
+        }
+        target.rows.push(row);
+        target.rows.sort((a, b) => a.threadOrder - b.threadOrder || a.sourceOrder - b.sourceOrder);
+        continue;
+      }
+    }
     let match: { rows: (RailRow & { sourceOrder: number })[] } | undefined;
     for (let i = groups.length - 1; i >= 0; i--) {
       const candidate = groups[i]!;
@@ -944,7 +1044,9 @@ function rowSignature(row: RailRow): string {
     row.key, row.threadOrder, row.at, row.displayAt, row.mark ?? null, row.place,
     row.label, row.rawLabel ?? null, row.editKind ?? null,
     row.stretch ? [row.stretch.start, row.stretch.end] : null,
-    row.clipIds ?? null, row.overlayClipIds ?? null, !!row.combinable,
+    row.clipIds ?? null, row.overlayClipIds ?? null, row.brollSectionId ?? null,
+    row.brollSectionRange ? [row.brollSectionRange.start, row.brollSectionRange.end] : null,
+    !!row.continuousBroll, !!row.combinable,
     row.value ?? null, row.word ?? null, row.decision ?? null,
     row.needs, row.asks, row.isAskingCurrent, row.pending, row.busy, row.revised,
     row.decided, row.rejected, row.skipped, row.countsAsNeed, row.hasNeedNest,
@@ -1034,15 +1136,22 @@ export class RailStore {
     const hasStructured = [...this.infos.values()].some(info => info.rows !== undefined);
     if (!hasStructured) return;
     const unifiedRows = synthesizeUnifiedRows(this.infos);
+    const callKeys = new Set(unifiedRows.filter(u => u.isCall).map(u => u.key));
+    const reloading = (key: string) => {
+      if (callKeys.has(key)) return false;
+      const sep = key.indexOf(":");
+      return sep > 0 && this.infos.get(key.slice(0, sep))?.listLoaded === false;
+    };
     const tracked = unifiedRows
       .filter(u => u.isCall || u.rows.some(r => this.infos.get(r.threadId)?.listLoaded !== false))
       .map(u => ({ key: u.key, place: u.place, was: u.was, busy: u.busy }));
-    this.linger.track(tracked, this.lowShown, this.doneShown);
+    this.linger.track(tracked, this.lowShown, this.doneShown, reloading);
     const nextHeld = new Set<string>();
     for (const row of tracked) if (this.linger.of(row.key)) nextHeld.add(row.key);
+    for (const key of this.prevHeldKeys) if (this.linger.of(key)) nextHeld.add(key);
     this.prevHeldKeys = nextHeld;
     for (const key of [...this.arrived.keys()]) {
-      if (this.linger.of(key) || !unifiedRows.some(u => u.key === key && (u.place === "working" || u.place === "done"))) {
+      if (this.linger.of(key) || (!reloading(key) && !unifiedRows.some(u => u.key === key && (u.place === "working" || u.place === "done")))) {
         this.clearArrived(key);
       }
     }

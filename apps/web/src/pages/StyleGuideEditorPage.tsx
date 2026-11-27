@@ -1,19 +1,36 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { slugifyStyleGuideName, type StyleGuideAsset, type StyleGuideRecord, type Task, type TaskEvent } from "@scarlet/shared";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import {
+  serializeStyleGuideDefinition,
+  slugifyStyleGuideName,
+  type StyleGuideAsset,
+  type StyleGuideRecord,
+  type StyleGuideSound,
+  type StyleGuideTransition,
+  type Task,
+  type TaskEvent,
+} from "@scarlet/shared";
 import { AgentChip, useAgentAvailability } from "../components/agent/AgentChip";
 import { SkillCommandInput } from "../components/agent/SkillCommandInput";
 import { Said } from "../components/review/RunBundle";
 import { WindowActions } from "../components/shell/WorkspaceNavigation";
 import { ConfirmDialog, ErrorState, Icon, InlineError, Loading, Modal, Spinner, Toggle } from "../components/ui/primitives";
 import { api, errorMessage } from "../lib/client";
+import { builtinStyleGuideByName } from "../lib/builtinStyleGuides";
 import { desktop, isDesktop } from "../lib/desktop";
 import { isComposing } from "../lib/hotkeys";
 import { taskActivityLabel } from "../lib/taskActivity";
 import { isActiveTask } from "../lib/taskRun";
 import { useEscapeToLeave, useFileDropTarget } from "../lib/uiHooks";
 import { useStyleGuidesStore } from "../stores/styleGuides";
+import { ColorLookStage } from "./style-guide/ColorLookStage";
+import { SoundsStage } from "./style-guide/SoundsStage";
+import { StyleSpecimen } from "./style-guide/StyleSpecimen";
+import { useStyleSoundPlayer } from "./style-guide/stageAudio";
+import { TransitionsStage } from "./style-guide/TransitionsStage";
 import "../simple.css";
+
+type StageTab = "graphics" | "transitions" | "sounds" | "color";
 
 interface StagedFile {
   key: string;
@@ -37,6 +54,7 @@ export function StyleGuideEditorPage() {
   const { styleGuideId } = useParams();
   const isNew = !styleGuideId;
   const navigate = useNavigate();
+  const location = useLocation();
 
   const library = useStyleGuidesStore(s => s.styleGuides);
   const storeGuide = useStyleGuidesStore(s => (styleGuideId ? s.styleGuides.find(g => g.id === styleGuideId) : undefined));
@@ -66,6 +84,8 @@ export function StyleGuideEditorPage() {
   const [savingMeta, setSavingMeta] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [stageTab, setStageTab] = useState<StageTab>("graphics");
+  const player = useStyleSoundPlayer(guide);
 
   const [edits, setEdits] = useState<Task[]>([]);
   const [activeEvents, setActiveEvents] = useState<TaskEvent[]>([]);
@@ -75,6 +95,9 @@ export function StyleGuideEditorPage() {
 
   const [ask, setAsk] = useState("");
   const [stagedFiles, setStagedFiles] = useState<StagedFile[]>([]);
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [importingFile, setImportingFile] = useState(false);
+  const consumedInitialFiles = useRef(false);
   const [sending, setSending] = useState(false);
   const [askErr, setAskErr] = useState<string | null>(null);
 
@@ -178,6 +201,7 @@ export function StyleGuideEditorPage() {
   }, 'dialog[open], [role="menu"], [data-shortcut-overlay]');
 
   const stageItems = (items: Array<File | { path: string }>) => {
+    setImportNote(null);
     setStagedFiles(prev => [
       ...prev,
       ...items.map(source => ({
@@ -188,19 +212,115 @@ export function StyleGuideEditorPage() {
     ]);
   };
 
+  const handleIncomingFiles = async (items: Array<File | { path: string }>) => {
+    if (!items.length) return;
+    setAskErr(null);
+    const toStage: Array<File | { path: string }> = [];
+    let latestImported: StyleGuideRecord | null = null;
+    let latestImportedName = "";
+
+    for (const item of items) {
+      const fileName = item instanceof File ? item.name : item.path.split(/[\\/]/).pop() || "file";
+      if (/\.json$/i.test(fileName)) {
+        setImportingFile(true);
+        try {
+          const targetId = latestImported?.id ?? guide?.id;
+          const res = await api.importStyleGuideFile(item, { ...(targetId && { styleGuideId: targetId }), name: fileName });
+          if (res.imported) {
+            latestImported = res.styleGuide;
+            latestImportedName = fileName;
+            setLoaded(res.styleGuide);
+            setName(res.styleGuide.name);
+            setIsDefault(res.styleGuide.isDefault);
+            useStyleGuidesStore.getState().apply(res.styleGuide);
+            continue;
+          }
+        } catch (e) {
+          setAskErr(errorMessage(e));
+          continue;
+        } finally {
+          setImportingFile(false);
+        }
+      }
+      toStage.push(item);
+    }
+
+    if (latestImported) {
+      setImportNote(`Imported settings from ${latestImportedName}.`);
+      if (isNew) {
+        createdHere.current = latestImported.id;
+        navigate(`/settings/style-guides/${latestImported.id}`, { replace: true });
+      }
+    }
+    if (toStage.length) {
+      stageItems(toStage);
+      boxRef.current?.focus();
+    }
+  };
+
+  // Pick up any style file dropped on the Style Guides gallery page before navigating to /new.
+  useEffect(() => {
+    if (consumedInitialFiles.current) return;
+    const incoming = (location.state as { initialFiles?: Array<File | { path: string }> } | null)?.initialFiles;
+    if (!incoming?.length) return;
+    consumedInitialFiles.current = true;
+    void handleIncomingFiles(incoming);
+  }, [location.state]);
+
   const { over: dropping, dropProps } = useFileDropTarget(
-    paths => stageItems(paths.map(path => ({ path }))),
-    files => stageItems(Array.from(files)),
+    paths => void handleIncomingFiles(paths.map(path => ({ path }))),
+    files => void handleIncomingFiles(Array.from(files)),
     { ignoreChildLeave: true },
   );
 
+  const exportStyleGuide = () => {
+    if (!guide) return;
+    const payload = JSON.stringify(serializeStyleGuideDefinition(guide), null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${guide.name}.style.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const pickFiles = async () => {
     if (isDesktop()) {
-      const picked = await desktop.pickFile("Attach a logo, font, or reference image").catch(() => null);
-      if (picked) stageItems([{ path: picked }]);
+      const picked = await desktop.pickFile("Attach a style file (.json, .md, .yaml, .pdf), logo, font, audio, or .cube look file").catch(() => null);
+      if (picked) void handleIncomingFiles([{ path: picked }]);
       return;
     }
     fileInputRef.current?.click();
+  };
+
+  const ensureGuideForDirectEdit = async (): Promise<StyleGuideRecord> => {
+    if (guide) return guide;
+    const requestedSlug = slugifyStyleGuideName(name);
+    const derived = requestedSlug || uniqueSlug("style-guide", library);
+    const created = await create({ name: derived, isDefault });
+    createdHere.current = created.id;
+    setLoaded(created);
+    setName(created.name);
+    if (isNew) navigate(`/settings/style-guides/${created.id}`, { replace: true });
+    return created;
+  };
+
+  const saveTransitions = async (transitions: StyleGuideTransition[]) => {
+    const target = await ensureGuideForDirectEdit();
+    const saved = await update(target.id, { transitions });
+    setLoaded(saved);
+  };
+
+  const saveSounds = async (sounds: StyleGuideSound[]) => {
+    const target = await ensureGuideForDirectEdit();
+    const saved = await update(target.id, { sounds });
+    setLoaded(saved);
+  };
+
+  const handleGuideUpdated = (updated: StyleGuideRecord) => {
+    setLoaded(updated);
+    useStyleGuidesStore.getState().apply(updated);
   };
 
   const commitName = async () => {
@@ -341,6 +461,7 @@ export function StyleGuideEditorPage() {
   if (!isNew && !guide) return <Loading label="Loading style guide…" />;
 
   const previewUrl = guide?.preview ? api.styleGuidePreviewUrl(guide.id, guide.preview.updatedAt) : undefined;
+  const fallbackPreset = !previewUrl && guide ? builtinStyleGuideByName(guide.name) : undefined;
   const canSend = Boolean(ask.trim() || stagedFiles.length > 0);
 
   return (
@@ -376,6 +497,17 @@ export function StyleGuideEditorPage() {
         </label>
         <div className="flex-1" />
         <AgentChip direction="down" variant="icon" />
+        {!isNew && guide && (
+          <button
+            type="button"
+            className="btn-quiet"
+            disabled={working}
+            title="Export all settings (graphics, transitions, sounds, color look) as a .style.json file"
+            onClick={exportStyleGuide}
+          >
+            Export
+          </button>
+        )}
         {!isNew && (
           <button
             type="button"
@@ -390,14 +522,14 @@ export function StyleGuideEditorPage() {
         <WindowActions inSettings />
       </div>
 
-      <div className="skill-editor-body">
+      <div {...dropProps} className="skill-editor-body relative">
         <aside className="skill-chat" aria-label="Style guide chat">
           <div className="simple-chat" ref={threadRef}>
             {edits.length === 0 && (
               <div className="style-guide-chat-empty">
-                <p>Describe the look you want, or drop a logo, font, or reference screenshot into the message box.</p>
+                <p>Describe your look for captions, lower thirds, boxes, graphics, transitions, sound effects, or camera color — or drop a style settings file (.json, .md, .yaml, .pdf), logo, font, audio clip, or .cube file anywhere.</p>
                 <p className="text-dim mt-2 text-[12px]">
-                  Scarlet will render a live 16:9 preview beside you and apply this style whenever you create graphics.
+                  Scarlet updates the live preview tabs beside you and applies this style automatically across projects.
                 </p>
               </div>
             )}
@@ -481,8 +613,16 @@ export function StyleGuideEditorPage() {
             })}
           </div>
 
-          <div {...dropProps} className="composer-dock">
+          <div className="composer-dock">
             <InlineError>{askErr}</InlineError>
+            {importNote && (
+              <div className="sg-import-note">
+                <span>{importNote}</span>
+                <button type="button" className="btn-icon" aria-label="Dismiss import notice" title="Dismiss" onClick={() => setImportNote(null)}>
+                  <Icon name="x" size={11} />
+                </button>
+              </div>
+            )}
             <div className="composer-input">
               {stagedFiles.length > 0 && (
                 <div className="composer-files" role="group" aria-label="Files attached to your message">
@@ -509,16 +649,16 @@ export function StyleGuideEditorPage() {
                   const files = Array.from(e.clipboardData?.files ?? []);
                   if (!files.length) return;
                   e.preventDefault();
-                  stageItems(files);
+                  void handleIncomingFiles(files);
                 }}
               >
                 <div className="composer-row">
                   <button
                     type="button"
                     className="btn-icon shrink-0 text-muted hover:text-fg"
-                    aria-label="Attach logo, font, or screenshot"
-                    title="Attach logo, font, or screenshot"
-                    disabled={boxOff || sending}
+                    aria-label="Attach style file, logo, font, audio, or look file"
+                    title="Attach style file (.json, .md, .yaml, .pdf), logo, font, audio, or .cube look file"
+                    disabled={boxOff || sending || importingFile}
                     onClick={() => void pickFiles()}
                   >
                     <Icon name="paperclip" size={14} />
@@ -530,7 +670,7 @@ export function StyleGuideEditorPage() {
                     className="sr-only"
                     onChange={e => {
                       const files = Array.from(e.target.files ?? []);
-                      if (files.length) stageItems(files);
+                      if (files.length) void handleIncomingFiles(files);
                       e.target.value = "";
                     }}
                   />
@@ -541,8 +681,8 @@ export function StyleGuideEditorPage() {
                     plain
                     id={askId}
                     disabled={boxOff}
-                    ariaLabel={question ? "Answer Scarlet" : "Describe your style or drop a logo, font, or screenshot"}
-                    placeholder={question ? "Answer Scarlet…" : "Describe a look, or drop a logo, font, or screenshot…"}
+                    ariaLabel={question ? "Answer Scarlet" : "Describe captions, graphics, transitions, sounds, or color look, or drop files"}
+                    placeholder={question ? "Answer Scarlet…" : "Ask for captions, graphics, transitions, SFX, or color — or drop files…"}
                     onChange={text => { setAsk(text); setAskErr(null); }}
                     onSubmit={() => void send()}
                   />
@@ -563,34 +703,101 @@ export function StyleGuideEditorPage() {
                 </div>
               </div>
             </div>
-            {dropping && <div className="composer-drop" aria-hidden="true">Attach to your message</div>}
           </div>
         </aside>
 
         <main className="style-guide-preview-pane" aria-label="Style guide preview">
-          <div className="style-guide-preview-stage">
-            {previewUrl ? (
-              <button
-                type="button"
-                className="style-guide-preview-frame is-clickable"
-                onClick={() => setLightboxOpen(true)}
-                title="Click to inspect full size"
-              >
-                <img src={previewUrl} alt={`Live preview of @${guide!.name}`} />
-              </button>
-            ) : (
-              <div className="style-guide-preview-frame is-empty">
-                <span className="style-guide-preview-placeholder-title">Live preview</span>
-                <span className="style-guide-preview-placeholder-body">
-                  Describe the look you want or drop a logo, font, or screenshot in chat.
-                </span>
-              </div>
-            )}
-            {guide?.description && (
-              <p className="style-guide-preview-caption">{guide.description}</p>
-            )}
+          <div className="sg-stage-shell">
+            <div className="sg-tab-bar" role="tablist" aria-label="Style guide sections">
+              {([
+                { id: "graphics", label: "Graphics" },
+                { id: "transitions", label: "Transitions", count: guide?.transitions.length ?? 0 },
+                { id: "sounds", label: "Sounds", count: guide?.sounds.length ?? 0 },
+                { id: "color", label: "Color look", dot: Boolean(guide?.colorLook) },
+              ] as Array<{ id: StageTab; label: string; count?: number; dot?: boolean }>).map(tab => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={stageTab === tab.id}
+                  className={`sg-tab ${stageTab === tab.id ? "is-active" : ""}`}
+                  onClick={() => setStageTab(tab.id)}
+                >
+                  <span>{tab.label}</span>
+                  {tab.count ? <span className="sg-tab-count tnum">{tab.count}</span> : null}
+                  {tab.dot ? <span className="sg-tab-dot" aria-hidden="true" /> : null}
+                </button>
+              ))}
+            </div>
+
+            <div className="sg-tab-panel" role="tabpanel" aria-label={stageTab}>
+              {stageTab === "graphics" && (
+                <div className="style-guide-preview-stage">
+                  {previewUrl ? (
+                    <button
+                      type="button"
+                      className="style-guide-preview-frame is-clickable"
+                      onClick={() => setLightboxOpen(true)}
+                      title="Click to inspect full size"
+                    >
+                      <img src={previewUrl} alt={`Live preview of @${guide!.name}`} />
+                    </button>
+                  ) : fallbackPreset ? (
+                    <div className="style-guide-preview-frame">
+                      <StyleSpecimen preset={fallbackPreset} />
+                    </div>
+                  ) : (
+                    <div className="style-guide-preview-frame is-empty">
+                      <span className="style-guide-preview-placeholder-title">Live preview</span>
+                      <span className="style-guide-preview-placeholder-body">
+                        Describe the look you want or drop a logo, font, or screenshot in chat.
+                      </span>
+                    </div>
+                  )}
+                  {guide?.description && (
+                    <p className="style-guide-preview-caption">{guide.description}</p>
+                  )}
+                </div>
+              )}
+
+              {stageTab === "transitions" && (
+                <TransitionsStage
+                  guide={guide}
+                  disabled={working || savingMeta}
+                  player={player}
+                  onSave={saveTransitions}
+                />
+              )}
+
+              {stageTab === "sounds" && (
+                <SoundsStage
+                  guide={guide}
+                  disabled={working || savingMeta}
+                  player={player}
+                  onSave={saveSounds}
+                  onGuideUpdated={handleGuideUpdated}
+                  onDropStyleFiles={items => void handleIncomingFiles(items)}
+                />
+              )}
+
+              {stageTab === "color" && (
+                <ColorLookStage
+                  guide={guide}
+                  onSuggestPrompt={prompt => {
+                    setAsk(prompt);
+                    setAskErr(null);
+                    boxRef.current?.focus();
+                  }}
+                />
+              )}
+            </div>
           </div>
         </main>
+        {dropping && (
+          <div className="sg-drop-overlay" aria-hidden="true">
+            Drop a style settings file (.json, .md, .yaml, .pdf) or brand asset to import or attach to chat
+          </div>
+        )}
       </div>
 
       <Modal open={lightboxOpen && !!previewUrl} onClose={() => setLightboxOpen(false)} title={`@${guide?.name ?? ""}`} width={1080}>

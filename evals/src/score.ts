@@ -396,6 +396,10 @@ export function scoreRun(input: ScoreInput): Score {
       tokens,
       outputTokens: usage?.outputTokens ?? null,
       costUsd: trace?.costUsd ?? null,
+      // Gemini's runs report their steps: how many, the largest context, and the steps that missed the cache.
+      modelSteps: trace?.steps?.steps ?? null,
+      peakContextTokens: trace?.steps?.peakContext ?? null,
+      cacheMisses: trace?.steps?.misses ?? null,
     },
   };
 }

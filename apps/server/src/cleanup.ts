@@ -6,6 +6,7 @@
  * SCARLET_CLEANUP_OPENAI_MODEL / SCARLET_CLEANUP_GEMINI_MODEL, else the defaults below.
  */
 import type { Ctx } from "./context.js";
+import { clip, humanDuration } from "./logText.js";
 
 const DEFAULT_MODEL = { anthropic: "claude-opus-5-5", openai: "gpt-4o-mini", gemini: "gemini-2.5-flash" };
 // The note waits for its cleanup, so a provider that stops answering must not hold it for the HTTP client's five minutes.
@@ -35,9 +36,15 @@ export async function cleanupNote(
   const user = `Playhead ${where}.\n\nSpoken note:\n"""${transcript}"""`;
   const deadline = AbortSignal.timeout(CLEANUP_TIMEOUT_MS);
   const stop = signal ? AbortSignal.any([deadline, signal]) : deadline;
+  const started = Date.now();
+  // One line for each cleanup: its provider and model, how long it took and why it kept the editor's words. Never the words.
+  const done = (text: string | null, why?: string) => {
+    ctx.log(`[cleanup] ${provider} ${model} ${text ? "rewrote the note" : `kept the spoken note (${why ?? "empty reply"})`} in ${humanDuration(Date.now() - started)}`);
+    return text;
+  };
   try {
     if (provider === "anthropic") {
-      if (!ctx.env.anthropicKey) return null;
+      if (!ctx.env.anthropicKey) return done(null, "no Anthropic key");
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -62,12 +69,12 @@ export async function cleanupNote(
         content?: Array<{ type: string; text?: string }>;
       };
       // A rewrite cut off at its length limit is half an instruction: the note keeps what the editor said.
-      if (json.stop_reason === "refusal" || json.stop_reason === "max_tokens") return null;
+      if (json.stop_reason === "refusal" || json.stop_reason === "max_tokens") return done(null, `stopped: ${json.stop_reason}`);
       const text = (json.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("").trim();
-      return text || null;
+      return done(text || null);
     }
     if (provider === "gemini") {
-      if (!ctx.env.geminiKey) return null;
+      if (!ctx.env.geminiKey) return done(null, "no Gemini key");
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-goog-api-key": ctx.env.geminiKey },
@@ -83,18 +90,18 @@ export async function cleanupNote(
         candidates?: Array<{ finishReason?: string; content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>;
       };
       const candidate = json.candidates?.[0];
-      if (!candidate) return null;
+      if (!candidate) return done(null, "no candidate");
       if (candidate.finishReason && candidate.finishReason !== "STOP") {
-        return null;
+        return done(null, `stopped: ${clip(candidate.finishReason, 40)}`);
       }
       const text = (candidate.content?.parts ?? [])
         .filter((p) => !p.thought)
         .map((p) => p.text ?? "")
         .join("")
         .trim();
-      return text || null;
+      return done(text || null);
     }
-    if (!ctx.env.openaiKey) return null;
+    if (!ctx.env.openaiKey) return done(null, "no OpenAI key");
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${ctx.env.openaiKey}` },
@@ -111,11 +118,11 @@ export async function cleanupNote(
     if (!res.ok) throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const json = (await res.json()) as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }> };
     const choice = json.choices?.[0];
-    if (choice?.finish_reason === "length") return null;
-    return choice?.message?.content?.trim() || null;
+    if (choice?.finish_reason === "length") return done(null, "stopped: length");
+    return done(choice?.message?.content?.trim() || null);
   } catch (e) {
     // A request cancelled by the client can abort with a plain string as its reason.
-    ctx.log(`[cleanup] failed: ${e instanceof Error ? e.message : String(e)}`);
+    ctx.log(`[cleanup] ${provider} ${model} failed after ${humanDuration(Date.now() - started)}${deadline.aborted ? " (timed out)" : ""}: ${clip(e instanceof Error ? e.message : String(e), 360)}`);
     return null;
   }
 }

@@ -33,11 +33,24 @@ export function exportCounting(job: ExportJob): boolean {
   return job.phase === "rendering" && !job.waiting && percent > 0 && percent < PICTURE_DONE;
 }
 
-/** How the last export ended. `context` is the video it was for: a saved file is the video's export only until the video changes. */
-export type ExportResult = { phase: "done"; path: string; context: string }
+/**
+ * How the last export ended. `context` is the video it was for: a saved file is the video's export only until the video
+ * changes. `sidecar`: the file was the video's captions or timeline, not the video, so it doesn't make the video
+ * exported; `video` is then the video's own last export, which still is.
+ */
+export type ExportResult = { phase: "done"; path: string; context: string; sidecar?: true; video?: { path: string; context: string } }
   /** `seen`: the editor has had the reason in front of them, in the Export sheet. Until then the menu is marked for it. */
   | { phase: "failed"; error: string; file: ExportFile; context: string; seen?: boolean };
 export type ExportState = ExportJob | ExportResult;
+
+/**
+ * The video's own last export, the file and the video it was of. A caption or timeline file saved since doesn't take
+ * its place: Export said "Exported · Interview.vtt" and stopped saying the video hadn't been exported (2026-11-26).
+ */
+export function videoExport(state: ExportState | undefined): { path: string; context: string } | undefined {
+  if (state?.phase !== "done") return undefined;
+  return state.sidecar ? state.video : { path: state.path, context: state.context };
+}
 
 // Keep a requested export alive if the editor opens a different project during the render.
 export const useExports = create<{ jobs: Record<string, ExportState | undefined> }>(() => ({ jobs: {} }));
@@ -232,7 +245,10 @@ async function run(projectId: string, file: ExportFile, context: string, version
       }
     }
     ticket = null;
-    result = { phase: "done", path: saved, context: job.context };
+    const sidecar = file.format === "srt" || file.format === "vtt" || file.format === "otio";
+    const video = sidecar ? videoExport(prior as ExportState | undefined) : undefined;
+    result = sidecar ? { phase: "done", path: saved, context: job.context, sidecar: true, ...(video && { video }) }
+      : { phase: "done", path: saved, context: job.context };
   } catch (err) {
     const message = errorMessage(err);
     // Another window is saving the file: it resumed this export, whichever window started it, and it settles it.

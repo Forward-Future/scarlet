@@ -4,6 +4,7 @@ import { Icon } from "../../components/ui/primitives";
 import { clock as clockLabel } from "../../lib/format";
 import { inListOrder, ReviewLinger, tabShown, type ListOrder, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
+import { useProjectStore } from "../../stores/project";
 import { useLeavingRows } from "./lowRiskFold";
 import { dedupeDockEntries, type DockEntry, type DockRow, type ReviewDockStore } from "./reviewDockStore";
 import { useReviewTabHeight } from "./reviewTabHeight";
@@ -76,6 +77,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   useSyncExternalStore(linger.subscribe, linger.snapshot, linger.snapshot);
 
   const [open, setOpen] = listState;
+  const paused = useProjectStore(s => !!s.current?.project.editingPaused);
   const host = useRef<HTMLDivElement>(null);
   useLeavingRows(host);
   const askedReveal = useRef(false);
@@ -86,9 +88,9 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const hasTabs = reports.some(r => r.hasForYou);
   const tab: ReviewTab = tabShown(open);
 
-  // Merge all threads' entries (deduplicated across cross-thread flags) in timeline order for tracking, Working, and Done.
+  // Merge all threads' entries (deduplicated across cross-thread flags and continuous B-roll sections) in timeline order.
   const deduped = hasTabs ? dedupeDockEntries(reports.flatMap(r => r.entries)) : [];
-  const allowedKeys = new Set(deduped.map(e => e.key));
+  const dedupedByKey = new Map(deduped.map(e => [e.key, e]));
   const allEntries = hasTabs ? inListOrder(deduped, TIME_ORDER) : [];
   const inPlace = (place: RowPlace) => allEntries.filter(e => e.place === place);
   const optional = hasTabs ? inPlace("optional") : [];
@@ -97,7 +99,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
 
   // While a pass's confident edits are shown in the dock (and its list has settled), notify the workspace so the timeline shows its cuts too.
   const openPassThreadId = optionalShown
-    ? reports.find(r => r.isPass && r.listLoaded !== false && r.entries.some(e => e.place === "optional" && allowedKeys.has(e.key)))?.threadId
+    ? reports.find(r => r.isPass && r.listLoaded !== false && r.entries.some(e => dedupedByKey.get(e.key)?.place === "optional"))?.threadId
     : undefined;
   useEffect(() => {
     if (!onListOpen || !openPassThreadId) return;
@@ -106,12 +108,19 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   }, [openPassThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (hasTabs) {
+    const callKeys = new Set(allEntries.filter(e => e.row.callIndex !== undefined).map(e => e.key));
+    const reloading = (key: string) => {
+      if (callKeys.has(key)) return false;
+      const sep = key.indexOf("/");
+      return sep > 0 && loadedOf.get(key.slice(0, sep)) === false;
+    };
     linger.track(
       allEntries
         .filter(e => e.row.callIndex !== undefined || loadedOf.get(e.threadId) !== false)
         .map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })),
       optionalShown,
       tab === "done",
+      reloading,
     );
   }
   const heldFrom = (from: "you" | "optional" | "done") =>
@@ -127,7 +136,10 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const lowRows = optionalShown
     ? [...reports].reverse().flatMap(r =>
       inListOrder(
-        r.entries.filter(e => allowedKeys.has(e.key) && (e.place === "optional" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "optional"))),
+        r.entries.flatMap(raw => {
+          const e = dedupedByKey.get(raw.key);
+          return e && (e.place === "optional" || ((e.place === "working" || e.place === "done") && linger.of(e.key)?.from === "optional")) ? [e] : [];
+        }),
         TIME_ORDER,
       ),
     )
@@ -255,13 +267,14 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const pastHour = drawn.some(list => list.rows.some(({ row }) => clockLabel(row.displayAt).length > 5));
 
   const renderMember = (entry: DockEntry, m: DockRow) => (
-    <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}>
+    <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined} data-working={m.busy && !m.asks ? "busy" : undefined}>
       <button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
         data-log-control={m.dataLogControl} data-log-label="Edit in a moment" disabled={!m.open} title={m.title || m.label}
         onClick={letGo(() => store.openMember(entry.threadId, entry.key, m.key))}
         onPointerEnter={() => store.hoverRow(entry.threadId, m.mark, m.hover)} onPointerLeave={() => store.hoverRow(entry.threadId)}>
         <span className="simple-pass-label">
           {m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+          {m.busy && !m.asks && <span className="simple-pass-spin" aria-hidden="true" />}
           <span className="simple-pass-words">{m.label}</span>
           {m.version > 0 && <EditVersion n={m.version} hover={m.spent} />}
         </span>
@@ -284,14 +297,18 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         const { row, members, more, moment, unfolded } = entry;
         const value = id === "all" ? row.value : row.decision ?? row.value;
         const heldRow = hasTabs ? linger.of(entry.key) : undefined;
-        const leaving = !!heldRow?.leaving && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
-        const canUnkeepRow = !!row.unkeep && !leaving;
+        const lingeringHere = !!heldRow && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
+        const lingerKind = lingeringHere ? (entry.place === "working" ? "working" : (row.decided || row.rejected || row.skipped) ? "done" : undefined) : undefined;
+        const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
+        const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
+        const leaving = !!heldRow?.leaving && lingeringHere;
+        const canUnkeepRow = !!row.unkeep && !leaving && !lingeringHere;
         const isLowRow = id === "you" && lowKeys.has(entry.key);
         return <Fragment key={row.key}>
           {splitAt !== undefined && idx === splitAt && (
             <li className={splitAt === 0 ? "review-tier-sep is-first" : "review-tier-sep"} role="presentation">
               <span className="review-tier-sep-row">
-                <span className="review-tier-label">Safe edits ({optional.length})</span>
+                <span className="review-tier-label">{optional.length > 0 ? `Safe edits (${optional.length})` : "Safe edits"}</span>
                 {optional.length > 0 && onKeepConfident && (
                   <button type="button" className="review-head-keep" title={doneLabel(optional.length)} aria-label={doneLabel(optional.length)}
                     onClick={letGo(onKeepConfident)}>Keep {optional.length} safe {optional.length === 1 ? "edit" : "edits"}</button>
@@ -301,7 +318,10 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
           )}
           <li className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
             data-thread={entry.threadId}
-            data-low-risk={isLowRow ? "" : undefined}>
+            data-low-risk={isLowRow ? "" : undefined}
+            data-lingering={lingerKind}
+            data-working={workingState}
+            data-paused={workingState === "pending" && paused ? "" : undefined}>
             <button type="button"
               className={[
                 row.on && "is-on",
@@ -324,6 +344,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
               <span className="simple-pass-label">
                 {(row.rejected || row.skipped) && <RejectedMark />}
                 {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+                {spinning && <span className="simple-pass-spin" aria-hidden="true" />}
                 <span className="simple-pass-words">{row.label}</span>
                 {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
                 {row.fresh && <small className="edit-version is-new">New</small>}
@@ -338,7 +359,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
               onPointerEnter={() => store.hoverRow(entry.threadId, row.mark, row.hover)} onPointerLeave={() => store.hoverRow(entry.threadId)}>
               <button type="button" className="simple-unkeep" data-log-control="unkeep-edit"
                 aria-label={`Unkeep ${row.label}`} title={row.unkeepTip ?? "Unkeep"}
-                onClick={letGo(() => store.unkeepRow(entry.threadId, entry.key))}>Unkeep</button>
+                onClick={letGo(() => store.unkeepRow(entry.threadId, entry.key, threadIds))}>Unkeep</button>
             </span>}
             {row.nests.map(nest => nest.node)}
             {unfolded && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">

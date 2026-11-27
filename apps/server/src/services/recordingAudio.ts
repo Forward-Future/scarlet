@@ -1,12 +1,23 @@
 import { createHash, randomUUID } from "node:crypto";
 import { open, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { heardAudioKey, speechActivity, speechActivityOf, speechActivityStart, type HeardAudio } from "@scarlet/render";
+import { clip, humanDuration, logId, throttledLog } from "../logText.js";
 import { extractWav } from "../render/ffmpeg.js";
 import { EMISSION_STORE_SUFFIXES, pcmWavHeader } from "../transcribe/wordAlign.js";
-import { readWavDataLayout } from "../util.js";
+import { readWavDataLayout, errorMessage } from "../util.js";
 
-type Paths = { paths: { tmp: string; waveforms(projectId: string): string } };
+type Paths = { paths: { tmp: string; waveforms(projectId: string): string }; log?: (line: string) => void };
+
+/** A recording in the library is saved under its media id: that id, for the log, and never its path. */
+const fileId = (file: string) => logId(basename(file, extname(file)));
+/** A recording that won't decode whole fails again on each read of it: logged once a minute for each engine's log. */
+const throttles = new WeakMap<(line: string) => void, ReturnType<typeof throttledLog>>();
+function throttled(log: (line: string) => void) {
+  let throttle = throttles.get(log);
+  if (!throttle) throttles.set(log, throttle = throttledLog(log));
+  return throttle;
+}
 
 /** The recording as it is now and the audio heard from it: what a decode or a store of what was heard from it is named by. */
 async function stamp(file: string, audio?: HeardAudio) {
@@ -83,9 +94,14 @@ export async function recordingWav(ctx: Paths, file: string, signal: AbortSignal
   if (!entry) {
     const wav = join(ctx.paths.tmp, `recording-${randomUUID()}.wav`);
     // The decode outlives the request that started it, so that request's signal doesn't stop it for the others.
+    const began = performance.now();
     const decoded = extractWav(file, wav, { audio }).then(async () => ({ wav, ...await wavLayout(wav) }));
     const created = entry = { decoded, users: 0 };
     decodes.set(key, created);
+    const log = ctx.log;
+    if (log) void decoded.then(d => log(`[audio] ${fileId(file)} decoded whole for reading: ${humanDuration(d.samples / RATE * 1000)} of sound in ${humanDuration(performance.now() - began)}`),
+      error => throttled(log)(`decode:${key}`, `[audio] ${fileId(file)} couldn't be decoded whole after ${humanDuration(performance.now() - began)}: ${clip(errorMessage(error))}`))
+      .catch(() => { /* A log line never breaks what it describes. */ });
     // A file that can't be deleted (held open by another program) stays for the startup sweep: nothing to stop the engine over.
     decoded.catch(() => { if (decodes.get(key) === created) decodes.delete(key); return rm(wav, { force: true }).catch(() => {}); });
   }
@@ -154,6 +170,7 @@ export async function recordingSpeechActivity(ctx: Paths, file: string, from: nu
     recording = await recordingWav(ctx, file, signal, audio);
   } catch {
     signal.throwIfAborted();
+    // The decode's failure is logged where it happened; this read goes on by the window.
     return speechActivity(file, from, to, signal, audio);
   }
   try {

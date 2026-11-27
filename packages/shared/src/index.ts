@@ -7,7 +7,9 @@ export * from "./learnings.js";
 export * from "./usage.js";
 export * from "./graphics.js";
 export * from "./skills.js";
+export * from "./builtInSfx.js";
 export * from "./styleGuides.js";
+export * from "./youtube.js";
 export * from "./wsEvents.js";
 export * from "./checkIn.js";
 export * from "./telemetry.js";
@@ -29,12 +31,15 @@ export * from "./showArea.js";
 export * from "./editingTools.js";
 export * from "./threads.js";
 export {
+  BUILT_IN_COMMANDS,
+  builtInCommand,
+  commandGuides,
   dialogueCommand,
   dialogueShortcut,
-  extendsDialoguePass,
-  isDialogueGuide,
   skillCommands,
   skillExtends,
+  skillOperation,
+  skillRuns,
   taskDialogueOperation,
   taskRunKind,
   type RunKind,
@@ -79,4 +84,5 @@ export * from "./restarts.js";
 export * from "./joinFragments.js";
 export * from "./capabilities.js";
 export * from "./editKind.js";
+export * from "./brollSections.js";
 export * from "./text.js";

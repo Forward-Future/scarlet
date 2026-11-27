@@ -48,7 +48,7 @@ export function mediaDurationBucket(seconds: number): MediaDurationBucket {
 }
 
 /** The ways an edit leaves Scarlet. */
-export const EXPORT_ROUTES = ["render", "handoff", "otio", "srt", "vtt"] as const;
+export const EXPORT_ROUTES = ["render", "handoff", "otio", "srt", "vtt", "youtube"] as const;
 export type ExportRoute = (typeof EXPORT_ROUTES)[number];
 
 /**
@@ -58,6 +58,7 @@ export type ExportRoute = (typeof EXPORT_ROUTES)[number];
  */
 const FEATURES = [
   ["POST", "/projects", "project.create"],
+  ["POST", "/projects/sample", "project.create_sample"],
   ["PATCH", "/projects/:id", "project.update"],
   ["DELETE", "/projects/:id", "project.trash"],
   ["POST", "/projects/:id/restore", "project.restore"],
@@ -101,6 +102,8 @@ const FEATURES = [
   ["PUT", "/media/:mediaId/audio-track", "media.audio_track"],
   ["POST", "/projects/:id/media", "media.upload"],
   ["POST", "/projects/:id/media/import", "media.import"],
+  ["DELETE", "/projects/:id/media/:mediaId", "media.remove"],
+  ["PUT", "/media/:mediaId/note", "media.note"],
   ["POST", "/media/:mediaId/transcribe", "media.transcribe"],
 
   ["POST", "/skills", "skill.create"],
@@ -115,6 +118,33 @@ const FEATURES = [
   ["POST", "/tasks/:taskId/retry", "task.retry"],
   ["POST", "/tasks/:taskId/continue-when-ready", "task.continue_when_ready"],
   ["POST", "/tasks/:taskId/answer", "task.answer"],
+  ["POST", "/tasks/:taskId/hold", "task.hold"],
+  ["POST", "/tasks/:taskId/start-now", "task.start_now"],
+  ["POST", "/tasks/:taskId/reword", "task.reword"],
+  ["POST", "/projects/:id/attachments", "message.attach"],
+  ["POST", "/projects/:id/stop-editing", "editing.stop"],
+  ["POST", "/projects/:id/resume-editing", "editing.resume"],
+  ["POST", "/projects/:id/kept-edits", "edit.keep_confident"],
+  ["POST", "/projects/:id/kept-edits/undo", "edit.keep_confident_undo"],
+
+  ["POST", "/projects/:id/learnings/:learningId/approve", "learning.approve"],
+  ["PATCH", "/projects/:id/learnings/:learningId", "learning.revise"],
+  ["POST", "/projects/:id/learnings/:learningId/decline", "learning.decline"],
+
+  ["POST", "/style-guides", "style_guide.create"],
+  ["POST", "/style-guides/from-graphic", "style_guide.from_graphic"],
+  ["POST", "/style-guides/import-file", "style_guide.import_file"],
+  ["PUT", "/style-guides/:styleGuideId", "style_guide.update"],
+  ["POST", "/style-guides/:styleGuideId/edit", "style_guide.edit"],
+  ["DELETE", "/style-guides/:styleGuideId", "style_guide.delete"],
+  ["POST", "/style-guides/:styleGuideId/assets", "style_guide.asset_add"],
+  ["DELETE", "/style-guides/:styleGuideId/assets/:assetId", "style_guide.asset_delete"],
+
+  ["PUT", "/settings/youtube/config", "youtube.configure"],
+  ["POST", "/settings/youtube/connect", "youtube.connect"],
+  ["POST", "/settings/youtube/disconnect", "youtube.disconnect"],
+  ["POST", "/projects/:id/youtube/publish", "youtube.publish"],
+  ["POST", "/youtube/uploads/:uploadId/cancel", "youtube.cancel_upload"],
 ] as const;
 
 export type Feature = (typeof FEATURES)[number][2];

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { fullRenderContext, isAsideTask, ScarletApiError } from "@scarlet/shared";
+import { fullRenderContext, isAsideTask, isHandOff, ScarletApiError } from "@scarlet/shared";
 import type {
   ActivityEntry,
   ApproveResponse,
@@ -47,6 +47,8 @@ export interface ProjectData {
   renderSettingsRevision?: number;
   sourcePreviewRevisions?: Record<string, number>;
   tasks: Task[];
+  /** Hand-offs still at work: runs a request gave a kind of work to, on the model the editor chose for it in Task models. */
+  handOffs?: Task[];
   taskEvents: Record<string, TaskEvent[]>;
   /** Token totals per task, across its runs. Tasks without a report are absent. */
   taskUsage?: Record<string, UsageTotals>;
@@ -455,6 +457,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
               changes: mergeSinceLoad(changes.changes, base.changes, d.changes),
               notes: mergeSinceLoad(notes.notes, base.notes, d.notes),
               tasks: mergeSinceLoad(tasks.tasks, base.tasks, d.tasks),
+              ...(tasks.handOffs && { handOffs: mergeSinceLoad(tasks.handOffs, base.handOffs ?? [], d.handOffs ?? []) }),
               taskEvents, taskEventScopes,
               reviewStatus: undefined, reviewError: undefined,
             };
@@ -570,6 +573,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
           patch(cur.id, (d) => ({ renders: upsert(d.renders, ev.render) }));
           break;
         case "task.updated":
+          // A hand-off isn't part of the conversation either, but its row in Working says which model it runs on.
+          if (isHandOff(ev.task)) { const handOff = ev.task; patch(cur.id, (d) => ({ handOffs: upsert(d.handOffs ?? [], handOff) })); break; }
           // A skill edit or a learning check runs from a project without being part of its conversation.
           if (isAsideTask(ev.task)) break;
           patch(cur.id, (d) => ({ tasks: upsert(d.tasks, ev.task) }));
@@ -712,7 +717,7 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.rejectEdits(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edits });
       replaceChange(change);
       showRewritten(cur.id, project);
-      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return change.appliedVersion ?? change.toVersion;
     },
     async adjustCut(threadId, head, cut, removed) {
@@ -721,7 +726,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.adjustCut(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, cut, removed });
       replaceChange(change);
       showRewritten(cur.id, project);
-      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      if (change.rejects) await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      else void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return { version: change.appliedVersion ?? change.toVersion, rejected: !!change.rejects };
     },
     async adjustEdit(threadId, head, edit, nextRange) {
@@ -730,7 +736,8 @@ export const useProjectStore = create<ProjectState>((set, get, store) => {
       const { project, change } = await api.adjustEdit(cur.id, { expectedHead: head, branch: cur.project.branch ?? "main", threadId, edit, nextRange });
       replaceChange(change);
       showRewritten(cur.id, project);
-      void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      if (change.rejects) await get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
+      else void get().refreshHead(cur.id).catch(headUnread(cur.id, get().current?.project.head));
       return { version: change.appliedVersion ?? change.toVersion, rejected: !!change.rejects };
     },
     async reviseStagedCut(changeId, index, body) {

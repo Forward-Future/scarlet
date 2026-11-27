@@ -1,7 +1,11 @@
 // @vitest-environment happy-dom
-import { expect, it, vi } from "vitest";
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emptyTimeline, makeMediaClip, type MediaAsset, type Timeline } from "@scarlet/timeline";
+import type { WaveformResponse } from "@scarlet/shared";
 import { api } from "../../lib/client";
-import { sourcePeaks, waveformBars, waveformScale } from "./TimelineWaveform";
+import { TimelineWaveform, sourcePeaks, waveformBars, waveformScale } from "./TimelineWaveform";
 
 it("projects clipped, retimed source peaks into the selected window with gain, fades and gaps", () => {
   const wave = { mediaId: "take", from: 3, to: 7, peaks: [1, .5, .25, .75], rms: [.5, .25, 0, .5] };
@@ -101,4 +105,110 @@ it("answers a window from one read already that holds it as finely, and reads ag
   } finally {
     read.mockRestore();
   }
+});
+
+it("drops an in-flight read when a recording switches audio tracks", async () => {
+  let finishFirst!: (wave: WaveformResponse) => void;
+  const first = new Promise<WaveformResponse>(resolve => { finishFirst = resolve; });
+  const read = vi.spyOn(api, "waveform")
+    .mockImplementationOnce(() => first)
+    .mockImplementation(async (mediaId, from, to, points = 1000) => ({ mediaId, from, to, peaks: new Array(points).fill(.5) }));
+  try {
+    const pending = sourcePeaks("wave_track_inflight", 0, 20, 0);
+    await sourcePeaks("wave_track_inflight", 0, 20, 1);
+    finishFirst({ mediaId: "wave_track_inflight", from: 0, to: 20, peaks: [.1] });
+    await pending;
+    const reread = await sourcePeaks("wave_track_inflight", 0, 20, 0);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(reread.peaks[0]).toBe(.5);
+  } finally {
+    read.mockRestore();
+  }
+});
+
+describe("TimelineWaveform", () => {
+  let root: Root;
+  let container: HTMLDivElement;
+  let heard: 0 | 1 = 0;
+
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(240);
+    heard = 0;
+    // Track 0 is loud in the first half and silent after; track 1 is the other way round.
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to, points = 1000) => ({
+      mediaId, from, to,
+      peaks: Array.from({ length: points }, (_, i) => ((from + (i + .5) * (to - from) / points) < 10) === (heard === 0) ? .8 : 0),
+    }));
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const asset = (id: string, extra: Partial<MediaAsset> = {}): MediaAsset => ({
+    id, kind: "video", name: id, path: `${id}.mp4`, hash: id, duration: 20, hasAudio: true, status: "ready", ...extra,
+  });
+  const timelineOf = (mediaId: string): Timeline => {
+    const t = emptyTimeline("prj_wave");
+    t.tracks[0]!.clips.push(makeMediaClip(mediaId, 0, 20, 0));
+    return t;
+  };
+  const drawn = () => container.querySelector(".timeline-waveform path")?.getAttribute("d");
+
+  it("re-reads and redraws when the recording switches to another audio track", async () => {
+    const timeline = timelineOf("wave_track_switch");
+    const draw = (media: MediaAsset[]) => act(async () => root.render(createElement(TimelineWaveform, { timeline, media, start: 0, duration: 20 })));
+    await draw([asset("wave_track_switch")]);
+    const before = drawn();
+    expect(before).toBeTruthy();
+    expect(api.waveform).toHaveBeenCalledTimes(1);
+
+    heard = 1;
+    await draw([asset("wave_track_switch", { audioTrack: 1 })]);
+    expect(api.waveform).toHaveBeenCalledTimes(2);
+    expect(drawn()).not.toBe(before);
+
+    // A cached window for one track must not answer a sub-window of another track.
+    vi.mocked(api.waveform).mockClear();
+    await sourcePeaks("wave_track_cache", 0, 20, 0);
+    await sourcePeaks("wave_track_cache", 5, 10, 1);
+    expect(api.waveform).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the drawn waveform steady while an unrelated file imports", async () => {
+    const timeline = timelineOf("wave_stable_main");
+    const loading = vi.fn();
+    const draw = (media: MediaAsset[]) => act(async () => root.render(createElement(TimelineWaveform, { timeline, media, start: 0, duration: 20, onLoading: loading })));
+    const importing = (fraction: number) => asset("wave_stable_broll", { status: "ingesting", preparation: { stage: "fingerprint", fraction } });
+
+    await draw([asset("wave_stable_main"), importing(.1)]);
+    const svg = container.querySelector(".timeline-waveform svg");
+    expect(svg).toBeTruthy();
+    expect(api.waveform).toHaveBeenCalledTimes(1);
+    loading.mockClear();
+
+    let removedSvg = 0, ripples = 0;
+    const watch = new MutationObserver(records => {
+      for (const record of records) {
+        for (const node of record.removedNodes) if (node.nodeName.toLowerCase() === "svg") removedSvg++;
+        for (const node of record.addedNodes) if (node instanceof Element && node.classList.contains("waveform-ripple")) ripples++;
+      }
+    });
+    watch.observe(container, { childList: true, subtree: true });
+    for (const fraction of [.2, .3, .4]) await draw([asset("wave_stable_main"), importing(fraction)]);
+    watch.disconnect();
+
+    expect(container.querySelector(".timeline-waveform svg")).toBe(svg);
+    expect(removedSvg).toBe(0);
+    expect(ripples).toBe(0);
+    expect(loading).not.toHaveBeenCalledWith(true);
+    expect(api.waveform).toHaveBeenCalledTimes(1);
+  });
 });

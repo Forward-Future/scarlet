@@ -88,6 +88,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
   store.setLowOpen(!!open.low);
   store.setDoneOpen(open.done);
   const batchSummaries = useProjectStore(s => s.current?.id === projectId ? s.current.batchSummaries : undefined);
+  const paused = useProjectStore(s => s.current?.id === projectId ? !!s.current.project.editingPaused : false);
   useEffect(() => {
     store.setBatchSummaries(batchSummaries);
   }, [store, batchSummaries]);
@@ -292,6 +293,11 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
         const activeRow = row.batch?.find(r => r.on) ?? row;
         const leaving = !!row.leaving;
         const arriving = !!row.arriving;
+        const lingerKind = row.lingerFrom
+          ? (row.place === "working" ? "working" : (row.decided || row.rejected || row.skipped) ? "done" : undefined)
+          : undefined;
+        const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
+        const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
         const canUnkeepRow = key === "done" && !leaving && !row.pending && !row.rejected && !row.skipped && !row.isMarker
           && (!!row.unkeepCall || row.members.some(m => m.canUnkeep));
         const value = row.decision ?? row.value;
@@ -312,7 +318,10 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
           : row.rejected ? `${rowTime} ${row.label}, rejected`
           : `${rowTime}: ${row.label}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : row.decided ? (row.isMarker ? ", done" : ", kept") : needTime ? ", needs you" : ""}`);
         const itemClass = [leaving && "is-leaving", arriving && "is-arriving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined;
-        return <li key={row.key} className={itemClass}>
+        return <li key={row.key} className={itemClass}
+          data-lingering={lingerKind}
+          data-working={workingState}
+          data-paused={workingState === "pending" && paused ? "" : undefined}>
           <button type="button"
             className={["simple-edit", row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", row.isAskingCurrent && "is-asking-current", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ")}
             aria-current={row.on || undefined}
@@ -331,6 +340,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
             <span className="simple-pass-label">
               {(row.rejected || row.skipped) && <RejectedMark />}
               {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+              {spinning && <span className="simple-pass-spin" aria-hidden="true" />}
               <span className="simple-pass-words simple-edit-words">{row.label}</span>
               {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
               {row.fresh && <small className="edit-version is-new">New</small>}
@@ -346,10 +356,10 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
               aria-label={`Unkeep ${row.label}`} title={unkeepTip}
               onClick={letGo(() => { const fresh = freshRow(row.key); if (fresh) unkeepRow(fresh); })}>Unkeep</button>
           </span>}
-          <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span></AimRow>
+          <AimRow on={row.on}>{activeLead}<span className="composer-aim-words">{activeRow.label}</span>{activeRow.version > 0 && <EditVersion n={activeRow.version} />}</AimRow>
           {row.nests.map(nest => nest.node)}
           {moment?.unfolded && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
-            {moment.subRows.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}>
+            {moment.subRows.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined} data-working={m.busy && !m.asks ? "busy" : undefined}>
               <button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
                 data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open}
                 data-row-tip={m.label} data-row-meta={m.tipMeta}
@@ -358,6 +368,7 @@ export function ReviewRail({ projectId, store, open, onOpen, selected, onDoneLow
                 onPointerEnter={() => onHover?.(m.mark, m.hover)} onPointerLeave={() => onHover?.()}>
                 <span className="simple-pass-label">
                   {m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+                  {m.busy && !m.asks && <span className="simple-pass-spin" aria-hidden="true" />}
                   <span className="simple-pass-words simple-edit-words">{m.label}</span>
                   {m.version > 0 && <EditVersion n={m.version} hover={m.spent} />}
                 </span>

@@ -2,7 +2,7 @@
 import { normalizeTranscriptToken, selectedRange } from "@scarlet/shared";
 import { clipDuration, frameAlignedRemoval, mergeRanges, timelineToSource, type Project, type TimeRange, type Timeline, type TranscriptWord } from "@scarlet/timeline";
 import { round2 as r2 } from "./analysis.js";
-import type { DialoguePlanSources } from "./dialogue-cut-resolve.js";
+import { readWithout, type DialoguePlanSources } from "./dialogue-cut-resolve.js";
 import { checkKeptWords, dialogueCutPreview, dialogueJoinWords } from "./dialogue-join.js";
 import { audibleClipsInTrackOrder } from "./dialogue-reading.js";
 import { edgeOvershoots } from "./edge-overshoot.js";
@@ -66,7 +66,7 @@ export async function verifySurvivingJoins(
   const transcripts = () => transcriptsRead ??= (async () => {
     const found = new Map<string, TranscriptWord[]>();
     await Promise.all([...new Set(audibleClipsInTrackOrder(tl).map(c => c.mediaId))].map(async id => {
-      const words = await sources.words(id, undefined, false).catch(() => null);
+      const words = await sources.words(id, undefined, false).catch(readWithout(sources, `failed to read the words of ${id} for the joins`, null));
       if (words?.length) found.set(id, words);
     }));
     return found;

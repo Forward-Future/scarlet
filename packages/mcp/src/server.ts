@@ -67,6 +67,7 @@ const STYLE_GUIDE_EDIT_TOOLS: ReadonlySet<string> = new Set([
   "task_log",
   "task_question",
   "attachment_read",
+  "style_guide_get",
   "style_guide_update",
   "style_guide_preview_render",
   "style_guide_preview_get",
@@ -87,8 +88,8 @@ const LISTEN_CHECK_TOOLS: ReadonlySet<string> = new Set(["source_audio"]);
 export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["project_get", "timeline_get", "task_log", "task_question"]);
 const FEW_TOOL_TASKS: ReadonlySet<string> = new Set(["area_check", "listen_check", "learning_check", "batch_summary", "skill_edit", "style_guide_edit", "skill_from_change"]);
 /** Tools a request that only tightens local pauses refuses: it saves classified pauses with dialogue_apply_cuts. */
-const NOT_FOR_LOCAL_PAUSES: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "dialogue_check_repeats"]);
-const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
+const NOT_FOR_LOCAL_PAUSES: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_sync_multicam", "timeline_switch_cameras", "timeline_crossfade_audio", "timeline_framing", "timeline_picture_sync", "captions_generate", "asset_add", "style_guide_sound_import", "dialogue_check_repeats"]);
+const PASS_WIDE_TOOLS: ReadonlySet<string> = new Set(["timeline_propose", "timeline_first_cut", "timeline_sync_multicam", "timeline_switch_cameras", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_review_save"]);
 
 /** When the tool call under way has to have answered by, in ms since the epoch: its harness's tool wait from when it began. */
 const callDeadline = new AsyncLocalStorage<number>();
@@ -242,12 +243,17 @@ export function createScarletMcpServer(workspace: ScarletClient, ctx: ScarletMcp
   const heardKept = new Set<string>();
   const keptThread = ctx.task && ["edit", "note", "revise"].includes(ctx.task.kind) ? ctx.task.context.threadId ?? ctx.task.id : undefined;
   let keptAskedAt = 0;
+  let keptFailure: string | undefined;
   async function keptLine() {
     if (!keptThread || Date.now() - keptAskedAt < 5000) return undefined;
     keptAskedAt = Date.now();
     try {
       return keptEditsNote((await client.keptEdits(ctx.projectId, keptThread)).kept, heardKept);
-    } catch {
+    } catch (err) {
+      // Asked again on the next call: say why once, not every few seconds.
+      const why = describeError(err);
+      if (why !== keptFailure && !diagnosticSessionClosed) console.error(`[scarlet-mcp] task ${ctx.taskId}: failed to read the edits the editor kept: ${why}`);
+      keptFailure = why;
       return undefined;
     }
   }

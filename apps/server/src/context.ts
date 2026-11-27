@@ -12,7 +12,7 @@ import { humanDuration, logId } from "./logText.js";
 import { Paths } from "./paths.js";
 import { createRepos, type Repos } from "./repo/index.js";
 import type { RenderAdapter, WaveformCache } from "./render/adapter.js";
-import { scarletRenderAdapter as defaultAdapter } from "./render/scarletRender.js";
+import { renderLog, scarletRenderAdapter as defaultAdapter } from "./render/scarletRender.js";
 import type { RenderQueue } from "./services/renderQueue.js";
 import { execFile } from "node:child_process";
 import { basename, dirname, join } from "node:path";
@@ -152,6 +152,17 @@ export interface ServerOptions {
     now?: () => number;
     random?: () => number;
   };
+  /** Overrides for YouTube OAuth and upload endpoints (used by tests). */
+  youtube?: {
+    authBaseUrl?: string;
+    tokenUrl?: string;
+    revokeUrl?: string;
+    apiBaseUrl?: string;
+    uploadBaseUrl?: string;
+    oauthTimeoutMs?: number;
+    uploadChunkBytes?: number;
+    fetch?: typeof fetch;
+  };
 }
 
 export interface Ctx {
@@ -162,7 +173,7 @@ export interface Ctx {
   render: RenderAdapter;
   renders: RenderQueue;
   settings(): ServerSettings;
-  env: { openaiKey?: string; anthropicKey?: string; geminiKey?: string };
+  env: { openaiKey?: string; anthropicKey?: string; geminiKey?: string; youtubeClientId?: string; youtubeClientSecret?: string };
   options: ServerOptions;
   log(message: string): void;
   /** Anonymous usage reports. See docs/telemetry.md. */
@@ -205,7 +216,8 @@ export interface Ctx {
 export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
   const paths = new Paths(options.dataDir);
   paths.ensureRoot();
-  const db = openDb(paths.db);
+  // The library's schema changes go to this engine's log too.
+  const db = openDb(paths.db, options.log ?? (m => console.log(m)));
   const env = options.env ?? process.env;
   const bundledWhisper = bundledWhisperCli(env);
   const whisperCli = bundledWhisper ?? devWhisperCli(env);
@@ -213,6 +225,7 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
   // The audio helper is one per engine process. Its notes on where each model runs go to this engine's log.
   audioWorker.log = options.log ?? (m => console.log(m));
   editorFirst.log = audioWorker.log;
+  renderLog.log = audioWorker.log;
   // An agent at work asks for the helper's models again within a turn or two.
   const agentAtWork = db.prepare("SELECT 1 FROM tasks WHERE state IN ('claimed','running') AND kind != 'transcribe' LIMIT 1");
   audioWorker.wanted = () => { try { return !!agentAtWork.get(); } catch { return false; } };
@@ -243,7 +256,13 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
     bus: new Bus(db),
     render: options.render ?? defaultAdapter,
     settings: () => repos.settings.get(),
-    env: { openaiKey: env.OPENAI_API_KEY || undefined, anthropicKey: env.ANTHROPIC_API_KEY || undefined, geminiKey: env.GEMINI_API_KEY || undefined },
+    env: {
+      openaiKey: env.OPENAI_API_KEY || undefined,
+      anthropicKey: env.ANTHROPIC_API_KEY || undefined,
+      geminiKey: env.GEMINI_API_KEY || undefined,
+      youtubeClientId: env.SCARLET_YOUTUBE_CLIENT_ID || undefined,
+      youtubeClientSecret: env.SCARLET_YOUTUBE_CLIENT_SECRET || undefined,
+    },
     options,
     log,
     telemetry: createTelemetry({
@@ -304,7 +323,10 @@ export function createContext(options: ServerOptions): Omit<Ctx, "renders"> {
     },
     async close() {
       shutdown.abort();
+      // A quit that hangs is waiting on one of these: say how many there were and how long they took to stop.
+      const waiting = pending.size, stopping = Date.now();
       while (pending.size) await Promise.allSettled([...pending]);
+      if (waiting) log(`[lifecycle] ${waiting} ${waiting === 1 ? "piece" : "pieces"} of work stopped in ${humanDuration(Date.now() - stopping)}`);
       // The note of when this engine began is for the engine that finds its claims after it was killed. A clean quit
       // takes the note away. Left behind, it would stay beside an id that may next go to an earlier build's engine,
       // which notes nothing and would then be taken for another program.

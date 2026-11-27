@@ -194,7 +194,21 @@ it("keeps a segment whole when one of its words reaches speaking level", () => {
   const lines = [seg(["one", 1, 2]), seg(["two", 3, 4]), seg(["three", 5, 6]), seg(["four", 7, 8]),
     seg(["and", 9, 9.2], ["then", 9.3, 10])];
   const levels = levelsOf(12, [[1, 2, -26], [3, 4, -26], [5, 6, -26], [7, 8, -26], [9, 9.2, -50], [9.3, 10, -27]]);
-  expect(withoutUnheardSegments(lines, levels, () => false).dropped).toEqual([]);
+  expect(withoutUnheardSegments(lines, levels, w => !["and", "then"].includes(w.text)).dropped).toEqual([]);
+});
+
+it("takes out every line of a recording the aligner heard none of, however loud: a music bed holds no speech", () => {
+  // Whisper's "Thank you." over a music bed, each word stretched over the sound, loud throughout.
+  const lines = [seg(["Thank", 0.57, 18.72], ["you.", 18.72, 29.98]), seg(["Thank", 30.57, 43.62], ["you.", 43.62, 59.98])];
+  const levels = levelsOf(60, [[0, 60, -20]]);
+  const { segments, dropped } = withoutUnheardSegments(lines, levels, () => false);
+  expect(dropped).toHaveLength(2);
+  expect(segments).toEqual([]);
+  // One line it heard is speech: the recording keeps its loud lines.
+  const spoken = [...lines, seg(["hello", 61, 62])];
+  expect(withoutUnheardSegments(spoken, levelsOf(63, [[0, 63, -20]]), w => w.text === "hello").dropped).toEqual([]);
+  // Without the aligner's word nothing is known, and nothing goes.
+  expect(withoutUnheardSegments(lines, levels).dropped).toEqual([]);
 });
 
 it("takes out every line of a silent track, which has no level of its own to compare with", () => {

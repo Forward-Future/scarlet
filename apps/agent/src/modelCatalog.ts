@@ -5,6 +5,7 @@ import { z } from "zod/v3";
 import { AgentOptionId, type AgentAvailability, type ModelOptions } from "@scarlet/shared";
 import { hasApiKey } from "./detect.js";
 import { DEFAULT_GEMINI_EFFORT, findAcpEffortOption, findAcpModelOption, isAcpAuthError } from "./runners/acp.js";
+import { stderrTail } from "./logText.js";
 import { spawnLines } from "./runners/spawn.js";
 
 export type CliAgent = "claude" | "codex" | "gemini";
@@ -80,7 +81,8 @@ function flattenAcpOptions(options: Array<z.infer<typeof acpOptionValue> | z.inf
 type ProbeFailure = "initialize_failed" | "request_failed" | "invalid_response" | "repeated_cursor" | "timed_out" | "process_failed" | "incomplete_response";
 
 export class ModelCatalogError extends Error {
-  constructor(readonly reason: ProbeFailure) {
+  /** How the CLI exited and what it last said on stderr, when it failed: for the host's log. */
+  constructor(readonly reason: ProbeFailure, readonly detail?: string) {
     super(reason);
   }
 }
@@ -105,7 +107,7 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
   };
   const args = {
     claude: ["--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"],
-    codex: ["app-server"],
+    codex: ["app-server", "-c", "analytics.enabled=false"],
     gemini: ["acp", "--disable-telemetry"],
   };
   let requestId = 1;
@@ -243,7 +245,11 @@ export async function discoverModels(agent: CliAgent, file: string, env: NodeJS.
       send({ id: requestId, method: "initialize", params });
     }
     const outcome = await proc.done;
-    if (!complete) throw new ModelCatalogError(failure ?? (outcome?.timedOut ? "timed_out" : outcome?.code !== 0 ? "process_failed" : "incomplete_response"));
+    if (!complete) {
+      const reason = failure ?? (outcome?.timedOut ? "timed_out" : outcome?.code !== 0 ? "process_failed" : "incomplete_response");
+      const tail = stderrTail(outcome?.stderr ?? "", 200);
+      throw new ModelCatalogError(reason, reason === "process_failed" ? `exit code ${outcome?.code}${outcome?.signal ? ` (signal ${outcome.signal})` : ""}${tail ? `; stderr: ${tail}` : ""}` : undefined);
+    }
     return {
       models: [...names.keys()].filter(Boolean), modelLabels: Object.fromEntries(names), modelOptions: Object.fromEntries(modelOptions),
       ...(defaultModel && names.has(defaultModel) ? { model: defaultModel } : {}),

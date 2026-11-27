@@ -95,7 +95,6 @@ export function pointOf(context: AgentContext | "whole" | null | undefined) {
 const AGENT_KEY = "scarlet.agent";
 const RUN_TOKENS_KEY = "scarlet.runTokens";
 const NEW_LAYOUT_KEY = "scarlet.newLayout";
-const REVIEW_DICTATION_KEY = "scarlet.reviewDictation";
 const FIRST_EDIT_HINT_KEY = "scarlet.firstEditHint";
 const SIGN_IN_LATER_KEY = "scarlet.signInLater";
 
@@ -194,24 +193,15 @@ interface UiState {
   showRunTokens: boolean;
   setShowRunTokens(v: boolean): void;
 
-  /** Try the new three-column workspace layout (Beta). Off by default unless turned on in Settings → General. */
+  /** Use the three-column workspace layout. On by default unless the editor switches to the classic layout in Settings → General. */
   newLayout: boolean;
   setNewLayout(v: boolean): void;
-
-  /**
-   * What was said into the mic waits in the message box to be read and sent, instead of going at once. On unless
-   * turned off in Settings → General.
-   */
-  reviewDictation: boolean;
-  setReviewDictation(v: boolean): void;
 
   /** Context pinned to the next agent instruction (from transcript span, note popover, etc). */
   draftOwner: string | null;
   savedDrafts: Record<string, ComposerDraft>;
   openDraft(projectId: string | null, threadId?: string): void;
   clearSentDraft(owner: string | null, sent: ComposerDraft): void;
-  /** Puts a message that couldn't be sent back into the box it was sent from, unless that box has words in it again. */
-  keepUnsent(owner: string | null, unsent: ComposerDraft): void;
   /**
    * Puts words said into the mic at the end of the message being written in the box they were said into, aimed where
    * the box was when the mic opened, to be read and sent. Says whether that box is the one on the page.
@@ -323,6 +313,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   agentSelected: false,
   setAgent: (agent) => {
     set({ agent, agentSelected: true });
+    // Which model the next request goes to: a model's name, never anything typed in the box.
+    appLog("action", "model", { agent: agent.agent, model: agent.model?.slice(0, 80), effort: agent.effort, tier: agent.serviceTier }, { key: "model" });
     saveAgent(agent);
   },
   setDefaultAgent: (agent) => {
@@ -338,22 +330,13 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ showRunTokens: v });
   },
 
-  newLayout: (() => { try { return localStorage.getItem(NEW_LAYOUT_KEY) === "1"; } catch { return false; } })(),
+  newLayout: (() => { try { return localStorage.getItem(NEW_LAYOUT_KEY) !== "0"; } catch { return true; } })(),
   setNewLayout: (v) => {
     try {
-      if (v) localStorage.setItem(NEW_LAYOUT_KEY, "1");
-      else localStorage.removeItem(NEW_LAYOUT_KEY);
+      if (v) localStorage.removeItem(NEW_LAYOUT_KEY);
+      else localStorage.setItem(NEW_LAYOUT_KEY, "0");
     } catch { /* Keep the choice for this session. */ }
     set({ newLayout: v });
-  },
-
-  reviewDictation: (() => { try { return localStorage.getItem(REVIEW_DICTATION_KEY) !== "off"; } catch { return true; } })(),
-  setReviewDictation: (v) => {
-    try {
-      if (v) localStorage.removeItem(REVIEW_DICTATION_KEY);
-      else localStorage.setItem(REVIEW_DICTATION_KEY, "off");
-    } catch { /* Keep the choice for this session. */ }
-    set({ reviewDictation: v });
   },
 
   draftOwner: null,
@@ -396,17 +379,6 @@ export const useUiStore = create<UiState>((set, get) => ({
       else delete savedDrafts[owner];
       set({ savedDrafts });
     }
-  },
-  keepUnsent: (owner, unsent) => {
-    const state = get();
-    const current = state.draftOwner === owner;
-    const existing = current ? state : owner ? state.savedDrafts[owner] : undefined;
-    if (existing?.agentDraft) return;
-    // Restore the recording's target, including a newer version of the same cut Scarlet re-aimed while transcribing.
-    const recovered = existing && sameTarget(existing.agentContext, unsent.agentContext)
-      ? { ...unsent, agentContext: existing.agentContext } : unsent;
-    if (current) set(recovered);
-    else if (owner) set({ savedDrafts: { ...state.savedDrafts, [owner]: recovered } });
   },
   dictate: (owner, text, aim) => {
     const state = get();

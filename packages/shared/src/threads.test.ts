@@ -75,20 +75,19 @@ describe("runs and requests", () => {
 
   it("knows what a request is when it is sent: a dialogue pass, a request about one staged cut, or neither", () => {
     expect(taskRunKind(task("t", { instruction: "/dialogue-pass" }))).toBe("pass");
-    expect(taskRunKind(task("t", { instruction: "/first-cut-dialogue" }))).toBe("pass");
-    expect(taskRunKind(task("t", { instruction: "History…\nRequest: /first-cut-dialogue keep it tight", context: { message: "/first-cut-dialogue keep it tight" } }))).toBe("pass");
-    expect(taskRunKind(task("t", { instruction: "/first-cut-dialogue", context: { dialogueOperation: "none", skillIds: ["custom"] } }))).toBeUndefined();
+    expect(taskRunKind(task("t", { instruction: "History…\nRequest: /dialogue-pass keep it tight", context: { message: "/dialogue-pass keep it tight" } }))).toBe("pass");
+    expect(taskRunKind(task("t", { instruction: "/dialogue-pass", context: { dialogueOperation: "none", skillIds: ["custom"] } }))).toBeUndefined();
     expect(taskRunKind(task("t", { instruction: "Run the pass", context: { skillIds: ["skl_dialogue"] } }))).toBeUndefined();
     // A request about one staged cut is that, even when it carries the pass's skill.
     expect(taskRunKind(task("t", { instruction: "Start it later.", context: { changeId: "c1", cutIndex: 0, skillIds: ["skl_dialogue"] } }))).toBe("cut");
     // The command anywhere in the request runs the skill, as the message box sends it, and so does its alias for pauses:
     // either is a pass before the skill's id is known, and when it can't be.
-    expect(taskRunKind(task("t", { instruction: "Keep it tight /first-cut-dialogue" }))).toBe("pass");
-    expect(taskRunKind(task("t", { instruction: "Redo what /first-cut-dialogue did to the intro" }))).toBe("pass");
+    expect(taskRunKind(task("t", { instruction: "Keep it tight /dialogue-pass" }))).toBe("pass");
+    expect(taskRunKind(task("t", { instruction: "Redo what /dialogue-pass did to the intro" }))).toBe("pass");
     expect(taskRunKind(task("t", { instruction: "/tighten-pauses-here around the demo" }))).toBe("pass");
     // Anything else has no kind: a plain request, a command that is part of a longer word or path, one about an applied edit.
     expect(taskRunKind(task("t", { instruction: "Add captions" }))).toBeUndefined();
-    expect(taskRunKind(task("t", { instruction: "Look in skills/first-cut-dialogue for the rule" }))).toBeUndefined();
+    expect(taskRunKind(task("t", { instruction: "Look in skills/dialogue-pass for the rule" }))).toBeUndefined();
     expect(taskRunKind(task("t", { instruction: "Make it bigger", context: { editIndex: 2 } }))).toBeUndefined();
   });
 
@@ -124,6 +123,17 @@ describe("buildThreads", () => {
     const threads = buildThreads({ notes: [], changes: [change("a", { taskId: "one" })],
       tasks: [task("one"), task("two"), task("words", { kind: "transcribe" }), task("skill", { kind: "skill_edit" })] });
     expect(threads.map(t => [t.id, t.tasks.map(x => x.id), t.changes.map(x => x.id)])).toEqual([["one", ["one"], ["a"]], ["two", ["two"], []]]);
+  });
+
+  it("leaves a ⌘Z that took a put-back out again in no request of its own", () => {
+    const human = { type: "human", name: "Editor" };
+    const rejected = change("rejected", { threadId: "one", rejects: true, state: "approved", author: human, description: "Rejected · Shortened a pause",
+      fromVersion: "v1", toVersion: "v2", createdAt: at(2) });
+    const undo = change("undo", { state: "approved", author: human, description: "Undo · Rejected · Shortened a pause",
+      fromVersion: "v2", toVersion: "v3", revertsVersion: "v2", createdAt: at(3) });
+    const threads = buildThreads({ notes: [], tasks: [task("one", { changeIds: ["made"], context: { threadId: "one" } })],
+      changes: [change("made", { state: "approved", createdAt: at(1) }), rejected, undo] });
+    expect(threads.map(t => [t.id, t.changes.map(x => x.id)])).toEqual([["one", ["made", "rejected"]]]);
   });
 
   it("names a thread by what was asked, a first cut as the first edit, and an older proposal by its description", () => {

@@ -71,7 +71,13 @@ fn append(file: &Path, line: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     if std::fs::metadata(file).map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
-        let _ = std::fs::rename(file, file.with_extension("1.log"));
+        if let Err(e) = std::fs::rename(file, file.with_extension("1.log")) {
+            // Once per launch: every later line would try, and fail, again.
+            static NOTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                log::warn!("couldn't rotate the shared copies log {}: {e}", file.display());
+            }
+        }
     }
     let mut out = OpenOptions::new().create(true).append(true).open(file)?;
     out.write_all(line.as_bytes())

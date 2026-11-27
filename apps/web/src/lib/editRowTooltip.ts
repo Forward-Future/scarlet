@@ -8,9 +8,9 @@ import type { Revision } from "./passCalls";
 export interface RowTooltipInfo {
   /** Primary heading (the full edit label or summary). */
   tip: string;
-  /** Short plain-language summary line (edit kind, cut amount or key setting). */
+  /** Short plain-language summary line (edit kind, cut amount or key setting, and live status). */
   meta?: string;
-  /** Optional quiet note underneath (review check cue, Scarlet's reason, or earlier version). */
+  /** Optional quiet note underneath, only for actionable cues (review check, to-do ask, earlier revision, or extra moment edits). */
   detail?: string;
 }
 
@@ -20,6 +20,8 @@ export interface RowTooltipContext {
   media?: readonly Pick<MediaAsset, "id" | "name">[];
   fps?: number;
   status?: string;
+  /** The model at work on it now, while Scarlet adds or revises it ("B-roll · Gemini 3 Pro" when handed off). */
+  by?: string;
   version?: number;
   places?: number;
 }
@@ -31,19 +33,15 @@ const SLACK = 0.5;
 const TOUCH = 0.05;
 const EXACT_MATCH_SLACK = 0.2;
 const QUOTE_MOST = 64;
+const SETTLED_OR_QUEUED_STATUS = new Set(["Kept", "Done", "Rejected", "Up next", "Queued"]);
 
-const plainName = (name: string) => name.replace(/\.[a-z0-9]{2,5}$/i, "");
-const RAW_MEDIA_NAME = /^(?:(?:screen\s*recording|screenshot|recording|cleanshot|movie\s*recording|audio\s*recording|video|audio|capture|clip|take)[\s_-]*)?(?:\d{4}[-_.]\d{2}[-_.]\d{2}(?:(?:[\s_T-]+|[\s_]+at[\s_]+)\d{1,2}[-_.:]\d{2}(?:[-_.:]\d{2})?(?:[\s_]*(?:am|pm))?)?|\d{8}[_-]\d{6,9})[\s_-]*(?:\(\d+\)|\d+)?$|^(?:img|vid|mov|mvi|dsc|dscf|dscn|pxl|dji|gopr|gh\d{2}|gx\d{2}|mah|clip|rec|cam|c|a\d{3}c\d{3})[_-]?\d{3,}(?:[_-][a-z0-9]+)*$|^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^\d+$/i;
-const helpfulName = (name: string | undefined) => {
-  const clean = name?.trim();
-  return clean && !RAW_MEDIA_NAME.test(plainName(clean)) ? plainName(clean) : undefined;
-};
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const seconds = (value: number) => `${Math.round(value * 10) / 10} s`;
 const quote = (text: string) => {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat ? `“${flat.length > QUOTE_MOST ? `${flat.slice(0, QUOTE_MOST - 1).trimEnd()}…` : flat}”` : undefined;
 };
+const unquote = (text: string) => text.replace(/^[“"']|[”"']$/g, "").trim();
 const friendlyGain = (volume: number) => {
   if (volume <= 0) return "muted";
   const db = Math.round(20 * Math.log10(volume));
@@ -89,19 +87,45 @@ const zoomRangeWords = (from: number, to: number) => {
 };
 const hasMeasurement = (text: string) => /(%|dB|×|\bframes?\b|\b\d+(?:\.\d+)?\s*s\b)/i.test(text);
 
-const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
+const norm = (s: string) => s.toLowerCase().replace(/[“”"'’‘]/g, "'").replace(/\s+/g, " ").replace(/[.!?]+$/, "").trim();
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const distinct = (candidate: string | undefined, against: string): string | undefined => {
   const trimmed = candidate?.trim();
   if (!trimmed) return undefined;
-  return norm(trimmed) === norm(against) ? undefined : trimmed;
+  const n = norm(trimmed);
+  if (!n) return undefined;
+  const base = norm(against);
+  if (base === n) return undefined;
+  if (n.length >= 3 && new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRe(n)}(?:$|[^\\p{L}\\p{N}])`, "u").test(base)) {
+    return undefined;
+  }
+  return trimmed;
 };
 
-/** Turn compact card detail strings from `editDetail` into simpler plain-English tooltip copy with fewer numbers. */
-function humanizeDetail(kind: EditLike["kind"], raw: string): string {
+/** Combine a live status word and active model into one clean phrase (e.g. "Revising with GPT-6.2-Sol"). */
+function appendStatus(parts: string[], status?: string, by?: string) {
+  const cleanStatus = status && status !== "Rejected" ? status : undefined;
+  if (cleanStatus && by && cleanStatus.endsWith("…") && !by.includes(" · ")) {
+    parts.push(`${cleanStatus.slice(0, -1)} with ${by}`);
+    return;
+  }
+  if (cleanStatus) parts.push(cleanStatus);
+  if (by) parts.push(by);
+}
+
+/**
+ * Turn compact card detail strings from `editDetail` into simpler plain-English tooltip copy without clip filenames
+ * that repeat the row title.
+ */
+function humanizeDetail(kind: EditLike["kind"], raw: string): string | undefined {
   // Keep only the first piece when an edit generated a long list of steps (e.g. many captions at once).
   const first = raw.split(" · ")[0]!.trim();
+  if (!first) return undefined;
 
   if (kind === "text") return first;
+
+  const opacity = /(?:^|\s+at\s+)(\d+% opacity)$/.exec(first);
+  if (opacity) return opacity[1];
 
   if (kind === "zoom") {
     const move = /^Zooms (\d+)% → (\d+)%$/.exec(first);
@@ -128,33 +152,35 @@ function humanizeDetail(kind: EditLike["kind"], raw: string): string {
   }
 
   if (kind === "voice") {
-    return first.replace(/\s+at (\d+%)$/, " ($1)");
+    const mix = /\bat (\d+%)$/.exec(first);
+    return mix ? `Voice cleanup (${mix[1]})` : "Voice cleanup";
   }
 
   if (kind === "overlay" || kind === "graphic" || kind === "broll") {
-    return first.replace(/\s+at (\d+% opacity)$/, " ($1)");
+    if (first === "A colour card") return "Colour card";
+    if (/^Fades (?:in|out) over /i.test(first)) return first.toLowerCase();
+    // Omit raw clip/generated-asset names — the edit title already names what was added.
+    return undefined;
   }
 
   if (kind === "audio" || kind === "dip") {
-    const dipped = /^(.+?)\s+(down|up) to ([+−-]?\d+ dB)(?:\s+in \d+ places)?$/.exec(first);
-    if (dipped) {
-      const subject = dipped[1] === "Sound" ? "" : `${dipped[1]} `;
-      const verb = dipped[2] === "down" ? "lowered" : "raised";
-      return `${subject}${verb} to ${dipped[3]}`;
-    }
-    const leveled = /^(.+?)\s+([+−-]\d+ dB)$/.exec(first);
-    if (leveled) {
-      const subject = leveled[1] === "Sound" ? "" : `${leveled[1]} `;
-      const dir = leveled[2]!.startsWith("+") ? "louder" : "quieter";
-      return `${subject}${dir} (${leveled[2]})`;
-    }
-    const added = /^Added (.+?),\s*([+−-]\d+ dB|muted|at full level)$/.exec(first);
+    const dipped = /^.+?\s+(down|up) to ([+−-]?\d+ dB)(?:\s+in \d+ places)?$/.exec(first);
+    if (dipped) return `${dipped[1] === "down" ? "lowered" : "raised"} to ${dipped[2]}`;
+    const added = /^Added .+,\s*([+−-]\d+ dB|muted|at full level)$/.exec(first);
     if (added) {
-      if (added[2] === "muted") return `Added ${added[1]} (muted)`;
-      if (added[2] === "at full level") return `Added ${added[1]}`;
-      return `Added ${added[1]} (${added[2]})`;
+      if (added[1] === "muted") return "muted";
+      if (added[1] === "at full level") return undefined;
+      return `${added[1]!.startsWith("+") ? "louder" : "quieter"} (${added[1]})`;
     }
-    return first.replace(/^Sound muted$/, "Muted").replace(/at full level$/, "at full volume");
+    if (/^Added /i.test(first)) return undefined;
+    const leveled = /^.+?\s+([+−-]\d+ dB)$/.exec(first);
+    if (leveled) return `${leveled[1]!.startsWith("+") ? "louder" : "quieter"} (${leveled[1]})`;
+    if (/\bback to a steady level$/i.test(first)) return "back to a steady level";
+    if (/^Sound fades (in|out) over /i.test(first)) return first.replace(/^Sound /i, "");
+    if (/^(?:Sound )?muted$/i.test(first)) return "muted";
+    if (/at full level$/i.test(first)) return "at full volume";
+    if (/^(?:Muted|Unmuted) /i.test(first)) return first;
+    return undefined;
   }
 
   return first;
@@ -238,57 +264,12 @@ function addedSeconds(edit: EditLike, change?: Change): number | undefined {
   return total > 0 ? total : undefined;
 }
 
-/** Find the inserted file name for an `insert` edit, from `addClip` ops or matching main-track clips. */
-function insertedMediaName(edit: EditLike, { change, timeline, media = [] }: RowTooltipContext): string | undefined {
-  const nameOf = (clip: Clip) => {
-    if (clip.kind !== "media") return undefined;
-    const labeled = clip.label?.trim();
-    if (labeled) return labeled;
-    const file = media.find(m => m.id === clip.mediaId);
-    return file ? helpfulName(file.name) : undefined;
-  };
-  const near = (r: TimeRange | undefined) => !!r && r.start <= edit.range.end + SLACK && r.end >= edit.range.start - SLACK
-    && (edit.range.end - edit.range.start <= TOUCH || r.end - r.start <= TOUCH
-      || Math.min(r.end, edit.range.end) - Math.max(r.start, edit.range.start) > TOUCH);
-  for (const op of (change?.ops ?? []) as Op[]) {
-    if (op.op !== "addClip") continue;
-    const clip = op.clip as Clip | undefined;
-    if (!clip || clip.kind !== "media") continue;
-    let r: TimeRange | undefined;
-    try { r = clipRange(clip); } catch { r = undefined; }
-    if (near(r)) {
-      const name = nameOf(clip);
-      if (name) return name;
-    }
-  }
-  const baseVideo = timeline?.tracks.find(t => t.kind === "video");
-  if (baseVideo) {
-    for (const clip of baseVideo.clips) {
-      if (clip.kind !== "media") continue;
-      let r: TimeRange | undefined;
-      try { r = clipRange(clip); } catch { continue; }
-      if (Math.abs(r.start - edit.range.start) <= EXACT_MATCH_SLACK && Math.abs(r.end - edit.range.end) <= EXACT_MATCH_SLACK) {
-        const name = nameOf(clip);
-        if (name) return name;
-      }
-    }
-  }
-  return undefined;
-}
-
 /**
  * Fallback detail reader from the current timeline when a change has no granular `ops` (such as a full-timeline save)
- * or for reframe crop/pan transforms that `editDetail` leaves unspecified.
+ * or for reframe crop/pan transforms that `editDetail` leaves unspecified. Never includes raw media filenames.
  */
-function timelineFallbackDetail(edit: EditLike, { timeline, media = [], fps }: RowTooltipContext): { kind?: EditLike["kind"]; detail?: string } {
+function timelineFallbackDetail(edit: EditLike, { timeline, fps }: RowTooltipContext): { kind?: EditLike["kind"]; detail?: string } {
   if (!timeline) return {};
-  const nameOf = (clip: Clip) => {
-    if (clip.kind !== "media") return undefined;
-    const labeled = clip.label?.trim();
-    if (labeled) return labeled;
-    const file = media.find(m => m.id === clip.mediaId);
-    return file ? helpfulName(file.name) : undefined;
-  };
   const rangeOf = (clip: Clip) => {
     try { return clipRange(clip); } catch { return undefined; }
   };
@@ -317,11 +298,9 @@ function timelineFallbackDetail(edit: EditLike, { timeline, media = [], fps }: R
       if (track.kind !== "audio") continue;
       for (const clip of track.clips) {
         if (clip.kind !== "media" || !overlaps(rangeOf(clip))) continue;
-        const name = nameOf(clip);
         const moves = levelWords(clip.volumeKeyframes, clip.volume ?? 1);
-        if (moves) return { detail: `${name ? `${name} ` : ""}${moves}` };
-        if (typeof clip.volume === "number" && clip.volume !== 1) return { detail: `${name ? `${name} ` : ""}${friendlyGain(clip.volume)}` };
-        if (name) return { detail: name };
+        if (moves) return { detail: moves };
+        if (typeof clip.volume === "number" && clip.volume !== 1) return { detail: friendlyGain(clip.volume) };
       }
     }
   }
@@ -332,10 +311,9 @@ function timelineFallbackDetail(edit: EditLike, { timeline, media = [], fps }: R
         if (clip.kind !== "media" || !overlaps(rangeOf(clip))) continue;
         const cleanup = clip.effects?.find(e => e.type === "voiceCleanup" && e.enabled !== false);
         if (!cleanup) continue;
-        const name = nameOf(clip);
         const mix = (cleanup.params as { mix?: unknown } | undefined)?.mix;
         const mixWords = typeof mix === "number" && mix < 1 ? ` (${percent(Math.max(0, mix))})` : "";
-        return { detail: `Voice cleanup${name ? ` on ${name}` : ""}${mixWords}` };
+        return { detail: `Voice cleanup${mixWords}` };
       }
     }
   }
@@ -345,10 +323,9 @@ function timelineFallbackDetail(edit: EditLike, { timeline, media = [], fps }: R
       if (track.kind !== "video" || track.id === baseVideoId) continue;
       for (const clip of track.clips) {
         if (!overlaps(rangeOf(clip))) continue;
-        if (clip.kind === "color") return { detail: "A colour card" };
-        if (clip.kind === "media") {
-          const name = nameOf(clip);
-          if (name) return { detail: clip.opacity !== undefined && clip.opacity < 1 ? `${name} (${percent(clip.opacity)} opacity)` : name };
+        if (clip.kind === "color") return { detail: "Colour card" };
+        if (clip.kind === "media" && clip.opacity !== undefined && clip.opacity < 1) {
+          return { detail: `${percent(clip.opacity)} opacity` };
         }
       }
     }
@@ -414,7 +391,7 @@ function timelineFallbackDetail(edit: EditLike, { timeline, media = [], fps }: R
   }
 
   // For unclassified ("other" / undefined) edits from full-timeline saves, check for an exact clip match on
-  // caption, audio, or overlay tracks so the hover still surfaces its real content (e.g. caption words or music level).
+  // caption, audio, or overlay tracks so the hover still surfaces its real kind and setting.
   if (!kind || kind === "other") {
     for (const track of timeline.tracks) {
       if (track.kind === "caption") {
@@ -426,18 +403,16 @@ function timelineFallbackDetail(edit: EditLike, { timeline, media = [], fps }: R
       } else if (track.kind === "audio") {
         const hit = track.clips.find(c => c.kind === "media" && exactMatch(rangeOf(c)));
         if (hit && hit.kind === "media") {
-          const name = nameOf(hit);
           const moves = levelWords(hit.volumeKeyframes, hit.volume ?? 1);
-          const detail = moves ? `${name ? `${name} ` : ""}${moves}`
-            : typeof hit.volume === "number" && hit.volume !== 1 ? `${name ? `${name} ` : ""}${friendlyGain(hit.volume)}`
-            : name;
-          if (detail) return { kind: "audio", detail };
+          const detail = moves ?? (typeof hit.volume === "number" && hit.volume !== 1 ? friendlyGain(hit.volume) : undefined);
+          return { kind: "audio", ...(detail && { detail }) };
         }
       } else if (track.kind === "video" && track.id !== baseVideoId) {
         const hit = track.clips.find(c => exactMatch(rangeOf(c)));
         if (hit) {
-          const detail = hit.kind === "color" ? "A colour card" : nameOf(hit);
-          if (detail) return { kind: "overlay", detail };
+          const detail = hit.kind === "color" ? "Colour card"
+            : hit.kind === "media" && hit.opacity !== undefined && hit.opacity < 1 ? `${percent(hit.opacity)} opacity` : undefined;
+          return { kind: "overlay", ...(detail && { detail }) };
         }
       }
     }
@@ -465,8 +440,8 @@ export function changeForEdit(thread: Pick<Thread, "changes" | "flagged"> | unde
 }
 
 /**
- * Build plain, easy-to-scan hover tooltip content (title + one clean summary line + optional note) for an edit row.
- * Keeps numbers minimal: never repeats timestamps already shown on the row, and only includes one key amount/length.
+ * Build plain, easy-to-scan hover tooltip content (title + one compact summary line + optional actionable cue)
+ * for an edit row. Omits clip filenames and editorial rationale already shown in the title or on the edit card.
  */
 export function editRowTooltip(edit: EditLike, ctx: RowTooltipContext = {}): RowTooltipInfo {
   const title = (edit.reason && edit.summary) || edit.label;
@@ -489,9 +464,8 @@ export function editRowTooltip(edit: EditLike, ctx: RowTooltipContext = {}): Row
     const added = addedSeconds(edit, ctx.change);
     if (added !== undefined) parts.push(`+${lengthLabel(added)}`);
   } else if (edit.kind === "insert") {
-    const inserted = insertedMediaName(edit, ctx);
     if (edit.rejected) parts.push("Rejected");
-    parts.push(inserted ? `Inserted ${inserted}` : "Insert");
+    parts.push("Insert");
     const added = addedSeconds(edit, ctx.change);
     if (added !== undefined) parts.push(`+${lengthLabel(added)}`);
   } else {
@@ -504,12 +478,13 @@ export function editRowTooltip(edit: EditLike, ctx: RowTooltipContext = {}): Row
     const kindWord = editKindWord(edit) ?? (fallback.kind ? editKindWord({ kind: fallback.kind }) : undefined);
 
     if (effectiveKind === "text") {
-      parts.push(detailText ? `Caption: ${detailText}` : "Caption");
+      const freshQuote = detailText && distinct(unquote(detailText), title) ? detailText : undefined;
+      parts.push(freshQuote ? `Caption: ${freshQuote}` : "Caption");
       if (hasSpan) parts.push(lengthLabel(span));
     } else if (detailText) {
       if (kindWord && !detailStatesKind(kindWord, detailText)) parts.push(kindWord);
       parts.push(detailText);
-      const showSpanWithDetail = effectiveKind === "broll" || effectiveKind === "graphic"
+      const showSpanWithDetail = effectiveKind === "broll" || effectiveKind === "graphic" || effectiveKind === "overlay"
         || (effectiveKind !== "transition" && effectiveKind !== "split" && !hasMeasurement(detailText));
       if (hasSpan && showSpanWithDetail) parts.push(lengthLabel(span));
     } else if (kindWord) {
@@ -521,14 +496,15 @@ export function editRowTooltip(edit: EditLike, ctx: RowTooltipContext = {}): Row
   }
 
   if (ctx.places && ctx.places > 1) parts.push(`in ${ctx.places} places`);
-  if (ctx.status && ctx.status !== "Rejected") parts.push(ctx.status);
+  appendStatus(parts, ctx.status, ctx.by);
 
-  // Quiet detail line underneath: review cue when waiting, to-do ask, or Scarlet's reason when distinct from the row title.
-  const waitingCheck = !edit.rejected && ctx.status !== "Kept" && ctx.status !== "Done" && edit.check && edit.check !== REVISED_CHECK
+  // Quiet detail line underneath: only actionable cues (review check when waiting on the editor, or to-do ask).
+  // Scarlet's general rationale (`edit.reason`) lives on the edit card when opened and is not repeated on hover.
+  const isWaiting = !edit.rejected && (!ctx.status || (!SETTLED_OR_QUEUED_STATUS.has(ctx.status) && !ctx.status.endsWith("…")));
+  const waitingCheck = isWaiting && edit.check && edit.check !== REVISED_CHECK
     ? (edit.reviewSays || edit.check) : undefined;
   const detail = distinct(waitingCheck, title)
-    ?? distinct(edit.marker ? edit.todo : undefined, title)
-    ?? distinct(edit.reason, title);
+    ?? distinct(edit.marker ? edit.todo : undefined, title);
 
   return {
     tip: title,
@@ -547,6 +523,7 @@ export function callRowTooltip(call: {
   version: number;
   earlier?: Revision;
   word?: string;
+  by?: string;
 }): RowTooltipInfo {
   const isCutProposal = call.tag === "Cut" || call.tag.startsWith("−");
   const parts: string[] = [];
@@ -560,12 +537,12 @@ export function callRowTooltip(call: {
   }
   if (call.state === "approved") parts.push("Kept");
   else if (call.state === "skipped") parts.push("Rejected");
-  else if (call.word) parts.push(call.word);
+  else appendStatus(parts, call.word, call.by);
 
   const earlierNote = call.earlier
     ? `Earlier: ${call.earlier.reason ?? "Scarlet’s earlier version."}${call.earlier.note ? `\nYou: “${call.earlier.note}”` : ""}`
     : undefined;
-  const detail = earlierNote ?? distinct(call.reason, call.summary);
+  const detail = earlierNote ?? (call.state === "open" ? distinct(call.reason, call.summary) : undefined);
 
   return {
     tip: call.summary,
@@ -578,11 +555,9 @@ export function callRowTooltip(call: {
 export function decidedCallRowTooltip(call: { label: string; note?: string; length?: number; approved: boolean }): RowTooltipInfo {
   const parts = [call.approved ? "Kept cut" : "Rejected cut"];
   if (call.length && call.length > 0) parts.push(lengthLabel(call.length));
-  const detail = distinct(call.note, call.label);
   return {
     tip: call.label,
     meta: parts.join(" · "),
-    ...(detail && { detail }),
   };
 }
 
@@ -597,8 +572,11 @@ export function momentRowTooltip(
   const tags = [...new Set(members.map(m => m.value || m.kind).filter((v): v is string => !!v && v !== "Edit"))];
   if (tags.length) parts.push(tags.slice(0, 3).join(", "));
   if (status) parts.push(status);
-  const memberLines = members.map(m => m.label).filter(Boolean);
-  const detail = memberLines.length > 1 ? memberLines.join("\n") : undefined;
+  // List only additional edits in this moment so the main title isn't repeated verbatim.
+  const otherLines = members.length > 1
+    ? members.map(m => m.label).filter((label): label is string => !!distinct(label, mainLabel))
+    : [];
+  const detail = otherLines.length > 0 ? otherLines.join("\n") : undefined;
   return {
     tip: mainLabel,
     meta: parts.join(" · "),
