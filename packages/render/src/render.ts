@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_PREVIEW_HEIGHT, snapToFrame } from "@scarlet/timeline";
 import type { Project, ProjectSettings, Timeline, TimeRange } from "@scarlet/timeline";
-import { FfmpegError, even, failureReason, fnum, runFfmpeg, sampleCount, threadedAvcPreview, withStreamInfoFallback } from "./exec.js";
+import { FfmpegError, even, failureReason, fnum, machineBusy, runFfmpeg, sampleCount, threadedAvcPreview, withStreamInfoFallback } from "./exec.js";
 import type { FontOptions } from "./fonts.js";
 import { buildFilterGraph, type GraphOptions } from "./graph.js";
 import { directDevice, encodeDirectPicture } from "./directPicture.js";
@@ -15,9 +15,15 @@ import type { ProbeResult } from "./probe.js";
 import { COMPRESSED_AUDIO_BITRATE, PROGRAM_AUDIO_BITRATE, hardwareEncoderFailure, withRenderEncoder, type VideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
 export { bestEncoder, encoderArgs, resolveVideoEncoder, type HwAccel, type RenderQuality } from "./encoder.js";
 
-/** High-core Apple silicon decodes AVC previews and single-frame seeks faster in software. */
-export function timelinePreviewDecoder(accel: HwAccel | undefined, decoder: GraphOptions["decoder"]): GraphOptions["decoder"] {
-  return (accel ?? "auto") === "auto" && decoder === "videotoolbox" && threadedAvcPreview ? "videotoolbox-hevc" : decoder;
+/**
+ * High-core Apple silicon decodes AVC previews and single-frame seeks faster in software. With `cpuHasRoom`, for a
+ * picture the editor is waiting on while the machine isn't busy, it decodes HEVC in software too: VideoToolbox hands
+ * every 4K frame back whole and opens a session per FFmpeg, so four seconds of a 4K HEVC camera took 0.94 s that way and
+ * 0.19 s on the CPU, and a single frame 0.35 s against 0.13 s, with identical decoded frames (M5 Max, 2026-11-26).
+ */
+export function timelinePreviewDecoder(accel: HwAccel | undefined, decoder: GraphOptions["decoder"], cpuHasRoom = false): GraphOptions["decoder"] {
+  if ((accel ?? "auto") !== "auto" || decoder !== "videotoolbox" || !threadedAvcPreview) return decoder;
+  return cpuHasRoom ? undefined : "videotoolbox-hevc";
 }
 
 export interface RenderOptions extends FontOptions {
@@ -39,6 +45,8 @@ export interface RenderOptions extends FontOptions {
   videoEncoder?: VideoEncoder;
   /** Read originals with the software decoder and scaler. Encoding may still use hardware. */
   softwareDecode?: boolean;
+  /** The editor is waiting on this range to play: a high-core Mac decodes it on the CPU while it has room (`timelinePreviewDecoder`). */
+  editorWaiting?: boolean;
   /** Set false to force a packet scan on every movie input. */
   indexedInputs?: boolean;
   onProgress?: (fraction: number) => void;
@@ -129,7 +137,8 @@ export async function renderRange(
   const exporting = quality === "delivery" || opts.exportHeight !== undefined;
   // On a high-core Apple Silicon Mac, threaded AVC decoding also wins on verified
   // full-size delivery. Both routes feed the same hardware encoder.
-  const appleDecoder = encoder === "h264_videotoolbox" ? timelinePreviewDecoder(opts.hwaccel, "videotoolbox") : undefined;
+  const appleDecoder = encoder === "h264_videotoolbox"
+    ? timelinePreviewDecoder(opts.hwaccel, "videotoolbox", !!opts.editorWaiting && !exporting && !machineBusy()) : undefined;
   const threadedAvc = appleDecoder === "videotoolbox-hevc";
   const device = exporting && opts.pictureOnly && !opts.softwareDecode && !threadedAvc && !opts.splits?.length && !opts.extraArgs?.length
     ? directDevice(encoder) : undefined;
@@ -142,6 +151,7 @@ export async function renderRange(
     directPicture: !!device,
     transitions: opts.transitions,
     indexedInputs: opts.indexedInputs ?? true,
+    rowThreads: opts.editorWaiting,
     signal: opts.signal,
     pictureOnly: opts.pictureOnly,
     pictureSource: resolver && (async (...args) => {

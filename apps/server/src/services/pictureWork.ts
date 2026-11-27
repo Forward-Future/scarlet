@@ -1,5 +1,7 @@
-import { availableParallelism, loadavg } from "node:os";
+import { availableParallelism } from "node:os";
 import { resolveVideoEncoder, type HwAccel } from "@scarlet/render";
+// Whether the machine is too busy to give a CPU decode its cores. The renderer asks it too, for the editor's own pictures.
+export { machineBusy } from "@scarlet/render";
 
 /**
  * Decoding pictures from long 4K recordings takes several cores per FFmpeg, and a dialogue pass asks for dozens of
@@ -94,14 +96,4 @@ export async function pictureDecoder(accel: HwAccel): Promise<"cuda" | "videotoo
   if (accel === "none") return;
   if (accel === "videotoolbox" || (accel === "auto" && process.platform === "darwin")) return "videotoolbox";
   if (accel === "nvenc" || (accel === "auto" && await resolveVideoEncoder("auto").catch(() => "libx264") === "h264_nvenc")) return "cuda";
-}
-
-/**
- * Whether the machine has twice as much work as cores or more, by the last minute's load. A 4K decode on the CPU then
- * gets a share of its cores, while the GPU's decoder is not shared the same way: at five times as much work as cores, ten seconds of a
- * 4K recording took 17.4 s on the CPU and 5.0 s with VideoToolbox, against 0.5 s and 2.6 s on an idle machine
- * (M-series, 2026-11-22 and 2026-11-13). Windows reports no load, so it never counts as busy.
- */
-export function machineBusy(load = loadavg()[0]!, cores = availableParallelism()): boolean {
-  return load > 2 * cores;
 }

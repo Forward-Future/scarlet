@@ -845,6 +845,10 @@ describe("render", () => {
     expect(timelinePreviewDecoder("videotoolbox", "videotoolbox")).toBe("videotoolbox");
     expect(timelinePreviewDecoder("auto", "cuda")).toBe("cuda");
     expect(timelinePreviewDecoder("none", undefined)).toBeUndefined();
+    // A picture the editor waits on decodes on a high-core Mac's CPU while it has room; HEVC included.
+    expect(timelinePreviewDecoder("auto", "videotoolbox", true)).toBe(ffmpeg.threadedAvcPreview ? undefined : "videotoolbox");
+    expect(timelinePreviewDecoder("videotoolbox", "videotoolbox", true)).toBe("videotoolbox");
+    expect(timelinePreviewDecoder("auto", "cuda", true)).toBe("cuda");
   });
 
   it("uses the probed playback codec for hardware decoding older imports", async () => {
@@ -1150,6 +1154,30 @@ describe("render", () => {
       const luma = (rgb: Buffer) => rgb[0]! * 0.299 + rgb[1]! * 0.587 + rgb[2]! * 0.114;
       expect(luma(pixel(34, 18))).toBeGreaterThan(luma(pixel(48, 40)) + 4);
       expect(luma(pixel(34, 18))).toBeLessThan(luma(pixel(32, 16)) - 4);
+    });
+
+    it("rounds an opaque layer's corners on its first frame alone, with the pixels rounding every frame gave", async () => {
+      const movie = { id: "red", kind: "video" as const, name: "red", path: "red.mp4", duration: 4, fps: 30, width: 64, height: 64, hasAudio: false };
+      const inset = makeMediaClip("red", 0, 0.5, 0, { transform: {
+        x: 0.25, y: 0.125, scale: 0.75, rotation: 0, cropLeft: 0.25, cropRight: 0.25, cropTop: 0.25, cropBottom: 0, cornerRadius: 0.25,
+      } });
+      const timeline = edit(track([inset]));
+      timeline.background = "#00FF00";
+      const graphOf = async () => {
+        const graph = await buildFilterGraph(stills, timeline, { start: 0, end: 0.5 }, { mediaRoot: dir, pictureOnly: true });
+        await graph.cleanup();
+        return graph.graph;
+      };
+      // Known to be opaque: one mask, laid on every frame.
+      stills.media = [{ ...movie, hasAlpha: false }];
+      expect(await graphOf()).toContain("alphamerge");
+      const once = await pictures(stills, timeline, { start: 0, end: 0.5 });
+      // Not known to be: each frame's own alpha is rounded.
+      stills.media = [movie];
+      expect(await graphOf()).not.toContain("alphamerge");
+      const everyFrame = await pictures(stills, timeline, { start: 0, end: 0.5 });
+      expect(once).toHaveLength(15);
+      expect(Buffer.concat(once).equals(Buffer.concat(everyFrame))).toBe(true);
     });
 
     it("holds a still for exactly its clip: a PNG, a GIF's first picture, a one-picture movie and a colour", async () => {

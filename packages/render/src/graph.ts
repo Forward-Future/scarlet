@@ -78,6 +78,11 @@ export interface GraphOptions extends FontOptions {
   transitions?: Pick<TransitionPlan, "motions" | "layers">;
   /** Reuse probed movie headers for seeks when the caller supports discovery fallback. */
   indexedInputs?: boolean;
+  /**
+   * A short read the editor waits on: an HEVC original with wavefront rows or tiles (`ProbeResult.rowParallel`) that
+   * decodes on the CPU uses slice threads, which decode each picture's rows at once, instead of frame threads.
+   */
+  rowThreads?: boolean;
   signal?: AbortSignal;
   pictureSource?: (asset: MediaAsset, from: number, to: number, minimumHeight: number) => Promise<{ file: string; start: number } | undefined>;
   audioOnly?: boolean;
@@ -138,6 +143,8 @@ interface MediaPicture {
   /** One picture on every project frame (`fillsFrames`). */
   filled: boolean;
   toneMap: string[];
+  /** Fully opaque until its corners are rounded (a picture without alpha and no effect that could give it some), over several frames. */
+  opaque: boolean;
 }
 
 export async function buildFilterGraph(
@@ -251,7 +258,7 @@ async function writeFilterGraph(
     stack = out;
   };
 
-  const videoForMedia = (clip: MediaClip, idx: number, p: Placement, { still, cudaScale, sharedStart, held, filled, toneMap }: MediaPicture) => {
+  const videoForMedia = (clip: MediaClip, idx: number, p: Placement, { still, cudaScale, sharedStart, held, filled, toneMap, opaque }: MediaPicture) => {
     const speed = clip.speed ?? 1;
     const moves = motionsOf(clip.id);
     const tf = resolveTransform(clip, warn);
@@ -272,7 +279,7 @@ async function writeFilterGraph(
     // An HDR picture becomes SDR before anything else is done to it, so effects, looks and the canvas see what a normal screen shows.
     chain.push(...toneMap);
     chain.push(...effectFilters(clip.effects, "video", effectCtx));
-    chain.push(...transformChain(tf, W, H));
+    chain.push(...transformChain(tf, W, H, { opaque, name: () => `round${labelN++}` }));
     if (clip.videoFadeIn > 0) chain.push(`fade=t=in:st=0:d=${fnum(clip.videoFadeIn)}:alpha=1`);
     if (clip.videoFadeOut > 0) {
       chain.push(`fade=t=out:st=${fnum(Math.max(0, p.clipDur - clip.videoFadeOut))}:d=${fnum(clip.videoFadeOut)}:alpha=1`);
@@ -422,10 +429,13 @@ async function writeFilterGraph(
       const shared = motionsOf(clip.id).length ? undefined : sharedReads?.get(clip);
       const indexedPicture = opts.indexedInputs && !includeAudio;
       let indexedOriginal = !!asset.previewClock && hasIndexedAvc(asset);
+      // Decided once per clip, so the clip's picture and sound still share one input.
+      const rowThreads = !!opts.rowThreads && wantVideo && !still && codec === "hvc1" && (await verifiedProbe(asset))?.rowParallel === true;
       const open = (input: string, start: number, hardware: boolean, duration = p.vis * speed) => addInput([
         ...(indexedPicture && (input !== file || shared || indexedOriginal) ? INDEXED_MP4_INPUT : []),
         ...(hardware && cudaScale ? CUDA_FRAMES_INPUT :
-          hardware && accelerate && opts.decoder !== "cuda" ? ["-hwaccel", "videotoolbox"] : []),
+          hardware && accelerate && opts.decoder !== "cuda" ? ["-hwaccel", "videotoolbox"] :
+          rowThreads && input === file ? ["-thread_type", "slice"] : []),
         ...(start > 0 ? ["-ss", fnum(start)] : []), "-t", fnum(duration),
       ], input);
       const pictureDelay = still ? 0 : Math.max(0, firstPicture - srcStart) / speed;
@@ -461,6 +471,8 @@ async function writeFilterGraph(
           filled: !opts.singleFrame && fillsFrames(clip, asset, fps),
           // A preview copy of an HDR file is SDR already.
           toneMap: proxy ? [] : await toneMapFor(hdr),
+          // A single frame has no frames to share a mask with.
+          opaque: !opts.singleFrame && asset.hasAlpha === false && !clip.effects.length,
         });
         if (opts.directPicture && opts.pictureOnly && !opts.pictureFilter && !opts.singleFrame && firstLayer && !shared && !proxy && !still && !motionsOf(clip.id).length &&
             directExportPicture(clip, visible, asset, await verifiedProbe(asset), W, H, fps, D)) {
