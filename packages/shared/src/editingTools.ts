@@ -15,7 +15,7 @@ export const EDITING_TOOL_GROUPS = [
   { title: "Requests and skills", description: "Report progress, ask editorial questions, hand a kind of work to the model chosen for it in Task models, use saved instructions and offer rules to add to them.",
     tools: ["task_log", "task_question", "hand_off", "skills_list", "learning_suggest", "skill_save_from_change", "skill_save_edit"] },
   { title: "Motion graphics", description: "Draw graphics from web pages, capture pages and take clips of videos from the web, and read the files and style guide the editor gave.",
-    tools: ["graphic_render", "graphic_get", "web_capture", "web_video", "style_guide_save", "style_guide_update", "style_guide_preview_render", "style_guide_preview_get", "attachment_read"] },
+    tools: ["graphic_render", "graphic_get", "web_capture", "web_video", "style_guide_save", "style_guide_get", "style_guide_sound_import", "style_guide_update", "style_guide_preview_render", "style_guide_preview_get", "attachment_read"] },
   { title: "Frame inspection", description: "Examine a source frame or several moments from an edit together.",
     tools: ["media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area"] },
   { title: "Edit comparison", description: "Listen to source audio, or have a model that hears listen for one that can't, and compare both sides of a suggested edit.",

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createProject } from "@scarlet/timeline";
-import { isDialogueGuide } from "@scarlet/shared";
+import { skillRuns, type Skill } from "@scarlet/shared";
 import { createApp, type ScarletApp } from "../app.js";
 import { accessToken } from "../auth.js";
 import { BUNDLED_SKILLS } from "../bundledSkills.js";
@@ -18,6 +18,13 @@ const text = (body: string, description = "Make a first dialogue pass.") =>
 const shipped = text("Cut false starts.");
 const next = text("Cut false starts and long pauses.", "Make a first dialogue edit.");
 const editor = { id: "usr_1", name: "Editor" } as Parameters<typeof updateSkill>[1];
+/** The line the shipped dialogue guide carries in its header, saying which of Scarlet's commands it guides. */
+const RUNS = "runs: dialogue-pass, tighten-pauses-here";
+/**
+ * A copy of the dialogue guide made before the guide said so in its header, as an upgrade leaves it: the editor's text
+ * with that one line added, as one more version.
+ */
+const withRuns = (skill: Skill) => ({ ...skill, content: expect.stringContaining(RUNS), version: skill.version + 1, updatedAt: expect.any(String) });
 
 it("keeps a skill's name and other header fields when its description and instructions are revised", () => {
   const draft = { description: "Cut: fast", instructions: "\nNew body.\n" };
@@ -102,7 +109,7 @@ describe("the skills Scarlet comes with", () => {
     await upgrade();
     const guide = publicGuide()!;
     expect(guide.source).toBeUndefined();
-    expect(isDialogueGuide(guide)).toBe(true);
+    expect(skillRuns(guide)).toContain("dialogue-pass");
     expect(guide.content).toContain("Keep all filler words.");
     expect(guide.content).toContain("Leave the final decision on each proposed removal of pauses to the editor, even after you check the cut.");
     expect(guide.content).toContain("Leave the final decision on each proposed removal of production talk to the editor, even after you check the cut.");
@@ -146,7 +153,8 @@ describe("the skills Scarlet comes with", () => {
     oldSettings({ aiCuts: { pause: "cut", filler: "cut", retake: "cut", coaching: "cut" }, pauseTightness: "natural", crossfadeFrames: 2 });
     await upgrade();
     const migrated = app.ctx.repos.skills.get(mine.id)!;
-    expect(migrated.content.startsWith(content)).toBe(true);
+    expect(migrated.content).toContain(content);
+    expect(skillRuns(migrated)).toContain("dialogue-pass");
     expect(migrated.content).toContain("Use a 2-frame audio crossfade at dialogue joins.");
     // One saved before the setting existed had the same default.
     await upgrade();
@@ -162,8 +170,10 @@ describe("the skills Scarlet comes with", () => {
     oldSettings({ aiCuts: { retake: "suggest" }, pauseTightness: "loose", crossfadeFrames: 0 });
     await upgrade();
     const migrated = app.ctx.repos.skills.get(mine.id)!;
-    expect(migrated).toMatchObject({ name: mine.name, enabled: false, bundledName: mine.bundledName, version: mine.version + 1 });
-    expect(migrated.content.startsWith(content)).toBe(true);
+    // One version says which command it guides, the next carries the preferences.
+    expect(migrated).toMatchObject({ name: mine.name, enabled: false, bundledName: mine.bundledName, version: mine.version + 2 });
+    expect(migrated.content).toContain(content);
+    expect(skillRuns(migrated)).toContain("dialogue-pass");
     expect(migrated.content).toContain("Leave the final decision on each proposed removal of retakes to the editor, even after you check the cut.");
     expect(migrated.content).toContain("Leave generous breathing room");
     expect(migrated.content).toContain("Use straight audio cuts");
@@ -313,14 +323,15 @@ describe("the skills Scarlet comes with", () => {
     expect(generic.id).not.toBe(mine.id);
     await upgrade();
     expect(publicGuide()).toEqual(generic);
-    expect(saved()).toEqual(mine);
-    expect(app.ctx.repos.skillVersions.list(mine.id)).toEqual(history);
-    expect(await readFile(join(app.ctx.paths.skills, "team", mine.name, "SKILL.md"), "utf8")).toBe(mine.content);
+    // The editor's own wording stays; the upgrade adds only the line saying it guides the dialogue pass.
+    expect(saved()).toEqual(withRuns(mine));
+    expect(app.ctx.repos.skillVersions.list(mine.id).slice(0, -1)).toEqual(history);
+    expect(await readFile(join(app.ctx.paths.skills, "team", mine.name, "SKILL.md"), "utf8")).toBe(saved().content);
     const library = app.ctx.repos.skills.select();
     expect(assistantSkills(library, [generic.id], true)).toEqual([generic]);
-    expect(assistantSkills(library, [mine.id], true)).toEqual([mine]);
+    expect(assistantSkills(library, [mine.id], true)).toEqual([saved()]);
     expect(assistantSkills(library, [], true).find(s => s.id === mine.id)?.content).toContain("Read this workflow");
-    const renamed = updateSkill(app.ctx, editor, mine, { name: "my-dialogue-cut" });
+    const renamed = updateSkill(app.ctx, editor, saved(), { name: "my-dialogue-cut" });
     expect(assistantSkills([renamed], [], true)[0]?.content).toContain("Read this workflow");
     expect(assistantSkills([renamed], [], false)).toEqual([renamed]);
   });
@@ -328,11 +339,11 @@ describe("the skills Scarlet comes with", () => {
   it("preserves a custom old directory seed and an independently named custom destination", async () => {
     const local = createSkill(app.ctx, null, { name: "first-cut-dialogue", scope: "team", content: text("From my seed folder.") }, { source: "seed" });
     await upgrade();
-    expect(saved()).toEqual(local);
+    expect(saved()).toEqual(withRuns(local));
     deleteSkill(app.ctx, publicGuide()!);
     const own = createSkill(app.ctx, editor, { name: "dialogue-pass", scope: "team", content: "My separately written guide." });
     await upgrade();
-    expect(saved()).toEqual(local);
+    expect(saved()).toEqual(withRuns(local));
     expect(publicGuide()).toEqual(own);
   });
 
@@ -343,8 +354,8 @@ describe("the skills Scarlet comes with", () => {
     expect(seedSkillList(app.ctx, [local], "seed")).toBe(1);
     const own = publicGuide()!;
     await upgrade();
-    expect(publicGuide()).toEqual(own);
-    expect(saved()).toEqual(old);
+    expect(publicGuide()).toEqual(withRuns(own));
+    expect(saved()).toEqual(withRuns(old));
   });
 
   it("honors deletion of the original stock guide across an upgrade", async () => {
@@ -361,7 +372,7 @@ describe("the skills Scarlet comes with", () => {
     await upgrade();
     deleteSkill(app.ctx, publicGuide()!, editor);
     await upgrade();
-    expect(saved()).toEqual(own);
+    expect(saved()).toEqual(withRuns(own));
     expect(publicGuide()).toBeUndefined();
   });
 
@@ -570,7 +581,7 @@ describe("skills that the workflows replaced", () => {
   ].join("\n");
 
   it("ships the stock skills in skills/, and removes unedited copies of the rest on upgrade", async () => {
-    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "b-roll", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "multi-cam", "music-under-speech", "punch-in", "speed-through-waits", "split-edits"]);
+    expect(app.ctx.repos.skills.select().map(skill => skill.name).sort()).toEqual(["add-captions", "b-roll", "color-match", "dialogue-pass", "fit-length", "frame-screen", "matt-talking-head", "motion-graphics", "multi-cam", "music-under-speech", "punch-in", "speed-through-waits", "split-edits"]);
     const stock = createSkill(app.ctx, null, { name: "smooth-audio-cuts", scope: "team", content: smoothing }, { source: "bundled" });
     const run = uses([stock.id]);
     app.ctx.repos.tasks.put({ ...run, state: "done" });

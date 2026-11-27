@@ -580,6 +580,7 @@ impl HostRuntime {
     /// Cancel running tasks (they complete as cancelled) and stop the loops.
     async fn stop(&self) {
         log::info!("agent host stopping ({} running)", self.running.lock().unwrap().len());
+        let started = std::time::Instant::now();
         self.cancel.cancel();
         self.wake.notify_one();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -591,7 +592,10 @@ impl HostRuntime {
             log::warn!("still running 15 s after the stop: {}; ending their CLIs", left.join(", "));
         }
         // Nothing an agent started may outlive the app.
-        let _ = tokio::task::spawn_blocking(spawn::kill_stopped_now).await;
+        if let Err(e) = tokio::task::spawn_blocking(spawn::kill_stopped_now).await {
+            log::warn!("agent host: ending the stopped CLIs failed: {e}");
+        }
         self.connected.store(false, Ordering::SeqCst);
+        log::info!("agent host stopped in {}", crate::util::human_duration(started.elapsed()));
     }
 }

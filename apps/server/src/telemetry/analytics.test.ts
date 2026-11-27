@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -137,6 +137,55 @@ describe("when telemetry is off", () => {
     await sending;
     await t.close();
     expect(sent.map(names)).toEqual([["sending"], ["after"]]);
+  });
+
+  it("forgets the install's id when turned off, and starts a new install when turned back on", async () => {
+    let preference = { enabled: true, revision: 0 };
+    const t = telemetry({ preference: () => preference });
+    t.record("before");
+    await t.flush();
+    const before = sent[0]!.body.batch[0]!.distinct_id;
+    expect(existsSync(idFile)).toBe(true);
+    preference = { enabled: false, revision: 1 };
+    t.refreshPreference();
+    expect(existsSync(idFile)).toBe(false);
+    preference = { enabled: true, revision: 2 };
+    t.record("after");
+    await t.close();
+    expect(sent.map(names)).toEqual([["before"], ["after"]]);
+    expect(sent[1]!.body.batch[0]!.distinct_id).not.toBe(before);
+  });
+
+  it("removes an id an earlier launch left when the environment turns reports off", () => {
+    writeFileSync(idFile, "123e4567-e89b-42d3-a456-426614174000\n");
+    telemetry({ env: { SCARLET_TELEMETRY_ENABLED: "false" } });
+    expect(existsSync(idFile)).toBe(false);
+  });
+
+  it("never sends a failed batch again once turned off", async () => {
+    let preference = { enabled: true, revision: 0 };
+    const t = telemetry({ reply: call => call === 1 ? 503 : 200, preference: () => preference });
+    t.record("failed");
+    await t.flush();
+    expect(sent).toHaveLength(1);
+    preference = { enabled: false, revision: 1 };
+    await t.flush();
+    preference = { enabled: true, revision: 2 };
+    await t.flush();
+    await t.close();
+    expect(sent.map(names)).toEqual([["failed"]]);
+  });
+
+  it("sends nothing in the background after another engine turns reports off", async () => {
+    vi.useFakeTimers();
+    let preference = { enabled: true, revision: 0 };
+    const t = telemetry({ preference: () => preference, now: () => Date.now() });
+    t.start();
+    t.record("queued");
+    preference = { enabled: false, revision: 1 }; // Saved by a peer: this engine hears of it only on its next look.
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS * 3);
+    await t.close();
+    expect(sent).toEqual([]);
   });
 
   it("discards the queue if the library preference cannot be read", async () => {
@@ -341,7 +390,7 @@ describe("when a send fails", () => {
 
     clock.at += 1;
     await t.flush();
-    expect(logs).toEqual(["[telemetry] dropped 1 event(s) after 3 failed sends"]);
+    expect(logs).toEqual(["[telemetry] dropped 1 event(s) after 3 failed sends (last: HTTP 503)"]);
     await t.flush();
     expect(sent).toHaveLength(3);
 

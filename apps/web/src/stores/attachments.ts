@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { TaskAttachment } from "@scarlet/shared";
+import { appLog, errorName } from "../lib/appLog";
 import { api, errorMessage } from "../lib/client";
 import { fileBaseName } from "../lib/format";
 import { usePictureMarksStore } from "./pictureMarks";
@@ -43,13 +44,19 @@ export const useAttachmentsStore = create<AttachmentsState>((set, get) => {
       const marked = usePictureMarksStore.getState().byProject[projectId]?.marks.length ? 1 : 0;
       const room = MAX_ATTACHMENTS - marked - (get().byProject[projectId]?.length ?? 0);
       const taken = files.slice(0, Math.max(0, room));
+      // Counts only: a file's name is the editor's own.
+      appLog("action", "attach", { project: projectId, count: taken.length, refused: files.length - taken.length || undefined,
+        pasted: files.filter(file => !("path" in file)).length || undefined }, { level: taken.length < files.length ? "warn" : "info" });
       if (!taken.length) return;
       const rows = taken.map(file => ({ file, row: { key: `att-${++next}`, name: "path" in file ? fileBaseName(file.path) : file.name || "Pasted file", state: "adding" as const } }));
       set(state => ({ byProject: { ...state.byProject, [projectId]: [...state.byProject[projectId] ?? [], ...rows.map(r => r.row)] } }));
       for (const { file, row } of rows) {
         const upload = ("path" in file ? api.uploadAttachment(projectId, { path: file.path }) : api.uploadAttachment(projectId, file, file.name || undefined))
           .then(({ attachment }) => patch(projectId, row.key, { state: "ready", attachment, name: attachment.name }),
-            (e: unknown) => patch(projectId, row.key, { state: "failed", error: errorMessage(e) }))
+            (e: unknown) => {
+              appLog("error", "attachment", { project: projectId, pasted: "path" in file ? undefined : true, name: errorName(e) }, { level: "warn" });
+              patch(projectId, row.key, { state: "failed", error: errorMessage(e) });
+            })
           .finally(() => uploads.delete(row.key));
         uploads.set(row.key, upload);
       }

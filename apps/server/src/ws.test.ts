@@ -131,7 +131,9 @@ it("follows a project that exists and says when one doesn't", async () => {
     { type: "error", message: "no project prj_missing" },
     { type: "project.subscribed", projectId: "prj_missing", found: false },
   ]);
-  expect(ws().slice(1)).toEqual([`[ws] a client follows ${project.id}`, "[ws] a client asked to follow an unknown project, prj_missing"]);
+  expect(ws().slice(1)).toEqual([`[ws] a client follows ${project.id}`, "[ws] a client asked to follow an unknown project, prj_missing",
+    // Said once a minute each, so a window and engine that disagree on a message can be seen.
+    "[ws] ignored a client message that isn’t JSON", "[ws] ignored a client message the engine doesn’t understand: type=subscribe"]);
 });
 
 it("sends a project's events to the clients following it, and everything else to all", async () => {

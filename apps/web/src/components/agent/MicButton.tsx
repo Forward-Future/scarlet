@@ -7,7 +7,7 @@ import { Icon } from "../ui/primitives";
 
 /** What the red button is named while it records: a press sends what was said, and Esc throws it away. */
 export const SEND_RECORDING = "Send (Esc to discard)";
-/** Its name when what was said waits in the message box to be read first (Settings → General → Review dictation before sending). */
+/** Its name when what was said waits in the message box to be read before sending. */
 export const REVIEW_RECORDING = "Stop and review (Esc to discard)";
 
 /**

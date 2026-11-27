@@ -50,7 +50,7 @@ pub fn login_command(agent: &str) -> Option<(&'static str, &'static [&'static st
     match agent {
         "claude" => Some(("claude", &["auth", "login", "--claudeai"])),
         "codex" => Some(("codex", &["login"])),
-        "gemini" => Some(("agy", &["acp", "--login"])),
+        "gemini" => Some(("agy", &["acp", "--login", "--disable-telemetry"])),
         _ => None,
     }
 }
@@ -107,7 +107,7 @@ impl LoginManager {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(session) = sessions.get_mut(&status.agent) {
             if session.report(attempt, status) {
-                let _ = self.app.emit("agent-login://status", &session.status);
+                crate::util::note_emit("agent-login://status", self.app.emit("agent-login://status", &session.status));
             }
         }
     }
@@ -141,7 +141,7 @@ impl LoginManager {
             if let Some(previous) = sessions.insert(agent.to_string(), session) {
                 previous.cancel.cancel();
             }
-            let _ = self.app.emit("agent-login://status", &waiting);
+            crate::util::note_emit("agent-login://status", self.app.emit("agent-login://status", &waiting));
         }
         log::info!("{agent} sign-in started (pid {pid})");
 
@@ -319,7 +319,7 @@ mod tests {
     fn claude_codex_and_gemini_have_one_click_sign_in() {
         assert_eq!(login_command("claude").unwrap().1, &["auth", "login", "--claudeai"]);
         assert_eq!(login_command("codex").unwrap(), ("codex", &["login"][..]));
-        assert_eq!(login_command("gemini").unwrap(), ("agy", &["acp", "--login"][..]));
+        assert_eq!(login_command("gemini").unwrap(), ("agy", &["acp", "--login", "--disable-telemetry"][..]));
         assert!(login_command("other").is_none());
     }
 }

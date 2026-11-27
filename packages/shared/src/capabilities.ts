@@ -196,6 +196,15 @@ type SignedInAgent = { id: string; installed: boolean; loggedIn?: boolean; model
  */
 export type ListeningSetting = "auto" | "off" | `${string}:${string}`;
 
+/**
+ * How a model that did something is named to the editor and to another model: the name its host gives it, else the
+ * model, else its agent. agy's own default model is Gemini's. The one place outside the hosts that names a provider for
+ * this, so the engine's tools and prompt never do.
+ */
+export function modelDisplayName(by: { agent: string; model?: string; label?: string }): string {
+  return by.label ?? (by.agent === "gemini" && !by.model ? "Gemini" : by.model ?? by.agent);
+}
+
 /** The setting's value for one model: "agent:model", or "agent:default" for its CLI's own default model. */
 export const listenerKey = (listener: Listener): ListeningSetting => `${listener.agent}:${listener.model ?? "default"}`;
 

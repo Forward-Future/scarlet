@@ -1,6 +1,6 @@
-import { clipRange, firstIndex, historyLineage, makeTimeMap, timelineDuration, withHandles, type Timeline, type TimeRange } from "@scarlet/timeline";
+import { clipRange, firstIndex, historyLineage, makeTimeMap, timelineDuration, withHandles, type Change, type Clip, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { Thread } from "./threads.js";
-import { NAMED_SLACK, savedEdits, type ProjectFiles, type SavedEdit, type ThreadEdit } from "./threadEdits.js";
+import { filterSupersededEdits, NAMED_SLACK, savedEdits, type ProjectFiles, type SavedEdit, type ThreadEdit } from "./threadEdits.js";
 
 /** How far apart, in seconds on the working cut, two named edits can sit and still be the same place. */
 const SAME_PLACE = 1;
@@ -79,7 +79,7 @@ function playsAll(before: Timeline, span: TimeRange, head: Timeline, fps: number
 
 /** Return playable ranges on the working cut, never mixing clocks from different versions or branches. */
 export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVersionLink[],
-  readVersion: (version: string) => Timeline | undefined, fps: number, media?: ProjectFiles): ThreadEdit[] {
+  readVersion: (version: string) => Timeline | undefined, fps: number, media?: ProjectFiles, projectChanges?: readonly Change[]): ThreadEdit[] {
   const { lineage, undone } = historyLineage(links, head.version);
   const duration = timelineDuration(head);
   if (!duration) return [];
@@ -88,7 +88,45 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     if (!timelines.has(version)) timelines.set(version, version === head.version ? head : readVersion(version));
     return timelines.get(version);
   };
-  const edits = savedEdits(thread, v => !undone.has(v) && (v === head.version || lineage.has(v)), read, fps, media);
+  const visible = (v: string) => !undone.has(v) && (v === head.version || lineage.has(v));
+  const lineageDepth = new Map<string, number>();
+  const lineageList = [...lineage];
+  for (let i = 0; i < lineageList.length; i++) lineageDepth.set(lineageList[i]!, lineageList.length - 1 - i);
+  const isAfter = (other: Change, origin: Change) => {
+    const a = lineageDepth.get(other.appliedVersion ?? other.toVersion);
+    const b = lineageDepth.get(origin.appliedVersion ?? origin.toVersion);
+    if (a !== undefined && b !== undefined && a !== b) return a > b;
+    return (Date.parse(other.createdAt ?? "") || 0) > (Date.parse(origin.createdAt ?? "") || 0);
+  };
+  const edits = filterSupersededEdits(
+    savedEdits(thread, visible, read, fps, media, projectChanges),
+    thread,
+    visible,
+    projectChanges,
+    isAfter,
+    read,
+  );
+  const headClips = new Map<string, Clip>();
+  for (const track of head.tracks) for (const clip of track.clips) {
+    if (!headClips.has(clip.id)) headClips.set(clip.id, clip);
+  }
+  const currentClipSpan = (placedClips: SavedEdit["placedClips"]): TimeRange | undefined => {
+    if (!placedClips?.length) return;
+    let start = Infinity, end = -Infinity;
+    for (const placed of placedClips) {
+      const clip = headClips.get(placed.id);
+      if (!clip || clip.enabled === false) continue;
+      if (placed.mediaId !== undefined && (clip.kind !== "media" || clip.mediaId !== placed.mediaId)) continue;
+      try {
+        const r = clipRange(clip);
+        start = Math.min(start, r.start);
+        end = Math.max(end, r.end);
+      } catch { /* ignore invalid clip bounds */ }
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+    const clamped = { start: Math.max(0, start), end: Math.min(duration, end) };
+    return clamped.end > clamped.start ? clamped : undefined;
+  };
   const maps = new Map<string, ReturnType<typeof makeTimeMap> | null>([[head.version, t => t]]);
   const mapFrom = (version: string) => {
     if (!maps.has(version)) {
@@ -259,7 +297,7 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
   const reshaped = new Set<ThreadEdit>();
   /** Places of a save Scarlet named no edit for where the video plays as it did (`quiet`): they finished other edits. */
   const quietly = new Set<ThreadEdit>();
-  for (const { version, named, still, resaved, putBack, markerSays: _markerSays, reviewLocation, quiet, ...edit } of edits) {
+  for (const { version, named, still, resaved, putBack, markerSays: _markerSays, markerIds: _markerIds, placedClips, placedSpan, reviewLocation, quiet, ...edit } of edits) {
     const map = mapFrom(version);
     if (!map) continue;
     const mappedBack = putBack ? mapRange(map, putBack) : undefined;
@@ -299,7 +337,8 @@ export function threadTimeline(thread: Thread, head: Timeline, links: ReviewVers
     if (point && edit.beforeCut && !edit.rejected && start === null) adrift.push(edit);
     if (start === null || end === null || start > end + 1e-6 || start > duration) continue;
     if (edit.range.end > edit.range.start && end <= start) continue;
-    const range = { start: Math.max(0, start), end: Math.min(duration, Math.max(start, end)) };
+    const mappedRange = { start: Math.max(0, start), end: Math.min(duration, Math.max(start, end)) };
+    const range = (!edit.rejected && !edit.beforeCut && !edit.marker && placedSpan ? currentClipSpan(placedClips) : undefined) ?? mappedRange;
     // A removal has a join but no surviving frames of its own. Audition the join with context.
     const placed: ThreadEdit = range.end === range.start ? { ...edit, at: range.start, range: withHandles(range, 1.5, duration) } : { ...edit, range };
     const review = placeReview(placed, reviewLocation);

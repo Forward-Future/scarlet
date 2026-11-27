@@ -2,6 +2,7 @@ import type { Dirent } from "node:fs";
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join } from "node:path";
 import type { ExpandMediaPathsResponse } from "@scarlet/shared";
+import { humanDuration } from "../logText.js";
 
 /**
  * Unambiguous video file extensions discovered inside dropped folders.
@@ -74,11 +75,15 @@ export async function isVideoFile(filePath: string): Promise<boolean> {
  */
 export async function expandMediaPaths(
   paths: readonly string[],
-  opts: { signal?: AbortSignal; maxVideos?: number; maxEntries?: number; maxDepth?: number } = {},
+  opts: { signal?: AbortSignal; maxVideos?: number; maxEntries?: number; maxDepth?: number; log?: (line: string) => void } = {},
 ): Promise<ExpandMediaPathsResponse> {
   const maxVideos = opts.maxVideos ?? MAX_VIDEOS;
   const maxEntries = opts.maxEntries ?? MAX_ENTRIES;
   const maxDepth = opts.maxDepth ?? MAX_DEPTH;
+  const log = opts.log ?? (() => {});
+  const began = performance.now();
+  let unreadable = 0;
+  let limited = false;
   const files: string[] = [];
   const seenFiles = new Set<string>();
   const emptyFolders: Array<{ path: string; name: string }> = [];
@@ -124,6 +129,8 @@ export async function expandMediaPaths(
       try {
         entries = await readdir(dir, { withFileTypes: true });
       } catch {
+        // A folder that can't be listed (no permission, gone) is skipped; it is counted for the log.
+        unreadable++;
         return;
       }
 
@@ -178,10 +185,15 @@ export async function expandMediaPaths(
     };
 
     await walk(input, 0);
+    if (hitLimit) limited = true;
     if (foundInFolder === 0 && !hitLimit) {
       emptyFolders.push({ path: input, name: pathBaseName(input) });
     }
   }
 
+  // Counts only: the folders' and files' names are the editor's.
+  if (folders) {
+    log(`[media] dropped folders searched in ${humanDuration(performance.now() - began)}: ${folders} folders, ${scannedEntries} entries, ${files.length} files, ${emptyFolders.length} without video${unreadable ? `, ${unreadable} couldn't be listed` : ""}${limited ? ", stopped at the limit" : ""}`);
+  }
   return { files, folders, emptyFolders };
 }

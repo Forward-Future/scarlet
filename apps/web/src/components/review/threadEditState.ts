@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isAddRequest, isRejectRequest, matchesEdit, threadEditList, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
+import { create } from "zustand";
+import { brollSectionForEdit, isAddRequest, isRejectRequest, matchesEdit, stretchesContiguous, threadEditList, type BrollSection, type EditRef, type Task, type Thread, type ThreadEdit } from "@scarlet/shared";
+import type { TimeRange } from "@scarlet/timeline";
 import { requestThreadEdits, useThreadEditKey } from "./threadEditRequest";
 import { reviewKey, useKeptEdits } from "../../lib/keptEdits";
 import { samePlace } from "../../lib/editMoments";
@@ -24,6 +26,7 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   // Located on the working cut on screen, which holds while the video plays: the engine's list for a newer one waits.
   const head = useShownCutStore(s => s.head);
   const media = useProjectStore(s => s.current?.media);
+  const projectChanges = useProjectStore(s => s.current?.changes);
   // An edit another request made counts here once this request flagged it.
   const applied = !!thread?.changes.some(c => c.state === "approved") || !!thread?.flagged?.length;
   const key = useThreadEditKey(projectId, head, thread);
@@ -59,7 +62,7 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
   // initial engine read is still in flight, stay empty so stale/undone/no-op edits never flash and disappear.
   const failed = !!thread && loaded?.threadId === thread.id && loaded.edits === undefined;
   const fallback = !head || failed;
-  const saved = useMemo(() => thread && !resolved && fallback ? threadEditList(thread, media) : noEdits, [thread, media, resolved, fallback]);
+  const saved = useMemo(() => thread && !resolved && fallback ? threadEditList(thread, media, projectChanges) : noEdits, [thread, media, projectChanges, resolved, fallback]);
   const edits = resolved ?? (fallback ? saved : noEdits);
   useEffect(() => { if (current && loaded.edits) shown.current = { key, edits }; }, [current, loaded, key, edits]);
   // An edit the editor rejected is out of the video: it is no edit to open, count or mark, only a row that says so.
@@ -70,6 +73,28 @@ export function useThreadEdits(projectId: string, thread: Thread | undefined, ne
 }
 
 export const noEdits: ListedEdit[] = [];
+
+type PressedAdd = { id: string; threadId: string; changeId: string; spot: number; state: "queued" };
+
+/**
+ * Adds the editor pressed whose request hasn't reached the project yet. Each counts as queued from the press, so the
+ * card can go on at once and a quick run of A presses adds every to-do: none waits on the one before, and the next
+ * edit in line is never one already pressed.
+ */
+const usePressedAdds = create<{ adds: PressedAdd[] }>(() => ({ adds: [] }));
+let pressedCount = 0;
+
+/** Counts an Add as on its way from the press. The returned function takes it off once its request is in, or failed. */
+export function pressAdd(threadId: string, changeId: string, spot: number) {
+  const id = `pressed-add-${++pressedCount}`;
+  usePressedAdds.setState(s => ({ adds: [...s.adds, { id, threadId, changeId, spot, state: "queued" }] }));
+  return () => usePressedAdds.setState(s => ({ adds: s.adds.filter(add => add.id !== id) }));
+}
+
+function usePressedAddsOf(thread: Thread | undefined) {
+  const adds = usePressedAdds(s => s.adds);
+  return useMemo(() => adds.filter(add => add.threadId === thread?.id), [adds, thread?.id]);
+}
 
 /** The requests about one edit each that are queued or running, `only` the ones it picks. */
 function editRequestsOnTheirWay(thread: Thread | undefined, only?: (task: Thread["tasks"][number]) => boolean) {
@@ -87,10 +112,11 @@ export function useRejecting(thread: Thread | undefined) {
 
 /** Whether the request on its way for a to-do is the editor's Add, so its row says Adding… and not Revising…. */
 export function useAdding(thread: Thread | undefined) {
+  const pressed = usePressedAddsOf(thread);
   return useMemo(() => {
-    const pending = editRequestsOnTheirWay(thread, isAddRequest);
+    const pending = [...editRequestsOnTheirWay(thread, isAddRequest), ...pressed];
     return (edit: ListedEdit) => pending.some(ref => matchesEdit(edit, ref));
-  }, [thread]);
+  }, [thread, pressed]);
 }
 
 /** Whether the editor has reviewed an edit: kept here, or decided cut by cut when the pass was applied. */
@@ -122,8 +148,9 @@ export function useCanUnkeep(projectId: string, thread: Thread | undefined) {
  * still waiting its turn: the one Scarlet is on, when there are several.
  */
 export function useRevising(thread: Thread | undefined) {
+  const pressed = usePressedAddsOf(thread);
   return useMemo(() => {
-    const pending = editRequestsOnTheirWay(thread);
+    const pending = [...editRequestsOnTheirWay(thread), ...pressed];
     return (edit: ListedEdit) => {
       let first: (typeof pending)[number] | undefined;
       for (const ref of pending) if (matchesEdit(edit, ref)) {
@@ -132,7 +159,7 @@ export function useRevising(thread: Thread | undefined) {
       }
       return first ? { id: first.id, state: first.state } : undefined;
     };
-  }, [thread]);
+  }, [thread, pressed]);
 }
 
 /** What a row ends on while Scarlet has stopped work on its cut or edit to ask the editor something: the words its card uses. */
@@ -190,8 +217,8 @@ type WaitsOn<T> = { reviewed(edit: T): boolean; revising(edit: T): { state: Task
  * the request is folded. A flagged edit waits until it is kept or sent back, and again while the request it was sent
  * back with has stopped to ask the editor something. An edit made in several places is one row.
  */
-export function waitingRows<T extends ListedEdit>(edits: readonly T[], { reviewed, revising }: WaitsOn<T>): number {
-  return editGroups(edits).filter(group => group.members.some(({ edit }) => asksEditor(revising(edit)) || (!!edit.check && !reviewed(edit) && !revising(edit)))).length;
+export function waitingRows<T extends ListedEdit>(edits: readonly T[], { reviewed, revising }: WaitsOn<T>, brollSections?: readonly BrollSection[] | null): number {
+  return editGroups(edits, brollSections).filter(group => group.members.some(({ edit }) => asksEditor(revising(edit)) || (!!edit.check && !reviewed(edit) && !revising(edit)))).length;
 }
 
 /**
@@ -205,19 +232,68 @@ export function waitingPassRows<T extends ListedEdit>(calls: readonly { state: s
 }
 
 /**
- * The distinct edits in a list. Edits only combine into one row when they share a label and overlap on the timeline
- * exactly. Cuts, flagged edits, and spots marked for the editor always stay one row each.
+ * The distinct edits in a list. Edits combine into one row when they share a label and overlap on the timeline
+ * exactly, or when contiguous B-roll edits belong to one continuous B-roll section. Cuts, non-B-roll flagged edits,
+ * and spots marked for the editor always stay one row each.
  */
-export function editGroups<T extends ListedEdit>(edits: readonly T[]): { label: string; members: { edit: T; i: number }[] }[] {
-  const groups: { label: string; members: { edit: T; i: number }[] }[] = [];
+export function editGroups<T extends ListedEdit>(
+  edits: readonly T[],
+  brollSections?: readonly BrollSection[] | null,
+): { label: string; members: { edit: T; i: number }[]; continuousBroll?: boolean; stretch?: TimeRange }[] {
+  type Group = { label: string; members: { edit: T; i: number }[]; brollSectionId?: string; isBroll?: boolean; stretch?: TimeRange };
+  const groups: Group[] = [];
+  const isContinuousBroll = (edit: T) => !edit.beforeCut && !edit.marker && !edit.rejected && edit.kind === "broll";
   edits.forEach((edit, i) => {
+    if (isContinuousBroll(edit)) {
+      const section = brollSections ? brollSectionForEdit(brollSections, edit.range) : undefined;
+      const canMerge = brollSections ? !!section : edit.range.end > edit.range.start;
+      if (canMerge) {
+        const matching: Group[] = [];
+        for (const g of groups) {
+          if (!g.isBroll) continue;
+          const matches = brollSections
+            ? g.brollSectionId === section!.id
+            : g.members.some(m => stretchesContiguous(m.edit.range, edit.range));
+          if (matches) matching.push(g);
+        }
+        if (matching.length) {
+          const target = matching[0]!;
+          for (let k = 1; k < matching.length; k++) {
+            const extra = matching[k]!;
+            target.members.push(...extra.members);
+            const idx = groups.indexOf(extra);
+            if (idx >= 0) groups.splice(idx, 1);
+          }
+          target.members.push({ edit, i });
+          target.members.sort((a, b) => a.i - b.i);
+          target.stretch = {
+            start: Math.min(...target.members.map(m => m.edit.range.start)),
+            end: Math.max(...target.members.map(m => m.edit.range.end)),
+          };
+          return;
+        }
+        groups.push({
+          label: edit.label,
+          members: [{ edit, i }],
+          brollSectionId: section?.id,
+          isBroll: true,
+          stretch: edit.range,
+        });
+        return;
+      }
+    }
     const alone = !!edit.beforeCut || !!edit.check || !!edit.marker;
     const group = alone ? undefined : groups.findLast(g => {
+      if (g.isBroll) return false;
       const first = g.members[0]!.edit;
       return !first.beforeCut && !first.check && !first.marker && first.label === edit.label && samePlace(first, edit);
     });
     if (group) { group.members.push({ edit, i }); return; }
     groups.push({ label: edit.label, members: [{ edit, i }] });
   });
-  return groups;
+  return groups.map(({ label, members, isBroll, stretch }) => ({
+    label,
+    members,
+    ...(isBroll && members.length > 1 ? { continuousBroll: true, stretch } : {}),
+  }));
 }

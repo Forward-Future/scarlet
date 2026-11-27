@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import { clipRange, type Change, type Clip, type TimeRange, type Timeline, type Track } from "@scarlet/timeline";
-import { matchesEdit, REVISED_CHECK, type ThreadEdit } from "@scarlet/shared";
+import { brollSectionForEdit, continuousBrollSections, matchesEdit, REVISED_CHECK, type ThreadEdit } from "@scarlet/shared";
 import { ThreadAction } from "../../../components/review/ThreadEdits";
 import { asksEditor, revisionWord } from "../../../components/review/threadEditState";
 import { editRowWord } from "../../../lib/editKind";
@@ -12,6 +12,7 @@ import { inListOrder, tabShown, type ListOrder, type ReviewLinger, type RowPlace
 import { type Thread } from "../../../lib/threads";
 import { useKeepSelectedInView } from "../../../lib/uiHooks";
 import { useProjectStore } from "../../../stores/project";
+import { useWorkingModel } from "../../../lib/workingModel";
 import { useShownCut } from "../../../stores/shownCut";
 import { EditResultLink, entryKeys, Made, namedEdit, nestsUnder, passEntries, passMade, selectedRowKey, useListOpen, usePassFacts, useReveal, useThreadFacts, threadRowPlaces, type Entry } from "../passRows";
 import { useReviewRail, type RailEditMember, type RailRow, type RailSubRow } from "../railStore";
@@ -159,6 +160,7 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const fps = useProjectStore(s => s.current?.project.settings.fps);
   const threadChanges = useMemo(() => [...thread.changes, ...thread.flagged ?? []], [thread.changes, thread.flagged]);
   const clipsBySpot = useMemo(() => editClipIdsBySpot(threadChanges, edits, timeline), [threadChanges, edits, timeline]);
+  const brollSections = useMemo(() => timeline ? continuousBrollSections(timeline, media) : undefined, [timeline, media]);
   const editByKey = useMemo(() => new Map(edits.map(e => [editKey(e), e])), [edits]);
   const tab = tabShown(open);
   // A single preview follows the open card. An explicitly opened list keeps the timeline on the whole pass.
@@ -187,14 +189,21 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const ownOpen = useRef<string>(undefined);
   const lastOpen = heldOpen ?? ownOpen;
   const openId = onEntry?.row.id;
+  const openPlace = onEntry?.place;
   useEffect(() => {
     const was = lastOpen.current;
     lastOpen.current = openId;
-    if (!onEntry || openId === was) return;
-    const at = onEntry.place;
+    if (!onEntry) return;
+    if (openId === was) {
+      // If an open edit returned from Working or Done to Needs review (e.g. a revision landed or Unkeep),
+      // keep the request's active section in sync so Revise and ↑ ↓ treat it as Needs review again.
+      if (tab !== "you" && (openPlace === "you" || openPlace === "optional")) setOpen(undefined);
+      return;
+    }
+    const at = openPlace;
     const shown = tab === "you" ? at === "you" || at === "optional" : at === tab;
-    if (!shown) setOpen(at === "you" || at === "optional" ? undefined : at);
-  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!shown && at) setOpen(at === "you" || at === "optional" ? undefined : at);
+  }, [openId, openPlace]); // eslint-disable-line react-hooks/exhaustive-deps
   // What it came to, with See edit after it for a request's one edit. The edits the sentence would name are said by
   // their rows, every one of which is in the column.
   const onScreen = new Set(drawn.flatMap(list => list.rows.flatMap(entryKeys)));
@@ -217,6 +226,9 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
       canUnkeep: !e.marker && canUnkeep(e) && !(!e.check && decidedCallEditKeys.has(editKey(e))),
     }));
     const spotClips = singleEdit ? clipsBySpot.get(editKey(singleEdit)) : undefined;
+    const brollSection = singleEdit?.kind === "broll" && brollSections
+      ? brollSectionForEdit(brollSections, singleEdit.range, [...(spotClips?.overlayClipIds ?? []), ...(spotClips?.clipIds ?? [])])
+      : undefined;
     const combinable = !!singleEdit && !singleEdit.beforeCut && (singleEdit as ThreadEdit).at === undefined
       && singleEdit.kind !== "cut" && !singleEdit.marker && railMembers.length > 0;
     const rowNests = under(entry);
@@ -247,6 +259,8 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
       stretch: singleEdit?.range,
       clipIds: spotClips?.clipIds,
       overlayClipIds: spotClips?.overlayClipIds,
+      brollSectionId: singleEdit?.kind === "broll" && brollSections ? (brollSection?.id ?? null) : undefined,
+      brollSectionRange: brollSection?.range,
       combinable,
       value: row.value,
       word: row.word,
@@ -341,7 +355,8 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   /** The row key whose question is currently displayed over the message box, so it lights up. */
   askingRowKey?: string }) {
   const facts = useThreadFacts({ projectId, thread, edits, rejected, actions });
-  const { reviewed, canUnkeep, revising, rejecting, adding, gone, showing, shownEdit, groups, need, openEdit, openId } = facts;
+  const modelAt = useWorkingModel();
+  const { reviewed, canUnkeep, revising, rejecting, adding, gone, showing, shownEdit, groups, need, openEdit, openId, brollSections } = facts;
   const [open, setOpen] = list;
   const [host, reveal] = useReveal(open);
   const rail = useReviewRail()!;
@@ -362,15 +377,22 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   // the list shown already.
   const ownOpen = useRef<string>(undefined);
   const lastOpen = heldOpen ?? ownOpen;
+  const openPlace = openEdit ? place(openEdit) : undefined;
   useEffect(() => {
     const was = lastOpen.current;
     lastOpen.current = openId;
-    if (!openEdit || openId === was) return;
-    const at = place(openEdit);
+    if (!openEdit) return;
+    if (openId === was) {
+      if (tab !== "you" && (openPlace === "you" || openPlace === "optional")) {
+        setOpen(openPlace === "you" ? "need" : undefined);
+      }
+      return;
+    }
+    const at = openPlace;
     const shown = tab === "you" ? at === "you" || at === "optional" : at === tab;
     if (shown) { if (at === "you") setOpen(o => o ?? "need"); }
     else if (at) setOpen(at === "you" ? "need" : at === "optional" ? undefined : at);
-  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [openId, openPlace]); // eslint-disable-line react-hooks/exhaustive-deps
   // There is no list of every edit to open: one left open from the line that used to open the edits Scarlet didn't
   // flag lets go, as they are listed under Safe edits.
   useEffect(() => { if (open === "all") setOpen(undefined); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -393,13 +415,13 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   const seeEvery = single && canSeeAll ? <EditResultLink {...seeProps} place="inline" /> : null;
   const optional = countOf("optional");
   const railRows: RailRow[] | undefined = !edits.length && !gone.length ? undefined : [
-    ...groups.map(({ members }): RailRow => {
+    ...groups.map(({ members, continuousBroll }): RailRow => {
       const rowEdits = members.map(m => m.edit);
       const waiting = (e: Omit<ThreadEdit, "at">) => !!e.check && !reviewed(e) && !revising(e);
       const asking = (e: Omit<ThreadEdit, "at">) => asksEditor(revising(e));
       const openHere = showing?.rejected ? undefined : rowEdits.find(e => !!showing && matchesEdit(showing, e));
       const shown = openHere ?? rowEdits.find(asking) ?? rowEdits.find(waiting) ?? rowEdits[0]!;
-      const key = editKey(shown);
+      const key = editKey(rowEdits[0]!);
       const rowNests = rowEdits.flatMap(e => nests.filter(n => n.key === editKey(e)));
       const hasNeedNest = rowNests.some(n => !!n.needs);
       const rowTabPlace = placeOf.get(editKey(rowEdits[0]!)) ?? "optional";
@@ -416,11 +438,15 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
       const needs = !asks && !isRevising && rowEdits.some(waiting);
       const countsAsNeed = rowEdits.some(e => asksEditor(revising(e)) || (!!e.check && !reviewed(e) && !revising(e)));
       const at = Math.min(...rowEdits.map(e => (e as ThreadEdit).at ?? e.range.start));
-      const displayAt = (!reviewed(shown) && !isRevising ? shown.reviewRange?.start : undefined) ?? ((shown as ThreadEdit).at ?? shown.range.start);
-      const value = rowTabPlace === "done" ? decision : editRowWord(shown);
+      const displayAt = continuousBroll
+        ? at
+        : ((!reviewed(shown) && !isRevising ? shown.reviewRange?.start : undefined) ?? ((shown as ThreadEdit).at ?? shown.range.start));
+      const value = rowTabPlace === "done" ? decision : (continuousBroll ? "B-roll" : editRowWord(shown));
       const label = (shown.reason && shown.summary) || shown.label;
       const checkTitle = revised || shown.reason ? undefined : shown.check;
-      const version = rowEdits.length === 1 && shown.previous.length ? shown.previous.length + 1 : 0;
+      const version = continuousBroll
+        ? Math.max(0, ...rowEdits.map(e => e.previous.length ? e.previous.length + 1 : 0))
+        : (rowEdits.length === 1 && shown.previous.length ? shown.previous.length + 1 : 0);
       const spentText = rowEdits.map(e => spent.get(editKey(e))).find(Boolean);
       const isAskingCurrent = !!askingRowKey && rowEdits.some(e => editKey(e) === askingRowKey);
       const combinable = !shown.beforeCut && (shown as ThreadEdit).at === undefined && shown.kind !== "cut" && !shown.marker;
@@ -436,6 +462,9 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         for (const id of sc.clipIds) allClipIds.add(id);
         for (const id of sc.overlayClipIds) allOverlayIds.add(id);
       }
+      const brollSection = (continuousBroll || shown.kind === "broll") && brollSections
+        ? brollSectionForEdit(brollSections, stretch, [...allOverlayIds, ...allClipIds])
+        : undefined;
       const railMembers: RailEditMember[] = rowEdits.map(e => ({
         threadId: thread.id,
         edit: e,
@@ -451,16 +480,27 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         places: rowEdits.length,
         version,
         status: word ?? decision,
+        by: modelAt(revisingNow),
       });
+      const brollShotLabels = continuousBroll
+        ? [...new Set(rowEdits.map(e => ((e.reason && e.summary) || e.label).trim()).filter(Boolean))]
+        : [];
+      const brollTipMeta = continuousBroll
+        ? ["B-roll", stretch.end > stretch.start ? lengthLabel(stretch.end - stretch.start) : undefined, decided ? decision : undefined].filter(Boolean).join(" · ")
+        : undefined;
+      const brollTipDetail = continuousBroll && brollShotLabels.length > 1
+        ? (brollShotLabels.length <= 3 ? brollShotLabels.join("\n") : `${brollShotLabels[0]}\n${brollShotLabels[1]}\nand ${brollShotLabels.length - 2} more`)
+        : undefined;
+      const rowWas = [...new Set(rowEdits.flatMap(e => [editKey(e), ...e.previous.map(editKey)]).filter(k => k !== key))];
       return {
         key,
-        was: rowEdits.flatMap(e => e.previous.map(editKey)),
+        was: rowWas,
         threadId: thread.id,
         threadOrder,
         at,
         displayAt,
         mark: displayAt,
-        hover: { threadId: thread.id, editKey: key },
+        hover: { threadId: thread.id, editKey: editKey(shown) },
         place: rowTabPlace,
         label,
         rawLabel: shown.label,
@@ -469,10 +509,13 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         requestText: thread.title?.trim() || undefined,
         reason: shown.reason?.trim() || undefined,
         threadWorking: !!working,
-        editKind: shown.kind,
+        editKind: continuousBroll ? "broll" : shown.kind,
         stretch,
         clipIds: allClipIds.size ? [...allClipIds] : undefined,
         overlayClipIds: allOverlayIds.size ? [...allOverlayIds] : undefined,
+        brollSectionId: (continuousBroll || shown.kind === "broll") && brollSections ? (brollSection?.id ?? null) : undefined,
+        brollSectionRange: brollSection?.range,
+        ...(continuousBroll && { continuousBroll: true }),
         combinable,
         value,
         word,
@@ -493,8 +536,8 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
         version,
         spent: spentText,
         tipText: rowTip.tip,
-        tipMeta: rowTip.meta,
-        tipDetail: rowTip.detail ?? checkTitle,
+        tipMeta: brollTipMeta ?? rowTip.meta,
+        tipDetail: brollTipDetail ?? rowTip.detail ?? checkTitle,
         removedSeconds: removed,
         logControl: "open-edit",
         logLabel: "Edit",

@@ -72,7 +72,7 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
     headTimelineOrNull, transcriptWords, joinPages, measureTimeline,
     edgesInSound, edgeInSoundText,
   } = session;
-  const { without, withoutUnlessPreparing } = errors;
+  const { without, withoutUnlessPreparing, withoutOnce } = errors;
   const { ripplesOnFrames, propose, presetInsetOver, presetInsetText } = proposePipeline;
   const intentInput = makeIntentInput(Boolean(taskId));
 
@@ -143,7 +143,7 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
     const transcripts = new Map<string, TranscriptWord[]>();
     for (const id of new Set(on.tracks.flatMap(t => t.clips.flatMap(c => c.kind === "media" && !except.has(c.mediaId) ? [c.mediaId] : [])))) {
       if (!project.media.some(m => m.id === id && carriesAudio(m))) continue;
-      const words = await transcriptWords(id, false).catch(() => null);
+      const words = await transcriptWords(id, false).catch(withoutOnce(`failed to read the words of ${id} on the timeline`, null));
       if (words?.length) transcripts.set(id, words);
     }
     return timelineWords(on, transcripts).filter(w => w.end > w.start).map(w => ({ start: w.start, end: w.end }));
@@ -151,28 +151,28 @@ export function registerTimelineTools(deps: TimelineToolsDeps) {
 
   tool(
     "timeline_propose",
-    `Propose an edit to the timeline. Provide EITHER \`ops\` (a list of operations on the named base version) OR \`timeline\` (a full replacement timeline). Scarlet validates it, stores a new version, makes short before/after previews available when the editor opens the change. Directly requested edits apply automatically, onto the current video when it moved since the base version. An edit that meets footage changed since then is not applied: the result's \`notApplied\` says where, and the current version to make it on. Suggestions and alternatives wait for review. Write \`description\` for the editor in one short, plain sentence about what changed (e.g. "Cut the false start at 1:17 and the 1.4 s pause after it"). Pass \`noteIds\` when the change answers review notes. Every audible clip edge the edit makes is measured on its recording, whichever op makes it: one inside a sounding word, or through a sound it would leave a piece of, refuses the edit and gives the quiet second beside it. Audible clips that play the same moment of one recording in sync add up in the mix: an edit that plays a moment louder that way than its base version played it is refused with the clips, the stretch that got louder and both levels. Make the change it names, which turns down the copy the edit added or changed, and another when that one alone can't, over that stretch alone, or pass \`layeredSound\` when the editor asked to hear it layered. Returns the change id, state, affected timeline ranges, the new version id and a diff.
+    `Propose an edit to the timeline: EITHER \`ops\`, operations on the base version, OR \`timeline\`, a full replacement. Scarlet validates it and stores a new version, with short before/after previews when the editor opens the change. Directly requested edits apply at once, onto the current video when it moved since the base version; an edit that meets footage changed since then is not applied, and \`notApplied\` says where and the current version to make it on. Suggestions and alternatives wait for review. Every audible clip edge the edit makes, whichever op makes it, is measured on its recording: one inside a sounding word, or through a sound it would leave a piece of, refuses the edit with the quiet second beside it. Audible clips playing the same moment of one recording in sync add up in the mix: an edit that plays a moment louder that way than its base version did is refused with the clips, the stretch and both levels. Make the change it names over that stretch alone (turning down the copy the edit added or changed, and another when that alone can't), or pass \`layeredSound\` when the editor asked to hear it layered. Returns the change id, state, affected timeline ranges, the new version id and a diff.
 
 ${OPS_DOC}`,
     {
       ops: z.array(z.record(z.unknown())).optional().describe("Operations to apply to the current head (see op types)"),
       timeline: z.record(z.unknown()).optional().describe("Full replacement Timeline JSON (use for initial assemblies); omit when using ops"),
       description: z.string().min(1).describe("One short sentence for the chat about what the editor will see or hear"),
-      batchTitle: z.string().trim().min(1).max(80).optional().describe("When this save makes several similar edits of the same kind (such as multiple cuts, graphics, zooms, or audio fixes), give a short plain-English group title summarizing them together for the edits list (e.g. '3 model title cards', '4 zooms on key moments', '2 cuts: false start & tangent'). Omit for a single edit or unrelated edits."),
+      batchTitle: z.string().trim().min(1).max(80).optional().describe("For several similar edits of one kind in this save: a short plain-English title for them together in the edits list, such as '3 model title cards'. Omit for one edit or unrelated ones."),
       reason: editReasonInput.describe("Why you proposed the whole change. Give this for an unnamed edit or when several edits share one suggestion card."),
       noteIds: z.array(z.string()).optional().describe("Review note ids this change responds to"),
       fromVersion: z.string().optional().describe("Version the ops apply to. Defaults to the version you last read with timeline_get or timeline_at; leave it out unless you mean another version."),
-      range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive() }).optional().describe("Only when every op in ops is rippleDelete across all tracks (without trackIds or pictureLayout): timeline range on the base version for synchronized ripple removals, including local pauses. Omit range for all other ops (addTrack, addClip, trim, overlays, framing); use timelineEdits to mark where non-ripple edits apply."),
+      range: z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive() }).optional().describe("Only when every op is a rippleDelete across all tracks (no trackIds or pictureLayout): the base version's timeline range of these synchronized removals, local pauses included. Omit it for any other op; timelineEdits marks where those apply."),
       pictureLayout: z.union([z.object({ screenClipId: z.string(), cameraClipId: z.string(),
         presenter: InsetPresenter.optional(),
         framing: InsetFraming.optional(),
       }), z.literal("asPlaced")]).optional()
-        .describe("Optional camera inset during the specified clips’ overlap, in the bottom-right corner, placed on the presenter where `faces` finds one face: `presenter` sets how much of them it shows, its shape, size and corners as the editor's skill asks (head and shoulders at a quarter size when omitted). `framing` (scale, center-relative x/y, optional crop and cornerRadius) sets the transform outright instead. Omit pictureLayout to use the submitted clip transforms."),
+        .describe("A camera inset over the two clips' overlap, bottom right, placed on the presenter where `faces` finds one face: `presenter` sets how much of them shows, its shape, size and corners as the editor's skill asks (head and shoulders at a quarter size when omitted); `framing` sets the transform outright instead. Omit pictureLayout to use the submitted clip transforms."),
       intent: intentInput,
       timelineEdits: timelineEditsInput,
       ...(!taskId && { autoApprove: z.boolean().optional().describe("Apply a standalone edit authored directly by the editor") }),
       skipRender: z.boolean().optional().describe("Skip before/after renders (metadata-only changes like markers)"),
-      withdraws: z.array(z.string()).max(20).optional().describe("Change IDs of this request's own suggestions or alternatives, still waiting for the editor, that this one replaces, such as a draft or a test. They leave the editor's review when this one is saved."),
+      withdraws: z.array(z.string()).max(20).optional().describe("Change ids of this request's own suggestions or alternatives, still waiting for the editor, that this one replaces, such as a draft; they leave the review when this one is saved."),
       layeredSound: z.boolean().optional().describe("The editor asked to hear the same moment of a recording on two clips at once. Leave it out otherwise"),
     },
     async ({ ops, timeline, description, batchTitle, reason, noteIds, fromVersion, intent, autoApprove, timelineEdits, skipRender, range, pictureLayout, withdraws, layeredSound }) => {
@@ -304,7 +304,7 @@ ${OPS_DOC}`,
       if (splitJoins.length && !result.isError) {
         const said = new Map<string, TranscriptWord[] | null>();
         for (const mediaId of new Set(splitJoins.flatMap(j => [j.left.mediaId, j.right.mediaId])))
-          said.set(mediaId, await transcriptWords(mediaId, false).catch(() => null));
+          said.set(mediaId, await transcriptWords(mediaId, false).catch(withoutOnce(`failed to read the words of ${mediaId} beside a split join`, null)));
         notes.push(`Split joins: ${JSON.stringify(splitJoinEvidence(applyOps(before!, body.ops!), splitJoins, id => said.get(id)))}`);
       }
       return notes.length ? { ...result, content: [...result.content, ...notes.map(text => ({ type: "text" as const, text }))] } : result;

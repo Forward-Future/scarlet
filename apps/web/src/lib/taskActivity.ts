@@ -57,6 +57,8 @@ const toolActivity: Record<string, string> = {
   web_capture: "Capturing a page from the web",
   web_video: "Getting a video from the web",
   style_guide_save: "Saving the style guide",
+  style_guide_get: "Reading the style guide",
+  style_guide_sound_import: "Adding a sound effect",
   style_guide_update: "Saving the style guide",
   style_guide_preview_render: "Drawing a style preview",
   style_guide_preview_get: "Reading the style preview",

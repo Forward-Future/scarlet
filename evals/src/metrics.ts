@@ -521,6 +521,12 @@ export interface TraceMetrics {
   /** Models the engine couldn't price, so the run has no cost. */
   unpricedModels: string[];
   inspection: { listened: number; listenedByTool: Record<string, number>; visual: number; levels: number; usedAudio: boolean; usedVisual: boolean };
+  /**
+   * Model steps, the largest context one sent, and the steps whose cache read fell far short of the step before's
+   * context, with the tokens those sent again uncached: from each run's `usage_steps` event (Gemini's runs report it).
+   * Null when no run did.
+   */
+  steps: { steps: number; peakContext: number; misses: number; missedTokens: number } | null;
 }
 
 const ms = (a?: string, b?: string) => {
@@ -543,7 +549,16 @@ export function traceMetrics(task: TaskLike, events: readonly EventLike[]): Trac
   const byTool: Record<string, number> = {}, errorsByTool: Record<string, number> = {}, listenedByTool: Record<string, number> = {};
   let visual = 0, levels = 0, waiting = 0, asked: string | undefined, questions = 0, firstChange: string | undefined;
   let firstCall: string | undefined, firstRecommendation: string | undefined;
+  let steps: TraceMetrics["steps"] = null;
   for (const e of events) {
+    // One per run: a task paused for a question, or resumed, adds its runs' steps together.
+    if (e.type === "log" && e.data?.kind === "usage_steps") {
+      const n = (key: string) => typeof e.data?.[key] === "number" && Number.isFinite(e.data[key]) ? e.data[key] as number : 0;
+      const misses = Array.isArray(e.data.misses) ? e.data.misses.length : 0;
+      steps = { steps: (steps?.steps ?? 0) + n("steps"), peakContext: Math.max(steps?.peakContext ?? 0, n("peakContext")),
+        misses: (steps?.misses ?? 0) + misses, missedTokens: (steps?.missedTokens ?? 0) + n("missedTokens") };
+      continue;
+    }
     if (e.type === "tool") {
       const name = toolName(String(e.data?.tool ?? e.text.split(" ")[0]));
       byTool[name] = (byTool[name] ?? 0) + 1;
@@ -593,6 +608,7 @@ export function traceMetrics(task: TaskLike, events: readonly EventLike[]): Trac
     costUsd: typeof raw.estimatedApiCostUsd === "number" && Number.isFinite(raw.estimatedApiCostUsd) ? round(raw.estimatedApiCostUsd, 4) : null,
     unpricedModels: Array.isArray(raw.unpricedModels) ? raw.unpricedModels.filter((m): m is string => typeof m === "string") : [],
     inspection: { listened, listenedByTool, visual, levels, usedAudio: listened > 0, usedVisual: visual > 0 },
+    steps,
   };
 }
 

@@ -95,7 +95,7 @@ it("honors the Settings switch for queued events, other engines, and subsequent 
     await engine.close();
     expect(engine.requests).toEqual([]);
   }
-  rmSync(join(dataDir, "telemetry-id")); // A disabled launch must not need an ID.
+  expect(existsSync(join(dataDir, "telemetry-id"))).toBe(false); // Turning reports off forgets the install's id.
   const next = boot({ key, dataDir });
   expect((await next.api("GET", "/settings")).body).toMatchObject({ settings: { telemetryEnabled: false } });
   expect(next.app.ctx.telemetry.active).toBe(false);
@@ -115,6 +115,23 @@ it("drops a peer's buffered events even when the editor turns reports back on be
   await peer.api("POST", "/projects", { name: "After enabling" });
   await peer.close();
   expect(peer.events().map(event => event.properties.feature)).toEqual(["project.create"]);
+});
+
+it("keeps reports off when the switch is sent something other than true or false", async () => {
+  const engine = boot({ key: "phc_test" });
+  await engine.app.ctx.telemetry.flush();
+  expect(existsSync(join(engine.dataDir, "telemetry-id"))).toBe(true);
+  expect((await engine.api("PATCH", "/settings", { telemetryEnabled: false })).status).toBe(200);
+  expect(existsSync(join(engine.dataDir, "telemetry-id"))).toBe(false);
+  for (const value of ["true", 1, "yes"]) {
+    expect((await engine.api("PATCH", "/settings", { telemetryEnabled: value })).status).toBe(400);
+  }
+  expect((await engine.api("GET", "/settings")).body).toMatchObject({ settings: { telemetryEnabled: false } });
+  const before = engine.requests.length;
+  await engine.api("POST", "/projects", { name: "While off" });
+  await engine.close();
+  expect(engine.requests.length).toBe(before);
+  expect(existsSync(join(engine.dataDir, "telemetry-id"))).toBe(false);
 });
 
 it("the environment opt-out takes precedence over a saved opt-in", async () => {

@@ -131,8 +131,8 @@ export interface ChatActions {
   listening?: Listening;
   listen(change: Change, assessment: CutAssessment): void;
   play(thread: Thread, change: Change): void;
-  /** Open an edit as ↑ ↓ and Keep reach it: its moment, or with `single` that edit alone. */
-  playEdit(edit: ThreadEdit, single?: boolean): void;
+  /** Open an edit as ↑ ↓ and Keep reach it: its moment, or with `single: true` that edit alone (`"moment"` keeps moment mode across timeline updates). */
+  playEdit(edit: ThreadEdit, single?: boolean | "moment"): void;
   /** The edit that's showing was picked on its own from under its moment's row, not as the moment. */
   showingSingle?: boolean;
   /**

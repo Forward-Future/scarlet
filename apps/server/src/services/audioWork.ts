@@ -1,3 +1,4 @@
+import { totalmem } from "node:os";
 import { logId } from "../logText.js";
 import { editorFirst } from "./editorFirst.js";
 
@@ -119,7 +120,7 @@ export class AudioLane {
     if (resumes) this.unhold();
     const behind = this.busy && !resumes ? this.current ?? this.held?.work : undefined;
     const ahead = behind ? this.waiting.length + 1 : 0;
-    const lane = this.name === "Whisper lane" ? "whisper" : "audio";
+    const lane = this.name === "Whisper lane" ? "whisper" : this.name === "page Whisper lane" ? "page-whisper" : "audio";
     const target = `lane=${lane} work=${work.kind} media=${logId(work.mediaId)}`;
     if (resumes) {
       // The lane was kept for this step.
@@ -251,6 +252,7 @@ export class AudioLane {
 
 const lanes = new Map<string, AudioLane>();
 const whisperLanes = new Map<string, AudioLane>();
+const pageWhisperLanes = new Map<string, AudioLane>();
 
 /** The engine's audio lane. One per data directory, which is one per engine. */
 export function audioLane(ctx: { paths: { root: string }; log?: (message: string) => void }): AudioLane {
@@ -271,9 +273,30 @@ export function whisperLane(ctx: { paths: { root: string }; log?: (message: stri
   return own;
 }
 
-/** A request now waits on `work`, which may be queued in either of the engine's lanes. */
+/** Memory two Whisper runs at once need room in: each holds its own copy of the model on the GPU. */
+const PAGE_WHISPER_MEMORY = 16 * 1024 ** 3;
+
+/**
+ * The lane a dialogue pass's scan pages take their Whisper turns in once the recording has its words. Where Whisper has
+ * a lane of its own, it is a second one beside it, so a page's Whisper runs while the transcript's reread is read in the
+ * first: one Whisper run leaves the GPU room for another. Three minutes of a recording read a minute at a time took
+ * 2.75 s one after another and 1.84 s all at once, two minutes 1.40 s at once, with the same words (M5 Max,
+ * 2026-11-26). In one lane the pages and the reread took turns, minute by minute. A Mac with less memory keeps the one
+ * lane.
+ */
+export function pageWhisperLane(ctx: { paths: { root: string }; log?: (message: string) => void }, separate: boolean | undefined,
+  memory = totalmem()): AudioLane {
+  const lane = whisperLane(ctx, separate);
+  if (!separate || memory < PAGE_WHISPER_MEMORY) return lane;
+  let own = pageWhisperLanes.get(ctx.paths.root);
+  if (!own) pageWhisperLanes.set(ctx.paths.root, own = lane.sibling("page Whisper lane"));
+  return own;
+}
+
+/** A request now waits on `work`, which may be queued in any of the engine's lanes. */
 export function askFor(ctx: { paths: { root: string } }, work: AudioWork) {
   work.asked = true;
   lanes.get(ctx.paths.root)?.ask(work);
   whisperLanes.get(ctx.paths.root)?.ask(work);
+  pageWhisperLanes.get(ctx.paths.root)?.ask(work);
 }

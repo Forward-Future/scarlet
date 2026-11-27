@@ -5,7 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { ScarletClient, Task, type AgentId } from "@scarlet/shared";
-import { INDEX_LINE_MAX, indexLine } from "./brief-tools.js";
+import { INDEX_LINE_MAX, indexLine, parameterLines, toolDoc } from "./brief-tools.js";
 import { ALWAYS_LOADED_TOOLS, createScarletMcpServer } from "./server.js";
 
 /** A run of a request of `kind` (an edit has every editing tool), with `more` tools registered before it connects. */
@@ -129,7 +129,13 @@ describe("brief tools", () => {
       const help = async (args: object) => await gemini.callTool({ name: "tool_help", arguments: args }) as CallToolResult;
       const whole = full.find(t => t.name === "dialogue_apply_cuts")!;
       const cuts = textOf(await help({ name: "mcp_scarlet_dialogue_apply_cuts" }));
-      expect(cuts).toBe(`dialogue_apply_cuts\n\n${whole.description}\n\nParameters (JSON schema):\n${JSON.stringify(whole.inputSchema)}`);
+      expect(cuts).toBe(toolDoc(whole));
+      expect(cuts.startsWith(`dialogue_apply_cuts\n\n${whole.description}\n\nParameters (* = required):\n- version* (string)\n`)).toBe(true);
+      expect(cuts).toContain("\n- cuts* (array of object)\n  - mediaId (string): ");
+      expect(cuts).toContain("\n  - kind* (\"pause\" | \"filler\" | \"retake\" | \"coaching\")\n");
+      // agy spills a result over its budget to a file and shows its head and tail: the model then read the whole doc
+      // again with read_file, in every Gemini pass (2026-11-26). It now fits Gemini's resultChars (9,000) on its own.
+      expect(Buffer.byteLength(cuts)).toBeLessThan(9_000);
       const at = textOf(await help({ name: "timeline_at" })), diff = textOf(await help({ name: "mcp_scarlet_timeline_diff" }));
       const unknown = await help({ name: "timeline_delete" });
       expect(unknown.isError).toBe(true);
@@ -146,10 +152,17 @@ describe("brief tools", () => {
       const long = textOf(await help({ names: batch }));
       expect(long.length).toBeLessThanOrEqual(9_000);
       const parts = long.split("\n\n---\n\n");
-      const returnedCount = parts.length - 1;
-      expect(returnedCount).toBeGreaterThanOrEqual(1);
-      expect(returnedCount).toBeLessThan(batch.length);
-      expect(parts.at(-1)).toBe(`Not read in this call, to ask for next: ${batch.slice(returnedCount).join(", ")}.`);
+      const readNames = parts.slice(0, -1).map(part => part.split("\n")[0]!);
+      expect(readNames.length).toBeGreaterThanOrEqual(1);
+      expect(readNames.length).toBeLessThan(batch.length);
+      // Read in the order asked, and every name not read is named once, in order, for the next call.
+      expect(readNames).toEqual(batch.filter(n => readNames.includes(n)));
+      expect(parts.at(-1)).toBe(`Not read in this call, to ask for next: ${batch.filter(n => !readNames.includes(n)).join(", ")}.`);
+      // One too long for what is left is named for later, and the shorter ones after it are still read.
+      const propose = full.find(t => t.name === "timeline_propose")!;
+      expect(toolDoc(propose).length).toBeGreaterThan(9_000 - at.length);
+      const packed = textOf(await help({ names: ["timeline_at", "timeline_propose", "timeline_diff"] }));
+      expect(packed).toBe([at, diff, "Not read in this call, to ask for next: timeline_propose."].join("\n\n---\n\n"));
       const unknownFirst = await help({ names: [...Array.from({ length: 8 }, (_, i) => `nothing_${i}`), "timeline_at"] });
       expect(unknownFirst.isError).toBeFalsy();
       expect(textOf(unknownFirst)).toMatch(/Not read in this call, to ask for next: timeline_at\.$/);
@@ -206,5 +219,53 @@ describe("brief tools", () => {
     expect(indexLine("project_get", "Get the project: settings, e.g. fps. For clips use timeline_get.")).toBe("project_get: Get the project: settings, e.g. fps.");
     expect(indexLine("x", `${"a".repeat(400)}.`)).toBe(`x: ${"a".repeat(INDEX_LINE_MAX - 1)}…`);
     expect(indexLine("x", "Two\n  lines. Then more.")).toBe("x: Two lines.");
+  });
+
+  it("lists a tool's parameters one line each, with their types, limits, defaults and nesting, and anything else as JSON", () => {
+    const schema = {
+      type: "object", required: ["version", "cuts"], additionalProperties: false, $schema: "http://json-schema.org/draft-07/schema#",
+      properties: {
+        version: { type: "string" },
+        fade: { type: "integer", minimum: 0, maximum: 12, description: "Frames." },
+        at: { type: "number", exclusiveMinimum: 0 },
+        mode: { type: "string", enum: ["ask", "cut"], description: "Which." },
+        times: { type: "integer", minimum: 1, default: 1 },
+        title: { type: "string", minLength: 1, maxLength: 80 },
+        note: { type: "string", minLength: 1 },
+        ids: { type: "array", items: { type: "string" }, maxItems: 20 },
+        quotes: { anyOf: [{ type: "string", minLength: 1 }, { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 }] },
+        patch: { type: "object", additionalProperties: {} },
+        layout: { anyOf: [{ type: "object", properties: { clipId: { type: "string" } }, required: ["clipId"] }, { type: "string", const: "asPlaced" }] },
+        shape: { anyOf: [{ type: "object", properties: { a: { type: "number" } } }, { type: "object", properties: { b: { type: "number" } } }] },
+        cuts: { type: "array", minItems: 1, items: { type: "object", required: ["kind"], properties: { kind: { type: "string", enum: ["pause"] }, range: { type: "object", properties: { start: { type: "number", minimum: 0 } } } } } },
+        odd: { type: "string", pattern: "^a", description: "Starts with a." },
+      },
+    };
+    expect(parameterLines(schema)).toEqual([
+      "- version* (string)",
+      "- fade (integer, 0 to 12): Frames.",
+      "- at (number, > 0)",
+      "- mode (\"ask\" | \"cut\"): Which.",
+      "- times (integer, >= 1, default 1)",
+      "- title (string, 1 to 80 chars)",
+      "- note (string, nonempty)",
+      "- ids (array of string, <= 20 items)",
+      "- quotes (string, nonempty | array of (string, nonempty), >= 1 items)",
+      "- patch (object)",
+      "- layout (object | \"asPlaced\")",
+      "  - clipId* (string)",
+      "- shape (object | object)",
+      "  - either (object):",
+      "    - a (number)",
+      "  - or (object):",
+      "    - b (number)",
+      "- cuts* (array of object, >= 1 items)",
+      "  - kind* (\"pause\")",
+      "  - range (object)",
+      "    - start (number, >= 0)",
+      "- odd (JSON schema {\"type\":\"string\",\"pattern\":\"^a\"}): Starts with a.",
+    ]);
+    expect(toolDoc({ name: "bare", description: "Nothing to give.", inputSchema: { type: "object", properties: {} } }))
+      .toBe("bare\n\nNothing to give.\n\nParameters (* = required):\nnone");
   });
 });

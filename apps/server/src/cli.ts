@@ -12,7 +12,7 @@
  *
  *   SCARLET_READY {"port":N,"url":"http://127.0.0.1:N","token":"sct_...","userId":"usr_...","dataDir":"..."}
  */
-import { existsSync, fstatSync } from "node:fs";
+import { existsSync, fstatSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
@@ -76,9 +76,9 @@ async function runServe(argv: string[]) {
   }
   // Analysis workers and agent tool connections use the same executable.
   // Initialize the HTTP engine only in the process that will serve requests.
-  const [{ serve }, { createApp }, { accessToken, localUser, publishDesktopSession }, { attachWebSocket }, { DEFAULT_POSTHOG_KEY, SCARLET_VERSION }] = await Promise.all([
+  const [{ serve }, { createApp }, { accessToken, localUser, publishDesktopSession }, { attachWebSocket }, { DEFAULT_POSTHOG_KEY, SCARLET_VERSION }, { humanDuration }] = await Promise.all([
     import("@hono/node-server"), import("./app.js"), import("./auth.js"), import("./ws.js"),
-    import("./telemetry/config.js"),
+    import("./telemetry/config.js"), import("./logText.js"),
   ]);
   const solo = args.solo === true;
   const port = Number(args.port ?? process.env.SCARLET_PORT ?? (solo ? 0 : 4000));
@@ -92,7 +92,7 @@ async function runServe(argv: string[]) {
     defaultSeed = undefined;
   }
   const skillsSeedDir =
-    process.env.SCARLET_SKILLS_SEED ?? (defaultSeed && existsSync(resolve(defaultSeed, "dialogue-pass", "SKILL.md")) ? defaultSeed : undefined);
+    process.env.SCARLET_SKILLS_SEED ?? (defaultSeed && hasSkills(defaultSeed) ? defaultSeed : undefined);
 
   // Nothing else catches these, and either one stops the engine. Say so in the log's own form as it goes.
   const fatal = (what: string) => (err: unknown) => {
@@ -122,7 +122,7 @@ async function runServe(argv: string[]) {
       transcription = `unreadable (${(err as Error).message})`;
     }
     const telemetry = ctx.telemetry.unavailable ? "unavailable" : ctx.telemetry.active ? "on" : "off";
-    ctx.log(`[lifecycle] ready port=${boundPort} version=${SCARLET_VERSION} node=${process.version} solo=${solo} transcription=${transcription} telemetry=${telemetry} data=${dataDir}`);
+    ctx.log(`[lifecycle] ready port=${boundPort} version=${SCARLET_VERSION} node=${process.version} solo=${solo} transcription=${transcription} telemetry=${telemetry} startup=${humanDuration(process.uptime() * 1000)} data=${dataDir}`);
   };
   const server = serve({ fetch: app.fetch, port, hostname }, (info: AddressInfo) => {
     const user = localUser(ctx);
@@ -249,4 +249,13 @@ if (command === "review-spots") {
 } else {
   console.error(`unknown command: ${command}\n\n${HELP}`);
   process.exit(2);
+}
+
+/** Whether a folder holds skills: any `<name>/SKILL.md`, whatever the skills are called. */
+function hasSkills(dir: string): boolean {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).some(entry => entry.isDirectory() && existsSync(resolve(dir, entry.name, "SKILL.md")));
+  } catch {
+    return false;
+  }
 }

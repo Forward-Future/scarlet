@@ -24,7 +24,7 @@ import { apiKeyVars, cmdShellArgs, detect, findOnPath, formatAvailability, needs
 import { privateDirectory } from "./private-files.js";
 import { AgentHost } from "./host.js";
 import { killStoppedNow } from "./processTree.js";
-import { errMsg } from "./runners/spawn.js";
+import { CLI_TELEMETRY_OFF, errMsg } from "./runners/spawn.js";
 
 interface Parsed {
   command: string;
@@ -95,7 +95,7 @@ async function cmdConnect(flags: Record<string, string>): Promise<void> {
 const SIGN_IN: Record<string, { bin: string; args: string[]; label: string; installHint: string }> = {
   claude: { bin: "claude", args: ["auth", "login", "--claudeai"], label: "Claude Pro/Max subscription", installHint: "npm i -g @anthropic-ai/claude-code" },
   codex: { bin: "codex", args: ["login"], label: "ChatGPT plan", installHint: "npm i -g @openai/codex" },
-  gemini: { bin: "agy", args: ["acp", "--login"], label: "Google account", installHint: "curl -fsSL https://antigravity.google/cli/install.sh | bash" },
+  gemini: { bin: "agy", args: ["acp", "--login", "--disable-telemetry"], label: "Google account", installHint: "curl -fsSL https://antigravity.google/cli/install.sh | bash" },
 };
 
 async function cmdAuth(positional: string[]): Promise<void> {
@@ -106,7 +106,7 @@ async function cmdAuth(positional: string[]): Promise<void> {
   if (!bin) throw new Error(`${sign.bin} is not installed (${sign.installHint})`);
   console.log(`Signing in to ${agent} with your ${sign.label}. A browser window will open…`);
   // An API key in the environment would make the CLI skip the subscription flow.
-  const env = stripVars(process.env, apiKeyVars(agent));
+  const env = { ...stripVars(process.env, apiKeyVars(agent)), ...CLI_TELEMETRY_OFF };
   const useShell = needsCmdShell(bin);
   const code = await new Promise<number | null>((resolve) => {
     const child = spawn(useShell ? "cmd.exe" : bin, useShell ? cmdShellArgs(bin, sign.args) : sign.args, {

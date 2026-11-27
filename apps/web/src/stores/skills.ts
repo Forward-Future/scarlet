@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { dialogueShortcut, isDialogueGuide, skillCommands, type Skill, type UpsertSkillRequest } from "@scarlet/shared";
+import { BUILT_IN_COMMANDS, commandGuides, dialogueShortcut, skillCommands, type Skill, type UpsertSkillRequest } from "@scarlet/shared";
 import { api, errorMessage } from "../lib/client";
 import { changedDuringLoad } from "./changedDuringLoad";
 
@@ -16,9 +16,12 @@ interface SkillsState {
 
 export function enabledSkills(library: Skill[]) {
   const commands = library.filter(skill => skill.enabled);
-  const dialogue = library.find(skill => skill.name === "dialogue-pass") ?? library.find(isDialogueGuide);
-  if (dialogue?.enabled && isDialogueGuide(dialogue) && !library.some(skill => skill.name === "tighten-pauses-here")) {
-    commands.push({ ...dialogue, name: "tighten-pauses-here", description: "Tighten only pauses in the selected passage or around the playhead." });
+  // Scarlet's own commands are listed through the skill that guides them (the first by name when several do), under
+  // the command's name, unless a skill already goes by it. One with no guide still runs when typed.
+  for (const command of BUILT_IN_COMMANDS) {
+    if (library.some(skill => skill.name === command.name)) continue;
+    const guide = commandGuides(command.name, library).sort((a, b) => a.name.localeCompare(b.name))[0];
+    if (guide) commands.push({ ...guide, name: command.name, description: command.description });
   }
   return commands.sort((a, b) => a.name.localeCompare(b.name));
 }

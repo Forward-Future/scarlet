@@ -127,6 +127,8 @@ interface PreviewProps {
     holdPassage?: boolean;
     /** Passage a pending check asks the editor to see on the working cut. */
     reviewRange?: TimeRange;
+    /** Full range and earliest change when a continuous B-roll section combines multiple edits into one line item. */
+    editSection?: { range: TimeRange; beforeChange?: Change };
     /** A revision was requested from the open card. Its message box is outside the player. */
     writeRequest?: number;
     /**
@@ -146,6 +148,8 @@ interface PreviewProps {
 
 /** How far past a click after an edit's passage the stretched passage plays. */
 const REACH_AFTER_SECONDS = 2;
+/** How long the full-screen controls and pointer stay up after the pointer stops moving. */
+const FULLSCREEN_IDLE_MS = 2000;
 
 export function CutPreview({ threadView, workingCache, draftVersion, draft, draftFailed, openingJoin, cutLoadError, onRetryDraft, source, autoPlaySource, hasCut, change, spot, approval = false, playChange, active,
   onMedia, simple, joined }: PreviewProps) {
@@ -403,13 +407,15 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const framing = threadView?.framing;
   const cutReview = threadView?.cutReview;
   const selectedEdit = threadView?.selected;
-  // A moment of a pass's list plays across all of its edits, once.
+  // A moment of a pass's list (or a combined continuous B-roll section) plays across all of its edits, once.
   const selectedMoment = threadView?.selectedMoment;
+  const sectionRange = simple.editSection?.range;
+  const selectedRange = selectedMoment ? momentRange(selectedMoment) : sectionRange ?? selectedEdit?.range;
   const selectedPassage = selectedEdit && (!selectedEdit.beforeCut && selectedEdit.at === undefined
-    ? editPlaybackRange(selectedMoment ? momentRange(selectedMoment) : selectedEdit.range, duration) : selectedEdit.range);
-  const originalChange = threadView?.originalChange;
+    ? editPlaybackRange(selectedRange!, duration) : selectedEdit.range);
+  const originalChange = simple.editSection?.beforeChange ?? threadView?.originalChange;
   // A marker left for the editor changed nothing in the video, so it has no Before to read.
-  const compared = selectedEdit?.marker ? undefined : selectedEdit;
+  const compared = selectedEdit?.marker ? undefined : selectedEdit && sectionRange ? { ...selectedEdit, range: sectionRange } : selectedEdit;
   const original = useEditBefore(current.id, displayedTimeline, compared, compared && originalChange, fps, !!framing, selectedPassage);
   const cutIndex = cutReview && selectedEdit ? cutReview.cuts.indexOf(selectedEdit) : -1;
   // Before belongs to the edit that's open: it holds while that edit is played again from its top, and the next edit
@@ -422,9 +428,10 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   // The next edit can carry the same request number, so a stretch left behind would play as its passage.
   useLayoutEffect(() => { if (!selectedEdit) setReach(undefined); }, [selectedEdit]);
   const playingBefore = before && !framing;
+  const [expanded, setExpanded] = useState(false);
   // Marks drawn on the picture for the message in the box. M, or a tool over the picture, marks the frame under the
   // playhead.
-  const canMark = !!simple.onPick && playable && !playingBefore && !framing;
+  const canMark = !!simple.onPick && playable && !playingBefore && !framing && !expanded;
   const markFrame = () => {
     if (!canMark) return;
     const time = Math.min(usePlayerStore.getState().time, lastFrame);
@@ -595,7 +602,24 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const preparing = current.media.find(isPreparingMedia);
 
   const stage = useRef<HTMLElement>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [controlsIdle, setControlsIdle] = useState(false);
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const wakeFullscreenControls = useCallback(() => {
+    if (!expanded) return;
+    setControlsIdle(false);
+    if (idleTimer.current !== undefined) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => {
+      idleTimer.current = undefined;
+      setControlsIdle(true);
+    }, FULLSCREEN_IDLE_MS);
+  }, [expanded]);
+  useEffect(() => {
+    if (expanded) wakeFullscreenControls();
+    else setControlsIdle(false);
+    return () => {
+      if (idleTimer.current !== undefined) { clearTimeout(idleTimer.current); idleTimer.current = undefined; }
+    };
+  }, [expanded, wakeFullscreenControls]);
   useEffect(() => {
     const sync = () => setExpanded(document.fullscreenElement === stage.current);
     const escape = (event: KeyboardEvent) => {
@@ -648,9 +672,12 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
   const transitionKey = `${reviewCut?.key ?? selection ?? ""}:${reviewCut?.side ?? ""}`;
 
   return (
-    <section ref={stage} className="cut-preview" aria-label={view} data-expanded={expanded || undefined}>
-      <AmbientLight stage={stage} monitor={monitor} />
-      {simple.onPick && (source || cut || change || draftVersion) && <PictureMarkTools projectId={current.id} enabled={canMark} onStart={markFrame} />}
+    <section ref={stage} className="cut-preview" aria-label={view} data-expanded={expanded || undefined}
+      data-idle={(expanded && controlsIdle) || undefined}
+      onPointerMove={expanded ? wakeFullscreenControls : undefined}
+      onPointerDown={expanded ? wakeFullscreenControls : undefined}>
+      {!expanded && <AmbientLight stage={stage} monitor={monitor} />}
+      {!expanded && simple.onPick && (source || cut || change || draftVersion) && <PictureMarkTools projectId={current.id} enabled={canMark} onStart={markFrame} />}
       <div className="watch-viewport">
         <div ref={monitor} className="watch-monitor" data-landscape={pictureAspect > 1 || undefined}
           style={{ "--picture-aspect": pictureAspect } as CSSProperties}
@@ -697,7 +724,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
             canWatchBefore={reviewCut?.side === "after" && !openingJoin}
           />
           {simple.label && <div className="simple-on-video" role="status">{simple.label}</div>}
-          {!playingBefore && !framing && <PictureMarks projectId={current.id} version={source ? undefined : rangeVersion} mediaId={source?.id} fps={fps} />}
+          {!expanded && !playingBefore && !framing && <PictureMarks projectId={current.id} version={source ? undefined : rangeVersion} mediaId={source?.id} fps={fps} />}
           {/* The edits saved while the video played come in as it stops, with a word that they did. */}
           {!source && <CaughtUpOnMonitor />}
           {cutLoadError && <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-2 bg-black/75 p-2 text-sm">
@@ -730,7 +757,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
         </div>}
         {simple.above}
         <div>
-          <PlayerTimeline activeShortcuts={active} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
+          <PlayerTimeline activeShortcuts={active && !expanded} foot={simple.foot} duration={duration} pictureAspect={pictureAspect} previewStrip={laneStrip} hoverVideo={hoverVideo}
             waveform={{ media: current.media, mediaPaused: current.project.mediaPaused, source, timeline: laneTimeline, ...sameClockBefore && {
               audioFrom: playingBefore ? sameClockBefore : undefined, scaleWith: playingBefore ? laneTimeline : sameClockBefore } }} frameAt={frameAt} onSeek={seekFull} onSelectTime={selectTime} onScrubStart={scrubStart}
             onAddTime={simple.shiftTimes && simple.onPick ? time => { seekFull(time); selectTime(time, "add"); } : undefined}

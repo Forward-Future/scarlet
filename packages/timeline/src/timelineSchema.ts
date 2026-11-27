@@ -127,6 +127,8 @@ export type MediaClip = z.infer<typeof MediaClip>;
 
 export const CaptionStyle = z.object({
   fontFamily: z.string().default("Inter"),
+  /** Weight variant matched when locating a font file (e.g. Bold, SemiBold, Medium, Black). */
+  fontWeight: z.enum(["normal", "medium", "semibold", "bold", "black"]).optional(),
   fontSize: z.number().positive().default(0.05), // fraction of canvas height
   color: RenderColor.default("#FFFFFF"),
   backgroundColor: RenderColor.optional(), // e.g. "#000000AA"

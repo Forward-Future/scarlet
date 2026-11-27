@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
-import { matchesEdit, REVISED_CHECK, type ThreadEdit } from "@scarlet/shared";
+import { brollSectionForEdit, continuousBrollSections, matchesEdit, REVISED_CHECK, type ThreadEdit } from "@scarlet/shared";
+import { useShownCut } from "../../stores/shownCut";
 import { EditVersion, RejectedMark, ThreadAction, ThreadEdits } from "../../components/review/ThreadEdits";
 import { asksEditor, listPlaces, revisionWord } from "../../components/review/threadEditState";
 import { Icon } from "../../components/ui/primitives";
@@ -11,6 +12,7 @@ import { inListOrder, ReviewLinger, tabShown, type ListOrder, type ReviewTab, ty
 import { type Thread } from "../../lib/threads";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { recordUndo } from "../../lib/undo";
+import { useProjectStore } from "../../stores/project";
 import { useLowRiskFold, useLowRiskLine } from "./lowRiskFold";
 import { EditResultLink, entryKeys, Made, namedEdit, nestsUnder, passEntries, passMade, selectedRowKey, useListOpen, usePassFacts, useReveal, useThreadFacts, threadRowPlaces, type Entry, type PassRow } from "./passRows";
 import { useDockHasTabs, useReviewDockStore, type DockEntry, type DockRow } from "./reviewDockStore";
@@ -106,6 +108,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
   const { pass, need, hasForYou, totalRows, fold, single, empty, waiting } = facts;
   const linger = useHeldRows(heldLinger);
   const [open, setOpen] = listState;
+  const paused = useProjectStore(s => s.current?.id === projectId ? !!s.current.project.editingPaused : false);
+  const { timeline } = useShownCut();
+  const media = useProjectStore(s => s.current?.media);
+  const brollSections = useMemo(() => timeline ? continuousBrollSections(timeline, media) : undefined, [timeline, media]);
   const [host, reveal] = useReveal(open);
   const dock = useReviewDockStore();
   const dockHasTabs = useDockHasTabs();
@@ -132,7 +138,17 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
     // A folded pass with nothing to review has no rows to draw unless the bottom dock renders it.
     { drawRows: hasForYou || listed || !!dock, numbers: true, backToReview: dockHasTabs || hasForYou });
   // A row that has just left Needs review for Working or Done, or Done for Working, stays a moment where it was, with its new word.
-  if (!dock && hasForYou) linger.track(entries.map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })), optionalOpen && tab === "you", tab === "done");
+  if (!dock && hasForYou) {
+    const callKeys = listLoaded === false ? new Set(entries.filter(e => e.row.n > 0).map(e => e.key)) : undefined;
+    linger.track(
+      entries
+        .filter(e => e.row.n > 0 || listLoaded !== false)
+        .map(e => ({ key: e.key, place: e.place, was: e.row.was, busy: e.row.busy })),
+      optionalOpen && tab === "you",
+      tab === "done",
+      callKeys ? key => !callKeys.has(key) : undefined,
+    );
+  }
   const heldFrom = (from: "you" | "optional" | "done") => entries.filter(e => (from === "done" ? e.place === "working" : e.place === "working" || e.place === "done") && linger.of(e.key)?.from === from);
   const inPlace = (place: RowPlace) => entries.filter(e => e.place === place);
   // Every list goes by time, as its rows lead with their times (the editor's call, 2026-11-24): low risk rows open in
@@ -248,6 +264,9 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
       dataLogLabel: extra?.moment ? "Moment" : "Pass item",
       callIndex: callIdx,
       edit,
+      editKind: edit?.kind,
+      stretch: edit?.range,
+      brollSectionId: edit?.kind === "broll" && brollSections ? (brollSectionForEdit(brollSections, edit.range)?.id ?? null) : undefined,
       owns: edit ? ownsEdit(edit) : undefined,
       editOrder: editIndexOf.has(r.key) ? { index: editIndexOf.get(r.key)!, of: edits.length } : undefined,
       nests: rowNests,
@@ -312,14 +331,22 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         const value = id === "all" ? row.value : row.decision ?? row.value;
         // Only rows leaving the list currently shown fade out: a row looked at in Working or Done meanwhile is where it belongs.
         const heldRow = linger.of(entry.key);
-        const leaving = !!heldRow?.leaving && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
-        const canUnkeepRow = !!row.unkeep && !leaving;
-        return <li key={row.key} className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined} data-low-risk={id === "you" && lowKeys.has(entry.key) ? "" : undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
+        const lingeringHere = !!heldRow && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
+        const lingerKind = lingeringHere ? (entry.place === "working" ? "working" : (row.decided || row.rejected || row.skipped) ? "done" : undefined) : undefined;
+        const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
+        const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
+        const leaving = !!heldRow?.leaving && lingeringHere;
+        const canUnkeepRow = !!row.unkeep && !leaving && !lingeringHere;
+        return <li key={row.key} className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
+          data-low-risk={id === "you" && lowKeys.has(entry.key) ? "" : undefined}
+          data-lingering={lingerKind}
+          data-working={workingState}
+          data-paused={workingState === "pending" && paused ? "" : undefined}><button type="button" className={[row.on && "is-on", row.rejected && "is-rejected", row.asks && "is-asking", !row.on && !row.rejected && row.decided && "is-decided"].filter(Boolean).join(" ") || undefined} aria-current={row.on || undefined}
           data-log-control="open-pass-item" data-log-label={moment ? "Moment" : "Pass item"} disabled={!row.open} title={row.title || row.label} onClick={letGo(() => row.open?.())}
           aria-label={more ? `${clockLabel(row.displayAt)} ${row.label}, ${more.replace("+ ", "and ")}` : row.rejected ? `${clockLabel(row.displayAt)} ${row.label}, rejected` : undefined}
           onPointerEnter={() => actions.lightMark(row.mark, row.hover)} onPointerLeave={() => actions.lightMark()}>
           <span className={row.needs || row.asks ? "simple-pass-time is-need" : "simple-pass-time"}>{clockLabel(row.displayAt)}{(row.needs || row.asks) && <span>, needs you</span>}</span>
-          <span className="simple-pass-label">{(row.rejected || row.skipped) && <RejectedMark />}{row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-pass-words">{row.label}</span>
+          <span className="simple-pass-label">{(row.rejected || row.skipped) && <RejectedMark />}{row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}{spinning && <span className="simple-pass-spin" aria-hidden="true" />}<span className="simple-pass-words">{row.label}</span>
             {row.version > 0 && <EditVersion n={row.version} hover={spent.get(row.key)} />}{row.fresh && <small className="edit-version is-new">New</small>}
             {/* What else the moment holds, which unfolds its edits under the row and folds them again. */}
             {more && moment && <span className="simple-pass-more" aria-expanded={!!open} title={open ? "Hide its edits" : "Show its edits"}
@@ -341,10 +368,10 @@ export function PassSummary({ projectId, thread, edits, rejected = noRejected, a
         </span>}
         {under(entry).map(nest => nest.node)}
         {open && members && <ol className="simple-pass-list is-moment" aria-label="Edits in this moment">
-          {members.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}><button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
+          {members.map(m => <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined} data-working={m.busy && !m.asks ? "busy" : undefined}><button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
             data-log-control="open-pass-item" data-log-label="Edit in a moment" disabled={!m.open} title={m.title || m.label} onClick={letGo(() => m.open?.())}
             onPointerEnter={() => actions.lightMark(m.mark, m.hover)} onPointerLeave={() => actions.lightMark()}>
-            <span className="simple-pass-label">{m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}<span className="simple-pass-words">{m.label}</span>
+            <span className="simple-pass-label">{m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}{m.busy && !m.asks && <span className="simple-pass-spin" aria-hidden="true" />}<span className="simple-pass-words">{m.label}</span>
               {m.version > 0 && <EditVersion n={m.version} hover={spent.get(m.key)} />}</span>
             {m.value && !m.word && <span className={m.busy && !m.word ? "simple-pass-value working-text" : "simple-pass-value"} title={spent.get(m.key)}>{m.value}</span>}
             {m.word && <span className={`simple-pass-check${m.revised || m.asks ? "" : " is-kept"}${m.busy ? " working-text" : ""}`} title={spent.get(m.key)}>{m.word}</span>}
@@ -425,7 +452,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   /** Newer requests below this one in the chat; an increase collapses held blank tab space. */
   laterRequests?: number }) {
   const facts = useThreadFacts({ projectId, thread, edits, rejected, actions });
-  const { reviewed, canUnkeep, revising, rejecting, adding, gone, showing, shownEdit, groups, need, openEdit, openId } = facts;
+  const { reviewed, canUnkeep, revising, rejecting, adding, gone, showing, shownEdit, groups, need, openEdit, openId, brollSections } = facts;
   const linger = useHeldRows(heldLinger);
   const [open, setOpen] = list;
   const [host, reveal] = useReveal(open);
@@ -447,7 +474,14 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   // Each row's tab, with nothing to review only for the bottom dock.
   const { rowOf, placeOf, tracked } = threadRowPlaces(facts, nests, hasForYou || !!dock);
   // A row that has just left Needs review for Working or Done, or Done for Working, stays a moment where it was, with its new word.
-  if (!dock && hasForYou) linger.track(tracked, optionalOpen && tab === "you", tab === "done");
+  if (!dock && hasForYou) {
+    linger.track(
+      listLoaded === false ? [] : tracked,
+      optionalOpen && tab === "you",
+      tab === "done",
+      listLoaded === false ? () => true : undefined,
+    );
+  }
   const place = (e: Omit<ThreadEdit, "at">) => placeOf.get(rowOf.get(editKey(e)) ?? "");
   const held = (e: Omit<ThreadEdit, "at">) => {
     const at = place(e);
@@ -548,7 +582,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
   if (dock && (edits.length > 0 || gone.length > 0)) {
     const openIdx = showing?.rejected ? -1 : showing ? edits.findIndex(e => matchesEdit(showing, e)) : -1;
     const order = listPlaces(thread, edits, gone);
-    const groupRows = groups.map(({ members }) => {
+    const groupRows = groups.map(({ members, continuousBroll }) => {
       const shown = members.find(m => m.i === openIdx) ?? members.find(m => asksEditor(revising(m.edit))) ?? members.find(m => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit)) ?? members[0]!;
       const needsCount = members.filter(m => !!m.edit.check && !reviewed(m.edit) && !revising(m.edit)).length;
       const allKept = members.every(m => reviewed(m.edit));
@@ -557,11 +591,18 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       const rowNests = members.flatMap(m => nests.filter(nest => nest.key === editKey(m.edit)));
       const took = members.map(m => spent.get(editKey(m.edit))).find(Boolean);
       const was = members.flatMap(m => m.edit.previous.map(editKey));
+      const stretch = {
+        start: Math.min(...groupEdits.map(e => e.range.start)),
+        end: Math.max(...groupEdits.map(e => e.range.end)),
+      };
       return {
         edit: shown.edit,
         i: shown.i,
         first: members[0]!.i,
         places: members.length,
+        continuousBroll,
+        stretch,
+        maxVersion: Math.max(0, ...groupEdits.map(e => e.previous.length ? e.previous.length + 1 : 0)),
         needs: needsCount,
         allKept,
         unkeepRefs,
@@ -626,7 +667,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       }
     };
     pushGone(-1, firstOf(0));
-    groupRows.forEach(({ edit, i, places, needs: needCount, allKept, unkeepRefs, groupEdits, rowNests, took, was, firstKey }, atIdx) => {
+    groupRows.forEach(({ edit, i, places, continuousBroll, stretch, maxVersion, needs: needCount, allKept, unkeepRefs, groupEdits, rowNests, took, was, firstKey }, atIdx) => {
       const rawKey = firstKey;
       const on = i === openIdx;
       const isKept = places > 1 ? allKept : reviewed(edit);
@@ -634,20 +675,23 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
       const busy = !!revisingNow && isWorking(revisingNow.state);
       const statusWord = revisionWord(revisingNow, { rejecting: rejecting(edit), adding: adding(edit), nextQueuedId: actions.nextQueuedId });
       const asksNow = asksEditor(revisingNow);
-      const version = edit.previous.length ? edit.previous.length + 1 : 0;
+      const version = continuousBroll ? maxVersion : (edit.previous.length ? edit.previous.length + 1 : 0);
       const decided = isKept && !isRevising;
-      const value = editRowWord(edit);
+      const value = continuousBroll ? "B-roll" : editRowWord(edit);
       const decision = decided ? (edit.marker ? "Done" : "Kept") : undefined;
       const check = asksNow || (places > 1 ? needCount > 0 : !!edit.check && !isRevising);
       const title = (edit.reason && edit.summary) || edit.label;
       const revised = edit.check === REVISED_CHECK && !reviewed(edit) && !isRevising;
-      const at = (edit as ThreadEdit).at ?? edit.range.start;
-      const displayAt = (!isKept && !isRevising ? edit.reviewRange?.start : undefined) ?? at;
+      const at = continuousBroll ? stretch.start : ((edit as ThreadEdit).at ?? edit.range.start);
+      const displayAt = continuousBroll ? stretch.start : ((!isKept && !isRevising ? edit.reviewRange?.start : undefined) ?? at);
       const rowTime = clockLabel(displayAt);
       const checkTitle = revised || edit.reason ? undefined : edit.check;
       const showUnkeep = decided && !edit.marker && unkeepRefs.length > 0;
       const unkeepTip = edit.check || dockHasTabs || hasForYou ? "Move back to Needs review" : "Unkeep";
       const entryPlace = placeOf.get(firstKey) ?? "optional";
+      const brollSection = (continuousBroll || edit.kind === "broll") && brollSections
+        ? brollSectionForEdit(brollSections, stretch)
+        : undefined;
       dockEntries.push({
         key: `${thread.id}/${rawKey}`,
         threadId: thread.id,
@@ -678,7 +722,7 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
           needs: !asksNow && check && !isKept,
           asks: asksNow,
           decided,
-          version: places === 1 ? version : 0,
+          version: places === 1 || continuousBroll ? version : 0,
           fresh: false,
           title: checkTitle,
           ariaLabel: `${rowTime}: ${title}${statusWord ? `, ${statusWord.replace(/…$/, "").toLowerCase()}` : isKept ? (edit.marker ? ", done" : ", kept") : check ? ", check" : ""}`,
@@ -697,6 +741,10 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
           dataLogControl: "open-edit",
           dataLogLabel: "Edit",
           edit,
+          editKind: continuousBroll ? "broll" : edit.kind,
+          stretch,
+          brollSectionId: (continuousBroll || edit.kind === "broll") && brollSections ? (brollSection?.id ?? null) : undefined,
+          ...(continuousBroll && { continuousBroll: true }),
           owns: ownsEdit(edit),
           edits: groupEdits,
           editOrder: { index: i + 1, of: edits.length },
@@ -739,10 +787,19 @@ export function ThreadResult({ projectId, thread, edits, rejected, actions, asid
     const h = held(edit);
     return !!h?.leaving && (tab === "you" ? h.from === "you" || h.from === "optional" : tab === h.from);
   };
+  const lingerKindOf = (edit: Omit<ThreadEdit, "at">): "working" | "done" | undefined => {
+    const h = held(edit);
+    const here = !!h && (tab === "you" ? h.from === "you" || h.from === "optional" : tab === h.from);
+    if (!here) return undefined;
+    const at = place(edit);
+    return at === "working" ? "working" : at === "done" ? "done" : undefined;
+  };
   const rows = (label: string | undefined, only?: (e: Omit<ThreadEdit, "at">) => boolean, listKey?: string) =>
     <ThreadEdits key={listKey} projectId={projectId} thread={thread} edits={edits} rejected={rejected} showing={actions.showing} only={only} label={label}
       // Only rows leaving the list currently shown fade out: a row looked at under Working or Done meanwhile is where it belongs.
-      leaving={only && tab !== "working" ? isLeaving : undefined} low={only && tab === "you" ? lowRow : undefined}
+      leaving={only && tab !== "working" ? isLeaving : undefined}
+      lingering={only && tab !== "working" ? lingerKindOf : undefined}
+      low={only && tab === "you" ? lowRow : undefined}
       nextQueuedId={actions.nextQueuedId}
       onPlay={ref => actions.openEdit(thread, ref)}
       onHover={ref => actions.lightMark(undefined, ref && { threadId: thread.id, editKey: editKey(ref) })}

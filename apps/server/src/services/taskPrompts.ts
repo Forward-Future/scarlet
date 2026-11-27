@@ -198,7 +198,7 @@ function graphicsContext(ctx: Ctx, project: Project, task: Task, activeSkills: r
 /**
  * The request as a CLI's first message. Claude Code takes a message that begins with "/" for one of its own slash
  * commands. Finding none of that name, it tells the model the command did not run and to say it isn't installed, and
- * a pass then opened its reply with "The /first-cut-dialogue command isn't installed in this session" (2026-11-07).
+ * a pass then opened its reply with "The /<command> command isn't installed in this session" (2026-11-07).
  * A lead-in keeps the editor's words as typed and out of the CLI's command parser. The system prompt carries the
  * instruction as well, unchanged.
  */
