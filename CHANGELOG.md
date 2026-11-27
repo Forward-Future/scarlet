@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 26, 2026
 
+- Edits use fewer tokens: Scarlet's instructions for its editing tools are shorter, and Gemini reads several of them at once instead of asking for them one by one.
+
 - Jumping around the timeline shows the picture and starts playing sooner, and the editor stays quick while Scarlet works.
 - While Scarlet looks through frames of a long video, or prepares one after import, the frames you scrub to on a Mac come up sooner.
 - Version numbers (`v2`, `v3`, etc.) in the edits list now appear in a subtler gray so edit titles and tags stand out more clearly.

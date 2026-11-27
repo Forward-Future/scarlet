@@ -275,6 +275,14 @@ describe("trace", () => {
     expect(m.usage).toEqual({ inputTokens: 1000, outputTokens: 200, "cache.read": 50 });
   });
 
+  it("adds up each run's model steps and cache misses, and has none for runs that didn't report them", () => {
+    expect(traceMetrics(task, events).steps).toBeNull();
+    const step = (steps: number, peakContext: number, misses: Array<{ missed: number }>) =>
+      ({ type: "log", text: "", data: { kind: "usage_steps", steps, peakContext, misses, missedTokens: misses.reduce((s, m) => s + m.missed, 0) } });
+    const runs = [...events, step(30, 180_000, [{ missed: 120_000 }]), step(12, 210_000, [])];
+    expect(traceMetrics(task, runs)).toMatchObject({ steps: { steps: 42, peakContext: 210_000, misses: 1, missedTokens: 120_000 }, toolCalls: 5 });
+  });
+
   it("times a task claimed again from its first event, not its latest start", () => {
     const m = traceMetrics({ ...task, startedAt: at(250) }, events);
     expect(m).toMatchObject({ finishSeconds: 605, activeSeconds: 539, queueSeconds: 6, firstChangeSeconds: 200 });

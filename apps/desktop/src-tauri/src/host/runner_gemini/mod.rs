@@ -528,6 +528,26 @@ impl AcpSession {
 /// The run's own folder for agy's settings, rules and sessions (`--gemini-dir`), beside its task folder: outside the
 /// folder the agent may write to, and the same for every attempt at the task, so a resumed session is still there. The
 /// host removes it with the run's other leftovers once the task lands, and the task folders' prune takes one left behind.
+/// A run's steps, peak context and cache misses, as a task event the evals read (`usage_steps`, no text, so the editor
+/// sees nothing) and a line of the host's log (`reportSteps` in apps/agent/src/runners/gemini.ts).
+fn report_steps(report: &transcript::StepsReport, on_event: &EventSink) {
+    let mut data = serde_json::to_value(report).unwrap_or_else(|_| json!({}));
+    if let Some(map) = data.as_object_mut() {
+        map.insert("kind".into(), json!("usage_steps"));
+    }
+    (on_event)(RunnerEvent::with("log", "", data));
+    let misses = report.misses.len();
+    log::info!(
+        "agy: {} step{}, peak context {} tokens, {} cache miss{}{}",
+        report.steps,
+        if report.steps == 1 { "" } else { "s" },
+        report.peak_context,
+        misses,
+        if misses == 1 { "" } else { "es" },
+        if misses > 0 { format!(" ({} tokens sent again uncached)", report.missed_tokens) } else { String::new() }
+    );
+}
+
 pub fn gemini_dir(run_dir: &Path) -> PathBuf {
     let name = run_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     run_dir.with_file_name(format!("{name}.gemini"))
@@ -645,6 +665,9 @@ pub async fn run_gemini(opts: RunOptions) -> RunResult {
         }
         sess.poll_transcript_usage();
         sess.emit_usage();
+        if let Some(report) = sess.transcript.report() {
+            report_steps(&report, &sess.on_event);
+        }
         (sess.st.clone(), sess.resume_failed)
     };
 
