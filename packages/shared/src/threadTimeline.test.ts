@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Change, emptyTimeline, leftOutJoins, timelineDuration, timelineFromKeepRanges } from "@scarlet/timeline";
+import { Change, emptyTimeline, leftOutJoins, makeMediaClip, makeTrack, timelineDuration, timelineFromKeepRanges } from "@scarlet/timeline";
 import { buildThreads, type Thread } from "./threads.js";
 import { Task } from "./tasks.js";
 import { changeRemovals, matchesEdit, namedTimelineEdits, REVISED_CHECK, threadEditList } from "./threadEdits.js";
@@ -881,6 +881,175 @@ describe("a doubt a later request raises about an edit already in the video", ()
       timelineEdits: [{ label: "Longer clip", range: { start: 18, end: 32 } }] };
     expect(threadEditList(thread([first, updated]))).toMatchObject([
       { changeId: "chg_2", label: "Longer clip", marker: true, todo: "B-roll: Longer clip covering the full thought.", previous: [{ changeId: "chg_1", spot: 0 }] },
+    ]);
+  });
+
+  it("drops a graphic edit whose clip media is replaced by a later request without replaces, and restores it on undo", () => {
+    const media = [
+      { id: "med_long", kind: "graphic" as const },
+      { id: "med_short", kind: "graphic" as const },
+    ];
+    const longClip = makeMediaClip("med_long", 0, 16.08, 836.3, { id: "clip_reverse_engineering_graphic" });
+    const shortClip = makeMediaClip("med_short", 0, 5.04, 846.51, { id: "clip_reverse_engineering_graphic" });
+    const overlayTrack = (clip: typeof longClip) => ({ ...makeTrack("video", "Graphics", "v4_motion_graphics"), clips: [clip] });
+    const v2 = { ...head, version: "v2", tracks: [...head.tracks, overlayTrack(longClip)] };
+    const v3 = { ...head, version: "v3", tracks: [...head.tracks, overlayTrack(shortClip)] };
+    const v4 = { ...head, version: "v4", tracks: [...head.tracks, overlayTrack({ ...shortClip, transform: { x: 0, y: 0.08, scale: 0.94 } })] };
+    const versions: Record<string, typeof head> = { v1: earlier, v2, v3, v4 };
+    const read = (version: string) => versions[version];
+    const first = { ...change, id: "chg_long", threadId: "thr_long", taskId: "tsk_long", fromVersion: "v1", toVersion: "v2",
+      createdAt: "2026-01-01T00:00:00Z",
+      ops: [
+        { op: "addClip", trackId: "v4_motion_graphics", clip: longClip },
+        { op: "updateMarker", markerId: "br_reverse_engineering", patch: { resolved: true } },
+      ],
+      timelineEdits: [{ label: "From the answer back to the explanation", range: { start: 836.3, end: 852.38 } }] };
+    const second = { ...change, id: "chg_short", threadId: "thr_short", taskId: "tsk_short", fromVersion: "v2", toVersion: "v3",
+      createdAt: "2026-01-02T00:00:00Z",
+      ops: [
+        { op: "moveClip", clipId: "clip_reverse_engineering_graphic", timelineIn: 846.51 },
+        { op: "updateClip", clipId: "clip_reverse_engineering_graphic", patch: { mediaId: "med_short", sourceIn: 0, sourceOut: 5.04 } },
+        { op: "updateMarker", markerId: "br_reverse_engineering", patch: { time: 846.51, resolved: true } },
+      ],
+      timelineEdits: [{ label: "Working backward from 55", range: { start: 846.51, end: 851.55 } }] };
+    // A later reframe touching only transform must NOT retire the surviving 5-second graphic.
+    const reframe = { ...change, id: "chg_reframe", threadId: "thr_long", taskId: "tsk_reframe", fromVersion: "v3", toVersion: "v4",
+      createdAt: "2026-01-03T00:00:00Z",
+      ops: [{ op: "updateClip", clipId: "clip_reverse_engineering_graphic", patch: { transform: { x: 0, y: 0.08, scale: 0.94 } } }],
+      timelineEdits: [{ label: "Reframe above the working backward graphic", range: { start: 846.51, end: 851.55 } }] };
+    const allChanges = [first, second, reframe];
+    const tLong = { ...thread([first, reframe]), id: "thr_long" };
+    const tShort = { ...thread([second]), id: "thr_short" };
+    const tree = [...links, { version: "v3", parent: "v2" }, { version: "v4", parent: "v3" }];
+
+    // The overwritten 16-second graphic is retired; the 5-second replacement survives the later reframe.
+    expect(threadTimeline(tLong, v4, tree, read, 30, media, allChanges).map(e => e.label)).toEqual([
+      "Reframe above the working backward graphic",
+    ]);
+    expect(threadTimeline(tShort, v4, tree, read, 30, media, allChanges)).toMatchObject([
+      { changeId: "chg_short", label: "Working backward from 55", kind: "graphic", range: { start: 846.51, end: 851.55 } },
+    ]);
+    // Client-side fallback without timelines also drops the superseded graphic edit.
+    expect(threadEditList({ ...thread([first]), id: "thr_long" }, media, allChanges)).toEqual([]);
+
+    // Undoing the 5-second replacement restores the 16-second graphic on its original thread.
+    const undoneTree = [...links, { version: "v3", parent: "v2" }, { version: "v5", parent: "v3", revertsVersion: "v3" }];
+    const v5 = { ...v2, version: "v5" };
+    expect(threadTimeline({ ...thread([first]), id: "thr_long" }, v5, undoneTree, v => v === "v5" ? v5 : read(v), 30, media, [first, second])).toMatchObject([
+      { changeId: "chg_long", label: "From the answer back to the explanation", range: { start: 836.3, end: 852.38 } },
+    ]);
+  });
+
+  it("retires removed, disabled, or full-timeline-replaced clips, keeps partially surviving or split clips, and tracks trimmed clip spans", () => {
+    const media = [
+      { id: "med_a", kind: "graphic" as const },
+      { id: "med_b", kind: "graphic" as const },
+      { id: "med_c", kind: "graphic" as const },
+    ];
+    const clipA = makeMediaClip("med_a", 0, 14, 566.6, { id: "gfx_a" });
+    const clipB = makeMediaClip("med_b", 0, 10, 200, { id: "gfx_b" });
+    const clipC = makeMediaClip("med_c", 0, 6, 300, { id: "gfx_c" });
+    const clipA_trimmed = makeMediaClip("med_a", 4.6, 13.6, 571.2, { id: "gfx_a" });
+    const clipB_right = makeMediaClip("med_b", 5, 10, 205, { id: "gfx_b_right" });
+    const track = (...clips: (typeof clipA)[]) => ({ ...makeTrack("video", "Graphics", "v4"), clips });
+    const v2 = { ...head, version: "v2", tracks: [...head.tracks, track(clipA, clipB, clipC)] };
+    const v3 = { ...head, version: "v3", tracks: [...head.tracks, track(clipA_trimmed, clipB_right)] };
+    const versions: Record<string, typeof head> = { v1: earlier, v2, v3 };
+    const read = (version: string) => versions[version];
+
+    const added = { ...change, id: "chg_add", threadId: "thr_1", taskId: "tsk_1", fromVersion: "v1", toVersion: "v2",
+      createdAt: "2026-01-01T00:00:00Z",
+      ops: [
+        { op: "addClip", trackId: "v4", clip: clipA },
+        { op: "addClip", trackId: "v4", clip: clipB },
+        { op: "addClip", trackId: "v4", clip: clipC },
+      ],
+      timelineEdits: [
+        { label: "Navier–Stokes and P versus NP", range: { start: 566.6, end: 580.6 } },
+        { label: "Split graphic", range: { start: 200, end: 210 } },
+        { label: "Removed graphic", range: { start: 300, end: 306 } },
+      ] };
+    // Later request trims gfx_a (moving its start to 571.2), splits gfx_b and drops only its first half, and removes gfx_c completely.
+    const later = { ...change, id: "chg_later", threadId: "thr_2", taskId: "tsk_2", fromVersion: "v2", toVersion: "v3",
+      createdAt: "2026-01-02T00:00:00Z",
+      ops: [
+        { op: "moveClip", clipId: "gfx_a", timelineIn: 571.2 },
+        { op: "updateClip", clipId: "gfx_a", patch: { sourceIn: 4.6, sourceOut: 13.6 } },
+        { op: "splitClip", clipId: "gfx_b", at: 205, newClipId: "gfx_b_right" },
+        { op: "removeClip", clipId: "gfx_b" },
+        { op: "removeClip", clipId: "gfx_c" },
+      ],
+      timelineEdits: [{ label: "Trimmed and cleaned graphics", range: { start: 200, end: 580.6 } }] };
+    const t1 = { ...thread([added]), id: "thr_1" };
+    const tree = [...links, { version: "v3", parent: "v2" }];
+    const projected = threadTimeline(t1, v3, tree, read, 30, media, [added, later]);
+    // gfx_c was completely removed (retired); gfx_b still has its right split half (205..210); gfx_a reflects its trimmed live span (571.2..580.2).
+    expect(projected.map(e => [e.label, Number(e.range.start.toFixed(1)), Number(e.range.end.toFixed(1))])).toEqual([
+      ["Split graphic", 205, 210],
+      ["Navier–Stokes and P versus NP", 571.2, 580.2],
+    ]);
+
+    // A full-timeline save (no ops) that removes gfx_a also retires it.
+    const v4 = { ...head, version: "v4", tracks: [...head.tracks, track(clipB_right)] };
+    const wholeSave = { ...change, id: "chg_whole", threadId: "thr_3", taskId: "tsk_3", fromVersion: "v3", toVersion: "v4",
+      createdAt: "2026-01-03T00:00:00Z", ops: undefined,
+      timelineEdits: [{ label: "Rebuilt overlays", range: { start: 571.2, end: 580.2 } }] };
+    const afterWhole = threadTimeline(t1, v4, [...tree, { version: "v4", parent: "v3" }],
+      v => v === "v4" ? v4 : read(v), 30, media, [added, later, wholeSave]);
+    expect(afterWhole.map(e => e.label)).toEqual(["Split graphic"]);
+  });
+
+  it("replaces an earlier graphic in place when its clip media is swapped in the same thread without replaces", () => {
+    const media = [
+      { id: "med_v1", kind: "graphic" as const },
+      { id: "med_v2", kind: "graphic" as const },
+    ];
+    const first = { ...change, id: "chg_1", fromVersion: "v1", toVersion: "v2", createdAt: "2026-01-01T00:00:00Z",
+      ops: [{ op: "addClip", trackId: "v4", clip: makeMediaClip("med_v1", 0, 12, 100, { id: "gfx_1" }) }],
+      timelineEdits: [{ label: "Long graphic", range: { start: 100, end: 112 } }] };
+    const swapped = { ...change, id: "chg_2", fromVersion: "v2", toVersion: "v3", createdAt: "2026-01-02T00:00:00Z",
+      ops: [{ op: "updateClip", clipId: "gfx_1", patch: { mediaId: "med_v2", sourceOut: 5 } }],
+      timelineEdits: [{ label: "Short graphic", range: { start: 100, end: 105 } }] };
+    expect(threadEditList(thread([first, swapped]), media)).toMatchObject([
+      { changeId: "chg_2", label: "Short graphic", previous: [{ changeId: "chg_1", spot: 0 }] },
+    ]);
+  });
+
+  it("keeps sub-range edits on longer clips scoped and does not resurrect edits whose original range was cut away", () => {
+    const media = [{ id: "med_bed", kind: "audio" as const }, { id: "med_gfx", kind: "graphic" as const }];
+    const audioClip = makeMediaClip("med_bed", 0, 15, 0, { id: "bed_1" });
+    const gfxClip = makeMediaClip("med_gfx", 0, 5, 20, { id: "gfx_cut" });
+    const aTrack = { ...makeTrack("audio", "Music", "a2"), clips: [audioClip] };
+    const vTrack = { ...makeTrack("video", "Graphics", "v4"), clips: [gfxClip] };
+    // Cut 19..21 out of the main video/audio so gfx_cut's original start (20) no longer maps onto head,
+    // even though gfx_cut itself still sits on the graphics track.
+    const baseCut = timelineFromKeepRanges("project", "interview", [{ start: 0, end: 19 }, { start: 21, end: 3468 }]);
+    const cutHead = {
+      ...baseCut,
+      version: "v3",
+      tracks: [
+        ...baseCut.tracks,
+        aTrack,
+        { ...vTrack, clips: [makeMediaClip("med_gfx", 1, 5, 19, { id: "gfx_cut" })] },
+      ],
+    };
+    const v2 = { ...head, version: "v2", tracks: [...head.tracks, aTrack, vTrack] };
+    const versions: Record<string, typeof head> = { v1: earlier, v2, v3: cutHead };
+    const read = (version: string) => versions[version];
+    const placed = { ...change, id: "chg_sub", fromVersion: "v1", toVersion: "v2", createdAt: "2026-01-01T00:00:00Z",
+      ops: [
+        { op: "addClip", trackId: "a2", clip: audioClip },
+        { op: "addClip", trackId: "v4", clip: gfxClip },
+      ],
+      timelineEdits: [
+        { label: "Music intro beat", range: { start: 0, end: 6 } },
+        { label: "Graphic at cut boundary", range: { start: 20, end: 25 } },
+      ] };
+    const tree = [...links, { version: "v3", parent: "v2" }];
+    const projected = threadTimeline(thread([placed]), cutHead, tree, read, 30, media, [placed]);
+    // Sub-range edit stays 0..6 (not expanded to 0..15); cut-boundary graphic is not resurrected when map(20) is null.
+    expect(projected.map(e => [e.label, e.range.start, e.range.end])).toEqual([
+      ["Music intro beat", 0, 6],
     ]);
   });
 });

@@ -155,8 +155,9 @@ export class MockClient implements ScarletApi {
     const project = this.store.projectById(id);
     const thread = this.projectThread(id, threadId);
     const head = project.head && this.store.db.timelines[project.head];
+    const projectChanges = this.store.db.changes.filter(c => c.projectId === id);
     return { version: project.head, edits: head ? threadTimeline(thread, head, this.store.db.versions[id] ?? [],
-      version => this.store.db.timelines[version], project.settings.fps, this.store.db.media[id]) : [] };
+      version => this.store.db.timelines[version], project.settings.fps, this.store.db.media[id], projectChanges) : [] };
   }
 
   async summarizeBatches(id: string, body: BatchSummariesRequest): Promise<BatchSummariesResponse> {

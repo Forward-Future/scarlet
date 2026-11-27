@@ -2785,7 +2785,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
       if (kept) return kept;
       // Not listed since Scarlet opened: the request's own saved list still says whether it took footage out.
       const own = threads.find(t => t.changes.some(c => c.id === changeId));
-      return revisionTarget({ context: about } as Task, changes, own && threadEditList(own));
+      return revisionTarget({ context: about } as Task, changes, own && threadEditList(own, media, changes));
     }
     const name = revisionTarget({ context: about } as Task, changes, placedEdits);
     if (key && name) targetNames.current.set(key, name);
@@ -2806,7 +2806,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
       const kept = targetTimes.current.get(key);
       if (kept !== undefined) return kept;
       const own = threads.find(t => t.changes.some(c => c.id === changeId));
-      const ownEdit = own && threadEditList(own).find(e => matchesEdit(e, { changeId, spot: editIndex }));
+      const ownEdit = own && threadEditList(own, media, changes).find(e => matchesEdit(e, { changeId, spot: editIndex }));
       return ownEdit ? ownEdit.range.start : about.time;
     }
     if (cutIndex !== undefined) return about.time;
@@ -2857,7 +2857,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     if (changeId && editIndex !== undefined) {
       const ownPool = focusThread?.id === replyThread.id && threadEdits.length ? threadEdits
         : rail.info(replyThread.id)?.edits?.length ? rail.info(replyThread.id)!.edits!
-        : threadEditList(replyThread, media);
+        : threadEditList(replyThread, media, changes);
       let edit = ownPool.find(e => matchesEdit(e, { changeId, spot: editIndex }));
       if (!edit) {
         for (const t of threads) {
