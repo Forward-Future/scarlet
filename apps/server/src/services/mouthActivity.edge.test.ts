@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -20,7 +20,8 @@ let workspace: ScarletApp;
 let projectId: string;
 
 beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), "scarlet-mouth-activity-test-"));
+  // The real path, as the media is read from: /private/var on macOS, not the /var link.
+  directory = realpathSync.native(mkdtempSync(join(tmpdir(), "scarlet-mouth-activity-test-")));
   workspace = createApp({ dataDir: directory, skillsSeedDir: join(directory, "empty-seed"), env: {}, log: () => {} });
   projectId = workspace.ctx.repos.projects.insert(createProject("Two cameras")).id;
   workspace.ctx.paths.ensureProject(projectId);
