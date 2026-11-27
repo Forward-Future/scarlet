@@ -7,6 +7,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 27, 2026
 
 - An export that stops arriving while it saves now fails and can be tried again, instead of waiting forever.
+- A style guide named in a skill or chat message is now used when its name is in bold, code or quotes, or has 's after it, instead of the default style guide.
 - Gemini can now read a style guide and bring in its sound effects instead of being refused.
 - Scarlet has a new app icon: an ink-painted moth in front of a red sun.
 - Keep, Revise, and Reject now look and animate the same across Needs review and Safe edits in both workspace layouts, including keeping timestamps, popping in a red ×, and lingering cleanly through refreshes before fading to Done or Working.
