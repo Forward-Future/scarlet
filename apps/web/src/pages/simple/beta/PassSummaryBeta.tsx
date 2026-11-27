@@ -189,14 +189,21 @@ export function PassSummary({ projectId, thread, threadOrder = 0, edits, rejecte
   const ownOpen = useRef<string>(undefined);
   const lastOpen = heldOpen ?? ownOpen;
   const openId = onEntry?.row.id;
+  const openPlace = onEntry?.place;
   useEffect(() => {
     const was = lastOpen.current;
     lastOpen.current = openId;
-    if (!onEntry || openId === was) return;
-    const at = onEntry.place;
+    if (!onEntry) return;
+    if (openId === was) {
+      // If an open edit returned from Working or Done to Needs review (e.g. a revision landed or Unkeep),
+      // keep the request's active section in sync so Revise and ↑ ↓ treat it as Needs review again.
+      if (tab !== "you" && (openPlace === "you" || openPlace === "optional")) setOpen(undefined);
+      return;
+    }
+    const at = openPlace;
     const shown = tab === "you" ? at === "you" || at === "optional" : at === tab;
-    if (!shown) setOpen(at === "you" || at === "optional" ? undefined : at);
-  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!shown && at) setOpen(at === "you" || at === "optional" ? undefined : at);
+  }, [openId, openPlace]); // eslint-disable-line react-hooks/exhaustive-deps
   // What it came to, with See edit after it for a request's one edit. The edits the sentence would name are said by
   // their rows, every one of which is in the column.
   const onScreen = new Set(drawn.flatMap(list => list.rows.flatMap(entryKeys)));
@@ -370,15 +377,22 @@ export function ThreadResult({ projectId, thread, threadOrder = 0, edits, reject
   // the list shown already.
   const ownOpen = useRef<string>(undefined);
   const lastOpen = heldOpen ?? ownOpen;
+  const openPlace = openEdit ? place(openEdit) : undefined;
   useEffect(() => {
     const was = lastOpen.current;
     lastOpen.current = openId;
-    if (!openEdit || openId === was) return;
-    const at = place(openEdit);
+    if (!openEdit) return;
+    if (openId === was) {
+      if (tab !== "you" && (openPlace === "you" || openPlace === "optional")) {
+        setOpen(openPlace === "you" ? "need" : undefined);
+      }
+      return;
+    }
+    const at = openPlace;
     const shown = tab === "you" ? at === "you" || at === "optional" : at === tab;
     if (shown) { if (at === "you") setOpen(o => o ?? "need"); }
     else if (at) setOpen(at === "you" ? "need" : at === "optional" ? undefined : at);
-  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [openId, openPlace]); // eslint-disable-line react-hooks/exhaustive-deps
   // There is no list of every edit to open: one left open from the line that used to open the edits Scarlet didn't
   // flag lets go, as they are listed under Safe edits.
   useEffect(() => { if (open === "all") setOpen(undefined); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps

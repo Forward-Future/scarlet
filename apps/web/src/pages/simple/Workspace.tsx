@@ -96,6 +96,8 @@ function wholeEdit(change: Change): AgentContext {
 const simpleRailWidth = (available: number) => Math.max(380, Math.min(480, available * 0.32));
 /** The narrowest the chat stays usable at. */
 const SIMPLE_RAIL_MIN = 320;
+/** How long an edit just sent to Working stays highlighted there before clearing its selection in the beta layout. */
+export const WORKING_HIGHLIGHT_MS = 3000;
 
 /**
  * The workspace: speak or type an edit, then watch each change with Before and After.
@@ -223,6 +225,8 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   }, [rail, current.id]);
   const railVersion = useSyncExternalStore(rail.subscribe, rail.snapshot, rail.snapshot);
   const [railOpen, setRailOpen] = useState({ working: true, done: false, low: false });
+  // Stable key of an open edit or call just sent to Working so its highlight clears itself after a few seconds in beta.
+  const [autoClearWorking, setAutoClearWorking] = useState<{ key: string; seq: number }>();
   if (beta) {
     rail.setLowOpen(railOpen.low);
     rail.setDoneOpen(railOpen.done);
@@ -780,6 +784,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     setFocus(undefined);
   }
   function listenCall(change: Change, a: CutAssessment) {
+    setAutoClearWorking(undefined);
     if (!beta && passThread) unfold(passThread);
     // The same call opened again while it's open keeps its words where they are.
     if (listening?.changeId !== change.id || listening.index !== a.index) startVisit();
@@ -805,6 +810,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     setListening(undefined);
   }
   function playChange(thread: Thread, change: Change) {
+    setAutoClearWorking(undefined);
     // The request's line pressed again while its edit is open plays that edit again as its row does: on the side it
     // was on, with its words left open. The message box is aimed at it again, as on any press of the line.
     const first = thread.id === focus?.threadId ? threadTimeline.edits.find(e => belongsTo(e, change)) : undefined;
@@ -819,11 +825,13 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     setFocus({ threadId: thread.id, changeId: change.id });
   }
   function playEdit(edit: ThreadEdit, single?: boolean | "moment") {
+    setAutoClearWorking(undefined);
     leaveForEdit();
     threadTimeline.choose(edit, "chat", single);
     setAimAgain(n => n + 1);
   }
   function openEdit(thread: Thread, ref: EditRef, from?: string, single?: boolean) {
+    setAutoClearWorking(undefined);
     if (!beta) unfold(thread);
     // The edit that's open, pressed again, plays again from the top: its card and the timeline's zoom stay. A cut
     // starts over as the video runs, unlit; any other edit keeps its side. Esc is what closes it. A cut plays under
@@ -1119,6 +1127,20 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   const openRailRow = (reviewingEdit && focusThread ? railView.findForEdit(focusThread.id, reviewingEdit) : undefined)
     ?? (openCall && passThread ? railView.findForCall(passThread.id, openCall.index) : undefined)
     ?? (reviewingEdit || openCall ? railView.findOpen() : undefined);
+  const openItemRootKey = !beta ? undefined
+    : reviewingEdit ? `edit:${editKey(reviewingEdit.previous[0] ?? reviewingEdit)}`
+    : openCall && listening ? `call:${listening.key}`
+    : undefined;
+  // Remember which rail section the open edit/call belonged to before a revision moved it to Working,
+  // since `createTask` can update the project store before `onSent` calls `moveOnFromRevised`.
+  const openSectionBeforeWork = useRef<{ key?: string; section?: RailSection }>({});
+  if (!beta || !openItemRootKey) {
+    openSectionBeforeWork.current = {};
+  } else if (openItemRootKey !== openSectionBeforeWork.current.key) {
+    openSectionBeforeWork.current = { key: openItemRootKey, section: openRailRow?.section };
+  } else if (openRailRow?.section && (openRailRow.section !== "working" || !openSectionBeforeWork.current.section)) {
+    openSectionBeforeWork.current = { key: openItemRootKey, section: openRailRow.section };
+  }
   const openBatchItems = reviewingEdit && focusThread && !reviewingEdit.rejected && !revisingEdit(reviewingEdit)
     && openRailRow?.batch && openRailRow.batch.length > 1
     ? openRailRow.batch : undefined;
@@ -2157,11 +2179,22 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   // list of every edit, the card stays on the edit it revised.
   function moveOnFromRevised() {
     if (beta) {
-      if (reviewingEdit) { if ((openRailRow?.section ?? tabShown(focusList)) === "you") moveOnFromShown(); return; }
+      if (reviewingEdit) {
+        if ((openSectionBeforeWork.current.section ?? openRailRow?.section ?? tabShown(focusList)) === "you") { moveOnFromShown(); return; }
+        const key = `edit:${editKey(reviewingEdit.previous[0] ?? reviewingEdit)}`;
+        setAutoClearWorking(was => ({ key, seq: (was?.seq ?? 0) + 1 }));
+        return;
+      }
       if (!openCall || !pass || !passThread) return;
       const view = rail.view();
       const currentCallRow = view.findForCall(passThread.id, openCall.index);
-      if ((currentCallRow?.section ?? tabShown(passList)) !== "you") return;
+      if ((openSectionBeforeWork.current.section ?? currentCallRow?.section ?? tabShown(passList)) !== "you") {
+        if (listening) {
+          const key = `call:${listening.key}`;
+          setAutoClearWorking(was => ({ key, seq: (was?.seq ?? 0) + 1 }));
+        }
+        return;
+      }
       const waits = view.sections.you.filter(r => isSteppableRailRow(r) && (r.needs || r.asks));
       const nextRow = nextRowAfter(waits, currentCallRow, listedAt.get(openCall.index) ?? openCall.start);
       player.pause();
@@ -2892,6 +2925,50 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
   };
 
   const compact = useSyncExternalStore(subscribeWidth, () => narrow.matches);
+  // In the beta layout, when an open edit or call is sent to Working and stays selected, keep its highlight visible
+  // briefly once it lands in Working and then clear the selection automatically unless the editor clicks it or starts
+  // typing/speaking.
+  const openItemInWorking = beta && ((!!reviewingEdit && editSentBack && !answeringEdit)
+    || (!!openCall && openCallBack && !answeringCut));
+  const prevOpenWorking = useRef<{ key?: string; working: boolean }>({ working: false });
+  useEffect(() => {
+    const prev = prevOpenWorking.current;
+    prevOpenWorking.current = { key: openItemRootKey, working: openItemInWorking };
+    if (!beta || !openItemRootKey || !openItemInWorking) {
+      setAutoClearWorking(undefined);
+      return;
+    }
+    if (prev.key === openItemRootKey && !prev.working) {
+      setAutoClearWorking(was => ({ key: openItemRootKey, seq: (was?.seq ?? 0) + 1 }));
+    }
+  }, [beta, openItemRootKey, openItemInWorking]);
+  const openWorkingRendered = beta && !!openItemRootKey && openItemInWorking && (compact || openDisplaySection === "working");
+  const resumeAfterAutoClear = useRef(false);
+  const clearWorkingSelection = useRef<() => void>(noop);
+  clearWorkingSelection.current = () => {
+    const box = useUiStore.getState();
+    if (box.agentDraft.trim() || box.speaking) return;
+    setAutoClearWorking(undefined);
+    const wasPlaying = usePlayerStore.getState().playing;
+    if (reviewingEdit && editSentBack && !answeringEdit) {
+      resumeAfterAutoClear.current = wasPlaying;
+      threadTimeline.clear();
+      setFocus(undefined);
+    } else if (openCall && openCallBack && !answeringCut) {
+      resumeAfterAutoClear.current = wasPlaying;
+      setListening(undefined);
+    }
+  };
+  useEffect(() => {
+    if (!resumeAfterAutoClear.current || openItemRootKey) return;
+    resumeAfterAutoClear.current = false;
+    player.play();
+  }, [openItemRootKey]);
+  useEffect(() => {
+    if (!beta || !autoClearWorking || autoClearWorking.key !== openItemRootKey || !openWorkingRendered || written || speaking) return;
+    const timer = window.setTimeout(() => clearWorkingSelection.current(), WORKING_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [beta, autoClearWorking, openItemRootKey, openWorkingRendered, written, speaking]);
   // In the new layout on a narrow window, what stays put above the message box: the request Scarlet is on now, else the
   // pass waiting on the editor's calls. Everything queued waits behind it, so it holds the same place until it's done.
   const [pinHost, setPinHost] = useState<HTMLElement | null>(null);

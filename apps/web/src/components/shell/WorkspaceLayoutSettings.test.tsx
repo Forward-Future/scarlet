@@ -9,8 +9,10 @@ import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { buildThreads } from "../../lib/threads";
 import { api } from "../../lib/client";
 import { useProjectStore, type ProjectData } from "../../stores/project";
+import { useHostsStore } from "../../stores/hosts";
 import { useUiStore } from "../../stores/ui";
 import { SimpleWorkspace } from "../../pages/SimpleWorkspace";
+import { WORKING_HIGHLIGHT_MS } from "../../pages/simple/Workspace";
 import { LINGER_FADE_MS, LINGER_MS } from "../../pages/simple/beta/reviewTabsBeta";
 import { WorkspaceLayoutSettings } from "./WorkspaceLayoutSettings";
 
@@ -1809,5 +1811,176 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".composer-aim-badge")?.textContent).toContain("Revising");
     expect(container.querySelector(".composer-aim-words")?.textContent).toBe("From separate tools to a long chain");
     expect(container.querySelector(".composer-aim-rowcopy .edit-version")?.textContent).toBe("v2");
+  });
+
+  it("auto-clears the Working row highlight after a few seconds when an edit is sent there, unless clicked or being typed", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const change = db.changes.find(c => c.id === "chg_approved_2") ?? db.changes[0]!;
+    const ownerThreadId = buildThreads({ changes: db.changes, tasks: db.tasks, notes: db.notes })
+      .find(t => t.changes.some(c => c.id === change.id))!.id;
+    const editOne = { changeId: change.id, spot: 0, label: "Kept overlay", kind: "overlay" as const, range: { start: 1, end: 4 }, previous: [] as { changeId: string; spot: number }[] };
+    const editTwo = { changeId: change.id, spot: 1, label: "Kept captions", kind: "graphic" as const, range: { start: 6, end: 9 }, previous: [] as { changeId: string; spot: number }[] };
+    let liveEdits: Array<{ changeId: string; spot: number; label: string; kind: "overlay" | "graphic"; range: { start: number; end: number }; previous: { changeId: string; spot: number }[]; check?: string }> = [editOne, editTwo];
+    let currentHead = project.head!;
+    let currentData: ProjectData = {
+      id: PRJ,
+      project: { ...project, head: currentHead },
+      timeline: { ...db.timelines[project.head!]!, version: currentHead },
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: db.tasks.filter(t => t.state !== "waiting_for_user" && t.state !== "running"),
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+
+    const { keepEdits } = await import("../../lib/keptEdits");
+    keepEdits(PRJ, ownerThreadId, [editOne, editTwo], currentHead);
+
+    const oldHosts = useHostsStore.getState();
+    vi.spyOn(window, "matchMedia").mockImplementation(query => ({
+      matches: false, media: query, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+    } as unknown as MediaQueryList));
+    useHostsStore.setState({ hosts: db.hosts });
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    const createTask = vi.fn().mockImplementation(async () => undefined);
+    useProjectStore.setState({ current: currentData, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined), createTask });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: currentHead,
+      edits: threadId === ownerThreadId ? (liveEdits as never) : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    const doneToggle = () => [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")]
+      .find(b => b.textContent?.startsWith("Done"))!;
+    const workingBtn = (label: string) => [...container.querySelectorAll<HTMLButtonElement>('.review-sec-body[aria-label="Working"] button.simple-edit')]
+      .find(b => b.textContent?.includes(label));
+    const doneBtn = (label: string) => [...container.querySelectorAll<HTMLButtonElement>('.review-sec-body[aria-label="Done"] button.simple-edit')]
+      .find(b => b.textContent?.includes(label));
+
+    // Open Done, click "Kept captions", then keep Done open while sending a revision so it lingers in Done first.
+    await act(async () => doneToggle().click());
+    await act(async () => {});
+    await act(async () => doneBtn("Kept captions")!.click());
+    await act(async () => {});
+    expect(doneBtn("Kept captions")!.classList.contains("is-on")).toBe(true);
+
+    vi.useFakeTimers();
+    try {
+      const now = new Date().toISOString();
+      const baseTask = db.tasks.find(t => t.id === "task_done") ?? db.tasks[0]!;
+      const revTask1 = Task.parse({
+        ...baseTask, id: "task_rev_done_captions", kind: "edit", state: "running",
+        createdAt: now, startedAt: now, finishedAt: undefined, summary: null, changeIds: [],
+        instruction: "Make captions larger",
+        context: { changeId: change.id, editIndex: 1, threadId: ownerThreadId, message: "Make captions larger" },
+      });
+      currentData = { ...currentData, tasks: [...currentData.tasks, revTask1] };
+      await act(async () => { useProjectStore.setState({ current: currentData }); });
+      await act(async () => {});
+
+      // While lingering in Done (LINGER_MS + LINGER_FADE_MS), it has not moved into Working yet.
+      expect(workingBtn("Kept captions")).toBeUndefined();
+      await act(async () => { vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS); });
+      await act(async () => {});
+
+      // Once it lands in Working, it starts highlighted.
+      expect(workingBtn("Kept captions")?.classList.contains("is-on")).toBe(true);
+
+      // Still highlighted just before WORKING_HIGHLIGHT_MS.
+      const playMock = HTMLMediaElement.prototype.play as ReturnType<typeof vi.fn>;
+      await act(async () => { vi.advanceTimersByTime(WORKING_HIGHLIGHT_MS - 100); });
+      expect(workingBtn("Kept captions")?.classList.contains("is-on")).toBe(true);
+
+      // Typing in the composer pauses the auto-clear countdown.
+      await act(async () => { useUiStore.getState().setAgentDraft("Wait, also adjust the font"); });
+      await act(async () => { vi.advanceTimersByTime(WORKING_HIGHLIGHT_MS + 500); });
+      expect(workingBtn("Kept captions")?.classList.contains("is-on")).toBe(true);
+
+      // Clearing the draft lets the countdown finish and auto-clear the highlight (without starting playback when paused).
+      playMock.mockClear();
+      await act(async () => { useUiStore.getState().setAgentDraft(""); });
+      await act(async () => { vi.advanceTimersByTime(WORKING_HIGHLIGHT_MS); });
+      await act(async () => {});
+      expect(workingBtn("Kept captions")?.classList.contains("is-on")).toBe(false);
+      expect(workingBtn("Kept captions")?.getAttribute("aria-current")).toBeNull();
+      expect(playMock).not.toHaveBeenCalled();
+
+      // Explicitly clicking the row in Working keeps it highlighted indefinitely.
+      await act(async () => workingBtn("Kept captions")!.click());
+      await act(async () => {});
+      expect(workingBtn("Kept captions")?.classList.contains("is-on")).toBe(true);
+      await act(async () => { vi.advanceTimersByTime(WORKING_HIGHLIGHT_MS * 3); });
+      expect(workingBtn("Kept captions")?.classList.contains("is-on")).toBe(true);
+
+      // When that revision finishes and lands back in Needs review (v2) while still open,
+      // the active section syncs back to Needs review so revising it from the composer moves on cleanly.
+      currentHead = `${project.head!}_v2`;
+      const editTwoV2 = { changeId: "chg_captions_v2", spot: 0, label: "Kept captions", kind: "graphic" as const, range: { start: 6, end: 9 }, previous: [{ changeId: change.id, spot: 1 }], check: "Check caption size." };
+      liveEdits = [editOne, editTwoV2];
+      const doneV2Change = { ...change, id: "chg_captions_v2", taskId: revTask1.id, threadId: ownerThreadId };
+      currentData = {
+        ...currentData,
+        project: { ...currentData.project, head: currentHead },
+        timeline: { ...currentData.timeline!, version: currentHead },
+        changes: [...currentData.changes, doneV2Change],
+        tasks: currentData.tasks.map(t => t.id === revTask1.id ? Task.parse({ ...t, state: "done", finishedAt: now, changeIds: ["chg_captions_v2"] }) : t),
+      };
+      await act(async () => { useProjectStore.setState({ current: currentData }); });
+      await act(async () => {});
+      await act(async () => {});
+
+      const needsBtn = [...container.querySelectorAll<HTMLButtonElement>(".review-rail-list button.simple-edit")]
+        .find(b => b.textContent?.includes("Kept captions"))!;
+      expect(needsBtn).toBeTruthy();
+      expect(needsBtn.classList.contains("is-on")).toBe(true);
+      expect(container.querySelector(".edit-card")).not.toBeNull();
+
+      // Sending a revision from Needs review on v2 closes the card immediately instead of staying stuck in Working.
+      const revTask2 = Task.parse({
+        ...baseTask, id: "task_rev_v2_captions", kind: "edit", state: "running",
+        createdAt: now, startedAt: now, finishedAt: undefined, summary: null, changeIds: [],
+        instruction: "Try bolder weight",
+        context: { changeId: "chg_captions_v2", editIndex: 0, threadId: ownerThreadId, message: "Try bolder weight" },
+      });
+      createTask.mockImplementation(async () => {
+        currentData = { ...currentData, tasks: [...currentData.tasks, revTask2] };
+        useProjectStore.setState({ current: currentData });
+        return revTask2;
+      });
+      await act(async () => { useUiStore.getState().setAgentDraft("Try bolder weight"); });
+      await act(async () => {});
+      const sendBtn = container.querySelector<HTMLButtonElement>(".composer-send")!;
+      expect(sendBtn.disabled).toBe(false);
+      await act(async () => sendBtn.click());
+      await act(async () => {});
+      expect(createTask).toHaveBeenCalledTimes(1);
+      expect(container.querySelector(".edit-card")).toBeNull();
+      expect(container.querySelector(".review-rail button.is-on")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      useHostsStore.setState(oldHosts, true);
+    }
+
+    const { readFileSync } = await import("node:fs");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    expect(betaCss).toContain('.review-sec-body[aria-label="Working"] :is(.simple-pass-list > li > button, .simple-edit) { transition: background-color .3s ease; }');
   });
 });
