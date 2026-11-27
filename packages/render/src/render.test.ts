@@ -1001,7 +1001,7 @@ describe("render", () => {
     ]);
     const pngProbe = await probeMedia(sarPng);
     expect((pngProbe.raw as { streams?: Array<{ sample_aspect_ratio?: string }> }).streams?.[0]?.sample_aspect_ratio).toBe("8:9");
-    expect(sampleAspectRatio(pngProbe)).toBe(1);
+    expect(sampleAspectRatio(pngProbe)).toBeCloseTo(8 / 9);
     project.media.push({
       id: "sar-still", kind: "image", name: "sar-still.png", path: "sar-still.png",
       width: 320, height: 180, hasAudio: false, hasAlpha: false,
@@ -2496,19 +2496,18 @@ it("encodes multi-split batches cleanly when an adelay audio clip precedes an ea
 }, 60_000);
 
 it("fits anamorphic footage by its displayed shape rather than its stored pixels", async () => {
-  const renderBounds = async (name: string, sar: string, srcW = 144, srcH = 108, outW = 96, outH = 54, zoom = false) => {
-    const clipFile = path.join(dir, `${name}.mp4`);
+  const renderBounds = async (name: string, sar: string, srcW = 144, srcH = 108, outW = 96, outH = 54, zoom = false, still = false) => {
+    const clipFile = path.join(dir, `${name}.${still ? "png" : "mp4"}`);
     const outFile = path.join(dir, `${name}-out.mp4`);
     await runCapture(resolveFfmpeg(), [
       "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
       "-f", "lavfi", "-i", `color=c=white:s=${srcW}x${srcH}:r=25:d=0.2,setsar=${sar}`,
-      "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", clipFile,
+      ...(still ? ["-frames:v", "1"] : ["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]), clipFile,
     ]);
     const project = createProject("Anamorphic", { width: outW, height: outH, fps: 25, aspect: "custom" });
-    project.media.push({
-      id: "m1", kind: "video", name: path.basename(clipFile), path: path.basename(clipFile),
-      duration: 0.2, fps: 25, width: srcW, height: srcH, hasAudio: false,
-    });
+    project.media.push(still
+      ? { id: "m1", kind: "image", name: path.basename(clipFile), path: path.basename(clipFile), width: srcW, height: srcH, hasAudio: false, hasAlpha: false }
+      : { id: "m1", kind: "video", name: path.basename(clipFile), path: path.basename(clipFile), duration: 0.2, fps: 25, width: srcW, height: srcH, hasAudio: false, hasAlpha: false });
     const timeline: Timeline = {
       version: "draft", parent: null, projectId: project.id, name: "Main", background: "#000000", markers: [],
       tracks: [{ id: "v1", kind: "video", name: "V1", muted: false, hidden: false, clips: [makeMediaClip("m1", 0, 0.2, 0, zoom ? {
@@ -2544,4 +2543,8 @@ it("fits anamorphic footage by its displayed shape rather than its stored pixels
   // An animated zoom fits by the displayed shape too.
   expect(await renderBounds("anamorphic-4-3-zoom", "4/3", 144, 108, 96, 54, true)).toEqual({ left: 0, width: 96, top: 0, height: 54 });
   expect(await renderBounds("square-1-1-zoom", "1", 144, 108, 96, 54, true)).toEqual({ left: 12, width: 72, top: 0, height: 54 });
+  // 96x54 at SAR 8:9 shows 85.3x54, so a zoom on a 96x54 canvas stays centred inside its transparent border.
+  expect(await renderBounds("narrow-8-9-zoom", "8/9", 96, 54, 96, 54, true)).toEqual({ left: 6, width: 84, top: 0, height: 54 });
+  // A zoomed still ignores its pixel-aspect tag, as an unzoomed one does.
+  expect(await renderBounds("still-8-9-zoom", "8/9", 96, 54, 96, 54, true, true)).toEqual({ left: 0, width: 96, top: 0, height: 54 });
 });

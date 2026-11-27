@@ -130,9 +130,9 @@ export function parseRate(rate: string | undefined): number {
 export const storedAsShown = (probe: Pick<ProbeResult, "rotation" | "displayMatrix" | "isStillImage">) =>
   !probe.isStillImage && !probe.displayMatrix && Math.abs(probe.rotation) % 360 === 0;
 
-/** The video stream's sample aspect ratio as shown (what FFmpeg's `sar` is after autorotate): 1 when absent or unknown; 1 for stills, which render with square pixels. */
+/** The video stream's sample aspect ratio as shown (what FFmpeg's `sar` is after autorotate): 1 when absent or unknown. A still asset renders with square pixels whatever this says (`setsar=1`). */
 export function sampleAspectRatio(probe: ProbeResult | undefined): number {
-  if (!probe || probe.isStillImage) return 1;
+  if (!probe) return 1;
   const stream = (probe.raw as FfprobeOutput | undefined)?.streams?.find(s => s.codec_type === "video" && !s.disposition?.attached_pic);
   const parsed = parseRate(stream?.sample_aspect_ratio?.replace(":", "/"));
   const sar = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;

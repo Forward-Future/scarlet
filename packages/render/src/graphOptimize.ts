@@ -102,7 +102,9 @@ function coversCanvas(clip: Clip, p: Placement, media: Map<string, MediaAsset>, 
     if (picture?.videoStart === undefined || !picture.videoDuration || !asset.duration ||
         sourceStart < picture.videoStart - 1e-6 || sourceEnd > Math.min(asset.duration, picture.videoStart + picture.videoDuration) + 1e-6) return false;
   }
-  const { w, h } = fittedSize(asset.width * sampleAspectRatio(picture), asset.height, W, H, tf.scale);
+  // A still renders with square pixels (`setsar=1`), as image viewers show it.
+  const sar = asset.kind === "image" ? 1 : sampleAspectRatio(picture);
+  const { w, h } = fittedSize(asset.width * sar, asset.height, W, H, tf.scale);
   return w >= W && h >= H;
 }
 
