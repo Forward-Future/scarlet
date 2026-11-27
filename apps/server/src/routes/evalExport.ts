@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { carriesAudio, clipDuration, planCutReview, reviewReasons, type Change, type MediaClip, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import type { AppEnv } from "../auth.js";
 import type { Ctx } from "../context.js";
+import { logId } from "../logText.js";
 import { resolveTimeline } from "../services/timeline.js";
 import { requireProject } from "./util.js";
 
@@ -39,12 +40,15 @@ export function evalExportRoutes(ctx: Ctx) {
     const changes = ctx.repos.changes.select(
       "project_id = ? AND json_extract(json, '$.intent') = 'suggestion'" + (taskId ? " AND json_extract(json, '$.taskId') = ?" : ""),
       taskId ? [project.id, taskId] : [project.id], "created_at ASC");
+    const unreadable: string[] = [];
     const exported = changes.flatMap(change => {
       let base: Timeline, proposed: Timeline;
       try {
         base = resolveTimeline(ctx, project, change.fromVersion);
         proposed = resolveTimeline(ctx, project, change.toVersion);
       } catch {
+        // Left out of the export. Said once per export, so an eval missing decisions can be traced to it.
+        unreadable.push(change.id);
         return [];
       }
       // Compute the review plan without storing the reconstructed original of a first cut.
@@ -63,6 +67,9 @@ export function evalExportRoutes(ctx: Ctx) {
         }),
       }];
     });
+    if (unreadable.length) {
+      ctx.log(`[review] review-decisions export of ${logId(project.id)} left out ${unreadable.length} ${unreadable.length === 1 ? "change" : "changes"} whose versions couldn't be read: ${unreadable.slice(0, 10).map(logId).join(", ")}${unreadable.length > 10 ? ", …" : ""}`);
+    }
     return c.json({ projectId: project.id, changes: exported });
   });
 

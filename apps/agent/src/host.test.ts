@@ -12,7 +12,7 @@ import { AgentHost, type HostOptions } from "./host.js";
 import type { AgentConfig } from "./config.js";
 import { promptTimeLimit, stalledReason, timedOutReason } from "./runLimits.js";
 import { claudeConfigDir, claudeProjectDir, claudeProjectDirs, pruneTaskDirs, removeClaudeSessions, removeControlFiles } from "./taskDirs.js";
-import { humanDuration } from "./taskReports.js";
+import { humanDuration } from "./logText.js";
 import { codexHomeDir } from "./runners/codex.js";
 import { DEFAULT_STALL_MS } from "./runners/types.js";
 import type { RunAgentFn, RunAgentOptions } from "./runners/types.js";
@@ -204,6 +204,7 @@ it("records the engine's resulting state and a question that no longer pauses th
   expect(lines).toContainEqual(expect.stringMatching(/requested=done state=queued outcome=changed/));
   expect(lines).toContainEqual(expect.stringMatching(/requested=done state=done outcome=superseded/));
   expect(lines).toContain(`[host] question task=${task.id} attempt=${startedAt} outcome=not_waiting`);
+  expect(lines).toContainEqual(expect.stringMatching(new RegExp(`^task ${task.id}: \\w+ ended \\(exit code none\\) after \\d+m?s; 0 tool calls, 0 errors$`)));
   expect(requests.filter(path => path.endsWith("/complete"))).toHaveLength(2);
   expect(lines.join("\n")).not.toContain("Private");
 });

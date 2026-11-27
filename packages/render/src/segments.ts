@@ -10,7 +10,7 @@ import path from "node:path";
 import { mergeRanges, planPlaybackSegments, planSegments, timelineDuration } from "@scarlet/timeline";
 import type { Clip, Project, Timeline, TimeRange } from "@scarlet/timeline";
 import { withRenderEncoder } from "./encoder.js";
-import { FfmpegError, LOCAL_MEDIA_INPUT, failureReason, runFfmpeg, sampleCount } from "./exec.js";
+import { FfmpegError, LOCAL_MEDIA_INPUT, failureReason, logElapsed, logRender, runFfmpeg, sampleCount } from "./exec.js";
 import { copyOriginalPicture, wholeOriginalPicture } from "./pictureCopy.js";
 import { renderProgramAudio } from "./programAudio.js";
 import { outputSize, renderRange, type RenderOptions } from "./render.js";
@@ -18,6 +18,7 @@ import {
   DELIVERY_AUDIO_REVISION,
   PROXY_CLOCK_REVISION,
   RENDER_REVISION,
+  SMOOTH_TRANSFORM_REVISION,
   TRANSITION_RENDER_REVISION,
   deliveryPicture,
   lutFileStamps,
@@ -43,6 +44,7 @@ export {
   DELIVERY_AUDIO_REVISION,
   PROXY_CLOCK_REVISION,
   RENDER_REVISION,
+  SMOOTH_TRANSFORM_REVISION,
   TRANSITION_RENDER_REVISION,
   lutFileStamps,
   segmentKey,
@@ -245,9 +247,9 @@ export async function renderPlaybackSegment(project: Project, timeline: Timeline
   const media = new Map(project.media.map(asset => [asset.id, asset]));
   const transitions = planTransitions(timeline, media, project.settings.fps);
   const [part] = segmentTimelines(transitions.timeline, [range]);
-  const seg = segmentInfo(project, part!, range, cacheDir, { quality, height: size.height, encoder, allowProxy: !!opts.pictureSource }, opts.mediaRoot, media, transitions);
+  const seg = segmentInfo(project, part!, range, cacheDir, { quality, height: size.height, encoder, allowProxy: !!opts.pictureSource }, opts.mediaRoot, media, transitions, opts.lutRoots);
   seg.cached = await fileHasContent(seg.file);
-  warnings.push(...await fillSegment(project, part!, seg, { ...opts, transitions, videoEncoder, quality, pictureOnly: false }));
+  warnings.push(...await fillSegment(project, part!, seg, { ...opts, transitions, videoEncoder, quality, pictureOnly: false, editorWaiting: true }));
   // Decode AAC with its MP4 priming edit intact. FLAC has no encoder delay, so
   // appending the next fragment neither drops nor repeats audio at the join.
   const samples = sampleCount(range.start, range.end, project.settings.sampleRate);
@@ -298,6 +300,7 @@ export async function renderFullCached(
       attempt => renderFullCached(project, timeline, cacheDir, output, attempt));
   }
   const pictureOnly = quality === "delivery" || opts.exportHeight !== undefined;
+  const started = Date.now();
   const visible = opts.omitCaptions ? { ...timeline, tracks: timeline.tracks.filter(t => t.kind !== "caption") } : timeline;
   const picture = pictureOnly ? deliveryPicture(project, visible) : visible;
   const ranges = exportSegments(!pictureOnly && !opts.omitCaptions && opts.segmentSeconds === undefined
@@ -313,7 +316,7 @@ export async function renderFullCached(
   const media = new Map(project.media.map(asset => [asset.id, asset]));
   const transitions = planTransitions(picture, media, project.settings.fps);
   const parts = segmentTimelines(transitions.timeline, ranges);
-  const segments = ranges.map((range, i) => segmentInfo(project, parts[i]!, range, cacheDir, format, opts.mediaRoot, media, transitions));
+  const segments = ranges.map((range, i) => segmentInfo(project, parts[i]!, range, cacheDir, format, opts.mediaRoot, media, transitions, opts.lutRoots));
   for (let i = 0; i < segments.length; i += 32) {
     await Promise.all(segments.slice(i, i + 32).map(async seg => { seg.cached = await fileHasContent(seg.file); }));
   }
@@ -401,6 +404,9 @@ export async function renderFullCached(
   opts.onProgress?.(1);
 
   const reused = segments.filter(segment => segment.cached).length;
+  logRender(() => `[render] ${quality} ${pictureOnly ? "export" : "render"} of ${segments.length} section${segments.length === 1 ? "" : "s"}` +
+    ` assembled in ${logElapsed(Date.now() - started)}: ${segments.length - reused} encoded with ${encoder}${runs.length < todo.length ? ` in ${runs.length} runs` : ""},` +
+    ` ${reused} reused from the cache${sound ? ", sound mixed separately" : ""}`);
   return {
     output,
     duration: total,

@@ -32,7 +32,7 @@ import { ReportLink } from "../../components/shell/ReportLink";
 /** What the chat says of how a run ended that a request's block doesn't read out: its heading says it stopped or couldn't finish. */
 const UNSAID = /^(?:Edit stopped\.|Edit resumed\.|Scarlet couldn’t finish this edit\.)$/;
 
-/** "Learned for dialogue-pass: ". What the rule came from ("from 3 cuts you rejected") is said in Learnings, not on the chat's one line. */
+/** "Learned for <skill>: ". What the rule came from ("from 3 cuts you rejected") is said in Learnings, not on the chat's one line. */
 function learnedLead(skill: string | undefined): string {
   return skill ? `Learned for ${skill}: ` : "Learned: ";
 }

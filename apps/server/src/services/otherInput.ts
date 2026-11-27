@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { fileInDirectory } from "@scarlet/render";
 import type { MediaAsset, TimeRange } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import { otherVoiceTurns } from "./otherVoiceTurns.js";
 import { wordSource, type measureSources } from "./transcriptSources.js";
 import { ENERGY_READS, sourceEnergyReader } from "./sourceEnergy.js";
@@ -130,6 +131,7 @@ function makeReader(ctx: Ctx) {
     const read = (from: number, to: number) => levels.energy(file, from, to, signal);
     let inputs = inputsOf.get(stamp);
     if (!inputs) {
+      const began = performance.now();
       inputs = (async () => {
         if (!(await levels.labels(file, signal)).length) return;
         const transcript = ctx.repos.transcripts.get(media.transcriptId!);
@@ -137,6 +139,10 @@ function makeReader(ctx: Ctx) {
       })();
       if (inputsOf.size >= 32) inputsOf.delete(inputsOf.keys().next().value!);
       inputsOf.set(stamp, inputs);
+      // Measured once for the file as it is now: which input the dialogue is on decides what every read of it says.
+      void inputs.then(found => ctx.log(`[audio] ${logId(media.id)} inputs ${found ? `measured: dialogue on input ${found.dialogue + 1}, other on ${found.other + 1}, mix on ${found.mix + 1}` : "not told apart: nothing is said about either"} in ${humanDuration(performance.now() - began)}`),
+        error => { if (!signal.aborted) ctx.log(`[audio] ${logId(media.id)} inputs couldn't be measured after ${humanDuration(performance.now() - began)}: ${clip(error instanceof Error ? error.message : String(error))}`); })
+        .catch(() => { /* A log line never breaks what it describes. */ });
       inputs.catch(() => inputsOf.delete(stamp));
     }
     const known = await inputs;

@@ -3,7 +3,7 @@ import { mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../private-files.js";
 import { briefInput, COMPACTED, COMPACTING, COMPACTION_ENDED, CONTROL_DIR, DEFAULT_STALL_MS, isQuestionTool, nextPlanEvent, prettyToolName, questionText, toolCallTarget, workspaceEnv, type RunAgentOptions, type RunAgentResult, type RunnerEvent } from "./types.js";
-import { earlyResult, exitError, jsonLine, resolveCli, spawnLines, tailSummary } from "./spawn.js";
+import { earlyResult, exitError, jsonLine, resolveCli, runnerLog, spawnLines, tailSummary } from "./spawn.js";
 import { addUsage, claudeUsage, createUsageReporter, usageWithModel } from "./usage.js";
 import type { AgentUsage, PlanStep } from "@scarlet/shared";
 
@@ -423,13 +423,17 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
 
   const stamp = await binaryStamp(cmd.file);
   const known = unsupportedClaudeFlags.get(stamp);
+  const runLog = runnerLog(opts, "claude");
   if (known) {
     for (const flag of known) stripClaudeCompatFlag(cmd.args, flag);
+    if (known.size) runLog(`runs without ${[...known].join(", ")}: this version refused them before`);
   }
 
   for (let attempt = 0; attempt <= CLAUDE_COMPAT_FLAGS.length; attempt++) {
     const st = newClaudeState();
     const reportUsage = createUsageReporter(opts.onUsage, opts.model);
+    // Lines that weren't one JSON object: passed on as they are, and counted here for the host's log.
+    let notJson = 0;
     const handle = spawnLines(cmd.file, cmd.args, {
       cwd: opts.cwd,
       env,
@@ -437,8 +441,12 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
       signal: opts.signal,
       timeoutMs: opts.timeoutMs,
       stallMs: opts.stallMs ?? DEFAULT_STALL_MS,
+      log: opts.log,
+      task: opts.task,
       onLine: (line) => {
-        for (const ev of parseClaudeLine(line, st)) {
+        const events = parseClaudeLine(line, st);
+        if (events.length === 1 && events[0]!.type === "log" && events[0]!.text === line) notJson++;
+        for (const ev of events) {
           // A resume that finds no session falls back to a fresh run. Keep its error out of the task log.
           if (opts.resumeSession && !st.started && ev.type === "error") continue;
           opts.onEvent(ev);
@@ -453,6 +461,7 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
       },
     });
     const outcome = await handle.done;
+    if (notJson) runLog(`wrote ${notJson} output line${notJson === 1 ? "" : "s"} that weren't JSON`);
     const session = { sessionId: st.sessionId ?? (st.started ? opts.resumeSession : undefined), usage: claudeRunUsage(st, opts.model) };
     const early = earlyResult(st, outcome, session);
     if (early) return early;
@@ -461,6 +470,7 @@ export async function runClaude(opts: RunAgentOptions): Promise<RunAgentResult> 
     if (!ok && !st.started && !mcpFailed && !st.resultIsError) {
       const flag = unsupportedClaudeCompatFlag(outcome.stderr);
       if (flag && stripClaudeCompatFlag(cmd.args, flag)) {
+        runLog(`refused ${flag}; trying again without it`);
         let cached = unsupportedClaudeFlags.get(stamp);
         if (!cached) {
           cached = new Set();

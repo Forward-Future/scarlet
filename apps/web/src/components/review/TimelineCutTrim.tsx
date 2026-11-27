@@ -258,17 +258,18 @@ export function useCutTrim({
       || cutAdjust.bounds.maxEnd > (live?.orig.end ?? shown.end) + halfFrame;
     const toneClass = cutAdjust.tone === "call" ? " is-call" : cutAdjust.tone === "edit" ? " is-edit" : "";
     const subject = cutAdjust.tone === "edit" ? "edit" : "cut";
+    const visEps = Math.max(1e-6, span * 1e-6);
     const handle = (edge: "start" | "end") => {
       if (edge === "start" ? !canMoveStart : !canMoveEnd) return null;
       const time = edge === "start" ? shown.start : shown.end;
-      if (time < from || time > from + span) return null;
+      if (time < from - visEps || time > from + span + visEps) return null;
       const held = live?.edge === edge;
       return (
         <button
           key={edge}
           type="button"
           className={`timeline-cut-handle is-${edge}${toneClass}${held ? " is-held" : ""}`}
-          style={{ left: `${percent(time)}%` }}
+          style={{ left: `${Math.max(0, Math.min(100, percent(time)))}%` }}
           aria-label={`Adjust ${edge === "start" ? "start" : "end"} of ${subject}, ${playbackClock(time)}`}
           title={`Drag edge to adjust ${subject} · hold for frame steps · ← → one frame`}
           data-cut-handle={edge}

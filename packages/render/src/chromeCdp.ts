@@ -5,10 +5,15 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, posix } from "node:path";
+import { join, parse, posix } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
-import { AbortError } from "./exec.js";
+import { AbortError, logElapsed, logReason, logRender } from "./exec.js";
+
+/** The browser's program name for the log, without its folder: "Google Chrome", "msedge". */
+function chromeName(chrome: string): string {
+  return parse(chrome.replace(/\\/g, "/")).name || "Chrome";
+}
 
 /** How long Chrome has to start, and a page to load. */
 const CHROME_START_MS = 30_000;
@@ -121,18 +126,27 @@ export class Browser {
     out.on("data", (chunk: Buffer) => this.read(chunk));
     out.on("error", error => this.fail(error));
     (child.stdio[3] as Writable).on("error", error => this.fail(error));
-    child.on("exit", (code, sig) => this.fail(new Error(`Chrome exited (${sig ?? code}) while drawing the graphic${this.stderr.length ? `: ${this.stderr.join("").slice(-600)}` : ""}`)));
+    child.on("exit", (code, sig) => {
+      if (!this.closing) logRender(`[graphics] Chrome exited by itself (${sig ?? code}) while it was drawing`, "chrome-exit");
+      this.fail(new Error(`Chrome exited (${sig ?? code}) while drawing the graphic${this.stderr.length ? `: ${this.stderr.join("").slice(-600)}` : ""}`));
+    });
     child.on("error", error => this.fail(error));
   }
+
+  /** Set once Scarlet starts closing it, so its exit is expected. */
+  private closing = false;
 
   /** Start Chrome. One that doesn't answer in time, or a stop meanwhile, leaves no process or profile behind. */
   static async launch(chrome: string, signal?: AbortSignal, timeoutMs = CHROME_START_MS): Promise<Browser> {
     signal?.throwIfAborted();
+    const started = Date.now();
     const profile = await mkdtemp(join(tmpdir(), "scarlet-chrome-"));
     const args = [
       "--headless=new", "--remote-debugging-pipe", `--user-data-dir=${profile}`,
       "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--disable-default-apps",
       "--disable-background-networking", "--disable-component-update", "--disable-domain-reliability", "--metrics-recording-only",
+      "--disable-breakpad", "--disable-crash-reporter", "--no-pings", "--disable-client-side-phishing-detection",
+      "--safebrowsing-disable-auto-update",
       "--mute-audio", "--hide-scrollbars", "--force-color-profile=srgb", "--font-render-hinting=none",
       "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
       "--allow-file-access-from-files", "--disable-features=Translate,MediaRouter,OptimizationHints,DialMediaRouteProvider",
@@ -145,8 +159,11 @@ export class Browser {
       child.stderr?.on("data", (chunk: Buffer) => { stderr.push(chunk.toString("utf8")); if (stderr.length > 40) stderr.shift(); });
       browser = new Browser(child, profile, stderr);
       await within(browser.send("Browser.getVersion"), timeoutMs, `Chrome didn't start within ${Math.round(timeoutMs / 1000)} s.`, signal);
+      const took = Date.now() - started;
+      if (took >= 5_000) logRender(`[graphics] ${chromeName(chrome)} was slow to start: ${logElapsed(took)}`);
       return browser;
     } catch (error) {
+      if (!signal?.aborted) logRender(() => `[graphics] ${chromeName(chrome)} didn't start after ${logElapsed(Date.now() - started)}: ${logReason(error)}`, "chrome-start");
       if (browser) await browser.close();
       else await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined);
       throw error;
@@ -193,6 +210,7 @@ export class Browser {
   }
 
   async close() {
+    this.closing = true;
     if (this.child.exitCode === null && this.child.signalCode === null) {
       const gone = new Promise(resolve => this.child.once("exit", resolve));
       this.child.kill("SIGKILL");

@@ -1040,9 +1040,9 @@ describe("review notes", () => {
 describe("tool annotations", () => {
   // Every tool that saves an edit, a recommendation, a file or a message to the editor. A harness may retry or
   // run the others in parallel without asking, so a new tool is placed here or among the reads on purpose.
-  const writes = ["timeline_propose", "timeline_first_cut", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
+  const writes = ["timeline_propose", "timeline_first_cut", "timeline_sync_multicam", "timeline_switch_cameras", "timeline_crossfade_audio", "timeline_transition", "timeline_framing", "timeline_picture_sync", "captions_generate", "dialogue_apply_cuts", "dialogue_check_repeats", "dialogue_review_save",
     "dialogue_revise_cut", "edit_flag", "note_reply", "note_resolve", "render_request", "screen_area", "task_log", "task_question", "hand_off", "learning_suggest", "skill_save_from_change", "skill_save_edit", "asset_add", "export_otio",
-    "graphic_render", "style_guide_save", "style_guide_update", "style_guide_preview_render", "transcript_fix"];
+    "graphic_render", "style_guide_save", "style_guide_update", "style_guide_preview_render", "style_guide_sound_import", "transcript_fix"];
   const every = EDITING_TOOL_GROUPS.flatMap(g => [...g.tools] as string[]);
 
   it("gives every tool an input schema a harness can convert: no array that lists an item per position", async () => {
@@ -1095,6 +1095,14 @@ describe("tool annotations", () => {
         }
       };
       for (const t of tools) walk(t.inputSchema, t.name);
+      // Gemini reads each parameter as a line of tool_help: one written as `any` or as raw JSON schema reads untyped.
+      const lines = (node: { properties?: Record<string, { type?: string }> }, path: string): void => {
+        for (const [name, field] of Object.entries(node.properties ?? {})) {
+          if (!field.type) untyped.push(`${path}.${name} has no type in tool_help`);
+          lines(field, `${path}.${name}`);
+        }
+      };
+      if (agent === "gemini") for (const t of tools) lines(t.inputSchema as Parameters<typeof lines>[0], t.name);
       expect(untyped).toEqual([]);
     } finally { await c.close(); }
   });
@@ -1384,7 +1392,12 @@ describe("what goes to stderr when a read fails and the tool answers without it"
       const saved = JSON.parse((result.content[0] as { text: string }).text);
       expect(saved).toMatchObject({ continueFrom: "applied" });
       expect(saved).not.toHaveProperty("keptSilences");
-      expect(logged()).toEqual(["[scarlet-mcp] failed to place the kept silences on applied: Scarlet server error 500 (engine_error): The database is busy."]);
+      // The extra readings the receipt goes on without say why on stderr too, but only the kept silences are measured.
+      expect([...logged()].sort()).toEqual([
+        "[scarlet-mcp] failed to find the short pieces left in the part on applied: Scarlet server error 500 (engine_error): The database is busy.",
+        "[scarlet-mcp] failed to place the kept silences on applied: Scarlet server error 500 (engine_error): The database is busy.",
+        "[scarlet-mcp] failed to read the words heard only in the part on applied: Scarlet server error 500 (engine_error): The database is busy.",
+      ]);
       // The result says what it was answered without, so its silence about kept silences isn't read as none.
       expect(result.content.at(-1)).toEqual({ type: "text",
         text: "Not measured: failed to place the kept silences on applied (Scarlet server error 500 (engine_error): The database is busy.)." });

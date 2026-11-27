@@ -27,6 +27,7 @@ import { DEFAULT_STALL_MS, type McpSpec, type RunAgentFn, type RunAgentResult, t
 import { promptTimeLimit, stalledReason, timedOutReason } from "./runLimits.js";
 import { claudeConfigDir, pruneTaskDirs, removeClaudeSessions, removeControlFiles, removeTokenFiles } from "./taskDirs.js";
 import { createEventForwarder, createLiveUsageReporter } from "./taskReports.js";
+import { clip, humanDuration, throttledLog } from "./logText.js";
 import { workspaceTools } from "./workspaceTools.js";
 
 const QUOTA_TTL_MS = 60_000;
@@ -43,7 +44,7 @@ export interface HostOptions {
   saveConfig?: (cfg: AgentConfig) => Promise<void>;
   runner?: RunAgentFn;
   detect?: () => Promise<AgentAvailability[]>;
-  probeQuota?: (agent: CliAgent, file: string, env: NodeJS.ProcessEnv) => Promise<SubscriptionQuota | undefined>;
+  probeQuota?: (agent: CliAgent, file: string, env: NodeJS.ProcessEnv, log?: (msg: string) => void) => Promise<SubscriptionQuota | undefined>;
   /** Where per-task workspaces live. */
   workRoot: string;
   /** Path to packages/mcp/dist/cli.js (resolved automatically when omitted). */
@@ -131,12 +132,17 @@ export class AgentHost {
   private quotaRefreshPromise: Promise<void> | null = null;
   private quotaQueued: { agents: Set<AgentId> | null; promise: Promise<void> } | null = null;
   private lastQuotaAt = 0;
+  /** The last quota refresh's outcome per runtime, so a refresh that changed nothing isn't logged again. */
+  private lastQuotaOutcome = "";
+  /** For a failure that can repeat each refresh or reconnect: one line a minute for each key. */
+  private readonly throttled: (key: string, line: string) => void;
 
   constructor(opts: HostOptions) {
     this.opts = opts;
     this.client = opts.client;
     this.config = opts.config;
     this.log = opts.log ?? ((m) => console.error(`[scarlet-agent] ${m}`));
+    this.throttled = throttledLog((line) => this.log(line));
   }
 
   get hostId(): string | undefined {
@@ -263,8 +269,11 @@ export class AgentHost {
 
   // -- registration & heartbeat ---------------------------------------------
 
-  private detectAgents(): Promise<AgentAvailability[]> {
-    return this.opts.detect ? this.opts.detect() : detectAgents({ models: this.config.models, providers: this.config.providers, log: this.log });
+  private async detectAgents(): Promise<AgentAvailability[]> {
+    const started = performance.now();
+    const agents = await (this.opts.detect ? this.opts.detect() : detectAgents({ models: this.config.models, providers: this.config.providers, log: this.log }));
+    this.log(`assistants: ${describeAgents(agents)} (checked in ${humanDuration(performance.now() - started)})`);
+    return agents;
   }
 
   private async register(): Promise<void> {
@@ -338,16 +347,32 @@ export class AgentHost {
     const run = (async () => {
       const targets = this.agents.filter((a) => isQuotaEligible(a) && (!only || only.has(a.id)));
       if (!targets.length) return;
+      const started = performance.now();
+      const outcomes: string[] = [];
       const results = await Promise.all(targets.map(async (agent) => {
         const file = this.opts.probeQuota ? cliBinary(agent.id) : await findOnPath(cliBinary(agent.id), env);
-        if (!file) return null;
+        if (!file) {
+          outcomes.push(`${agent.id}=not_found`);
+          return null;
+        }
+        // A probe that fails says why, at most once a minute for each runtime.
+        const probeLog = (msg: string) => this.throttled(`quota:${agent.id}`, `quota: ${agent.id} ${msg}`);
         try {
-          const quota = await probe(agent.id as CliAgent, file, runnerEnv(agent.id, this.agents, env));
+          const quota = await probe(agent.id as CliAgent, file, runnerEnv(agent.id, this.agents, env), probeLog);
+          outcomes.push(`${agent.id}=${quota ? "ok" : "none"}`);
           return quota ? { id: agent.id, quota } : null;
-        } catch {
+        } catch (err) {
+          outcomes.push(`${agent.id}=error`);
+          this.throttled(`quota:${agent.id}:threw`, `quota: ${agent.id} probe failed: ${clip(errMsg(err))}`);
           return null;
         }
       }));
+      // Logged when the outcome changes: a refresh follows every run, and one that found the same says nothing new.
+      const outcome = outcomes.sort().join(" ");
+      if (outcome !== this.lastQuotaOutcome) {
+        this.lastQuotaOutcome = outcome;
+        this.log(`[host] quota-refresh ${outcome} elapsedMs=${Math.round(performance.now() - started)}`);
+      }
       if (this.stopped) return;
       let changed = false;
       const next = this.agents.map((agent) => {
@@ -415,7 +440,8 @@ export class AgentHost {
       }
     });
     ws.on("error", (err) => this.log(`ws error: ${errMsg(err)}`));
-    ws.on("close", () => {
+    ws.on("close", (code) => {
+      if (!this.stopped) this.throttled("ws-close", `ws closed (code ${code}); reconnecting in 5s`);
       this.ws = null;
       this.subscriptions.clear();
       this.scheduleWsReconnect();
@@ -604,6 +630,9 @@ export class AgentHost {
     const stallMs = this.opts.stallMs ?? stallMinutes * 60_000;
     const liveUsage = createLiveUsageReporter(this.client, task, signal, this.log);
     let questionSeen: string | undefined;
+    // What the run reported, counted for the line that says how it ended. Never its words.
+    const seen = { tool: 0, error: 0 };
+    let reconnectLogged = false;
     // A runner that returns says whether its run ended on a question. Only one that threw leaves the question it saw.
     let runnerThrew = false;
     const run = (p: Prepared, priorUsage?: AgentUsage) => runner({
@@ -628,8 +657,14 @@ export class AgentHost {
       onUsage: snapshot => liveUsage.update(snapshot, priorUsage),
       onQuota: quota => this.applyLiveQuota(task.agent, quota),
       onCodexFallback: reason => this.log(`[host] codex-fallback ${identity} reason=${reason}`),
+      log: this.log,
+      task: task.id,
       onEvent: (ev: RunnerEvent) => {
         this.opts.onRunnerEvent?.(task, ev);
+        this.noteEvent(task, ev, seen, () => {
+          if (reconnectLogged) return false;
+          return (reconnectLogged = true);
+        });
         if (ev.type === "question") {
           questionSeen = ev.text;
           return; // Confirm delivery with the engine when the runner stops.
@@ -639,17 +674,25 @@ export class AgentHost {
       },
     }).catch((err): RunAgentResult => {
       runnerThrew = true;
+      this.log(`task ${task.id}: the ${task.agent} runner failed: ${clip(errMsg(err))}`);
       return { ok: false, summary: "", error: errMsg(err) };
     });
+    const ended = (r: RunAgentResult, since: number) => this.log(`task ${task.id}: ${task.agent} ended (exit code ${r.exitCode ?? "none"}) after ${humanDuration(performance.now() - since)}; `
+      + `${seen.tool} tool call${seen.tool === 1 ? "" : "s"}, ${seen.error} error${seen.error === 1 ? "" : "s"}${r.usage ? `, ${r.usage.inputTokens + r.usage.outputTokens} tokens` : ""}`);
 
+    const runStarted = performance.now();
     let result = await run(prepared);
+    ended(result, runStarted);
     // One report per claim replaces the last, so a failed resume's tokens go with the fresh run's.
     let usage = result.usage;
     if (result.resumeFailed && !signal.aborted) {
       // The CLI no longer has the session. Start over with the answers in the prompt.
       this.log(`task ${task.id}: could not resume the CLI session (${result.error ?? "unknown"}); starting a fresh run`);
       try {
-        result = await run(await this.prepare(task, true), usage);
+        const fresh = await this.prepare(task, true);
+        const freshStarted = performance.now();
+        result = await run(fresh, usage);
+        ended(result, freshStarted);
       } catch (err) {
         await events.flush();
         await liveUsage.recordFinal(usage);
@@ -725,6 +768,23 @@ export class AgentHost {
     return { landed, carriesOn };
   }
 
+  /**
+   * Note what a run reported in the host's log: its session start (Scarlet's own words, with the CLI's model and
+   * session id), the first reconnect of the run, and counts of its tool calls and errors. Never what the model said.
+   */
+  private noteEvent(task: Task, ev: RunnerEvent, seen: { tool: number; error: number }, firstReconnect: () => boolean): void {
+    try {
+      if (ev.type === "tool") seen.tool++;
+      else if (ev.type === "error") seen.error++;
+      const kind = ev.data?.kind;
+      if (kind === "init") this.log(`task ${task.id}: ${clip(ev.text, 200)}`);
+      // Codex's own words for a reconnect ("Reconnecting... 2/5"): one line a run.
+      else if (kind === "connection" && firstReconnect()) this.log(`task ${task.id}: ${task.agent} is reconnecting: ${clip(ev.text)}`);
+    } catch {
+      /* a log line never stops a run */
+    }
+  }
+
   /** Whether another attempt at the same run is at work in the folder this one shares with it. */
   private sharedWithAnotherAttempt(task: Task, signal: AbortSignal): boolean {
     const root = task.resumeRootId ?? task.id;
@@ -780,6 +840,16 @@ export class AgentHost {
     };
     return { systemPrompt, instruction, resumeSession, plan, refusedTool, workspace, cwd, mcp };
   }
+}
+
+/** One line for the log of what detection found, as the desktop host words it (`describe_agents`). */
+export function describeAgents(agents: AgentAvailability[]): string {
+  return agents.map((a) => {
+    if (!a.installed) return `${a.id} not installed`;
+    const signed = a.loggedIn === false ? "signed out" : "signed in";
+    const models = a.models ? `, ${a.models.length} models` : ", no model list";
+    return `${a.id}${a.version ? ` ${a.version}` : ""} (${signed}${a.auth ? `, ${a.auth}` : ""}${models})`;
+  }).join("; ");
 }
 
 /** The agent with a fresh subscription quota, which names the agent's plan when detection didn't. */

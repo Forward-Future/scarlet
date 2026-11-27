@@ -13,6 +13,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { isSea } from "node:sea";
 import { fileURLToPath } from "node:url";
+import { clip, humanDuration } from "../logText.js";
 import { editorFirst, type StillBackground } from "../services/editorFirst.js";
 
 export type AudioRequest =
@@ -40,11 +41,17 @@ let current: Job | undefined;
 let idle: ReturnType<typeof setTimeout> | undefined;
 let next = 0;
 const queue: Job[] = [];
+/** Why the engine stopped a helper, for the line its exit leaves in the log. */
+const stopping = new WeakMap<ChildProcess, string>();
+
+const named = (worker: ChildProcess) => `the audio helper${worker.pid !== undefined ? ` (pid ${worker.pid})` : ""}`;
 
 function start() {
   const args = isSea() ? [] : [fileURLToPath(new URL("../../dist/cli.js", import.meta.url))];
   const started = spawn(process.execPath, [...args, "audio-worker"], { windowsHide: true, stdio: ["ignore", "ignore", "pipe", "ipc"] });
   errors = "";
+  const startedAt = Date.now();
+  audioWorker.log?.(`[audio] started ${named(started)}`);
   // The helper serves background work and a pass's alike: it yields to the editor while its request is background work's.
   if (started.pid !== undefined) {
     const release = editorFirst.adopt(started.pid, () => current?.worker === started && !!current.background?.());
@@ -65,8 +72,16 @@ function start() {
     // A helper stopped for being idle can exit after the next request has started another: that job is not its own.
     if (job && job.worker === started) finish(job, () => job.reject(job.signal?.aborted ? job.signal.reason : error ?? new Error(errors.trim() || "The audio helper stopped before it answered.")));
   };
-  started.on("error", stopped);
-  started.on("exit", () => stopped());
+  started.on("error", error => {
+    audioWorker.log?.(`[audio] ${named(started)} failed: ${clip(error.message)}`);
+    stopped(error);
+  });
+  started.on("exit", (code, signal) => {
+    const job = current?.worker === started ? current : undefined;
+    const why = stopping.get(started) ?? (job ? `while it read a ${job.message.kind} request` : "on its own");
+    audioWorker.log?.(`[audio] ${named(started)} exited with ${signal ? `signal ${signal}` : `code ${code}`} after ${humanDuration(Date.now() - startedAt)}, ${why}`);
+    stopped();
+  });
   return started;
 }
 
@@ -93,6 +108,7 @@ function pump() {
     const rest = () => {
       idle = setTimeout(() => {
         if (child && audioWorker.wanted?.()) return rest();
+        if (child) stopping.set(child, "stopped after half a minute idle");
         child?.kill();
         child = undefined;
       }, IDLE_MS);
@@ -107,14 +123,20 @@ function pump() {
     const worker = job.worker = child ??= start();
     hold(worker, true);
     // Killing the helper is the only way to stop native inference. The next request starts another.
-    const abort = () => { if (child === worker) child = undefined; worker.kill("SIGKILL"); };
+    const abort = () => {
+      if (child === worker) child = undefined;
+      stopping.set(worker, `stopped to cancel a ${job.message.kind} request`);
+      worker.kill("SIGKILL");
+    };
     job.signal?.addEventListener("abort", abort, { once: true });
     job.cancel = () => job.signal?.removeEventListener("abort", abort);
     editorFirst.check();
     worker.send({ id: job.id, ...job.message }, error => {
+      if (error) audioWorker.log?.(`[audio] couldn't send a ${job.message.kind} request to ${named(worker)}: ${clip(error.message)}`);
       if (error) finish(job, () => job.reject(error));
     });
   } catch (error) {
+    audioWorker.log?.(`[audio] couldn't start the audio helper for a ${job.message.kind} request: ${clip(error instanceof Error ? error.message : String(error))}`);
     finish(job, () => job.reject(error));
   }
 }

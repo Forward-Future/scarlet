@@ -4,6 +4,7 @@ import { Icon } from "../../components/ui/primitives";
 import { clock as clockLabel } from "../../lib/format";
 import { inListOrder, ReviewLinger, tabShown, type ListOrder, type ReviewTab, type RowPlace } from "../../lib/reviewTabs";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
+import { useProjectStore } from "../../stores/project";
 import { useLeavingRows } from "./lowRiskFold";
 import { dedupeDockEntries, type DockEntry, type DockRow, type ReviewDockStore } from "./reviewDockStore";
 import { useReviewTabHeight } from "./reviewTabHeight";
@@ -76,6 +77,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   useSyncExternalStore(linger.subscribe, linger.snapshot, linger.snapshot);
 
   const [open, setOpen] = listState;
+  const paused = useProjectStore(s => !!s.current?.project.editingPaused);
   const host = useRef<HTMLDivElement>(null);
   useLeavingRows(host);
   const askedReveal = useRef(false);
@@ -255,13 +257,14 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
   const pastHour = drawn.some(list => list.rows.some(({ row }) => clockLabel(row.displayAt).length > 5));
 
   const renderMember = (entry: DockEntry, m: DockRow) => (
-    <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined}>
+    <li key={m.key} className={m.unkeep ? "has-unkeep" : undefined} data-working={m.busy && !m.asks ? "busy" : undefined}>
       <button type="button" className={m.on ? "is-on" : m.decided ? "is-decided" : undefined} aria-current={m.on || undefined}
         data-log-control={m.dataLogControl} data-log-label="Edit in a moment" disabled={!m.open} title={m.title || m.label}
         onClick={letGo(() => store.openMember(entry.threadId, entry.key, m.key))}
         onPointerEnter={() => store.hoverRow(entry.threadId, m.mark, m.hover)} onPointerLeave={() => store.hoverRow(entry.threadId)}>
         <span className="simple-pass-label">
           {m.decided && !m.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+          {m.busy && !m.asks && <span className="simple-pass-spin" aria-hidden="true" />}
           <span className="simple-pass-words">{m.label}</span>
           {m.version > 0 && <EditVersion n={m.version} hover={m.spent} />}
         </span>
@@ -284,8 +287,12 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
         const { row, members, more, moment, unfolded } = entry;
         const value = id === "all" ? row.value : row.decision ?? row.value;
         const heldRow = hasTabs ? linger.of(entry.key) : undefined;
-        const leaving = !!heldRow?.leaving && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
-        const canUnkeepRow = !!row.unkeep && !leaving;
+        const lingeringHere = !!heldRow && (id === "you" ? heldRow.from === "you" || heldRow.from === "optional" : id === heldRow.from);
+        const lingerKind = lingeringHere ? (entry.place === "working" ? "working" : row.decided ? "done" : undefined) : undefined;
+        const workingState = row.pending && !row.asks ? (row.busy ? "busy" : "pending") : undefined;
+        const spinning = workingState === "busy" || (lingerKind === "working" && workingState === "pending" && !paused);
+        const leaving = !!heldRow?.leaving && lingeringHere;
+        const canUnkeepRow = !!row.unkeep && !leaving && !lingeringHere;
         const isLowRow = id === "you" && lowKeys.has(entry.key);
         return <Fragment key={row.key}>
           {splitAt !== undefined && idx === splitAt && (
@@ -301,7 +308,10 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
           )}
           <li className={[leaving && "is-leaving", canUnkeepRow && "has-unkeep"].filter(Boolean).join(" ") || undefined}
             data-thread={entry.threadId}
-            data-low-risk={isLowRow ? "" : undefined}>
+            data-low-risk={isLowRow ? "" : undefined}
+            data-lingering={lingerKind}
+            data-working={workingState}
+            data-paused={workingState === "pending" && paused ? "" : undefined}>
             <button type="button"
               className={[
                 row.on && "is-on",
@@ -324,6 +334,7 @@ export function ReviewDock({ store, threadIds, list: listState, laterRequests = 
               <span className="simple-pass-label">
                 {(row.rejected || row.skipped) && <RejectedMark />}
                 {row.decided && !row.skipped && !row.needs && <span className="simple-pass-tick" aria-label="Decided"><Icon name="check" size={10} /></span>}
+                {spinning && <span className="simple-pass-spin" aria-hidden="true" />}
                 <span className="simple-pass-words">{row.label}</span>
                 {row.version > 0 && <EditVersion n={row.version} hover={row.spent} />}
                 {row.fresh && <small className="edit-version is-new">New</small>}

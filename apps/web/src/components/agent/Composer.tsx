@@ -343,7 +343,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
     const text = draft.trim();
     // Enter with nothing it can send does nothing on screen. The log says which, so a message that seemed to go
     // nowhere can be told from one that went.
-    const ignored = !text ? "empty" : text === "/" ? "slash-only" : onlyTime ? "time-only" : busy ? "still-sending" : speech.busy ? "listening" : undefined;
+    const ignored = !text ? "empty" : text === "/" ? "slash-only" : text === "@" ? "at-only" : onlyTime ? "time-only" : busy ? "still-sending" : speech.busy ? "listening" : undefined;
     if (ignored) return requestLog("send-ignored", { reason: ignored, ...sendFields("typed", text.length) });
     // Nothing can take the message. Enter says why under the box, where it used to do nothing.
     if (unavailable) {
@@ -463,6 +463,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
         if (task) onCreated?.(task);
         clearVoiceTarget(anchor);
       } catch (e) {
+        requestLog("send-failed", { how: "voice-note", bytes: r.blob.size, ...failure(e) }, "warn");
         setError(errorMessage(e));
       } finally {
         setBusy(false);
@@ -748,7 +749,7 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
           {(busy || speech.busy) && <Spinner className="size-3.5 shrink-0" />}
           {/* Shown once there's something to send (Enter sends too). Stopping an edit is on its card, where its progress is. */}
           {value.trim() && !onlyTime && <button type="button" className={rewording ? "btn-primary composer-send is-save shrink-0" : "btn-primary composer-send shrink-0"} data-log-control={rewording ? "save-queued-request" : "send-request"} aria-label={saveLabel} title={saveLabel}
-            disabled={busy || speech.busy || (!rewording && (draft.trim() === "/" || unavailable))} onClick={() => void submitText()}>
+            disabled={busy || speech.busy || (!rewording && (draft.trim() === "/" || draft.trim() === "@" || unavailable))} onClick={() => void submitText()}>
             <Icon name={rewording ? "check" : "arrow"} size={15} />
           </button>}
         </div>

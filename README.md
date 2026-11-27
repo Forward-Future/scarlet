@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Open-source AI video editor for macOS, Windows, and Linux.</strong><br>
-  Tell Claude Code or Codex what to change—by voice, in writing, or by drawing on a frame—and hear the edit on your timeline in seconds. Your original footage stays untouched.
+  Tell Claude Code, Codex or Gemini what to change—by voice, in writing, or by drawing on a frame—and hear the edit on your timeline in seconds. Your original footage stays untouched.
 </p>
 
 <p align="center">
@@ -36,10 +36,10 @@ Instead of waiting for full re-renders or hunting through a timeline, Scarlet re
 ## Major Features
 
 ### Edit by conversation, voice, or frame markup
-- **Bring your own agent:** Connect **Claude Code** or **Codex** using your existing subscription in **Settings → General**. Scarlet runs your agent locally over MCP—no separate AI billing or terminal wrangling.
+- **Bring your own agent:** Connect **Claude Code**, **Codex** or **Gemini** using your existing subscription in **Settings → General**. Scarlet runs your agent locally over MCP—no separate AI billing or terminal wrangling. You can also use **Ollama**, **LM Studio** or **OpenRouter** models, set up in **Settings → Models**; Claude Code runs the edit with them.
 - **Voice or text, whole video or exact moment:** Type in the composer or hold `V` to talk. Ask for a whole-video pass, or target a specific spot by pausing (`Space`), scrubbing, dragging a range on the ruler (with a frame-accurate close-up loupe), or highlighting words in the transcript.
 - **Draw directly on the frame (`M`):** Sketch, box, or point on the paused video frame so your agent sees exactly which part of the picture you mean. You can also drop reference images or PDF brand guides straight onto the message box.
-- **Non-destructive version history:** Every edit saves a new timeline version. Step back through earlier cuts in **History**, or press `⌘Z` / `Ctrl+Z` to undo keeps, rejections, and revisions.
+- **Non-destructive version history:** Every edit saves a new timeline version, so your original footage is never changed. Press `⌘Z` / `Ctrl+Z` to undo keeps, rejections, and revisions.
 
 ### Fast review, Before/After playback & live transcript
 
@@ -49,7 +49,7 @@ Instead of waiting for full re-renders or hunting through a timeline, Scarlet re
 
 - **Partial segment rendering:** Scarlet only re-renders the seconds around a change and stitches the rest from cached segments, so playback stays fast even on long recordings.
 - **Instant Before/After (`\`):** Open any edit or cut card above the timeline and press `\` to flip between the removed footage and the new join. Click the transcript icon on a cut card to inspect struck-through removed words alongside the surrounding sentence.
-- **Focused `For you` review queue:** Confident edits go straight onto your working timeline; judgment calls and flagged edits wait in **For you**. Step through them with `↑` / `↓` and press `K` (Keep), `A` (Approve), `S` (Skip), `R` (Revise), or `×` (Reject).
+- **Focused `Needs review` list:** Confident edits go straight onto your working timeline; judgment calls and flagged edits wait in **Needs review**, above the message box. Step through them with `↑` / `↓` and press `K` (Keep), `R` (Revise), or `X` (Reject).
 - **Searchable Transcript rail:** Open **Transcript** from the `⋯` menu to read along beside the player, search spoken phrases, click any word to jump the playhead, or select a passage to ask about.
 - **Parallel edit revisions:** Ask for revisions on several different cuts or edits at the same time—Scarlet runs an agent on each while safely queuing whole-video requests above the message box.
 
@@ -69,6 +69,9 @@ Type `/` in the composer to run one of Scarlet’s built-in editing workflows. E
 | `/add-captions` | Builds clean, readable caption tracks timed to retained speech. |
 | `/motion-graphics` | Generates lower thirds, titles, and callouts from HTML/CSS/JS rendered locally to transparent ProRes 4444 via bundled headless Chrome. |
 | `/b-roll` | Plans B-roll and graphic spots as To-dos first, then sources or creates only the ones you ask for. |
+| `/split-edits` | Makes J and L cuts so the next voice leads into its shot, or a line carries on over the listener, in interviews and conversations. |
+| `/multi-cam` | Syncs multiple cameras and audio tracks, matches speakers to angles, and switches shots with natural pacing for podcasts and interviews. |
+| `/color-match` | Matches exposure, white balance and contrast across cameras, or applies a style guide's saved color look across the edit. |
 | `/speed-through-waits` | Speeds through installs, builds, and loading screens while keeping tracks in sync and speech at normal speed. |
 | `/music-under-speech` | Dips music under speech so every word is clear, swelling back up in longer pauses and where nobody speaks. |
 | `/fit-length` | Trims an edit down to a target runtime by removing the least essential passages first. |
@@ -91,15 +94,16 @@ So your agent edits from real measurements instead of guesswork, Scarlet analyze
 - **Direct MP4 export:** Export the full cut or a custom time range in **Compressed**, **High** (hardware-accelerated), or **Original quality**.
 - **Caption files:** Export the captions alone as SubRip (`.srt`) or WebVTT (`.vtt`), for the whole video or a custom range.
 - **Finish in your NLE (`For Resolve, Final Cut or Premiere…`):** Save a self-contained handoff folder with `.fcpxml` (DaVinci Resolve, Final Cut Pro), `.otio` (Premiere Pro 26.5+, DaVinci Resolve), copies of the used footage, `.srt` captions, and a plain-English Read me explaining how to open it in each app and what does not carry over.
+- **Publish to YouTube:** Connect your channel in **Settings → General**, then choose **Publish to YouTube** in the Export window to upload the cut with final-cut chapter timestamps, as a Private draft by default.
 - **Native desktop app & open MCP engine:** Built with Tauri 2 (Rust shell + local SQLite/Node engine + FFmpeg + headless Chrome) for macOS (Apple Silicon & Intel), Windows x64, and Ubuntu 24.04 x86-64. Power users can also connect external MCP clients (`pnpm mcp`) or run the headless engine via Docker (`docker compose up -d`).
 
 ---
 
 ## Make Your First Edit
 
-1. **Import your footage.** Click **New project**, name it, and choose your files—mix video (MP4, MOV), separate audio (WAV, MP3), and images (PNG, JPEG). You can start editing while proxies and transcripts prepare. In **Settings → General**, connect **Claude Code** or **Codex**.
+1. **Import your footage.** Click **New project**, name it, and choose your files—mix video (MP4, MOV), separate audio (WAV, MP3), and images (PNG, JPEG). You can start editing while proxies and transcripts prepare. In **Settings → General**, connect **Claude Code**, **Codex** or **Gemini**.
 2. **Ask for a change.** Click a point on the timeline (or clear the time tag with `×` to edit the whole video), then type or hold `V` to speak. Try *“Remove the false starts and repeated takes, and keep the pauses before each answer”*—or type `/dialogue-pass` for a full first cut.
-3. **Review in context.** Open any edit from the conversation or timeline. Toggle Before/After with `\`, expand the cut’s transcript to see removed words, and step through items in **For you** with `↑` / `↓` to **Keep (`K`)**, **Approve (`A`)**, **Skip (`S`)**, or **Revise (`R`)**.
+3. **Review in context.** Open any edit from the conversation or timeline. Toggle Before/After with `\`, expand the cut’s transcript to see removed words, and step through items in **Needs review** with `↑` / `↓` to **Keep (`K`)**, **Revise (`R`)**, or **Reject (`X`)**.
 4. **Export or hand off.** Click **Export** in the project header to save an MP4 or its captions as `.srt` or `.vtt`, or choose **For Resolve, Final Cut or Premiere…** to create a handoff folder for DaVinci Resolve, Final Cut Pro, or Premiere Pro.
 
 ### Everyday Shortcuts
@@ -110,8 +114,8 @@ So your agent edits from real measurements instead of guesswork, Scarlet analyze
 | `Space` | Play / pause (pausing aims the empty composer at that frame) |
 | `\` | Toggle Before / After on the open edit or cut |
 | `↑` / `↓` | Step to previous / next edit or review call |
-| `←` / `→` | Skip 5 seconds (`Shift` for 1 second) |
-| `K` / `A` / `S` / `R` | Keep edit · Approve call · Skip call · Revise |
+| `←` / `→` | Skip 1 second (`Shift` for 1 frame) |
+| `K` / `X` / `R` | Keep · Reject · Revise the edit or call on screen |
 | `M` | Mark up the current frame (`D` draw, `B` box, `P` point) |
 | `/` | Pick an editing workflow in the composer |
 | `−` / `+` / `0` | Zoom timeline out / in / fit |

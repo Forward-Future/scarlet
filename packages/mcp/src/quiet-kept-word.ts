@@ -2,7 +2,7 @@ import { normalizeTranscriptToken } from "@scarlet/shared";
 import { clipEnd, rangesOverlap, timelineToSource, type Project, type Timeline, type TimeRange } from "@scarlet/timeline";
 import { appendInterval, isTag, round3 } from "./analysis.js";
 import { dialogueAudioStream, dialogueClips, type AudioLevels } from "./dialogue-join.js";
-import type { DialoguePlanSources } from "./dialogue-cut-resolve.js";
+import { readWithout, type DialoguePlanSources } from "./dialogue-cut-resolve.js";
 import { timelineJoins } from "./timeline-perception.js";
 
 const SHORT_PIECE = .5;
@@ -101,7 +101,7 @@ export async function measureQuietKeptWords(pieces: SourcePiece[], sources: Dial
   });
   if (!short.length) return [];
   // This read supplements the required edge measurements. Already prepared pages can still be used if it fails.
-  await sources.measure(short.map(p => ({ mediaId: p.mediaId, t: (p.start + p.end) / 2 }))).catch(() => undefined);
+  await sources.measure(short.map(p => ({ mediaId: p.mediaId, t: (p.start + p.end) / 2 }))).catch(readWithout(sources, "failed to measure the short pieces a cut keeps", undefined));
   const pages = sources.pages();
   const results = await Promise.all(short.map(async ({ start, end, mediaId, timeline }) => {
     const retained = { start, end };
@@ -120,7 +120,7 @@ export async function measureQuietKeptWords(pieces: SourcePiece[], sources: Dial
     if (!Number.isFinite(peak) || peak > ROOM_TONE_DBFS) return;
     const nearby = nearbySound(levels, retained, peak);
     if (!nearby) return;
-    const words = await sources.words(mediaId, retained.end, false).catch(() => null);
+    const words = await sources.words(mediaId, retained.end, false).catch(readWithout(sources, `failed to read the words of ${mediaId} a cut keeps`, null));
     const kept = words?.filter(w => {
       const middle = (w.start + w.end) / 2;
       return middle >= retained.start && middle < retained.end && !isTag(w.text) && normalizeTranscriptToken(w.text);

@@ -122,7 +122,7 @@ pub fn run() {
             quit::ask_before_quitting(app, "menu");
         } else if event.id() == quit::REPORT_PROBLEM_MENU_ID {
             use tauri::Emitter;
-            let _ = app.emit("report-problem://open", ());
+            crate::util::note_emit("report-problem://open", app.emit("report-problem://open", ()));
         }
     });
     let app = builder

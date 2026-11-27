@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { appLog, errorName } from "../../lib/appLog";
 import { desktop } from "../../lib/desktop";
 import { ReportLink } from "./ReportLink";
 
@@ -19,7 +20,8 @@ export function StartupRecovery({ title, detail, showLogs = false }: { title: st
     try {
       await navigator.clipboard.writeText(`${title}\n${detail}`);
       setFeedback("Diagnostics copied.");
-    } catch {
+    } catch (error) {
+      appLog("error", "clipboard", { what: "diagnostics", name: errorName(error) }, { level: "warn" });
       setFeedback("Select the error message above and copy it manually.");
     }
   }

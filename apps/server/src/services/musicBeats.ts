@@ -13,6 +13,7 @@ import type { MusicReading, MusicSection } from "@scarlet/shared";
 import type { MediaAsset } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
 import { badRequest, notFound } from "../errors.js";
+import { clip, humanDuration, logId } from "../logText.js";
 import { ffmpeg, ffmpegPosition } from "../render/ffmpeg.js";
 import { AnalysisCache } from "./analysisCache.js";
 
@@ -359,6 +360,17 @@ export async function musicBeats(ctx: Ctx, media: MediaAsset & { projectId: stri
   const key = JSON.stringify([MUSIC_BEATS_VERSION, file, info.size, info.ctimeMs, info.mtimeMs, from, Number.isFinite(end) ? end : null, heardAudioKey(audio)]);
   // A reading someone asked for isn't stopped by a pause of the project's media work. Trash and a quit do.
   const stop = ctx.projectSignal(media.projectId);
-  return cache.get(key, async work => analyzeMusic(await decode(file, from, Number.isFinite(end) ? end : undefined, AbortSignal.any([work, stop]), audio), from),
-    { signal: signal ? AbortSignal.any([signal, stop]) : stop });
+  return cache.get(key, async work => {
+    // Only a reading not kept yet decodes: one line for each, with how long it took.
+    const began = performance.now();
+    const what = `${logId(media.id)} ${from}–${Number.isFinite(end) ? end : "end"} s`;
+    try {
+      const reading = analyzeMusic(await decode(file, from, Number.isFinite(end) ? end : undefined, AbortSignal.any([work, stop]), audio), from);
+      ctx.log(`[audio] music beats of ${what} read in ${humanDuration(performance.now() - began)}: ${reading.beats.length} beats${"bpm" in reading.tempo ? ` at ${reading.tempo.bpm} bpm` : ", tempo unclear"}`);
+      return reading;
+    } catch (error) {
+      if (!work.aborted && !stop.aborted) ctx.log(`[audio] music beats of ${what} couldn't be read after ${humanDuration(performance.now() - began)}: ${clip(error instanceof Error ? error.message : String(error))}`);
+      throw error;
+    }
+  }, { signal: signal ? AbortSignal.any([signal, stop]) : stop });
 }

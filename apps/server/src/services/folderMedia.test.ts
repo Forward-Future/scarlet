@@ -119,6 +119,16 @@ it("does not report folders after the video cap as empty", async () => {
   expect(result.emptyFolders).toEqual([]);
 });
 
+it("logs what a search of dropped folders found by counts alone, never the folders' names", async () => {
+  const raw = join(directory, "Client footage");
+  mkdirSync(raw);
+  writeFileSync(join(raw, "a.mp4"), "a");
+  const lines: string[] = [];
+  await expandMediaPaths([raw, join(directory, "notes.txt")], { log: line => lines.push(line) });
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toMatch(/^\[media\] dropped folders searched in \d+ms: 1 folders, 1 entries, 2 files, 0 without video$/);
+});
+
 it("expands a dropped folder over HTTP, imports every video inside, starts caching automatically, and rejects a raw directory on /media/import with path_is_directory", async () => {
   const dataDir = join(directory, "data");
   const raw = join(directory, "raw");

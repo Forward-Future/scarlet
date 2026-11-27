@@ -523,9 +523,37 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     }
   });
 
-  it("shows up to three lines for Scarlet replies in the beta layout while keeping default layout and editor bubbles at two lines", async () => {
+  it("always shows full text in beta editor bubbles while keeping Scarlet replies at three lines and default layout unchanged", async () => {
     const db = buildDb(true);
     const project = db.projects.find(p => p.id === PRJ)!;
+    const now = new Date().toISOString();
+    const baseTask = db.tasks.find(t => t.id === "task_chat_direct")!;
+    const answeredTask = {
+      ...baseTask,
+      id: "task_answered_beta",
+      state: "running" as const,
+      createdAt: now,
+      startedAt: now,
+      finishedAt: undefined,
+      summary: null,
+      changeIds: [],
+      question: null,
+      instruction: "Always make sure the b-roll suggestions cover a large portion of the part that I am talking about, even when it wraps past two lines.",
+      context: { version: project.head! },
+    };
+    const queuedTask = {
+      ...baseTask,
+      id: "task_queued_beta",
+      state: "queued" as const,
+      createdAt: now,
+      startedAt: undefined,
+      finishedAt: undefined,
+      summary: null,
+      changeIds: [],
+      question: null,
+      instruction: "Also add subtle punch-ins whenever a key stat appears on screen and tighten any dead air around those transitions.",
+      context: { version: project.head! },
+    };
     const data: ProjectData = {
       id: PRJ,
       project,
@@ -534,8 +562,14 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       changes: db.changes,
       notes: db.notes,
       renders: db.renders,
-      tasks: db.tasks.filter(t => t.state !== "waiting_for_user"),
-      taskEvents: db.taskEvents,
+      tasks: [...db.tasks.filter(t => t.state !== "waiting_for_user"), answeredTask, queuedTask],
+      taskEvents: {
+        ...db.taskEvents,
+        task_answered_beta: [
+          { id: "ev_q_beta", taskId: "task_answered_beta", at: now, type: "question", text: "How much coverage?" },
+          { id: "ev_a_beta", taskId: "task_answered_beta", at: now, type: "answer", text: "Cover at least two thirds of each spoken passage so the visual stays anchored to the story." },
+        ],
+      },
       versions: db.versions[PRJ]!,
       fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
     };
@@ -559,15 +593,16 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8"),
     ].join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
     const foldsAt = (el: Element) => {
-      let best: { lines: number; weight: number } | undefined;
+      let best: { lines: number | undefined; weight: number } | undefined;
       for (const [, selectors, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-        const lines = /-webkit-line-clamp:\s*(\d+)/.exec(body!)?.[1];
-        if (!lines) continue;
+        const match = /-webkit-line-clamp:\s*(\d+|unset|none)/.exec(body!);
+        if (!match) continue;
+        const lines = /^\d+$/.test(match[1]!) ? Number(match[1]) : undefined;
         for (const selector of selectors!.split(",").map(part => part.trim())) {
           let matches = false;
           try { matches = el.matches(selector); } catch { /* Ignore selectors happy-dom cannot match. */ }
           const weight = (selector.match(/[.#[:]/g) ?? []).length;
-          if (matches && (!best || weight >= best.weight)) best = { lines: Number(lines), weight };
+          if (matches && (!best || weight >= best.weight)) best = { lines, weight };
         }
       }
       return best?.lines;
@@ -583,15 +618,35 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(scarletReq).not.toBeNull();
     expect([foldsAt(scarletClosing), foldsAt(scarletReq)]).toEqual([3, 3]);
 
-    // Editor bubbles remain clamped at 2 lines.
-    const userBubble = container.querySelector<HTMLElement>(".unit-msg .unit-bubble > p")!;
-    expect(foldsAt(userBubble)).toBe(2);
+    // Every editor text bubble shape in the beta layout shows its full text without clamping (finished, live, collapsed, loose, answer, and queued).
+    const requestBubbles = [...container.querySelectorAll<HTMLElement>(".unit-msg .unit-bubble > p")];
+    expect(requestBubbles.length).toBeGreaterThan(0);
+    for (const bubble of requestBubbles) expect(foldsAt(bubble)).toBeUndefined();
+    const firstUnit = container.querySelector<HTMLElement>(".unit")!;
+    firstUnit.classList.add("is-collapsed");
+    expect(foldsAt(firstUnit.querySelector(".unit-bubble > p")!)).toBeUndefined();
+    firstUnit.classList.remove("is-collapsed");
+    const looseBubble = container.querySelector<HTMLElement>(".simple-turn > .simple-msg.from-you p")!;
+    expect(looseBubble).not.toBeNull();
+    expect(foldsAt(looseBubble)).toBeUndefined();
+    const answerBubble = container.querySelector<HTMLElement>(".req-say.is-yours")!;
+    expect(answerBubble).not.toBeNull();
+    expect(foldsAt(answerBubble)).toBeUndefined();
+    const queueBubble = container.querySelector<HTMLElement>(".queue-bubble")!;
+    expect(queueBubble).not.toBeNull();
+    expect(foldsAt(queueBubble)).toBeUndefined();
 
-    // Turning off the beta layout leaves Scarlet's replies at the legacy 2-line clamp.
+    // Turning off the beta layout leaves Scarlet's replies and legacy editor bands at their legacy clamp.
     await act(async () => useUiStore.getState().setNewLayout(false));
     await act(async () => {});
     const legacyReply = container.querySelector<HTMLElement>(".simple-msg.from-scarlet .said, .req-say.said:not(.is-yours)")!;
     expect(foldsAt(legacyReply)).toBe(2);
+    const legacyUser = container.querySelector<HTMLElement>(".unit > .unit-msg p")!;
+    expect(foldsAt(legacyUser)).toBe(2);
+    const legacyUnit = legacyUser.closest<HTMLElement>(".unit")!;
+    legacyUnit.classList.add("is-collapsed");
+    expect(foldsAt(legacyUser)).toBe(1);
+    legacyUnit.classList.remove("is-collapsed");
   });
 
   it("omits the fold arrow in the beta layout and anchors finished token usage stats to the message bubble instead of the top-left corner", async () => {
@@ -996,6 +1051,122 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(container.querySelector(".review-tier-sep .review-head-keep")?.textContent).toBe("Keep 3 safe edits");
   });
 
+  it("advances straight to the next edit in line when clicking Reject in the beta layout, including inside grouped batches, and closes on the last", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const baseTimeline = structuredClone(db.timelines[project.head!]!);
+    const leadClip = baseTimeline.tracks[0]!.clips[0]!;
+    if (leadClip.kind === "media") leadClip.sourceOut = leadClip.sourceIn + 180;
+    const baseApproved = db.changes.find(c => c.state === "approved") ?? db.changes[0]!;
+    const batchChange = {
+      ...baseApproved,
+      id: "chg_batch_reject",
+      state: "approved" as const,
+      taskId: "task_batch_reject",
+      appliedVersion: project.head!,
+      appliedReview: undefined,
+      approvedSpots: undefined,
+      cutChoices: undefined,
+      noteIds: [],
+      createdAt: "2026-11-24T10:00:00.000Z",
+      description: "Added model titles.",
+      ops: [],
+    };
+    const batchTask = Task.parse({
+      id: "task_batch_reject", projectId: PRJ, kind: "edit", agent: "claude",
+      instruction: "Add titles for every model", state: "done", createdBy: { type: "human", name: "Editor" },
+      changeIds: [batchChange.id], createdAt: "2026-11-24T10:00:00.000Z",
+    });
+    const threads = buildThreads({ changes: [batchChange], tasks: [batchTask], notes: [] });
+    const batchThread = threads[0]!;
+    let data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: baseTimeline,
+      media: project.media,
+      changes: [batchChange],
+      notes: [],
+      renders: db.renders,
+      tasks: [batchTask],
+      taskEvents: {},
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    const rejectedSpots = new Set<number>();
+    let ver = 0;
+    const rejectEdits = vi.fn(async (_threadId: string, _head: string, edits: { spot: number }[]) => {
+      for (const e of edits) rejectedSpots.add(e.spot);
+      const nextVer = `ver_beta_reject_${++ver}`;
+      data = { ...data, project: { ...data.project, head: nextVer }, timeline: data.timeline && { ...data.timeline, version: nextVer } };
+      useProjectStore.setState({ current: data });
+      return nextVer;
+    });
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({
+      current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined),
+      rejectEdits: rejectEdits as never, createTask: vi.fn(),
+    });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "summarizeBatches").mockResolvedValue({ summaries: {}, pending: [] });
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "timeline").mockImplementation(async (_id, version = "head") => ({ timeline: { ...baseTimeline, version } }));
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: data.project.head!,
+      edits: threadId !== batchThread.id ? [] : [
+        { changeId: batchChange.id, spot: 0, label: "Flagged Opus title", range: { start: 5, end: 8 }, kind: "graphic" as const, previous: [], check: "Check framing.", ...(rejectedSpots.has(0) && { rejected: true as const }) },
+        { changeId: batchChange.id, spot: 1, label: "Flagged Fable title", range: { start: 12, end: 15 }, kind: "graphic" as const, previous: [], check: "Check overlap.", ...(rejectedSpots.has(1) && { rejected: true as const }) },
+        { changeId: batchChange.id, spot: 2, label: "Haiku 5.5 title", range: { start: 25, end: 28 }, kind: "graphic" as const, previous: [], ...(rejectedSpots.has(2) && { rejected: true as const }) },
+        { changeId: batchChange.id, spot: 3, label: "Sonnet 5.5 title", range: { start: 60, end: 63 }, kind: "graphic" as const, previous: [], ...(rejectedSpots.has(3) && { rejected: true as const }) },
+        { changeId: batchChange.id, spot: 4, label: "Hydrogen title", range: { start: 100, end: 103 }, kind: "graphic" as const, previous: [], ...(rejectedSpots.has(4) && { rejected: true as const }) },
+      ],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    const aimText = () => container.querySelector(".composer-aim-row")?.textContent ?? "";
+    const rejectBtn = () => container.querySelector<HTMLButtonElement>(".edit-card-reject")!;
+    const rejectedCardEl = () => container.querySelector('.edit-card[aria-label="Rejected edit"]');
+
+    // Open the first flagged edit and reject it -> moves straight to the second flagged edit.
+    const firstNeed = container.querySelector<HTMLButtonElement>('.review-rail-list ol[aria-label="Edits that need you"] > li > button')!;
+    await act(async () => firstNeed.click());
+    await act(async () => {});
+    expect(aimText()).toContain("Flagged Opus title");
+
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([aimText().includes("Flagged Fable title"), rejectedCardEl()]).toEqual([true, null]);
+
+    // Reject the second flagged edit -> flows straight into the safe-edit batch (1 of 3: Haiku 5.5 title).
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([aimText().includes("Haiku 5.5 title"), container.querySelector(".edit-card-step-count")?.textContent, rejectedCardEl()]).toEqual([true, "1 of 3", null]);
+
+    // Reject edit 1 of 3 in the batch -> advances to edit 2 ("Sonnet 5.5 title", now 1 of 2).
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([aimText().includes("Sonnet 5.5 title"), container.querySelector(".edit-card-step-count")?.textContent, rejectedCardEl()]).toEqual([true, "1 of 2", null]);
+
+    // Reject edit 1 of 2 -> advances to the remaining individual safe edit ("Hydrogen title").
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([aimText().includes("Hydrogen title"), container.querySelector(".edit-card-step-count"), rejectedCardEl()]).toEqual([true, null, null]);
+
+    // Reject the last remaining edit -> card closes cleanly.
+    await act(async () => rejectBtn().click());
+    await act(async () => {});
+    expect([container.querySelector(".edit-card"), rejectedCardEl()]).toEqual([null, null]);
+  });
+
   it("upgrades grouped edit rows live with AI-generated batch summaries from HTTP responses and WebSocket events", async () => {
     const db = buildDb();
     const project = db.projects.find(p => p.id === PRJ)!;
@@ -1168,5 +1339,243 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
       await act(async () => root.unmount());
       root = createRoot(container);
     }
+  });
+
+  it("keeps Working and Done headers pinned outside their scrollable bodies in the beta rail", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const change = db.changes.find(c => c.id === "chg_approved_2") ?? db.changes[0]!;
+    const ownerThreadId = buildThreads({ changes: db.changes, tasks: db.tasks, notes: db.notes })
+      .find(t => t.changes.some(c => c.id === change.id))!.id;
+    const workingTask = Task.parse({
+      id: "task_beta_working_sticky",
+      projectId: PRJ,
+      kind: "edit",
+      agent: "claude",
+      instruction: "Polish caption timing",
+      state: "running",
+      createdBy: { type: "human", name: "Editor" },
+      changeIds: [],
+      context: { changeId: change.id, editIndex: 0, threadId: ownerThreadId },
+      createdAt: "2026-11-26T10:00:00.000Z",
+    });
+    const data: ProjectData = {
+      id: PRJ,
+      project,
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: [...db.tasks.filter(t => t.state !== "waiting_for_user"), workingTask],
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === ownerThreadId ? [
+        { changeId: change.id, spot: 0, label: "Polish caption timing", range: { start: 1, end: 3 }, previous: [] },
+        { changeId: change.id, spot: 1, label: "Rejected outro clip", range: { start: 5, end: 8 }, previous: [], rejected: true as const },
+      ] : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    const foot = container.querySelector<HTMLElement>(".review-rail-foot")!;
+    const [workingHead, doneHead] = [...foot.querySelectorAll<HTMLButtonElement>(":scope > .review-sec")];
+    const [workingBody, doneBody] = [...foot.querySelectorAll<HTMLElement>(":scope > .review-sec-body")];
+    expect(workingHead?.textContent).toBe("Working1");
+    expect(doneHead?.textContent).toBe("Done1");
+    expect(workingHead?.nextElementSibling).toBe(workingBody);
+    expect(doneHead?.nextElementSibling).toBe(doneBody);
+    expect(workingBody?.hidden).toBe(false);
+    expect(doneBody?.hidden).toBe(true);
+
+    // Expanding Done opens both bodies inside the non-scrolling flex column foot.
+    await act(async () => doneHead!.click());
+    await act(async () => {});
+    expect(workingBody?.hidden).toBe(false);
+    expect(doneBody?.hidden).toBe(false);
+
+    // CSS keeps the footer non-scrolling, pins both headers (flex: none), and scrolls each section body independently.
+    const { readFileSync } = await import("node:fs");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    const footRule = /\[data-new-layout\]\s+\.review-rail-foot\s*\{([^}]*)\}/.exec(betaCss)?.[1] ?? "";
+    expect(footRule).toMatch(/display:\s*flex/);
+    expect(footRule).toMatch(/flex-direction:\s*column/);
+    expect(footRule).toMatch(/overflow:\s*hidden/);
+    expect(footRule).not.toMatch(/overflow-y:\s*auto/);
+    const secRule = /\[data-new-layout\]\s+\.review-sec\s*\{([^}]*)\}/.exec(betaCss)?.[1] ?? "";
+    expect(secRule).toMatch(/flex:\s*none/);
+    const bodyRule = /\[data-new-layout\]\s+\.review-sec-body\s*\{([^}]*)\}/.exec(betaCss)?.[1] ?? "";
+    expect(bodyRule).toMatch(/overflow-y:\s*auto/);
+    expect(bodyRule).toMatch(/min-height:\s*0/);
+  });
+
+  it("shows a green check mark or working spinner right on Needs review and Safe edit rows before moving them to Done or Working", async () => {
+    const db = buildDb();
+    const project = db.projects.find(p => p.id === PRJ)!;
+    const change = db.changes.find(c => c.id === "chg_approved_2") ?? db.changes[0]!;
+    const ownerThreadId = buildThreads({ changes: db.changes, tasks: db.tasks, notes: db.notes })
+      .find(t => t.changes.some(c => c.id === change.id))!.id;
+    const baseTasks = db.tasks.filter(t => t.state !== "waiting_for_user");
+    let data: ProjectData = {
+      id: PRJ,
+      project: { ...project, editingPaused: false },
+      timeline: db.timelines[project.head!]!,
+      media: project.media,
+      changes: db.changes,
+      notes: db.notes,
+      renders: db.renders,
+      tasks: baseTasks,
+      taskEvents: db.taskEvents,
+      versions: db.versions[PRJ]!,
+      fullRenderKeys: { context: fullRenderContext(project), preview: db.renders.find(r => r.kind === "full")!.key, delivery: "current-delivery" },
+    };
+    useUiStore.setState({ ...oldUi, newLayout: true }, true);
+    useProjectStore.setState({ current: data, status: "ready", load: vi.fn(), refreshHead: vi.fn(), loadTaskEvents: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "renders").mockResolvedValue({ renders: [] });
+    vi.spyOn(api, "preparePlayback").mockResolvedValue(undefined);
+    vi.spyOn(api, "cutPlaybackFile").mockRejectedValue(new Error("Still streaming"));
+    vi.spyOn(api, "sourceCaches").mockResolvedValue({ caches: [] });
+    vi.spyOn(api, "recordEditReview").mockResolvedValue(undefined);
+    vi.spyOn(api, "summarizeBatches").mockResolvedValue({ summaries: {}, pending: [] });
+    vi.spyOn(api, "keepEdits").mockResolvedValue(undefined);
+    vi.spyOn(api, "settings").mockResolvedValue({ settings: db.settings, transcriptionAvailable: true });
+    vi.spyOn(api, "skills").mockResolvedValue({ skills: [] });
+    vi.spyOn(api, "waveform").mockImplementation(async (mediaId, from, to) => ({ mediaId, from, to, peaks: [0.2, 0.8] }));
+    vi.spyOn(api, "cutReview").mockResolvedValue({ review: null });
+    vi.spyOn(api, "retakes").mockResolvedValue({ groups: [] } as never);
+    vi.spyOn(api, "threadEdits").mockImplementation(async (_projectId, threadId) => ({
+      version: project.head!,
+      edits: threadId === ownerThreadId ? [
+        { changeId: change.id, spot: 0, label: "Flagged intro cut", range: { start: 1, end: 3 }, kind: "cut", previous: [], check: "Check the cut." },
+        { changeId: change.id, spot: 1, label: "Safe captions", range: { start: 5, end: 8 }, kind: "text", previous: [] },
+        { changeId: change.id, spot: 2, label: "Safe music bed", range: { start: 9, end: 12 }, kind: "audio", previous: [] },
+      ] : [],
+    }));
+
+    await act(async () => root.render(<MemoryRouter><SimpleWorkspace /></MemoryRouter>));
+    await act(async () => {});
+
+    // Unfold Safe edits so safe rows are on screen before acting on them.
+    await act(async () => container.querySelector<HTMLButtonElement>(".review-tier-toggle")!.click());
+    await act(async () => {});
+
+    // Open the flagged edit first.
+    const flaggedBtn = container.querySelector<HTMLButtonElement>('.review-rail-list ol[aria-label="Edits that need you"] > li > button')!;
+    await act(async () => flaggedBtn.click());
+    await act(async () => {});
+
+    const keepBtn = [...container.querySelectorAll<HTMLButtonElement>(".edit-card button")]
+      .find(b => b.textContent?.trim() === "Keep")!;
+    const footHead = (name: "Working" | "Done") => [...container.querySelectorAll<HTMLButtonElement>(".review-rail-foot .review-sec")]
+      .find(b => b.textContent?.startsWith(name))!;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // 1) Keeping a flagged edit shows data-lingering="done" with a check mark and Kept in Needs review before moving to Done.
+      await act(async () => keepBtn.click());
+      await act(async () => {});
+      const keptFlagged = container.querySelector<HTMLLIElement>('.review-rail-list ol[aria-label="Edits that need you"] > li')!;
+      expect(keptFlagged.dataset.lingering).toBe("done");
+      expect(keptFlagged.querySelector(".simple-pass-tick")).not.toBeNull();
+      expect(keptFlagged.querySelector(".simple-edit-value")?.textContent).toBe("Kept");
+      expect(keptFlagged.querySelector(".simple-unkeep")).toBeNull();
+      expect(footHead("Done").textContent).toBe("Done0");
+
+      // 2) Revising a safe edit (running) and queuing another safe edit (pending, unpaused) show spinners & working labels in Safe edits before moving to Working.
+      const runningTask = Task.parse({
+        id: "task_status_running", projectId: PRJ, kind: "edit", agent: "claude",
+        instruction: "Make captions larger", state: "running",
+        createdBy: { type: "human", name: "Editor" }, changeIds: [],
+        context: { changeId: change.id, editIndex: 1, threadId: ownerThreadId },
+        createdAt: "2026-11-26T10:01:00.000Z",
+      });
+      const queuedTask = Task.parse({
+        id: "task_status_queued", projectId: PRJ, kind: "edit", agent: "claude",
+        instruction: "Lower music bed", state: "queued",
+        createdBy: { type: "human", name: "Editor" }, changeIds: [],
+        context: { changeId: change.id, editIndex: 2, threadId: ownerThreadId },
+        createdAt: "2026-11-26T10:02:00.000Z",
+      });
+      data = { ...data, tasks: [...baseTasks, runningTask, queuedTask] };
+      await act(async () => { useProjectStore.setState({ current: data }); });
+      await act(async () => {});
+
+      const safeItems = [...container.querySelectorAll<HTMLLIElement>('.review-low-body[aria-label="Safe edits"] ol > li')];
+      const runningLi = safeItems.find(li => li.textContent?.includes("Safe captions"))!;
+      const queuedLi = safeItems.find(li => li.textContent?.includes("Safe music bed"))!;
+      expect([runningLi.dataset.lingering, runningLi.dataset.working, runningLi.hasAttribute("data-paused")]).toEqual(["working", "busy", false]);
+      expect(runningLi.querySelector(".simple-pass-spin")).not.toBeNull();
+      expect(runningLi.querySelector(".simple-edit-check")?.textContent).toBe("Revising…");
+      expect([queuedLi.dataset.lingering, queuedLi.dataset.working, queuedLi.hasAttribute("data-paused")]).toEqual(["working", "pending", false]);
+      expect(queuedLi.querySelector(".simple-pass-spin")).not.toBeNull();
+      expect(queuedLi.querySelector(".simple-edit-check")?.textContent).toBe("Up next");
+      // Neither working row is duplicated in Working yet.
+      expect(footHead("Working").textContent).toBe("Working0");
+
+      // 3) Pausing project editing stops the queued lingering row from spinning while keeping the running row spinning.
+      data = { ...data, project: { ...data.project, editingPaused: true } };
+      await act(async () => { useProjectStore.setState({ current: data }); });
+      await act(async () => {});
+      const pausedItems = [...container.querySelectorAll<HTMLLIElement>('.review-low-body[aria-label="Safe edits"] ol > li')];
+      const pausedQueued = pausedItems.find(li => li.textContent?.includes("Safe music bed"))!;
+      const stillRunning = pausedItems.find(li => li.textContent?.includes("Safe captions"))!;
+      expect(pausedQueued.hasAttribute("data-paused")).toBe(true);
+      expect(pausedQueued.querySelector(".simple-pass-spin")).toBeNull();
+      expect(stillRunning.querySelector(".simple-pass-spin")).not.toBeNull();
+
+      // 4) After LINGER_MS + LINGER_FADE_MS, all lingering rows leave Needs review / Safe edits and land cleanly in Done and Working.
+      await act(async () => { vi.advanceTimersByTime(LINGER_MS + LINGER_FADE_MS); });
+      expect(container.querySelectorAll('.review-rail-list ol[aria-label="Edits that need you"] > li')).toHaveLength(0);
+      expect(container.querySelectorAll('.review-low-body[aria-label="Safe edits"] ol > li')).toHaveLength(0);
+      expect(footHead("Done").textContent).toBe("Done1");
+      expect(footHead("Working").textContent).toBe("Working2");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // CSS lights up lingering kept check marks in --color-ok and turns beta working/lingering timestamps into spinners while keeping status words visible.
+    const { readFileSync } = await import("node:fs");
+    const simpleCss = readFileSync(`${import.meta.dirname}/../../simple.css`, "utf8");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    expect(simpleCss).toMatch(/li\[data-lingering="done"\]\s+\.simple-pass-tick:not\(\.is-rejected\)\s*\{[^}]*color:\s*var\(--color-ok\)/);
+    expect(simpleCss).toMatch(/\.simple-pass-spin\s*\{[^}]*border-radius:\s*50%/);
+    expect(betaCss).toContain(':not([data-lingering="working"]) > button > :is(.simple-edit-check, .simple-pass-value, .simple-pass-check) { display: none; }');
+    expect(betaCss).toContain('[data-lingering="working"][data-working="pending"]:not([data-paused])');
+  });
+
+  it("aligns version numbers into one vertical column across rows in both default and beta review lists", async () => {
+    const { readFileSync } = await import("node:fs");
+    const simpleCss = readFileSync(`${import.meta.dirname}/../../simple.css`, "utf8");
+    const betaCss = readFileSync(`${import.meta.dirname}/../../pages/simple/beta/beta.css`, "utf8");
+    // Shared subgrid tracks keep the right-hand tag column uniform across rows (e.g. B-roll, Overlay, Edit, Graphic).
+    expect(simpleCss).toMatch(/\.simple-pass-list\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*46px minmax\(0,\s*1fr\) auto;/);
+    expect(simpleCss).toMatch(/\.simple-pass-list\s*>\s*li\s*>\s*button\s*\{[^}]*grid-template-columns:\s*subgrid;/);
+    expect(simpleCss).toMatch(/\.simple-pass-value,\s*\.simple-edit-value\s*\{[^}]*justify-self:\s*end;/);
+    expect(simpleCss).toMatch(/\.simple-edit-check,\s*\.simple-pass-check\s*\{[^}]*justify-self:\s*end;/);
+    // Title text expands to fill the title track so every row's v2/v3 lands on the same vertical line.
+    expect(simpleCss).toMatch(/:is\(\.simple-pass-label,\s*\.simple-edit-title\):has\(>\s*\.edit-version\)\s*>\s*:is\(\.simple-pass-words,\s*\.simple-edit-words\)\s*\{\s*flex:\s*1 1 auto;\s*\}/);
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail-list\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*46px minmax\(0,\s*1fr\) auto;/);
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail-list\s+\.simple-pass-list\.simple-edits\s*\{[^}]*grid-template-columns:\s*subgrid;/);
+    expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail\s+:is\(\.simple-edit-title,\s*\.simple-pass-label\):has\(>\s*\.edit-version\):not\(:has\(>\s*\.simple-pass-more\)\)\s*>\s*:is\(\.simple-edit-words,\s*\.simple-pass-words\)\s*\{\s*flex:\s*1 1 auto;\s*\}/);
+    // Version numbers use a subtler tone than trailing kind tags so titles and tags lead visually.
+    expect(simpleCss).toMatch(/\.edit-version\s*\{[^}]*color:\s*var\(--color-dim\);[^}]*opacity:\s*\.65;/);
+    expect(simpleCss).toMatch(/\.edit-version\.is-new\s*\{[^}]*color:\s*var\(--color-muted\);[^}]*opacity:\s*1;/);
   });
 });

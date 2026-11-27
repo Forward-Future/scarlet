@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync, rmdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { Skill, skillExtends, type UpsertSkillRequest, type User } from "@scarlet/shared";
+import { BUILT_IN_COMMANDS, commandGuides, Skill, skillExtends, type UpsertSkillRequest, type User } from "@scarlet/shared";
 import type { Author } from "@scarlet/timeline";
 import { newId } from "@scarlet/timeline";
 import type { Ctx } from "../context.js";
@@ -10,9 +10,9 @@ import { BUNDLED_SKILLS } from "../bundledSkills.js";
 import { badRequest, conflict, HttpError } from "../errors.js";
 import { atomicWriteFileSync } from "../util.js";
 import { actorFor, authorName, logActivity, quote } from "./activity.js";
-import { RETIRED_WORKFLOWS } from "./skillSeed.js";
+import { RETIRED_WORKFLOWS, renamedTo } from "./skillSeed.js";
 
-export { migrateGlobalSkills, retireMergedSkills, seedSkillList, seedSkills } from "./skillSeed.js";
+export { addCommandHeaders, migrateGlobalSkills, retireMergedSkills, seedSkillList, seedSkills } from "./skillSeed.js";
 
 type MirrorLocation = Pick<Skill, "id" | "name"> & {
   scope: "project" | "personal" | "team";
@@ -252,11 +252,14 @@ export function assistantSkills(skills: Skill[], selected: string[] | undefined,
   // guides it builds on in turn: the editor's own style is read on top of the guides.
   if (forPrompt && selected?.length) {
     const seen = new Set(selected);
+    // A built-in command no skill goes by brings the skills that guide it.
     const under = (skill: Skill | undefined): Skill[] => !skill ? [] : skillExtends(skill).flatMap(base => {
-      const found = skills.find(s => s.name === base && s.enabled);
-      if (!found || seen.has(found.id)) return [];
-      seen.add(found.id);
-      return [...under(found), found];
+      const named = skills.find(s => s.name === base && s.enabled);
+      const found = named ? [named] : BUILT_IN_COMMANDS.some(c => c.name === base) ? commandGuides(base, skills) : [];
+      return found.filter(guide => !seen.has(guide.id)).flatMap(guide => {
+        seen.add(guide.id);
+        return [...under(guide), guide];
+      });
     });
     const bases = selected.flatMap(id => under(skills.find(s => s.id === id)));
     const chosen = skills.filter(s => selected.includes(s.id));
@@ -268,7 +271,7 @@ export function assistantSkills(skills: Skill[], selected: string[] | undefined,
     // Workflows, customized or not, are read one pass at a time.
     if (!forPrompt) return skill;
     const workflow = BUNDLED_SKILLS.some(s => s.folder === skill.name || s.folder === skill.bundledName) ||
-      skill.bundledName === "first-cut-dialogue" ||
+      (skill.bundledName !== undefined && renamedTo(skill.bundledName) !== undefined) ||
       RETIRED_WORKFLOWS.includes(skill.name);
     if (!workflow) return skill;
     return { ...skill, content: `Read this workflow when it applies using skills_list with skillId "${skill.id}".` };

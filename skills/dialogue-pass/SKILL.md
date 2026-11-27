@@ -2,6 +2,7 @@
 name: dialogue-pass
 description: Make a first dialogue cut by trimming distracting pauses, fillers, redundant takes and production talk while preserving the speaker’s flow.
 category: Story and pacing
+runs: dialogue-pass, tighten-pauses-here
 ---
 
 # Dialogue pass

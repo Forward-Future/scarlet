@@ -387,6 +387,32 @@ it("renders edit-toned edge handles with custom removeLabel when pulling a timed
   expect(onCommit).toHaveBeenCalledWith({ start: 1, end: 1 });
 });
 
+it("keeps cut edge handles visible at 0% / 100% under float rounding and ignores nearby gaps while hovering a handle", async () => {
+  await act(async () => root.render(
+    <TimelineScrubber start={0} duration={20} playhead={0} fps={30} frameAt={() => undefined}
+      onSeek={t => seeks.push(t)} onScrubStart={() => released} onGap={() => {}}
+      gaps={[{ start: 4, end: 6, label: "Cut at 0:04", title: "Cut at 0:04", skipped: true }]}
+      highlight={{ key: "cut-edge", view: { start: 0, end: 20 }, band: { start: 0, end: 20 + 1e-12 }, bandLabel: "Cut · 20 s" }}
+      cutAdjust={{
+        bounds: { minStart: 0, maxStart: 20, minEnd: 0, maxEnd: 20 },
+        tone: "cut",
+        bandPrefix: "Cut",
+        onCommit: () => {},
+      }} />));
+  await zoomed();
+
+  const startHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="start"]');
+  const endHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="end"]');
+  expect(startHandle?.style.left).toBe("0%");
+  expect(endHandle?.style.left).toBe("100%");
+
+  // Hovering a cut handle must not highlight a neighboring cut gap or steal the resize cursor.
+  await act(async () => {
+    startHandle!.dispatchEvent(new PointerEvent("pointermove", { pointerId: 1, pointerType: "mouse", clientX: 250, bubbles: true }));
+  });
+  expect(container.querySelector(".timeline-slider")?.classList.contains("is-gap-aimed")).toBe(false);
+});
+
 /** An open cut's band, at `start` for a second, zoomed to as `focusAround` does: five seconds either side. */
 const openCut = (start: number, duration = 3000, playhead = start - 2) => act(async () => root.render(
   <TimelineScrubber start={0} duration={duration} playhead={playhead} frameAt={() => undefined} onSeek={t => seeks.push(t)} onScrubStart={() => released}
