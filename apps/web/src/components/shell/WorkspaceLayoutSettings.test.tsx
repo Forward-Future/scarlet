@@ -1574,5 +1574,8 @@ describe("WorkspaceLayoutSettings and beta layout toggle", () => {
     expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail-list\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*46px minmax\(0,\s*1fr\) auto;/);
     expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail-list\s+\.simple-pass-list\.simple-edits\s*\{[^}]*grid-template-columns:\s*subgrid;/);
     expect(betaCss).toMatch(/\[data-new-layout\]\s+\.review-rail\s+:is\(\.simple-edit-title,\s*\.simple-pass-label\):has\(>\s*\.edit-version\):not\(:has\(>\s*\.simple-pass-more\)\)\s*>\s*:is\(\.simple-edit-words,\s*\.simple-pass-words\)\s*\{\s*flex:\s*1 1 auto;\s*\}/);
+    // Version numbers use a subtler tone than trailing kind tags so titles and tags lead visually.
+    expect(simpleCss).toMatch(/\.edit-version\s*\{[^}]*color:\s*var\(--color-dim\);[^}]*opacity:\s*\.65;/);
+    expect(simpleCss).toMatch(/\.edit-version\.is-new\s*\{[^}]*color:\s*var\(--color-muted\);[^}]*opacity:\s*1;/);
   });
 });

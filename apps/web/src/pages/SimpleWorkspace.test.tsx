@@ -6486,7 +6486,7 @@ it("draws a pass's rows and any other request's rows as one row, and a revised e
       const val = row.querySelector(".simple-pass-value")!;
       return {
         tag: list.tagName,
-        mark: [mark.tagName, mark.textContent, drawn(mark, "font-size", "color", "margin-left", "border", "padding")],
+        mark: [mark.tagName, mark.textContent, drawn(mark, "font-size", "color", "opacity", "margin-left", "border", "padding")],
         row: [row.parentElement!.parentElement!.className, drawn(row, "font-size", "padding", "border-radius", "color")],
         value: [val.textContent, drawn(val, "font-size", "color")],
       };
@@ -6500,7 +6500,7 @@ it("draws a pass's rows and any other request's rows as one row, and a revised e
     const editM = measure();
     // Both are lists, a row to an item, with the same v2 mark, row box, and trailing value styling.
     expect([passM.tag, editM.tag]).toEqual(["OL", "OL"]);
-    expect([passM.mark, editM.mark]).toEqual(Array(2).fill(["SMALL", "v2", "12px / silver / 7px /  / "]));
+    expect([passM.mark, editM.mark]).toEqual(Array(2).fill(["SMALL", "v2", "12px / gray / .65 / 7px /  / "]));
     expect([passM.row, editM.row]).toEqual(Array(2).fill(["simple-pass-list", "12.5px / 6px 8px / 6px / white"]));
     expect([passM.value, editM.value]).toEqual(Array(2).fill(["Audio", "12px / silver"]));
   } finally {
