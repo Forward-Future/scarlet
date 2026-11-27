@@ -24,7 +24,10 @@ let logs: string[];
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "scarlet-graphics-edge-test-"));
   logs = [];
-  workspace = createApp({ dataDir: directory, skillsSeedDir: join(directory, "empty-seed"), env: {}, log: line => { logs.push(line); } });
+  // Drawing is mocked, but a browser must still be found: a stand-in file, so no installed Chrome is needed.
+  const chrome = join(directory, "chrome");
+  writeFileSync(chrome, "");
+  workspace = createApp({ dataDir: join(directory, "data"), skillsSeedDir: join(directory, "empty-seed"), env: { SCARLET_CHROME: chrome }, log: line => { logs.push(line); } });
   project = workspace.ctx.repos.projects.insert(createProject("Graphics"));
   workspace.ctx.paths.ensureProject(project.id);
   for (const mock of Object.values(drawing)) mock.mockReset();
@@ -119,7 +122,7 @@ describe("the style guide", () => {
   it("refuses to swap a folder in where its parent isn't a folder", async () => {
     writeFileSync(join(directory, "plain"), "file");
     mkdirSync(join(directory, "staging"));
-    await expect(swapInFolder(join(directory, "staging"), join(directory, "plain", "guide"))).rejects.toMatchObject({ code: "ENOTDIR" });
+    await expect(swapInFolder(join(directory, "staging"), join(directory, "plain", "guide"))).rejects.toMatchObject({ code: process.platform === "win32" ? "EINVAL" : "ENOTDIR" });
     expect(existsSync(join(directory, "staging"))).toBe(true);
   });
 
@@ -339,7 +342,7 @@ describe("drawing a graphic", () => {
     let copied: string[] = [];
     drawing.renderGraphic.mockImplementation(async (opts: { htmlFile: string }) => {
       const folder = join(opts.htmlFile, "..");
-      copied = readdirSync(folder, { recursive: true }).map(String).sort();
+      copied = readdirSync(folder, { recursive: true }).map(name => String(name).replaceAll("\\", "/")).sort();
       return { output: "", frames: 1, missingFonts: [{ family: "Brand Sans", sample: "T" }], installedFonts: [], problems: [], elapsedMs: 1 };
     });
     const result = await draw({ options: { basedOn: "gfx" }, assets: new Map([["fonts/new.woff2", Buffer.from("font")]]) });
