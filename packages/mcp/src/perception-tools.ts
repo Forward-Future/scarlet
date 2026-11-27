@@ -11,7 +11,6 @@ import { levelProfile, pauseStats, retakeGroups } from "./media-profile.js";
 import { json, noteEvidenceMiss, text, type ToolRegistrar } from "./tool-result.js";
 import { requireMediaAsset } from "./media-state.js";
 import { OTHER_INPUT, pct1 } from "./analysis.js";
-import { EXACT_WORD_TIMES } from "./word-lines.js";
 import { screenReadings, type ScreenLine } from "./screen-reading.js";
 import { motionSpans, type DetailFrame, type MotionSecond } from "./screen-motion.js";
 import type { RecordingCut } from "./brief-pictures.js";
@@ -244,7 +243,7 @@ export function registerPerception(deps: PerceptionDeps) {
     return heardOnlyVerbatim(shown, heard, w => verbatim.get(w.mediaId)![w.index]!);
   }
 
-  async function readTranscript({ version, from, to, detail, exact }: { version?: string; from?: number; to?: number; detail: "lines" | "words"; exact?: boolean }) {
+  async function readTranscript({ version, from, to, detail }: { version?: string; from?: number; to?: number; detail: "lines" | "words" }) {
     const [tl, { project }] = await Promise.all([deps.peekTimeline(version ?? "head"), deps.getProject()]);
     const duration = timelineDuration(tl);
     const range = { start: from ?? 0, end: to ?? duration };
@@ -273,7 +272,7 @@ export function registerPerception(deps: PerceptionDeps) {
       const sliceJoins = joins.filter(j => !slice.length || j.at <= slice.at(-1)!.end + 1e-3 || slice.length === words.length);
       const sliceHeard = slice.length === words.length ? allHeard : allHeard.filter(h => h.start <= slice.at(-1)!.end + 1e-3);
       const body = formatTimelineTranscript(slice, sliceJoins,
-        { detail, exact, fps: project.settings.fps, all, removed: join => joinTook(join, transcripts), heard: sliceHeard });
+        { detail, fps: project.settings.fps, all, removed: join => joinTook(join, transcripts), heard: sliceHeard });
       // Words are in order of their start: one said over the last word shown can end before it does. The next page
       // starts at the earliest such word, so it isn't skipped; otherwise just after the last word shown.
       const last = slice.at(-1);
@@ -299,7 +298,7 @@ export function registerPerception(deps: PerceptionDeps) {
   }
 
   tool("timeline_transcript",
-    "What the audience hears on a timeline version (default head): transcript words in playback order with TIMELINE seconds, and a ‖ line at every join between kept source ranges showing the source jump, the words either side and the words the join took out of the recording (took). Each mediaId line identifies the source of the #indices that follow. Use this mediaId and those transcript_get indices in dialogue_check_join or dialogue_apply_cuts. lines groups words between pauses and joins (`time #firstIndex text`). words gives every word its index in those lines (`time #index word #index word …`), says every pause, and names a speaker where it changes; a read of " + EXACT_WORD_TIMES + " words or fewer (a narrow from/to) lists `start-end #index word` instead, for exact edges. Read it after an edit to check that sentences still read naturally across each join. A word heard only on the input a recording's dialogue isn't on (a producer on a call, playback) reads " + OTHER_INPUT + ": it is not the speaker. The transcript tidies a restart or a stutter away, and a `+ heard` line is where the dialogue scan's saved verbatim reading hears words it left out: their TIMELINE seconds, mediaId and source seconds, and the words around them as heard. They play like any other: cut them by those timeline seconds, or by removeRepeat when dialogue_check_repeats lists them.",
+    "What the audience hears on a timeline version (default head): transcript words in playback order with TIMELINE seconds, and a ‖ line at every join between kept source ranges showing the source jump, the words either side and the words the join took out of the recording (took). Each mediaId line identifies the source of the #indices that follow. Use this mediaId and those transcript_get indices in dialogue_check_join or dialogue_apply_cuts. lines groups words between pauses and joins (`time #firstIndex text`); words lists `start-end #index word` for exact edges. Read it after an edit to check that sentences still read naturally across each join. A word heard only on the input a recording's dialogue isn't on (a producer on a call, playback) reads " + OTHER_INPUT + ": it is not the speaker. The transcript tidies a restart or a stutter away, and a `+ heard` line is where the dialogue scan's saved verbatim reading hears words it left out: their TIMELINE seconds, mediaId and source seconds, and the words around them as heard. They play like any other: cut them by those timeline seconds, or by removeRepeat when dialogue_check_repeats lists them.",
     { version: z.string().optional(), from: z.number().min(0).optional().describe("Timeline seconds"), to: z.number().min(0).optional().describe("Timeline seconds"),
       detail: z.enum(["lines", "words"]).default("lines") }, readTranscript);
 

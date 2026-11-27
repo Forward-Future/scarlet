@@ -198,7 +198,7 @@ export function registerDialogueReviewTools(deps: DialogueReviewToolsDeps) {
         const location = json({ index, currentVersion: version, range,
           next: range ? "Use this version for a revision of the current footage." : "The original footage has no unique placement. Inspect current takes with timeline_transcript and timeline_at." });
         if (range) {
-          const words = await getPerception().readTranscript({ version, from: Math.max(0, range.start - 2), to: range.end + 2, detail: "words", exact: true });
+          const words = await getPerception().readTranscript({ version, from: Math.max(0, range.start - 2), to: range.end + 2, detail: "words" });
           location.content.push(...words.content);
         }
         return location;

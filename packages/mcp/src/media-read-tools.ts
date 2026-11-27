@@ -26,7 +26,6 @@ import { describeGapSound, GAP_SECONDS, type GapSound } from "./gap-sound.js";
 import type { MediaSession } from "./media-session.js";
 import { eachRecording, RecordingList, recordingsAsked, requireMediaAsset, type SessionErrorHelpers } from "./media-state.js";
 import { json, text, type ToolRegistrar } from "./tool-result.js";
-import { EXACT_WORD_TIMES, LINE_WORDS, transcriptWordLines } from "./word-lines.js";
 
 /** The most buckets one waveform read returns. */
 const WAVEFORM_MAX_POINTS = 4000;
@@ -145,7 +144,12 @@ export function registerMediaReadTools(deps: MediaReadToolsDeps) {
         }
         flush();
       } else {
-        lines.push(...transcriptWordLines(shown, { note: w => gapNote.get(w.index), said, gapSeconds: GAP_SECONDS }));
+        let speaker: string | undefined;
+        for (const w of shown) {
+          if (gapNote.has(w.index)) lines.push(gapNote.get(w.index)!);
+          lines.push(`#${w.index} ${w.start.toFixed(2)}-${w.end.toFixed(2)}${w.speaker && w.speaker !== speaker ? ` ${w.speaker}:` : ""} ${said(w)}`);
+          speaker = w.speaker;
+        }
       }
       const more = next === undefined ? "" : `\nContinue with nextFromWord=${next}.`;
       return `${mediaId}: words #${picked[0]!.index}–#${shown.at(-1)!.index} of ${words.length}, source seconds.${estimates ? ` ${estimates}` : ""}\n${lines.join("\n")}${more}`;
@@ -154,7 +158,7 @@ export function registerMediaReadTools(deps: MediaReadToolsDeps) {
 
   tool(
     "transcript_get",
-    `Word-timed transcript of a media asset in SOURCE seconds. Each word carries a stable index (#123): the same index transcript_search, timeline_transcript and dialogue_scan show, and the word reference dialogue_check_join and dialogue_apply_cuts accept. Word times locate words; cut edges go where the recording is silent, which the dialogue tools measure. In text, a gap of ${GAP_SECONDS} s or more between two words is followed by a line saying what the recording holds there: quiet, or how much of it is sound at speaking level that no word explains, with its source seconds. That sound is whatever the transcript left out: a word it missed, a cut-off start, a breath, a laugh, typing. On a recording with a mix and two isolated inputs, such as a microphone and the computer's sound, a word heard only on the input the dialogue isn't on reads \`${OTHER_INPUT}\` (a producer on a call, a remote guest, playback), and a gap's line says how much of its sound is on that input alone (a system chime, a remark from the call): neither is the speaker. A missing transcript is started or joined with the configured provider; if the call reports preparation, call again. Narrow with from/to seconds or fromWord/toWord. A long result includes nextFromWord: pass it back with the same range, granularity and format to read the next page. Text format, word: one line per phrase, \`start #index word #index word …\`: the second the line's first word starts, then each word with its index. A line opens after a gap, at a new sentence or speaker (named where it changes), and every ${LINE_WORDS} words. A page of ${EXACT_WORD_TIMES} words or fewer, such as a narrow fromWord/toWord read, lists \`#index start-end word\` lines instead, with each word's own start and end, as json always does. Segment: \`[start-end] #first-#last speaker: text\` lines; json: [index, start, end, text, speaker] tuples, and otherInput listing the indices heard only on the other input. To read the same from/to range on several recordings, such as two microphones, list them as mediaIds instead of mediaId: each is read and paged on its own, in that order (text: one section each; json: \`reads\`), and one that couldn't be read says why in its place. Word indices belong to one recording, so a list takes from/to and no word indices: read on with mediaId and the nextFromWord its section gives.`,
+    `Word-timed transcript of a media asset in SOURCE seconds. Each word carries a stable index (#123): the same index transcript_search, timeline_transcript and dialogue_scan show, and the word reference dialogue_check_join and dialogue_apply_cuts accept. Word times locate words; cut edges go where the recording is silent, which the dialogue tools measure. In text, a gap of ${GAP_SECONDS} s or more between two words is followed by a line saying what the recording holds there: quiet, or how much of it is sound at speaking level that no word explains, with its source seconds. That sound is whatever the transcript left out: a word it missed, a cut-off start, a breath, a laugh, typing. On a recording with a mix and two isolated inputs, such as a microphone and the computer's sound, a word heard only on the input the dialogue isn't on reads \`${OTHER_INPUT}\` (a producer on a call, a remote guest, playback), and a gap's line says how much of its sound is on that input alone (a system chime, a remark from the call): neither is the speaker. A missing transcript is started or joined with the configured provider; if the call reports preparation, call again. Narrow with from/to seconds or fromWord/toWord. A long result includes nextFromWord: pass it back with the same range, granularity and format to read the next page. Text format: \`#index start-end word\` lines (word) or \`[start-end] #first-#last speaker: text\` lines (segment); json: [index, start, end, text, speaker] tuples, and otherInput listing the indices heard only on the other input. To read the same from/to range on several recordings, such as two microphones, list them as mediaIds instead of mediaId: each is read and paged on its own, in that order (text: one section each; json: \`reads\`), and one that couldn't be read says why in its place. Word indices belong to one recording, so a list takes from/to and no word indices: read on with mediaId and the nextFromWord its section gives.`,
     {
       mediaId: z.string().optional(),
       mediaIds: RecordingList.optional().describe("Several recordings to read over the same from/to range in one call, instead of mediaId"),

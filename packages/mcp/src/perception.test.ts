@@ -54,7 +54,7 @@ describe("timeline perception", () => {
       "‖ join 1 at 4.00 (0:04.00) mic 4.00→6.00 “we” | “Today”",
       "4.30 #4 Today we build.",
     ]);
-    expect(formatTimelineTranscript(placed, timelineJoins(tl), { detail: "words", fps: 30 })).toContain("4.3-4.6 #4 Today");
+    expect(formatTimelineTranscript(placed, timelineJoins(tl), { detail: "words", fps: 30 })).toContain("4.30-4.60 #4 Today");
     const page = [placed[3]!, { ...placed[4]!, mediaId: "guest", index: 0 }, placed[5]!];
     for (const detail of ["lines", "words"] as const) {
       const listed = formatTimelineTranscript(page, [], { detail, fps: 30 }).split("\n");
@@ -62,28 +62,6 @@ describe("timeline perception", () => {
       expect(listed[1]).toContain("#4 Today"); // The source index survives the cut and the page offset.
       expect(listed[3]).toContain("#0 we");
     }
-  });
-
-  it("gives every word its index in words but each line's start only, unless the read is short or asks for exact times", () => {
-    const tl = emptyTimeline("p");
-    tl.tracks[1]!.clips = [makeMediaClip("mic", 0, 20, 0)];
-    // Two sentences of twelve words, a pause of 0.8 s between them, and a second speaker on the last three words.
-    const spoken = Array.from({ length: 24 }, (_, i) => {
-      const start = 1 + i * .3 + (i >= 12 ? .8 : 0);
-      return [i === 11 ? "end." : `w${i}`, start, start + .25] as [string, number, number];
-    });
-    const placed = timelineWords(tl, new Map([["mic", words(spoken).map((w, i) => ({ ...w, speaker: i >= 21 ? "Speaker 2" : "Speaker 1" }))]]));
-    expect(formatTimelineTranscript(placed, [], { detail: "words", fps: 30 }).split("\n")).toEqual([
-      "mediaId mic",
-      "1 #0 Speaker 1: w0 #1 w1 #2 w2 #3 w3 #4 w4 #5 w5 #6 w6 #7 w7 #8 w8 #9 w9 #10 w10 #11 end.",
-      "  (0.85 s)",
-      "5.4 #12 w12 #13 w13 #14 w14 #15 w15 #16 w16 #17 w17 #18 w18 #19 w19 #20 w20 #21 Speaker 2: w21 #22 w22 #23 w23",
-    ]);
-    const exact = formatTimelineTranscript(placed, [], { detail: "words", fps: 30, exact: true }).split("\n");
-    expect(exact).toHaveLength(26);
-    expect(exact.slice(1, 3)).toEqual(["1-1.25 #0 Speaker 1: w0", "1.3-1.55 #1 w1"]);
-    expect(exact).toContain("  (0.85 s)");
-    expect(formatTimelineTranscript(placed.slice(0, 20), [], { detail: "words", fps: 30 }).split("\n")).toHaveLength(22);
   });
 
   it("shows where the verbatim reading hears a restart the transcript tidied away", () => {
