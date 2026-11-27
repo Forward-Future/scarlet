@@ -26,7 +26,7 @@ import {
   takesSystemPrompt,
   workspacePermission,
 } from "./geminiAcp.js";
-import { TranscriptUsageTailer } from "./geminiTranscript.js";
+import { TranscriptUsageTailer, type StepsReport } from "./geminiTranscript.js";
 import { asRecord, asString, earlyResult, errMsg, exitError, jsonLine, resolveCli, runnerLog, spawnLines, tailSummary } from "./spawn.js";
 import { clip } from "../logText.js";
 import { addUsage, createUsageReporter, geminiUsage, usageWithModel } from "./usage.js";
@@ -57,6 +57,17 @@ type PendingStep =
   | "prompt"
   | "done";
 
+/**
+ * A run's steps, peak context and cache misses, as a task event the evals read (`usage_steps`, no text, so the editor
+ * sees nothing) and a line of the host's log. Only per-run totals were kept, so a pass's misses couldn't be seen after it.
+ */
+export function reportSteps(report: StepsReport | undefined, onEvent: (ev: RunnerEvent) => void, log: (line: string) => void) {
+  if (!report) return;
+  onEvent({ type: "log", text: "", data: { kind: "usage_steps", ...report } });
+  log(`${report.steps} step${report.steps === 1 ? "" : "s"}, peak context ${report.peakContext} tokens, ` +
+    `${report.misses.length} cache miss${report.misses.length === 1 ? "" : "es"}${report.misses.length ? ` (${report.missedTokens} tokens sent again uncached)` : ""}`);
+}
+
 export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> {
   // Scarlet's own variables stay out of agy, so its terminal never holds the token.
   const env = workspaceEnv(opts.env ?? process.env, opts.workspace);
@@ -77,7 +88,9 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   let resumeFailed = false;
   let cancelSent = false;
   let configOptions: AcpConfigOption[] = [];
-  const transcript = new TranscriptUsageTailer();
+  // A cache miss goes in the host's log as its step is read, with the context Gemini then billed again uncached.
+  const transcript = new TranscriptUsageTailer(miss =>
+    runLog(`cache miss at step ${miss.step ?? "?"}: read ${miss.cached} of the ${miss.context} tokens the step before sent`));
   // Tools Scarlet refused during the turn under way. agy ends Gemini's turn on a refusal.
   let refused: string[] = [];
   let carryOns = 0;
@@ -435,6 +448,7 @@ export async function runGemini(opts: RunAgentOptions): Promise<RunAgentResult> 
   emit(remaining);
   pollTranscriptUsage();
   reportUsage();
+  reportSteps(transcript.report(), opts.onEvent, runLog);
 
   const usage = usageWithModel(st.usage, opts.model);
   if (resumeFailed) {
