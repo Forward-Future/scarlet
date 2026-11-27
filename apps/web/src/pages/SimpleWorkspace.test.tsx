@@ -15367,7 +15367,7 @@ it("dashes every undecided Needs review cut and edit on the timeline, and draws 
   expect(dashed()).toBe(false);
 });
 
-/** The new layout (Settings → General, Beta): the chat, then the column of edits, then the player. */
+/** The default three-column layout: the chat, then the column of edits, then the player. */
 const inNewLayout = async (see: () => Promise<void>) => {
   useUiStore.setState({ newLayout: true });
   try { await see(); } finally { await act(async () => root.render(null)); useUiStore.setState({ newLayout: false }); }
@@ -16183,15 +16183,15 @@ it("advances to safe edits once the last flagged edit is kept, with no filter ba
     .toEqual([["wrap", true], ["music bed", false], ["captions", false]]);
 });
 
-it("switches live between the default layout and the new one, which share one workspace, each with its own list of edits", async () => {
+it("switches live between the classic layout and the default three-column one, which share one workspace, each with its own list of edits", async () => {
   flaggedPairOneAsking();
   await showFolded();
   await act(async () => {});
-  // The default layout: the dock of edit lists under the chat, and no column of edits.
+  // The classic layout: the dock of edit lists under the chat, and no column of edits.
   expect(container.querySelector("[data-new-layout]")).toBeNull();
   expect(container.querySelector(".simple-review-dock")).not.toBeNull();
   expect(container.querySelector("#simple-review-rail")).toBeNull();
-  // Turned on in Settings, the new layout takes over at once: the column of edits, and no dock.
+  // With Classic workspace layout off, the default three-column layout takes over at once: the column of edits, and no dock.
   await act(async () => useUiStore.setState({ newLayout: true }));
   try {
     expect(container.querySelector("[data-new-layout]")).not.toBeNull();
@@ -16203,7 +16203,7 @@ it("switches live between the default layout and the new one, which share one wo
     await act(async () => {});
     expect(columnOpen()).toBe("captions");
   } finally { await act(async () => useUiStore.setState({ newLayout: false })); }
-  // Turned off again, the default layout is back as it was.
+  // Turned back on, the classic layout is back as it was.
   expect(container.querySelector("[data-new-layout]")).toBeNull();
   expect(container.querySelector("#simple-review-rail")).toBeNull();
   expect(container.querySelector(".simple-review-dock")).not.toBeNull();

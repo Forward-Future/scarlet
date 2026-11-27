@@ -6,6 +6,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 27, 2026
 
+- The three-column workspace layout is now the default. Turn on "Classic workspace layout" in Settings › General to switch back to the previous two-column layout any time.
+- Voice dictation now always waits in the message box so you can review it before pressing Enter, and the "Review dictation before sending" setting has been removed.
 - In the beta layout, the highlight on an edit you just sent to Working now clears itself after a few seconds.
 - In the beta layout, single-edit revisions now stay visible in the chat in chronological order while queued, working, and finished, with a clickable target header naming the edit, timestamp, and version (matching the `Revising` bar above the message box).
 - A continuous B-roll section made of back-to-back clips now appears as one item in the edit list and highlights the whole section on the timeline.

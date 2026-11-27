@@ -1,5 +1,5 @@
-/* Scoped styles for the opt-in "New workspace layout (Beta)" toggle. Every rule is under [data-new-layout] so
-   the default two-column design and SkillEditorPage remain completely untouched when the beta toggle is off. */
+/* Scoped styles for the default three-column workspace layout. Every rule is under [data-new-layout] so
+   the classic two-column layout and SkillEditorPage remain untouched when Classic workspace layout is on. */
 
 /* Workspace composer additions (single-line row-named aim line, timestamp chips, question panel over the box). */
 [data-new-layout] .composer-aim-line:has(.composer-aim-badge) { border-color: rgba(255, 255, 255, .14); border-left: 2px solid rgba(255, 255, 255, .28); background: rgba(255, 255, 255, .045); }

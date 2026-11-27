@@ -2,7 +2,6 @@ import { AboutSettings } from "../components/shell/AboutSettings";
 import { CheckInSettings } from "../components/shell/CheckInSettings";
 import { TalkingToYouSettings } from "../components/shell/TalkingToYouSettings";
 import { WorkspaceLayoutSettings } from "../components/shell/WorkspaceLayoutSettings";
-import { DictationSettings } from "../components/shell/DictationSettings";
 import { LocalModelNotice, TranscriptionGuide, useLocalModelStatus, useNeedsCrisperSetup } from "../components/shell/LocalModelNotice";
 import { PreferenceSelect } from "../components/ui/PreferenceSelect";
 import { StorageSettings } from "../components/shell/StorageSettings";
@@ -365,7 +364,6 @@ export function SettingsPage() {
             <ServerSettingsForm section="general" />
             <CheckInSettings />
             <TalkingToYouSettings />
-            <DictationSettings />
             <WorkspaceLayoutSettings />
           </>
         )}

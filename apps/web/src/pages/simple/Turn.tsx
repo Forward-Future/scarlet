@@ -102,7 +102,7 @@ function ChangeReply({ thread, entry, actions }: { thread: Thread; entry: Extrac
 }
 
 /**
- * The new layout's (Settings → General → "New workspace layout (Beta)") own lists of a request's edits. Given, the turn
+ * The default three-column layout's own lists of a request's edits. Given, the turn
  * draws as that layout does: inside its column of edits, with the editor's words as bubbles and no Pause or folding.
  */
 export type TurnBeta = { PassSummary: typeof PassSummaryBeta; ThreadResult: typeof ThreadResultBeta };
