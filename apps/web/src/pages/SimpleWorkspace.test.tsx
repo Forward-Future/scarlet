@@ -14161,6 +14161,31 @@ it("leaves full screen when Revise hands the keyboard to the message box, which 
   expect(editPanel()).not.toBeNull();
 });
 
+it("leaves full screen when N aims the message box at the playhead", async () => {
+  await show();
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
+  expect(stage.dataset.expanded).toBe("true");
+  useUiStore.setState({ composerFocus: 0 });
+  await press("n");
+  expect(useUiStore.getState().composerFocus).toBe(1);
+  expect(stage.dataset.expanded).toBeUndefined();
+});
+
+it("leaves full screen when holding V starts talking to the message box", async () => {
+  await show();
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
+  expect(stage.dataset.expanded).toBe("true");
+  useUiStore.setState({ voiceHold: false });
+  try {
+    await act(async () => useUiStore.getState().setVoiceHold(true));
+    expect(stage.dataset.expanded).toBeUndefined();
+  } finally {
+    await act(async () => useUiStore.getState().setVoiceHold(false));
+  }
+});
+
 it("takes a clip that's already showing back to its start, and plays it, when it is played from Media again", async () => {
   await show();
   const fromMedia = async () => {
