@@ -498,6 +498,22 @@ function pictureTimes(file: string) {
     "frame=pts_time", "-of", "csv=p=0", file]).then(result => result.stdout.toString().split("\n").filter(Boolean).map(parseFloat));
 }
 
+it("makes a long recording's parts side by side where the hardware decoder can help, every picture at its source time", async () => {
+  // On a Mac that decodes AVC on its CPU cores, VideoToolbox makes parts from the end while the CPU makes them from the start.
+  const input = path.join(dir, "lanes.mp4"), output = path.join(dir, "lanes-preview.mp4");
+  await runCapture("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30000/1001:d=95",
+    "-f", "lavfi", "-i", "sine=d=95", "-c:v", "libx264", "-g", "30", "-c:a", "aac", input]);
+  const progress: number[] = [];
+  const result = await makeProxy(input, output, { height: 90, hwaccel: "auto", checkpointDir: path.join(dir, "lane-parts"), onProgress: p => progress.push(p) });
+  expect(result.warnings.filter(w => w.startsWith("VideoToolbox could not"))).toEqual([]);
+  expect(progress).toEqual([...progress].sort((a, b) => a - b));
+  expect(progress.at(-1)).toBe(1);
+  const [want, got] = await Promise.all([pictureTimes(input), pictureTimes(output)]);
+  expect(got.length).toBe(want.length);
+  expect(Math.max(...got.map((t, i) => Math.abs(t - want[i]!)))).toBeLessThan(1e-4);
+  expect((await probeMedia(output)).hasAudio).toBe(true);
+});
+
 it("resumes a recording whose frame rate drifts and keeps each picture at its source time", async () => {
   // A phone recording at 29.97 that drops two pictures before it ends: its measured rate no longer matches the declared one.
   const input = path.join(dir, "drifting.mp4"), output = path.join(dir, "drifting-preview.mp4");
