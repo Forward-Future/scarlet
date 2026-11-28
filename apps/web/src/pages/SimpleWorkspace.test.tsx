@@ -21,6 +21,7 @@ import { usePlayerStore } from "../stores/player";
 import { usePictureMarksStore } from "../stores/pictureMarks";
 import { useShownCutStore } from "../stores/shownCut";
 import { useProjectStore, type ProjectData } from "../stores/project";
+import { resetShortcutsStore, useShortcutsStore } from "../stores/shortcuts";
 import { useSkillsStore } from "../stores/skills";
 import { useUiStore, type AgentContext } from "../stores/ui";
 import { SimpleWorkspace } from "./SimpleWorkspace";
@@ -895,6 +896,30 @@ it("steps between a request's edits with the arrow keys, sideways or up and down
   expect(openTitle()).toBe("captions");
   await press("Escape");
   expect(editPanel()).toBeNull();
+});
+
+it("steps between a request's edits with a modified next/previous edit shortcut", async () => {
+  useShortcutsStore.getState().setBinding("nextEdit", "Alt+ArrowDown");
+  useShortcutsStore.getState().setBinding("prevEdit", "Alt+ArrowUp");
+  try {
+    appliedEdits();
+    await show();
+    const turn = turnFor("chg_approved_2");
+    await click([...editRowsIn(turn)][0]!);
+    await act(async () => {});
+    expect(openTitle()).toBe("wrap");
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", code: "ArrowDown", altKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(openTitle()).toBe("music bed");
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", code: "ArrowUp", altKey: true, bubbles: true, cancelable: true }));
+    });
+    expect(openTitle()).toBe("wrap");
+  } finally {
+    localStorage.clear();
+    resetShortcutsStore();
+  }
 });
 
 it("keeps a reframe's card open, on the side it was on, when → or a press on the timeline leaves its passage", async () => {
@@ -6963,6 +6988,29 @@ it("steps through a pass's calls with ↑ and ↓, and Esc closes the call", asy
   expect(container.querySelector('[aria-label="Call"]')).toBeNull();
   expect(container.querySelector(".simple-on-video")).toBeNull();
   expect(container.querySelector('[aria-label="Suggestion"]')).toBeNull();
+});
+
+it("steps through a pass's calls with a modified next/previous edit shortcut", async () => {
+  useShortcutsStore.getState().setBinding("nextEdit", "Alt+ArrowDown");
+  useShortcutsStore.getState().setBinding("prevEdit", "Alt+ArrowUp");
+  try {
+    flagged();
+    useProjectStore.setState({ current: data });
+    await show();
+    await act(async () => {});
+    const altArrow = (key: "ArrowDown" | "ArrowUp") => act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, code: key, altKey: true, bubbles: true, cancelable: true }));
+    });
+    await altArrow("ArrowDown");
+    expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 3:50 · After");
+    await altArrow("ArrowDown");
+    expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 9:58 · After");
+    await altArrow("ArrowUp");
+    expect(container.querySelector(".simple-on-video")?.textContent).toBe("Showing cut at 3:50 · After");
+  } finally {
+    localStorage.clear();
+    resetShortcutsStore();
+  }
 });
 
 it("starts ↓ on the first call still waiting when nothing is open, and ↑ on the last, as need you does", async () => {
@@ -14182,6 +14230,31 @@ it("leaves full screen when Revise hands the keyboard to the message box, which 
   // The box is in the chat, behind the player: typed into unseen, the message went to Scarlet on Enter.
   expect(stage.dataset.expanded).toBeUndefined();
   expect(editPanel()).not.toBeNull();
+});
+
+it("leaves full screen when N aims the message box at the playhead", async () => {
+  await show();
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
+  expect(stage.dataset.expanded).toBe("true");
+  useUiStore.setState({ composerFocus: 0 });
+  await press("n");
+  expect(useUiStore.getState().composerFocus).toBe(1);
+  expect(stage.dataset.expanded).toBeUndefined();
+});
+
+it("leaves full screen when holding V starts talking to the message box", async () => {
+  await show();
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
+  expect(stage.dataset.expanded).toBe("true");
+  useUiStore.setState({ voiceHold: false });
+  try {
+    await act(async () => useUiStore.getState().setVoiceHold(true));
+    expect(stage.dataset.expanded).toBeUndefined();
+  } finally {
+    await act(async () => useUiStore.getState().setVoiceHold(false));
+  }
 });
 
 it("takes a clip that's already showing back to its start, and plays it, when it is played from Media again", async () => {

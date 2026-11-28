@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
@@ -324,6 +325,30 @@ struct ExportTransfer {
     render: Option<String>,
 }
 
+const ENGINE_DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const ENGINE_DOWNLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Copy one file of the engine into `file`. A large export may take a long time to copy, while a stalled one never
+/// resumes, so each read has an idle limit and the copy has no total limit.
+async fn download_engine_file(source: url::Url, idle: Duration, file: &mut (impl tokio::io::AsyncWrite + Unpin), transfer: &mut ExportTransfer) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(ENGINE_DOWNLOAD_CONNECT_TIMEOUT).read_timeout(idle).build().map_err(|e| e.to_string())?;
+    let mut res = client.get(source).header("x-scarlet-download", "1").header("x-scarlet-request-id", transfer.request.to_string())
+        .send().await.map_err(|e| e.without_url().to_string())?;
+    transfer.stage = "headers";
+    transfer.status = res.status().as_u16();
+    if !res.status().is_success() { return Err(format!("The engine could not deliver the file ({})", res.status())); }
+    loop {
+        transfer.stage = "read";
+        let Some(chunk) = res.chunk().await.map_err(|e| e.without_url().to_string())? else { break };
+        transfer.bytes += chunk.len() as u64;
+        transfer.stage = "write";
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 async fn save_engine_file(app: &AppHandle, state: &AppState, url: &str, path: &Path, temp: tempfile::NamedTempFile, transfer: &mut ExportTransfer) -> Result<String, String> {
     use tokio::io::AsyncWriteExt;
     let (file, temp_path) = temp.into_parts();
@@ -347,19 +372,7 @@ async fn save_engine_file(app: &AppHandle, state: &AppState, url: &str, path: &P
         transfer.render = source.path().strip_prefix("/api/renders/").and_then(|path| path.strip_suffix("/file"))
             .filter(|id| id.strip_prefix("rnd_").is_some_and(|value| value.len() == 12 && value.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())))
             .map(str::to_owned);
-        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().map_err(|e| e.to_string())?;
-        let mut res = client.get(source).header("x-scarlet-download", "1").header("x-scarlet-request-id", transfer.request.to_string())
-            .send().await.map_err(|e| e.without_url().to_string())?;
-        transfer.stage = "headers";
-        transfer.status = res.status().as_u16();
-        if !res.status().is_success() { return Err(format!("The engine could not deliver the file ({})", res.status())); }
-        loop {
-            transfer.stage = "read";
-            let Some(chunk) = res.chunk().await.map_err(|e| e.without_url().to_string())? else { break };
-            transfer.bytes += chunk.len() as u64;
-            transfer.stage = "write";
-            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-        }
+        download_engine_file(source, ENGINE_DOWNLOAD_IDLE_TIMEOUT, &mut file, transfer).await?;
     }
     transfer.stage = "sync";
     file.flush().await.map_err(|e| e.to_string())?;
@@ -853,5 +866,84 @@ mod tests {
         let kept: serde_json::Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
         assert_eq!((&kept["1"]["temp"], &kept["1"]["saver"]), (&saved["1"]["temp"], &saved["1"]["saver"]));
         assert!(kept["2"].get("temp").is_none() && kept["2"].get("saver").is_none());
+    }
+
+    async fn serve_export<Fut: std::future::Future<Output = ()> + Send>(
+        content_length: usize,
+        body: impl FnOnce(tokio::net::TcpStream) -> Fut + Send + 'static,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api/renders/rnd_000000000001/file", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let (mut req, mut len) = ([0u8; 1024], 0);
+            while !req[..len].windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut req[len..]).await.unwrap();
+                if n == 0 { break; }
+                len += n;
+            }
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {content_length}\r\n\r\n").as_bytes()).await.unwrap();
+            body(socket).await;
+        });
+        (url, server)
+    }
+
+    /// What the save's download wrote, and where it stood when it ended.
+    async fn download_export(url: &str, idle: Duration) -> (Result<(), String>, Vec<u8>, ExportTransfer) {
+        let mut transfer = ExportTransfer { request: uuid::Uuid::nil(), stage: "connect", status: 0, bytes: 0, render: None };
+        let mut body = Vec::new();
+        let saved = tokio::time::timeout(Duration::from_secs(5), download_engine_file(url.parse().unwrap(), idle, &mut body, &mut transfer))
+            .await.expect("export download hung past timeout");
+        (saved, body, transfer)
+    }
+
+    #[tokio::test]
+    async fn a_stalled_export_download_times_out_with_a_retryable_error() {
+        use tokio::io::AsyncWriteExt;
+        let (url, server) = serve_export(8192, |mut socket| async move {
+            socket.write_all(&[b'a'; 4096]).await.unwrap();
+            std::future::pending::<()>().await;
+        }).await;
+
+        let (saved, body, transfer) = download_export(&url, Duration::from_millis(300)).await;
+        server.abort();
+        assert_eq!(saved, Err("error decoding response body".into()));
+        assert_eq!((body.len(), transfer.bytes, transfer.stage, transfer.status), (4096, 4096, "read", 200));
+    }
+
+    #[tokio::test]
+    async fn an_engine_that_never_answers_times_out_with_a_retryable_error() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api/renders/rnd_000000000001/file", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let _held = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+
+        let (saved, _, transfer) = download_export(&url, Duration::from_millis(300)).await;
+        server.abort();
+        assert_eq!(saved, Err("error sending request".into()));
+        assert_eq!(transfer.status, 0);
+    }
+
+    #[tokio::test]
+    async fn an_active_slow_export_download_finishes_past_the_idle_limit() {
+        use tokio::io::AsyncWriteExt;
+        let (url, server) = serve_export(6 * 1024, |mut socket| async move {
+            for i in 0..6u8 {
+                if i > 0 { tokio::time::sleep(Duration::from_millis(150)).await; }
+                socket.write_all(&[b'a' + i; 1024]).await.unwrap();
+            }
+        }).await;
+
+        let idle = Duration::from_millis(400);
+        let started = std::time::Instant::now();
+        let (saved, body, transfer) = download_export(&url, idle).await;
+        server.await.unwrap();
+        assert!(started.elapsed() > idle);
+        assert_eq!(saved, Ok(()));
+        assert_eq!(body, (0..6u8).flat_map(|i| [b'a' + i; 1024]).collect::<Vec<_>>());
+        assert_eq!(transfer.bytes, 6 * 1024);
     }
 }

@@ -317,6 +317,15 @@ export function useUndoShortcut(workspaceActive: boolean, projectId: string, und
   }, [workspaceActive, projectId, undoRef]);
 }
 
+/** Previous/next edit step when the key is allowed on an open card, including modified bindings like ⌥↓ or ⌘↓. */
+function cardEditStep(e: KeyboardEvent): -1 | 0 | 1 {
+  const step = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
+  if (!step || !ignorePageShortcut(e)) return step;
+  if (e.defaultPrevented || isEditableTarget(e.target) || !(e.metaKey || e.ctrlKey || e.altKey)) return 0;
+  if (document.querySelector('dialog[open], [role="dialog"], [role="menu"], [data-shortcut-overlay]')) return 0;
+  return step;
+}
+
 /** Capture-phase ↑/↓/Esc shortcuts while an applied edit card is open. */
 export function useEditCardShortcuts(active: boolean, stepEdit: (delta: number) => void, closeEdit: () => void) {
   const editKeys = useRef({ stepEdit, closeEdit });
@@ -325,12 +334,12 @@ export function useEditCardShortcuts(active: boolean, stepEdit: (delta: number) 
     if (!active) return;
     // Capture phase, so previous/next edit keys (↑ and ↓ by default) step between edits before anything else takes them. ← and → pass through to the player.
     const onKey = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e)) return;
-      const step = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
+      if (isComposing(e)) return;
+      const step = cardEditStep(e);
       if (step) {
         e.preventDefault();
         if (!e.repeat) editKeys.current.stepEdit(step);
-      } else if (e.key === "Escape") {
+      } else if (e.key === "Escape" && !ignorePageShortcut(e)) {
         // Full screen takes the first Esc: it leaves full screen, and the edit stays open. So does the marking of a
         // frame, which ends on it.
         if (inFullScreen() || marksTakeEscape(e)) return;
@@ -353,15 +362,15 @@ export function useCallCardShortcuts(reviewKeysOn: boolean, hasPass: boolean, st
   useEffect(() => {
     if (!reviewKeysOn) return;
     const onKey = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e)) return;
+      if (isComposing(e)) return;
       const keys = reviewKeys.current;
-      const step = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
+      const step = cardEditStep(e);
       // With no call to step to, the arrows stay the player's: a pass still running, or one with nothing to ask. They
       // stay the player's while a suggestion is on its card too: no key acts on a call that isn't on screen.
       if (hasPass && !keys.suggestion && step && keys.calls) {
         e.preventDefault();
         if (!e.repeat) keys.stepCut(step);
-      } else if (e.key === "Escape" && (keys.listening || keys.suggestion) && !inFullScreen() && !marksTakeEscape(e)) {
+      } else if (e.key === "Escape" && !ignorePageShortcut(e) && (keys.listening || keys.suggestion) && !inFullScreen() && !marksTakeEscape(e)) {
         e.preventDefault();
         // Esc is the card's Close: neither closes a suggestion while it is being applied.
         if (keys.listening) keys.stopListening(); else if (!keys.applying) keys.closeReview();

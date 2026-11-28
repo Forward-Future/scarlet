@@ -533,14 +533,12 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     setTargetLabel(label);
     useUiStore.getState().setAgentContext(target);
   }
-  const [writeRequest, setWriteRequest] = useState(0);
   function startRevision(thread: Thread, target: AgentContext, label: string) {
     // A message being spoken is in the box until it is out. Aiming the box builds it again, which would drop the
     // recording without a word: Revise waits, as the tag's × does.
     if (useUiStore.getState().speaking) return;
     player.pause(true);
     aimAt(thread, target, label);
-    setWriteRequest(n => n + 1);
     useUiStore.getState().focusComposer();
   }
   /**
@@ -3429,7 +3427,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
                 ? { key: callPlaybackKey(listening.index, callTimeline.version), start: audition.start, side: listening.side,
                   beforeWindow: preparedCall?.before.window, afterWindow: preparedCall?.after.window,
                   beforeFile: preparedCall?.before.file, afterFile: preparedCall?.after.file } : undefined,
-            onGap: hearInBefore, onBand, cutAdjust, onPick: pickPoint, ...beta && { shiftTimes: true }, onRange: markRange, holdPassage: cutWaits, reviewRange, ...(openContinuousBroll && { editSection: { range: openContinuousBroll.range, beforeChange: openContinuousBroll.beforeChange } }), writeRequest, heard: heardPick, quiet: quietOpen }} threadView={playerView}
+            onGap: hearInBefore, onBand, cutAdjust, onPick: pickPoint, ...beta && { shiftTimes: true }, onRange: markRange, holdPassage: cutWaits, reviewRange, ...(openContinuousBroll && { editSection: { range: openContinuousBroll.range, beforeChange: openContinuousBroll.beforeChange } }), heard: heardPick, quiet: quietOpen }} threadView={playerView}
             workingCache={workingCache} draftVersion={previewVersion} draft={previewTimeline}
             openingJoin={!source && (appliedCut ? joinPending : openingJoin)} cutLoadError={cutLoadError}
             draftFailed={openingJoin ? !!single.error || (!!single.preview && !listenJoined) : pinnedCallVersion ? !!savedBefore.error : !appliedCut && draftFailed}

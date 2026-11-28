@@ -5,8 +5,9 @@ import { api, errorMessage, IS_MOCK } from "../../lib/client";
 import { openCutStream, playbackLoader } from "../../lib/cutStream";
 import { player } from "../../lib/player";
 import { logPlayRefusal, playbackLog } from "../../lib/playbackLog";
-import { ignorePageShortcut } from "../../lib/hotkeys";
+import { isComposing, useHotkeys } from "../../lib/hotkeys";
 import { pct } from "../../lib/format";
+import { matchesShortcut } from "../../stores/shortcuts";
 import { selectRender, useProjectStore } from "../../stores/project";
 import { usePlayerStore } from "../../stores/player";
 import { Progress, Spinner } from "../ui/primitives";
@@ -233,25 +234,30 @@ export function ChangeClip({ change, active = true, loading, clock: pageClock, p
     scrub: hold,
   }));
 
-  // Space plays as the play button does now, also after the picture changed which file it plays from.
-  const toggleNow = useRef(toggle);
-  toggleNow.current = toggle;
   useEffect(() => {
-    if (!active) {
-      video.current?.pause();
-      wantPlay.current = false;
-      return;
-    }
-    const down = (e: KeyboardEvent) => {
-      if (ignorePageShortcut(e, video.current)) return;
-      if (e.key === " ") {
-        e.preventDefault();
-        if (!e.repeat) toggleNow.current();
+    if (active) return;
+    video.current?.pause();
+    wantPlay.current = false;
+  }, [active]);
+
+  // Playback keys act on the Before clip while it is on screen: a changed play key, and K and L from the J/K/L preset.
+  useHotkeys(e => {
+    if (!active || isComposing(e)) return;
+    if (matchesShortcut(e, "playPause")) {
+      e.preventDefault();
+      if (!e.repeat) toggle();
+    } else if (matchesShortcut(e, "shuttleStop")) {
+      e.preventDefault();
+      if (!e.repeat) {
+        wantPlay.current = false;
+        video.current?.pause();
+        player.resetRateOnPause();
       }
-    };
-    window.addEventListener("keydown", down);
-    return () => window.removeEventListener("keydown", down);
-  }, [active, audition]);
+    } else if (matchesShortcut(e, "shuttleForward")) {
+      e.preventDefault();
+      if (!e.repeat && video.current?.paused) toggle();
+    }
+  }, undefined, video);
 
   return (
     <div className="absolute inset-0">
