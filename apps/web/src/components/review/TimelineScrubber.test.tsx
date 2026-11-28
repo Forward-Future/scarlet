@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useHotkeys } from "../../lib/hotkeys";
 import { matchesShortcut } from "../../stores/shortcuts";
 import { TimelineScrubber, type TimelineGap } from "./TimelineScrubber";
+import { useEditCardShortcuts } from "../../pages/simple/workspaceHooks";
 
 /** The timeline by itself, a thousand pixels wide, with no pictures or sound to draw. */
 let root: Root;
@@ -309,6 +310,62 @@ it("lets hover-only edge handles drag an open cut's start or end edge, shows liv
   expect(onCommit).toHaveBeenCalledTimes(2);
   expect(onCommit.mock.calls[1]![0].start).toBeCloseTo(2 + 1 / 30, 5);
   expect(onCommit.mock.calls[1]![0].end).toBe(4);
+});
+
+it("keeps an open edit card open when Esc cancels an edge press or drag, and closes it on the next Esc", async () => {
+  const closeEdit = vi.fn();
+  const onCommit = vi.fn();
+  function Harness() {
+    useEditCardShortcuts(true, () => {}, closeEdit);
+    return (
+      <TimelineScrubber start={0} duration={20} playhead={2} fps={30} frameAt={() => undefined}
+        onSeek={t => seeks.push(t)} onScrubStart={() => released}
+        highlight={{ key: "cut-1", view: { start: 0, end: 10 }, band: { start: 2, end: 4 }, bandLabel: "Cut · 2.0 s" }}
+        cutAdjust={{
+          bounds: { minStart: 0.5, maxStart: 4, minEnd: 2, maxEnd: 6 },
+          tone: "cut",
+          bandPrefix: "Cut",
+          onCommit,
+        }} />
+    );
+  }
+  await act(async () => root.render(<Harness />));
+  await zoomed();
+
+  const startHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="start"]')!;
+  const endHandle = container.querySelector<HTMLButtonElement>('[data-cut-handle="end"]')!;
+
+  // Press and hold still (before pointermove or hold timer sets live): Esc cancels without closing the card.
+  await act(async () => {
+    startHandle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 4, button: 0, isPrimary: true, clientX: 200, bubbles: true }));
+  });
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(closeEdit).not.toHaveBeenCalled();
+  expect(onCommit).not.toHaveBeenCalled();
+
+  // Drag an edge handle: Esc cancels the drag and keeps the card open.
+  await act(async () => {
+    endHandle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 5, button: 0, isPrimary: true, clientX: 400, bubbles: true }));
+  });
+  await act(async () => {
+    document.dispatchEvent(new PointerEvent("pointermove", { pointerId: 5, clientX: 460, bubbles: true }));
+    await new Promise(requestAnimationFrame);
+  });
+  expect(container.querySelector(".timeline-cut-readout")).not.toBeNull();
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(closeEdit).not.toHaveBeenCalled();
+  expect(onCommit).not.toHaveBeenCalled();
+  expect(container.querySelector(".timeline-cut-readout")).toBeNull();
+
+  // Once no drag is active, the next Esc closes the card.
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  expect(closeEdit).toHaveBeenCalledTimes(1);
 });
 
 it("leaves Space to playback after pressing a cut's edge handle", async () => {
