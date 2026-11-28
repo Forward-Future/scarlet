@@ -1334,6 +1334,38 @@ it("asks for the file's name once, in the system's Save dialog, which opens on t
   expect(choose).toHaveBeenLastCalledWith(data.project.name);
 });
 
+it("offers standard export resolutions from the short side for vertical, square and 4:5 projects", async () => {
+  const cases: Array<[number, number, string[]]> = [
+    [3840, 2160, ["Project · 3840 × 2160", "1920 × 1080", "1280 × 720", "854 × 480"]],
+    [2160, 3840, ["Project · 2160 × 3840", "1080 × 1920", "720 × 1280", "480 × 854"]],
+    [1080, 1920, ["Project · 1080 × 1920", "720 × 1280", "480 × 854"]],
+    [2160, 2160, ["Project · 2160 × 2160", "1080 × 1080", "720 × 720", "480 × 480"]],
+    [2160, 2700, ["Project · 2160 × 2700", "1080 × 1350", "720 × 900", "480 × 600"]],
+    // An odd size reads as the render will make it: 480.5 px wide rounds to 481, then to an even 482.
+    [482, 644, ["Project · 482 × 644", "482 × 642"]],
+  ];
+  const setSize = (width: number, height: number) => act(async () => useProjectStore.setState({
+    current: { ...data, project: { ...data.project, settings: { ...data.project.settings, width, height } } },
+  }));
+  for (const [width, height, expected] of cases) {
+    await setSize(width, height);
+    await show(<ExportSheet hasCut onClose={() => {}} />);
+    const options = await openOptions(container.querySelector<HTMLButtonElement>("#export-resolution")!);
+    expect(options.map(o => o.textContent)).toEqual(expected);
+    await show(null);
+  }
+  vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 5, path: "/chosen/vertical.mp4" });
+  vi.spyOn(desktop, "finishVideoExport").mockResolvedValue("/chosen/vertical.mp4");
+  const render: Render = { ...data.renders[0]!, id: "vertical-1080", version: data.project.head!, kind: "export", quality: "delivery", range: null, exportOptions: { height: 1920 }, state: "done" };
+  const request = vi.spyOn(api, "requestRender").mockResolvedValue({ render });
+  await setSize(2160, 3840);
+  await show(<ExportSheet hasCut onClose={() => {}} />);
+  await selectOption(container.querySelector<HTMLButtonElement>("#export-resolution")!, "1080 × 1920");
+  expect(container.querySelector("details summary")?.textContent).toContain("1080 × 1920");
+  await click(exportButton()!);
+  expect(request).toHaveBeenCalledWith(PRJ, expect.objectContaining({ exportOptions: { height: 1920 } }));
+});
+
 it("offers a folder for another app under For Resolve, Final Cut or Premiere, saying what it holds and what doesn't carry over", async () => {
   const choose = vi.spyOn(desktop, "chooseVideoExport").mockResolvedValue({ ticket: 7, path: "/Users/me/Exports/Interview" });
   const handoff = vi.spyOn(api, "handoff").mockResolvedValue({ files: [{ path: "Interview.fcpxml", text: "<fcpxml/>" }], mediaBytes: 0 });

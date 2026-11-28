@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 27, 2026
 
+- Export now offers the standard smaller sizes for vertical, square and 4:5 videos, such as 1080 × 1920 from a 4K vertical video.
 - Pressing Esc while dragging the edge of a cut or edit on the timeline now only cancels the drag, and leaves its card open.
 - An export that stops arriving while it saves now fails and can be tried again, instead of waiting forever.
 - Pressing N or holding V to talk in full screen now leaves full screen, so the message box you type or speak into is in view.
