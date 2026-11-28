@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 27, 2026
 
+- Pressing N or holding V to talk in full screen now leaves full screen, so the message box you type or speak into is in view.
 - Footage with non-square pixels, such as DV or HDV, now renders and exports at its true shape instead of squeezed or stretched.
 - While you preview Before, K and L from the Video editor (J/K/L) preset and a changed play key now work; next and previous edit keys set with ⌘ or ⌥ work on edit and call cards; and a shortcut set to + shows its key, and works with ⌘.
 - A style guide named in a skill or chat message is now used when its name is in bold, code or quotes, or has 's after it, instead of the default style guide.

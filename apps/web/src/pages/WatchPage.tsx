@@ -129,8 +129,6 @@ interface PreviewProps {
     reviewRange?: TimeRange;
     /** Full range and earliest change when a continuous B-roll section combines multiple edits into one line item. */
     editSection?: { range: TimeRange; beforeChange?: Change };
-    /** A revision was requested from the open card. Its message box is outside the player. */
-    writeRequest?: number;
     /**
      * The edit whose listen the editor has started, shared with the page's own listen of a cut. An edit that was a cut
      * until its revision landed, or becomes one, is taken up as it was instead of started again.
@@ -632,13 +630,13 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
       window.removeEventListener("keydown", escape);
     };
   }, []);
-  const lastWriteRequest = useRef(simple.writeRequest);
-  useEffect(() => {
-    if (simple.writeRequest === lastWriteRequest.current) return;
-    lastWriteRequest.current = simple.writeRequest;
-    setExpanded(false);
-    if (document.fullscreenElement === stage.current) void document.exitFullscreen().catch(() => {});
-  }, [simple.writeRequest]);
+  // Leave full screen whenever the keyboard or voice goes to the message box, which full screen hides.
+  useEffect(() => useUiStore.subscribe((state, previous) => {
+    if (state.composerFocus > previous.composerFocus || (state.voiceHold && !previous.voiceHold)) {
+      setExpanded(false);
+      if (document.fullscreenElement === stage.current) void document.exitFullscreen().catch(() => {});
+    }
+  }), []);
   // Leave the comparison when its decision returns the editor to the thread list.
   const previousChange = useRef(change?.id);
   useEffect(() => {
