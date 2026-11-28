@@ -10593,16 +10593,19 @@ it("keeps the selected edit row in view when stepping with Keep and doesn't let 
     const chat = container.querySelector<HTMLElement>(".simple-chat")!;
     Object.defineProperty(chat, "scrollHeight", { configurable: true, value: 1200 });
     Object.defineProperty(chat, "clientHeight", { configurable: true, value: 400 });
+    // The chat lays out 1200 px tall, at its bottom.
+    await act(async () => { chat.dispatchEvent(new Event("scroll")); });
     const rows = () => [...dockFor(turnFor("chg_approved_2")).querySelectorAll<HTMLElement>(".simple-pass-list > li > button")];
     await click(rows()[0]!);
     expect(scrolled.at(-1)?.textContent).toContain("music bed");
-    chat.scrollTop = 120;
+    // The editor scrolls up to read; the browser fires scroll so the chat stops following the newest message.
+    await act(async () => { chat.scrollTop = 120; chat.dispatchEvent(new Event("scroll")); });
     await press("k");
     expect(openTitle()).toBe("captions");
     expect(scrolled.at(-1)?.textContent).toContain("captions");
     // keepEdits bumps the change's updatedAt on the server: that activity update must not yank .simple-chat to scrollHeight.
     const later = new Date(Date.now() + 60_000).toISOString();
-    await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_later" ? { ...c, updatedAt: later } : c) }));
+    await event(d => ({ ...d, changes: d.changes.map(c => c.id === "chg_approved_2" ? { ...c, updatedAt: later } : c) }));
     expect(chat.scrollTop).toBe(120);
     await press("k");
     expect(openTitle()).toBe("wrap");
