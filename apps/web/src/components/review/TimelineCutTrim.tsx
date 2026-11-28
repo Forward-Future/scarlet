@@ -214,7 +214,8 @@ export function useCutTrim({
       window.removeEventListener("blur", lost);
       if (drag.current === held) drag.current = null;
       lifetime.abort();
-      finish?.();
+      // Adjusting an edge does not pick a point to play from: play on only if the video was playing.
+      finish?.({ marked: true });
     };
 
     const held = { id: -2, start: from, span, x: e.clientX, lifetime, finish: undefined };
