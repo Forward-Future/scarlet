@@ -34,6 +34,8 @@ export default defineConfig(({ command, mode }) => ({
     // The native player layout test measures the same compiled styles as the desktop renderer.
     css: { include: [/\.css\?inline$/] },
     environment: "node",
+    // The workspace tests drive whole pages and take a few seconds each on a busy CI runner, past Vitest's 5 s default.
+    testTimeout: 20_000,
     setupFiles: ["src/lib/domTestSetup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     // SimpleWorkspace.test.tsx is one long file that would hold a full run on one worker for minutes. A full run
