@@ -33,7 +33,7 @@ import type {
   VersionSummary,
 } from "@scarlet/shared";
 import type { AudioTrackSelection, Change, MediaAsset, Note, Project, Timeline, TimelineDiff, TimeRange, Transcript } from "@scarlet/timeline";
-import { adjustCut, adjustEdit, applyOps, diffTimelines, frameAligned, newId, putBackCut, timelineDuration, ASPECT_PRESETS } from "@scarlet/timeline";
+import { adjustCut, adjustEdit, applyOps, aspectSize, diffTimelines, frameAligned, newId, putBackCut, timelineDuration, ASPECT_PRESETS } from "@scarlet/timeline";
 import type { ActivityEntry, ApproveResponse, HandoffResponse, StagedCutRevision, TrashedProject } from "@scarlet/shared";
 import type { ScarletApi } from "../api";
 import { bootBackgroundActivity } from "./background";
@@ -223,11 +223,8 @@ export class MockClient implements ScarletApi {
     }
     if (body.settings && typeof body.settings === "object") {
       const settings = body.settings as Partial<Project["settings"]>;
-      project.settings = { ...project.settings, ...settings };
-      const preset = ASPECT_PRESETS[project.settings.aspect];
-      if (preset && settings.aspect && !settings.width) {
-        project.settings = { ...project.settings, ...preset };
-      }
+      const preset = settings.aspect && !settings.width ? aspectSize(settings.aspect, project.settings) : undefined;
+      project.settings = { ...project.settings, ...settings, ...preset };
       s.settings = project.settings;
       // As in the engine: "Last edited" moves when the video's settings change, not for a new name or an archive.
       project.updatedAt = now();

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyOp,
   applyOps,
+  aspectSize,
   captionsFromWords,
   clipEnd,
   createProject,
@@ -577,5 +578,31 @@ describe("transitions", () => {
     expect(leadIn).toBeDefined();
     expect(leadIn!.sourceIn).toBe(0);
     expect(leadIn!.sourceOut).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe("aspectSize", () => {
+  it("scales aspect presets to keep the project's resolution class and leaves 1080p and smaller at the preset", () => {
+    const cases: Array<[string | undefined, { width: number; height: number }, { width: number; height: number } | undefined]> = [
+      ["9:16", { width: 3840, height: 2160 }, { width: 2160, height: 3840 }],
+      ["1:1", { width: 3840, height: 2160 }, { width: 2160, height: 2160 }],
+      ["4:5", { width: 3840, height: 2160 }, { width: 2160, height: 2700 }],
+      ["16:9", { width: 2160, height: 3840 }, { width: 3840, height: 2160 }],
+      ["9:16", { width: 2560, height: 1440 }, { width: 1440, height: 2560 }],
+      ["1:1", { width: 2560, height: 1440 }, { width: 1440, height: 1440 }],
+      ["4:5", { width: 2560, height: 1440 }, { width: 1440, height: 1800 }],
+      ["16:9", { width: 1920, height: 1200 }, { width: 2134, height: 1200 }],
+      ["9:16", { width: 1920, height: 1080 }, { width: 1080, height: 1920 }],
+      ["1:1", { width: 1920, height: 1080 }, { width: 1080, height: 1080 }],
+      ["4:5", { width: 1920, height: 1080 }, { width: 1080, height: 1350 }],
+      ["9:16", { width: 1280, height: 720 }, { width: 1080, height: 1920 }],
+      ["1:1", { width: 1280, height: 720 }, { width: 1080, height: 1080 }],
+      ["4:5", { width: 1280, height: 720 }, { width: 1080, height: 1350 }],
+      ["custom", { width: 3840, height: 2160 }, undefined],
+      [undefined, { width: 3840, height: 2160 }, undefined],
+    ];
+    for (const [aspect, current, expected] of cases) {
+      expect(aspectSize(aspect, current)).toEqual(expected);
+    }
   });
 });

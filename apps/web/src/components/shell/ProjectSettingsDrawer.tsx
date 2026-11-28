@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ASPECT_PRESETS, type ProjectSettings } from "@scarlet/timeline";
+import { aspectSize, type ProjectSettings } from "@scarlet/timeline";
 import { errorMessage } from "../../lib/client";
 import { useProjectStore } from "../../stores/project";
 import { useStyleGuidesStore } from "../../stores/styleGuides";
@@ -8,11 +8,11 @@ import { useUiStore } from "../../stores/ui";
 import { PreferenceSelect } from "../ui/PreferenceSelect";
 import { ConfirmDialog, Drawer, Field, InlineError, Spinner } from "../ui/primitives";
 
-const ASPECTS: Array<{ value: ProjectSettings["aspect"]; label: string; dims: string }> = [
-  { value: "16:9", label: "16:9 landscape", dims: "1920×1080" },
-  { value: "9:16", label: "9:16 vertical", dims: "1080×1920" },
-  { value: "1:1", label: "1:1 square", dims: "1080×1080" },
-  { value: "4:5", label: "4:5 portrait", dims: "1080×1350" },
+const ASPECTS: Array<{ value: ProjectSettings["aspect"]; label: string }> = [
+  { value: "16:9", label: "16:9 landscape" },
+  { value: "9:16", label: "9:16 vertical" },
+  { value: "1:1", label: "1:1 square" },
+  { value: "4:5", label: "4:5 portrait" },
 ];
 const FPS_OPTIONS = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
 const fpsLabel = (fps: number) => `${Number(fps.toFixed(3))} fps`;
@@ -52,9 +52,11 @@ export function ProjectSettingsDrawer({ onDeleted }: { onDeleted: () => void }) 
   const fps = pickedFps === undefined || fpsLabel(pickedFps) === fpsLabel(settings.fps) ? settings.fps : pickedFps;
   const aspect = pickedAspect ?? settings.aspect;
   const renderAffecting = fps !== settings.fps || aspect !== settings.aspect;
-  const dimensions = `${settings.width}×${settings.height}`;
-  const aspectOptions = ASPECTS.map(a => ({ value: a.value, label: `${a.label} · ${settings.aspect === a.value ? dimensions : a.dims}` }));
-  if (settings.aspect === "custom") aspectOptions.push({ value: "custom", label: `Custom · ${dimensions}` });
+  const aspectOptions = ASPECTS.map(a => {
+    const size = settings.aspect === a.value ? settings : aspectSize(a.value, settings) ?? settings;
+    return { value: a.value, label: `${a.label} · ${size.width}×${size.height}` };
+  });
+  if (settings.aspect === "custom") aspectOptions.push({ value: "custom", label: `Custom · ${settings.width}×${settings.height}` });
 
   // The drawer stays until its save settles, as Cancel does: closed while it runs, a failure would have nowhere to show,
   // and the name in the header would go back to the old one without a word.
@@ -68,7 +70,7 @@ export function ProjectSettingsDrawer({ onDeleted }: { onDeleted: () => void }) 
           setBusy(true);
           setErr(null);
           try {
-            const dimensions = aspect !== project.settings.aspect ? ASPECT_PRESETS[aspect] : undefined;
+            const dimensions = aspect !== project.settings.aspect ? aspectSize(aspect, project.settings) : undefined;
             await updateProject({ name: name.trim() || project.name, ...(renderAffecting && { settings: { fps, aspect, ...dimensions } }) });
             setOpen(false);
           } catch (e2) {

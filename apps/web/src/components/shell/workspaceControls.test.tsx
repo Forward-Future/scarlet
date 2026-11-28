@@ -304,6 +304,32 @@ it("sends only the name for a rename and includes format for a frame rate or asp
   expect(useUiStore.getState().projectSettingsOpen).toBe(false);
 });
 
+it("keeps a 4K project's resolution class in aspect labels and on save", async () => {
+  const db = buildDb();
+  const base = db.projects.find(p => p.id === PRJ)!;
+  const project = { ...base, settings: { ...base.settings, aspect: "16:9" as const, width: 3840, height: 2160 } };
+  const updateProject = vi.fn().mockResolvedValue(undefined);
+  useProjectStore.setState({ current: {
+    id: PRJ, project, timeline: db.timelines[project.head!]!,
+    media: project.media, changes: db.changes, notes: db.notes, renders: db.renders,
+    tasks: db.tasks, taskEvents: db.taskEvents, versions: db.versions[PRJ]!,
+  }, updateProject });
+  useUiStore.setState({ projectSettingsOpen: true });
+  await mount(<ProjectSettingsDrawer onDeleted={vi.fn()} />);
+  const options = await openOptions(el.querySelector("#ps-aspect")!);
+  expect(options.map(o => o.textContent)).toEqual([
+    "16:9 landscape · 3840×2160",
+    "9:16 vertical · 2160×3840",
+    "1:1 square · 2160×2160",
+    "4:5 portrait · 2160×2700",
+  ]);
+  await click(options[1]!);
+  await act(async () => { el.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+  expect(updateProject).toHaveBeenCalledWith(expect.objectContaining({
+    settings: expect.objectContaining({ aspect: "9:16", width: 2160, height: 3840 }),
+  }));
+});
+
 it("lists a project matched to NTSC footage at its own rate once, in place of the preset that reads the same", async () => {
   const db = buildDb();
   const project = db.projects.find(p => p.id === PRJ)!;
