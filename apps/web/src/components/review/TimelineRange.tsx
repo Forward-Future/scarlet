@@ -237,15 +237,24 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
       g.stop();
       setLive(undefined);
     };
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      g.marked = true;
+      lost();
+    };
     g.stop = () => {
       if (gesture.current !== g) return;
       gesture.current = undefined;
+      el.removeAttribute("data-escape-owner");
       clearTimeout(g.hold);
       clearTimeout(g.still);
       if (g.paint !== undefined) cancelAnimationFrame(g.paint);
       document.removeEventListener("pointermove", move, true);
       document.removeEventListener("pointerup", up, true);
       document.removeEventListener("pointercancel", up, true);
+      window.removeEventListener("keydown", key, true);
       window.removeEventListener("blur", lost);
       if (drag.current === held) drag.current = null;
       lifetime.abort();
@@ -255,9 +264,12 @@ export function useRangeSelect({ slider, drag, from, span, start, end, fps, edge
     const held = { id: -1, start: from, span, x: e.clientX, lifetime, finish: undefined };
     drag.current = held;
     gesture.current = g;
+    // Claim Esc for the whole gesture so earlier range/card capture listeners don't act before `key` runs.
+    el.setAttribute("data-escape-owner", "");
     document.addEventListener("pointermove", move, true);
     document.addEventListener("pointerup", up, true);
     document.addEventListener("pointercancel", up, true);
+    window.addEventListener("keydown", key, true);
     window.addEventListener("blur", lost);
     // Held still, the press opens the close-up: on a handle at that end, on the ruler at the frame pressed.
     g.hold = window.setTimeout(() => {
