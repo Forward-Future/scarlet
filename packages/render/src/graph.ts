@@ -56,7 +56,7 @@ import {
   type Placement,
 } from "./graphTransform.js";
 import { CUDA_FRAMES_INPUT } from "./mediaInput.js";
-import { hasIndexedAvc, isImagePath, isStillAsset, probeMedia, storedAsShown, type ProbeResult } from "./probe.js";
+import { hasIndexedAvc, isImagePath, isStillAsset, probeMedia, sampleAspectRatio, storedAsShown, type ProbeResult } from "./probe.js";
 import { motionFilters, motionOffsets, motionsIn, planTransitions, type TransitionMotion } from "./transitions.js";
 
 export {
@@ -155,7 +155,7 @@ interface MediaPicture {
   /** Render animated scale/x/y via subpixel `perspective` instead of integer `scale:eval=frame` + `overlay`. */
   smooth: boolean;
   /** Source metadata used for smooth working-size and canvas-coverage checks. */
-  source?: { width?: number; height?: number; hasAlpha?: boolean };
+  source?: { width?: number; height?: number; hasAlpha?: boolean; sar?: number };
 }
 
 export async function buildFilterGraph(
@@ -291,6 +291,8 @@ async function writeFilterGraph(
       chain.push("trim=end_frame=1");
       chain.push(...toneMap);
       chain.push(...effectFilters(clip.effects, "video", effectCtx));
+      // A still's pixel-aspect tag is ignored as image viewers do, so the fit and the cover check agree.
+      chain.push("setsar=1");
       chain.push(...stages.prepare);
       chain.push("loop=loop=-1:size=1:start=0", "settb=AVTB", `setpts=N/${fnum(fps)}/TB`, `fps=${fnum(fps)}`);
       chain.push(`trim=duration=${fnum(p.vis)}`);
@@ -326,6 +328,8 @@ async function writeFilterGraph(
       // An HDR picture becomes SDR before anything else is done to it, so effects, looks and the canvas see what a normal screen shows.
       chain.push(...toneMap);
       chain.push(...effectFilters(clip.effects, "video", effectCtx));
+      // A still's pixel-aspect tag is ignored as image viewers do, so the fit and the cover check agree.
+      if (still) chain.push("setsar=1");
       chain.push(...transformChain(tf, W, H, { opaque, name: () => `round${labelN++}` }));
     }
 
@@ -526,7 +530,7 @@ async function writeFilterGraph(
           toneMap: proxy ? [] : await toneMapFor(hdr),
           tf,
           smooth,
-          source: { width: asset.width, height: asset.height, hasAlpha: asset.hasAlpha },
+          source: { width: asset.width, height: asset.height, hasAlpha: asset.hasAlpha, sar: smooth && !still ? sampleAspectRatio(await verifiedProbe(asset)) : 1 },
           // A single frame has no frames to share a mask with.
           opaque: !opts.singleFrame && asset.hasAlpha === false && !clip.effects.length,
         });
