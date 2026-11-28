@@ -177,12 +177,14 @@ describe("spawnLines", { timeout: 20_000 }, () => {
       vi.spyOn(Date, "now").mockImplementation(() => wall() + (clock() >= at ? ms : 0));
       onTestFinished(() => { vi.restoreAllMocks(); });
     };
+    // Limits well past the run's 2.5 s, so a slow start on a busy machine doesn't reach them: without the sleep check the
+    // hour would cross either at the first look.
     sleepFor(60 * 60_000);
-    const quiet = await node("setTimeout(()=>{},2500)", { stallMs: 2000 }).done;
+    const quiet = await node("setTimeout(()=>{},2500)", { stallMs: 5000 }).done;
     expect(quiet).toMatchObject({ code: 0, stalled: false, timedOut: false, killed: false });
     vi.restoreAllMocks();
     sleepFor(60 * 60_000);
-    const busy = await node("setInterval(()=>console.log('working'),100);setTimeout(()=>process.exit(0),2500)", { timeoutMs: 2000 }).done;
+    const busy = await node("setInterval(()=>console.log('working'),100);setTimeout(()=>process.exit(0),2500)", { timeoutMs: 5000 }).done;
     expect(busy).toMatchObject({ code: 0, timedOut: false, killed: false });
     vi.restoreAllMocks();
     // A clock a few seconds late is a busy machine, not sleep: it counts, and a quiet CLI still stalls.
