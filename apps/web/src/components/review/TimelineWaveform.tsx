@@ -236,7 +236,12 @@ export const TimelineWaveform = memo(function TimelineWaveform({ timeline, sourc
   const [loaded, setLoaded] = useState<{ spans: Span[]; waves: Map<string, WaveformResponse> }>();
   useLayoutEffect(() => {
     const el = lane.current!;
-    const measure = () => setCount(Math.min(1600, Math.ceil(el.clientWidth / 2.4)));
+    const measure = () => {
+      const hidden = getComputedStyle(el).visibility === "hidden";
+      const next = Math.min(1600, Math.ceil(el.clientWidth / 2.4));
+      // Full screen hides the widened lane; keep its bars until it is visible again.
+      setCount(current => current && hidden ? current : next);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
