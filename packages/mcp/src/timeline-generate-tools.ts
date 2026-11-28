@@ -36,6 +36,7 @@ import {
   round3,
 } from "./analysis.js";
 import type { RecordingCut } from "./brief-pictures.js";
+import { parseSubRip } from "./subrip.js";
 import { firstCutRanges } from "./first-cut-ranges.js";
 import { boxInCorner, cornerOf, CORNERS, coverOnText, framingOps, frameShown, MOVE_EASES, type Box, type Corner } from "./framing.js";
 import { moveCrossesScreenChange } from "./framing-report.js";
@@ -392,6 +393,27 @@ export function registerTimelineGenerateTools(deps: TimelineGenerateToolsDeps) {
           ...result.content,
         ],
       };
+    },
+  );
+
+  tool(
+    "captions_import_srt",
+    "Import plain SubRip text timed against the current edit into a new caption track. Paste the complete SRT contents. Existing tracks are preserved.",
+    {
+      srt: z.string().min(1).max(2_000_000),
+      trackName: z.string().trim().min(1).default("Imported captions"),
+      intent: intentInput,
+      reason: editReasonInput,
+    },
+    async ({ srt, trackName, intent, reason }) => {
+      const cues = parseSubRip(srt);
+      const head = (await client.workspace(projectId)).timeline;
+      if (!head) throw new Error("Assemble an edit before importing timed captions.");
+      const track: Track = {
+        id: newId("cap"), kind: "caption", name: trackName, hidden: false, muted: false,
+        clips: cues.map(cue => ({ ...cue, id: newId("cap"), kind: "caption", enabled: true })),
+      };
+      return propose({ intent, reason, description: `Import ${cues.length} timed captions`, ops: [{ op: "addTrack", track }] }, head);
     },
   );
 

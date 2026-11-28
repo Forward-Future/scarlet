@@ -22,3 +22,5 @@ Break lines where a reader would pause: at the end of a phrase, never between a 
 Keep captions clear of faces, on-screen text and anything the viewer needs to see. A caption that has to move for one shot can move; the style stays the same throughout.
 
 `captions_generate` builds the track from the kept words, `timeline_propose` edits single cues, and `frame_contact_sheet` shows them on the picture.
+
+When the editor supplies plain SubRip text timed to this cut, pass the original contents to `captions_import_srt`. It adds a separate editable track and keeps the supplied wording, line breaks, and times.
