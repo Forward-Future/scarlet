@@ -5,14 +5,14 @@
 <h1 align="center">Scarlet</h1>
 
 <p align="center">
-  <strong>Open-source AI video editor for macOS, Windows, and Linux.</strong><br>
-  Tell Claude Code, Codex or Gemini what to change—by voice, in writing, or by drawing on a frame—and hear the edit on your timeline in seconds. Your original footage stays untouched.
+  <strong>The AI video editor that does the tedious part.</strong><br>
+  Scarlet handles the ums, dead air, retakes and captions in seconds. You make the creative calls.
 </p>
 
 <p align="center">
-  <a href="https://github.com/Forward-Future/scarlet/releases/latest"><strong>Download Scarlet (macOS &amp; Windows)</strong></a>
+  <a href="https://github.com/Forward-Future/scarlet/releases/latest"><strong>Download for macOS &amp; Windows</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/Forward-Future/scarlet-releases/releases?q=Ubuntu">Ubuntu 24.04 x86-64 Preview</a>
+  <a href="https://github.com/Forward-Future/scarlet-releases/releases?q=Ubuntu">Ubuntu 24.04 Preview</a>
   &nbsp;·&nbsp;
   <a href="https://github.com/Forward-Future/scarlet-releases/releases">Early Access</a>
   &nbsp;·&nbsp;
@@ -20,115 +20,107 @@
 </p>
 
 <p align="center">
-  <img src="assets/scarlet-workspace.png" width="100%" alt="Scarlet native desktop workspace showing the AI editing conversation on the left, studio interview playback with an open cut review card in the center, and the video thumbnail and waveform timeline below.">
+  <img src="assets/scarlet-workspace.png" width="100%" alt="Scarlet's three-column workspace: the chat with Scarlet on the left, the edits column with Safe edits in the middle, and the interview playing with an open filler-word cut above the timeline on the right.">
 </p>
 
 ---
 
-Scarlet is built around a simple idea: **agents edit the cut list, Scarlet renders the video, and you make the creative calls.**
+Most of editing isn't creative. It's scrubbing for the false start, nudging a pause, typing captions, cutting the same "um" for the fortieth time.
 
-Instead of waiting for full re-renders or hunting through a timeline, Scarlet renders just the affected seconds so you can judge every cut in context. It shines on dialogue-heavy footage—interviews, talking-head videos, podcasts, and screen demos—while keeping every edit versioned and non-destructive.
+Scarlet hands that work to an AI agent. Say what you want, by voice or in writing. The edit lands on your timeline in seconds, and you hear it before you keep it. Your footage is never touched.
 
 > “Tighten the pause before ‘three things.’ Let me hear it both ways.”
 
----
+## Fast
 
-## Major Features
+- **Renders only what changed.** Scarlet re-renders the few seconds around an edit and reuses the rest, so playback stays instant on hour-long recordings.
+- **Talk instead of scrub.** Hold `V` and say it. Pause on a frame, drag a range on the ruler, or select words in the transcript to point at the exact moment.
+- **Draw on the frame (`M`).** Box, point or sketch on the picture so the agent sees what you mean. Drop in reference images or a brand guide PDF.
+- **Several edits at once.** Send back different cuts for revision at the same time. Scarlet works on each in parallel and queues whole-video requests behind them.
 
-### Edit by conversation, voice, or frame markup
-- **Bring your own agent:** Connect **Claude Code**, **Codex** or **Gemini** using your existing subscription in **Settings → General**. Scarlet runs your agent locally over MCP—no separate AI billing or terminal wrangling. You can also use **Ollama**, **LM Studio** or **OpenRouter** models, set up in **Settings → Models**; Claude Code runs the edit with them.
-- **Voice or text, whole video or exact moment:** Type in the composer or hold `V` to talk. Ask for a whole-video pass, or target a specific spot by pausing (`Space`), scrubbing, dragging a range on the ruler (with a frame-accurate close-up loupe), or highlighting words in the transcript.
-- **Draw directly on the frame (`M`):** Sketch, box, or point on the paused video frame so your agent sees exactly which part of the picture you mean. You can also drop reference images or PDF brand guides straight onto the message box.
-- **Non-destructive version history:** Every edit saves a new timeline version, so your original footage is never changed. Press `⌘Z` / `Ctrl+Z` to undo keeps, rejections, and revisions.
+## AI does the grunt work
 
-### Fast review, Before/After playback & live transcript
+- **Bring your own agent.** Connect **Claude Code**, **Codex** or **Gemini** with the subscription you already pay for, in **Settings → General**. Or use **Ollama**, **LM Studio** or **OpenRouter** models from **Settings → Models**. No extra AI bill.
+- **Edits from measurements, not guesses.** Scarlet transcribes and aligns every word locally, reads text on screen, tracks faces and listens for room tone. The agent cuts between words, not through them.
+- **Skills for the jobs you repeat.** Type `/` for a full first cut, captions, punch-ins, B-roll and more. Every skill is a Markdown file you can edit.
+- **It learns your taste.** Say “keep the laughs, only cut the dead air after them” and Scarlet offers it as a rule for next time. Nothing changes until you approve it.
 
-<p align="center">
-  <img src="assets/scarlet-cut-review.png" width="100%" alt="Scarlet three-column cut review showing the conversation on the left, a proposed filler-word cut open on the timeline in the center, and the searchable Transcript rail on the right.">
-</p>
-
-- **Partial segment rendering:** Scarlet only re-renders the seconds around a change and stitches the rest from cached segments, so playback stays fast even on long recordings.
-- **Instant Before/After (`\`):** Open any edit or cut card above the timeline and press `\` to flip between the removed footage and the new join. Click the transcript icon on a cut card to inspect struck-through removed words alongside the surrounding sentence.
-- **Focused `Needs review` list:** Confident edits go straight onto your working timeline; judgment calls and flagged edits wait in **Needs review**, above the message box. Step through them with `↑` / `↓` and press `K` (Keep), `R` (Revise), or `X` (Reject).
-- **Searchable Transcript rail:** Open **Transcript** from the `⋯` menu to read along beside the player, search spoken phrases, click any word to jump the playhead, or select a passage to ask about.
-- **Parallel edit revisions:** Ask for revisions on several different cuts or edits at the same time—Scarlet runs an agent on each while safely queuing whole-video requests above the message box.
-
-### Built-in editing workflows (Skills) & Learnings
+## You make the calls
 
 <p align="center">
-  <img src="assets/scarlet-skills.png" width="100%" alt="Scarlet Settings → Tools & skills showing categorized, editable Markdown editing workflows such as dialogue-pass, add-captions, frame-screen, motion-graphics, and punch-in.">
+  <img src="assets/scarlet-cut-review.png" width="100%" alt="A filler-word cut open for review, with Before and After, Revise and Keep on its card, and the searchable transcript open on the right.">
 </p>
 
-Type `/` in the composer to run one of Scarlet’s built-in editing workflows. Every workflow is an editable Markdown guide shared across your projects—customize them in **Settings → Tools & skills**, compose your own style on top of shipped guides, or turn an approved edit into a reusable skill.
+- **Safe edits stay out of your way.** Routine cuts are grouped under **Safe edits**. Keep them all in one click, or open any one to check it.
+- **Judgment calls come to you.** Anything Scarlet isn't sure about waits in **Needs review**. Step through with `↑` / `↓` and press `K` to keep, `R` to revise or `X` to reject.
+- **Before and After in one key.** Press `\` on any open edit to flip between the original and the new join. Open the cut's transcript to see the exact words that came out.
+- **Nothing is final.** Every edit is a new version of the timeline. `⌘Z` / `Ctrl+Z` takes back a keep, a reject or a revision.
 
-| Workflow | What it does |
+Prefer the old two-column view? Turn on **Classic workspace layout** in **Settings → General**.
+
+## Skills
+
+<p align="center">
+  <img src="assets/scarlet-skills.png" width="100%" alt="Settings → Tools &amp; skills listing Scarlet's editable editing workflows by category.">
+</p>
+
+| Skill | What it does |
 | --- | --- |
-| `/dialogue-pass` | Cuts false starts, redundant takes, filler words, and dead air while preserving natural pacing and flagging judgment calls. |
-| `/frame-screen` | Zooms smoothly onto the active pane or spoken text in screen recordings while keeping camera insets clear of on-screen text. |
-| `/punch-in` | Cuts between wide and tight framing across talking-head jump cuts and key lines using local face tracking. |
-| `/add-captions` | Builds clean, readable caption tracks timed to retained speech. |
-| `/motion-graphics` | Generates lower thirds, titles, and callouts from HTML/CSS/JS rendered locally to transparent ProRes 4444 via bundled headless Chrome. |
-| `/b-roll` | Plans B-roll and graphic spots as To-dos first, then sources or creates only the ones you ask for. |
-| `/split-edits` | Makes J and L cuts so the next voice leads into its shot, or a line carries on over the listener, in interviews and conversations. |
-| `/multi-cam` | Syncs multiple cameras and audio tracks, matches speakers to angles, and switches shots with natural pacing for podcasts and interviews. |
-| `/color-match` | Matches exposure, white balance and contrast across cameras, or applies a style guide's saved color look across the edit. |
-| `/speed-through-waits` | Speeds through installs, builds, and loading screens while keeping tracks in sync and speech at normal speed. |
-| `/music-under-speech` | Dips music under speech so every word is clear, swelling back up in longer pauses and where nobody speaks. |
-| `/fit-length` | Trims an edit down to a target runtime by removing the least essential passages first. |
-| `/tighten-pauses-here` | Focuses pause tightening on a selected passage or the region around the playhead. |
+| `/dialogue-pass` | First cut: false starts, repeated takes, filler words and dead air out, natural pacing kept, judgment calls flagged. |
+| `/frame-screen` | Zooms screen recordings onto the active pane or the text being read, keeping camera insets clear. |
+| `/punch-in` | Cuts between wide and tight framing on jump cuts and key lines, using local face tracking. |
+| `/add-captions` | Clean, readable captions timed to the speech that's left. |
+| `/motion-graphics` | Lower thirds, titles and callouts built in HTML/CSS/JS and rendered locally to transparent ProRes 4444. |
+| `/b-roll` | Plans B-roll and graphic spots as to-dos, then sources or makes only the ones you pick. |
+| `/split-edits` | J and L cuts so the next voice leads into its shot, or a line carries over the listener. |
+| `/multi-cam` | Syncs cameras and mics, matches speakers to angles and switches shots at a natural pace. |
+| `/color-match` | Evens out exposure, white balance and contrast across cameras, or applies your saved look. |
+| `/speed-through-waits` | Speeds through installs, builds and loading screens, keeping speech at normal speed. |
+| `/music-under-speech` | Dips music under every word and brings it back up in the gaps. |
+| `/fit-length` | Trims to a target runtime, least essential parts first. |
+| `/tighten-pauses-here` | Tightens pauses in a selected passage or around the playhead. |
 
-**Learnings:** When a request sounds like a recurring preference (for example, *“Keep laughs in—only cut dead air after them”*), Scarlet surfaces it as a suggested rule. Approve it to update your skill automatically, edit the wording in place, or dismiss it. [Browse all workflows →](skills/README.md)
+Write your own in **Settings → Tools & skills**, or turn an edit you liked into one. [Browse all skills →](skills/README.md)
 
-### Local media perception & cut safety
-So your agent edits from real measurements instead of guesswork, Scarlet analyzes footage locally on your machine:
-- **Verbatim transcription & tight word alignment:** Uses bundled **Whisper large-v3-turbo** out of the box, refined with local wav2vec2 CTC forced alignment and acoustic filler detection. Also supports optional **CrisperWhisper 2.0 large**, custom local models, and OpenAI Whisper (cloud).
-- **Audio & join safety:** 16 kHz waveform and room-tone analysis, multi-input voice awareness, optional audio crossfades, and safety gates that keep cut edges out of spoken words.
-- **Visual intelligence:** Local OCR reads text on screen recordings and lines it up with what the speaker reads aloud; local face tracking follows faces and gaze direction for punch-ins and vertical reframing; screen-motion and recording-cut detection keep screen inserts clean.
-
-### Export & NLE handoff
+## Export
 
 <p align="center">
-  <img src="assets/export-advanced.png" width="600" alt="Scarlet’s export sheet for Resolve, Final Cut or Premiere, listing what the handoff folder holds: the timeline (.fcpxml and .otio), a copy of the footage, captions (.srt), a Read me, and what does not carry over.">
+  <img src="assets/export-advanced.png" width="600" alt="Scarlet's export sheet for Resolve, Final Cut or Premiere, listing what the handoff folder holds: the timeline (.fcpxml and .otio), a copy of the footage, captions (.srt), a Read me, and what does not carry over.">
 </p>
 
-- **Direct MP4 export:** Export the full cut or a custom time range in **Compressed**, **High** (hardware-accelerated), or **Original quality**.
-- **Caption files:** Export the captions alone as SubRip (`.srt`) or WebVTT (`.vtt`), for the whole video or a custom range.
-- **Finish in your NLE (`For Resolve, Final Cut or Premiere…`):** Save a self-contained handoff folder with `.fcpxml` (DaVinci Resolve, Final Cut Pro), `.otio` (Premiere Pro 26.5+, DaVinci Resolve), copies of the used footage, `.srt` captions, and a plain-English Read me explaining how to open it in each app and what does not carry over.
-- **Publish to YouTube:** Connect your channel in **Settings → General**, then choose **Publish to YouTube** in the Export window to upload the cut with final-cut chapter timestamps, as a Private draft by default.
-- **Native desktop app & open MCP engine:** Built with Tauri 2 (Rust shell + local SQLite/Node engine + FFmpeg + headless Chrome) for macOS (Apple Silicon & Intel), Windows x64, and Ubuntu 24.04 x86-64. Power users can also connect external MCP clients (`pnpm mcp`) or run the headless engine via Docker (`docker compose up -d`).
+- **MP4** of the whole cut or a range, in Compressed, High (hardware-accelerated) or Original quality.
+- **Captions** as `.srt` or `.vtt`.
+- **Finish in Resolve, Final Cut or Premiere.** A handoff folder with `.fcpxml`, `.otio`, the footage it uses, captions and a plain-English Read me.
+- **Publish to YouTube** as a private draft, with chapters from the final cut. Connect your channel in **Settings → General**.
 
----
+## Your first edit
 
-## Make Your First Edit
+1. **Import.** Click **New project** and add your video, audio and images. Start editing while transcripts prepare.
+2. **Ask.** Type or hold `V`: *“Cut the false starts and repeated takes, keep the pauses before each answer.”* Or run `/dialogue-pass` for a full first cut.
+3. **Review.** Keep the safe edits, step through **Needs review**, flip Before/After with `\`.
+4. **Export.** Click **Export** for an MP4, captions or an NLE handoff.
 
-1. **Import your footage.** Click **New project**, name it, and choose your files—mix video (MP4, MOV), separate audio (WAV, MP3), and images (PNG, JPEG). You can start editing while proxies and transcripts prepare. In **Settings → General**, connect **Claude Code**, **Codex** or **Gemini**.
-2. **Ask for a change.** Click a point on the timeline (or clear the time tag with `×` to edit the whole video), then type or hold `V` to speak. Try *“Remove the false starts and repeated takes, and keep the pauses before each answer”*—or type `/dialogue-pass` for a full first cut.
-3. **Review in context.** Open any edit from the conversation or timeline. Toggle Before/After with `\`, expand the cut’s transcript to see removed words, and step through items in **Needs review** with `↑` / `↓` to **Keep (`K`)**, **Revise (`R`)**, or **Reject (`X`)**.
-4. **Export or hand off.** Click **Export** in the project header to save an MP4 or its captions as `.srt` or `.vtt`, or choose **For Resolve, Final Cut or Premiere…** to create a handoff folder for DaVinci Resolve, Final Cut Pro, or Premiere Pro.
-
-### Everyday Shortcuts
+### Shortcuts
 
 | Key | Action |
 | --- | --- |
-| `V` (hold) | Talk to Scarlet by voice |
-| `Space` | Play / pause (pausing aims the empty composer at that frame) |
-| `\` | Toggle Before / After on the open edit or cut |
-| `↑` / `↓` | Step to previous / next edit or review call |
-| `←` / `→` | Skip 1 second (`Shift` for 1 frame) |
-| `K` / `X` / `R` | Keep · Reject · Revise the edit or call on screen |
-| `M` | Mark up the current frame (`D` draw, `B` box, `P` point) |
-| `/` | Pick an editing workflow in the composer |
+| `V` (hold) | Talk to Scarlet |
+| `Space` | Play / pause (pausing aims your next message at that frame) |
+| `\` | Before / After on the open edit |
+| `↑` / `↓` | Previous / next edit |
+| `←` / `→` | Back / forward 1 second (`Shift` for 1 frame) |
+| `K` / `X` / `R` | Keep · Reject · Revise |
+| `M` | Mark up the frame (`D` draw, `B` box, `P` point) |
+| `/` | Pick a skill |
 | `−` / `+` / `0` | Zoom timeline out / in / fit |
-| `⌘Z` / `Ctrl+Z` | Undo last Keep, Reject, or revision |
-| `?` | Show all keyboard shortcuts |
+| `⌘Z` / `Ctrl+Z` | Undo |
+| `?` | All shortcuts |
 
----
+## Run from source
 
-## Run From Source
+Builds on **macOS 13+** (Apple Silicon or Intel), **Windows x64** and **Ubuntu 24.04 x86-64**. Scarlet is in early development.
 
-Scarlet is in active early development. You can build the native desktop app on **macOS 13+** (Apple Silicon or Intel), **Windows x64**, or **Ubuntu 24.04 x86-64**.
-
-**Prerequisites:** Git, Node.js 22.x or 24.x, pnpm 12.16.1, Rust, and the platform build tools in the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). On Ubuntu, install the [desktop build and playback dependencies](docs/development.md#ubuntu-2404-x86-64) first.
+**You need:** Git, Node.js 22 or 24, pnpm 12.16.1, Rust, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). On Ubuntu, install the [desktop dependencies](docs/development.md#ubuntu-2404-x86-64) first.
 
 ```sh
 git clone https://github.com/Forward-Future/scarlet.git
@@ -137,14 +129,13 @@ pnpm install --frozen-lockfile
 pnpm build
 ```
 
-**Try the sample interview (no setup required):**
+**Try the sample interview** (no setup, simulated agent):
+
 ```sh
 pnpm desktop:demo
 ```
-Opens the native editor with an isolated in-memory project and simulated assistant.
 
-**Edit your own footage:**
-Install CMake, then fetch the pinned media tools, build local Whisper support, and launch the desktop app:
+**Edit your own footage.** Install CMake, then:
 
 ```sh
 pnpm desktop:ffmpeg
@@ -153,25 +144,23 @@ node apps/desktop/scripts/build-whisper.mjs
 pnpm desktop:dev
 ```
 
----
+Scarlet is a native Tauri 2 app: a Rust shell, a local Node engine with SQLite, FFmpeg and headless Chrome. Connect other MCP clients with `pnpm mcp`, or run the engine headless with `docker compose up -d`.
 
-## Privacy, Local Models & Telemetry
+## Privacy
 
-- **Local by default:** Scarlet stores your projects, transcripts, waveforms, and renders on your computer.
-- **Transcription models:** Bundled **Whisper large-v3-turbo** is the default (downloaded on first use). You can also switch to **CrisperWhisper 2.0 large** (separately licensed weights), a custom local model, or OpenAI Whisper in **Settings → General**. [Transcription model guide →](docs/transcription-models.md)
-- **AI provider data:** Your connected AI provider receives your editing request and the project context the agent inspects (such as transcript excerpts and video frames).
-- **Optional telemetry:** Packaged releases send anonymous usage, edit review decisions, and task/export outcomes to PostHog. Turn off **Send usage reports** in **Settings → About**, or set `SCARLET_TELEMETRY_ENABLED=false` before launching Scarlet (Early Access versions through 0.1.3 use the environment variable). [See which events Scarlet sends →](docs/telemetry.md)
-
----
+- **Local by default.** Projects, transcripts, waveforms and renders stay on your computer.
+- **Transcription** runs locally with **Whisper large-v3-turbo**. You can switch to **CrisperWhisper 2.0 large**, your own model, or OpenAI Whisper in **Settings → General**. [Model guide →](docs/transcription-models.md)
+- **Your AI provider** sees your request and the project context the agent reads, such as transcript excerpts and frames.
+- **Telemetry.** Release builds send anonymous usage, review decisions and task and export outcomes to PostHog. Turn off **Send usage reports** in **Settings → About**, or set `SCARLET_TELEMETRY_ENABLED=false`. [What gets sent →](docs/telemetry.md)
 
 ## Contributing
 
-Bug reports and pull requests are welcome! When filing a bug, please include your operating system, steps to reproduce, and what you expected to see or hear—and use generated media so your own footage and transcripts stay private.
+Bug reports and pull requests are welcome. For bugs, include your OS, steps to reproduce and what you expected to see or hear. Use generated media so your footage stays private.
 
 - [Open an issue](https://github.com/Forward-Future/scarlet/issues) · [Contributing guide](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md)
-- **Working on the desktop app or engine?** Start with the [Development guide](docs/development.md).
-- **Working on how agents edit?** Read [How Scarlet works with AI agents](docs/AI-AGENTS.md) and the [Editing evaluations](evals/README.md).
+- Desktop app or engine: [Development guide](docs/development.md)
+- How agents edit: [Scarlet and AI agents](docs/AI-AGENTS.md) · [Editing evaluations](evals/README.md)
 
 ## License
 
-Scarlet is [MIT-licensed](LICENSE). It includes workflows adapted from Alex’s DaVinci editing skills, © 2026 Alex (@The_Alex) and Forward Future ([license](apps/desktop/src-tauri/licenses/alex-editing-skills.txt)). Acoustic filler detection is [Powered by Desert Ant Labs](https://desertant.com/).
+[MIT](LICENSE). Includes workflows adapted from Alex’s DaVinci editing skills, © 2026 Alex (@The_Alex) and Forward Future ([license](apps/desktop/src-tauri/licenses/alex-editing-skills.txt)). Acoustic filler detection [Powered by Desert Ant Labs](https://desertant.com/).
