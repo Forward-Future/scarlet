@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { TimeRange } from "@scarlet/timeline";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { HOLD_MS, LOUPE_PICTURES, LOUPE_PX_PER_FRAME, orderedRange, rangeEdges, snapTime } from "./TimelineRange";
+import { useEditCardShortcuts, useOutsideClearMarkedRange } from "../../pages/simple/workspaceHooks";
 
 /** The timeline by itself, a thousand pixels wide over 3000 seconds: three seconds a pixel. */
 let root: Root;
@@ -41,6 +42,8 @@ const event = (type: string, x: number) => new PointerEvent(type, { pointerId: 1
 const press = (selector: string, x: number) => act(async () => { container.querySelector(selector)!.dispatchEvent(event("pointerdown", x)); });
 const move = (x: number) => act(async () => { document.dispatchEvent(event("pointermove", x)); });
 const release = (x: number) => act(async () => { document.dispatchEvent(event("pointerup", x)); });
+// Esc goes where the editor's keys go: a pressed handle has focus, and its own Esc clears the range.
+const escape = () => act(async () => { (document.activeElement ?? window).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
 
 it("finds the edge a dragged end lands on, and keeps a range's ends in order and a frame apart", () => {
   expect(rangeEdges({ start: 5, end: 9 }, [{ start: 20, end: 22 }], [{ time: 9 }, { time: 30 }])).toEqual([5, 9, 20, 22, 30]);
@@ -314,4 +317,49 @@ it("drops a drag whose release was lost with the window, so the next click doesn
   await move(150);
   await release(150);
   expect(marked).toHaveBeenCalledExactlyOnceWith({ start: 300, end: 450 });
+});
+
+it("cancels a range handle drag on Esc without clearing the range, and clears it on the next Esc", async () => {
+  const cleared = vi.fn();
+  function Harness() {
+    useOutsideClearMarkedRange(true, cleared);
+    return <TimelineScrubber start={0} duration={3000} playhead={100} frameAt={() => undefined} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)}
+      range={{ start: 300, end: 450 }} onRange={marked} fps={30} marks={[]} />;
+  }
+  await act(async () => root.render(<Harness />));
+  await press(".timeline-range-handle.is-end", 150);
+  await move(200);
+  expect(container.querySelector(".timeline-range-handle.is-held")).not.toBeNull();
+  await escape();
+  expect(cleared).not.toHaveBeenCalled();
+  expect(container.querySelector(".timeline-range-handle.is-held")).toBeNull();
+  await release(200);
+  expect(marked).not.toHaveBeenCalled();
+  // Once no drag is active, the next Esc clears the range.
+  await escape();
+  expect(cleared).toHaveBeenCalledTimes(1);
+});
+
+it("cancels drawing a range on Esc without closing an open edit card, and closes it on the next Esc", async () => {
+  const closeEdit = vi.fn();
+  const released = vi.fn();
+  function Harness() {
+    useEditCardShortcuts(true, () => {}, closeEdit);
+    return <TimelineScrubber start={0} duration={3000} playhead={100} frameAt={() => undefined} onSeek={t => seeks.push(t)} onSelectTime={t => picks.push(t)}
+      onScrubStart={() => released} onRange={marked} fps={30} marks={[]} />;
+  }
+  await act(async () => root.render(<Harness />));
+  await press(".timeline-range-zone", 100);
+  await move(150);
+  expect(container.querySelector(".timeline-range.is-live")).not.toBeNull();
+  await escape();
+  expect(closeEdit).not.toHaveBeenCalled();
+  expect(container.querySelector(".timeline-range")).toBeNull();
+  expect(released).toHaveBeenLastCalledWith({ marked: true });
+  await release(150);
+  expect(marked).not.toHaveBeenCalled();
+  expect(picks).toEqual([]);
+  // Once no drag is active, the next Esc closes the card.
+  await escape();
+  expect(closeEdit).toHaveBeenCalledTimes(1);
 });
