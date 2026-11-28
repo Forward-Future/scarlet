@@ -6,6 +6,7 @@ Add one line under today's date for each change an editor would notice. Leave ou
 
 ## November 27, 2026
 
+- Pressing Esc while dragging the edge of a cut or edit on the timeline now only cancels the drag, and leaves its card open.
 - An export that stops arriving while it saves now fails and can be tried again, instead of waiting forever.
 - Pressing N or holding V to talk in full screen now leaves full screen, so the message box you type or speak into is in view.
 - Footage with non-square pixels, such as DV or HDV, now renders and exports at its true shape instead of squeezed or stretched.
