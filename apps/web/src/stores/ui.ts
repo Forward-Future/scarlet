@@ -79,10 +79,13 @@ export function spliceDraft(draft: string, at: number, text: string, replaces?: 
   const lead = before && !/\s$/.test(before) ? " " : "", tail = /^\s/.test(after) ? "" : " ";
   return { text: before + lead + text + tail + after, caret: before.length + lead.length + text.length + 1 };
 }
-/** The message box on the page, which knows where its cursor is. With none, the words go at the message's end. */
-export const draftInserter: { insert?: (text: string, replaces?: string) => void } = {};
-export function insertInDraft(text: string, replaces?: string) {
-  if (draftInserter.insert) return draftInserter.insert(text, replaces);
+/**
+ * The message box on the page, which knows where its cursor is. With none, the words go at the message's end; `stay`
+ * leaves focus where it is (a range handle stepped by ← or → keeps the keys).
+ */
+export const draftInserter: { insert?: (text: string, replaces?: string, stay?: boolean) => void } = {};
+export function insertInDraft(text: string, replaces?: string, stay?: boolean) {
+  if (draftInserter.insert) return draftInserter.insert(text, replaces, stay);
   const box = useUiStore.getState();
   box.setAgentDraft(spliceDraft(box.agentDraft, box.agentDraft.length, text, replaces).text);
 }

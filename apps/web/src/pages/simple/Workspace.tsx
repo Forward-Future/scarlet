@@ -3149,7 +3149,7 @@ export function Workspace({ beta = false }: { beta?: boolean }) {
     if (beta && marked) {
       const words = preciseRange(marked.start, marked.end);
       const wasWords = was?.markedRange ? preciseRange(was.markedRange.start, was.markedRange.end) : undefined;
-      if (words !== wasWords) insertInDraft(words, wasWords);
+      if (words !== wasWords) insertInDraft(words, wasWords, byKey);
     }
     // A handle stepped a frame by ← or → keeps the keys, so the next press steps it again.
     if (marked && !byKey) box.focusComposer();

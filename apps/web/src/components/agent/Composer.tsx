@@ -570,11 +570,11 @@ function ComposerBox({ project, thread, onCreated, onSent, selectedEdit, onClear
   const caretAfter = useRef<number>(undefined);
   useEffect(() => {
     if (rewording || !timesInWords) return;
-    const insert = (text: string, replaces?: string) => {
+    const insert = (text: string, replaces?: string, stay?: boolean) => {
       const field = inputRef.current, words = useUiStore.getState().agentDraft;
       const next = spliceDraft(words, field ? field.selectionStart ?? words.length : words.length, text, replaces);
       if (next.text === words) return;
-      if (text) caretAfter.current = next.caret;
+      if (text && !stay) caretAfter.current = next.caret;
       changeText(next.text);
     };
     draftInserter.insert = insert;
