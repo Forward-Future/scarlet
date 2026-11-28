@@ -8,6 +8,7 @@ import * as cutStream from "../../lib/cutStream";
 import { buildDb, PRJ } from "../../lib/mock/fixtures";
 import { usePlayerStore } from "../../stores/player";
 import { useProjectStore } from "../../stores/project";
+import { resetShortcutsStore, useShortcutsStore } from "../../stores/shortcuts";
 import { EditBeforePreview, type BeforePlayback, useEditBefore } from "./EditBeforePreview";
 
 const db = buildDb();
@@ -38,6 +39,8 @@ afterEach(async () => {
   container.remove();
   useProjectStore.setState(stores[0], true);
   usePlayerStore.setState(stores[1], true);
+  localStorage.clear();
+  resetShortcutsStore();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -190,4 +193,35 @@ it("plays from the point picked after the clip ran to its end, since the editor 
   expect([video.paused, held!.playing]).toEqual([true, true]);
   await act(async () => held!.carryOn());
   expect([video.paused, video.currentTime]).toEqual([false, 1]);
+});
+
+it("honors the J/K/L preset and a custom play/pause shortcut while previewing Before", async () => {
+  useShortcutsStore.getState().setPreset("jkl");
+  requestRender.mockResolvedValue({ ...db.renders[0]!, id: "rnd_before", kind: "segment", state: "done" });
+  await show(before({ timeline, range: { start: 2, end: 6 } }));
+  const video = container.querySelector("video")!;
+  const press = (key: string, code: string) => act(async () => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true }));
+  });
+  // K before the section is in keeps the clip from starting once its metadata arrives.
+  await press("k", "KeyK");
+  await sectionIn(4);
+  expect(video.paused).toBe(true);
+  // L plays it, K pauses it, and L plays it again.
+  await press("l", "KeyL");
+  expect(video.paused).toBe(false);
+  await press("k", "KeyK");
+  expect(video.paused).toBe(true);
+  await press("k", "KeyK");
+  expect(video.paused).toBe(true);
+  await press("l", "KeyL");
+  expect(video.paused).toBe(false);
+  await press("l", "KeyL");
+  expect(video.paused).toBe(false);
+  // A custom play/pause binding toggles the Before clip too.
+  useShortcutsStore.getState().setBinding("playPause", "P");
+  await press("p", "KeyP");
+  expect(video.paused).toBe(true);
+  await press("p", "KeyP");
+  expect(video.paused).toBe(false);
 });
