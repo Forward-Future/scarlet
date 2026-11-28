@@ -271,7 +271,7 @@ describe("what doesn't carry over", () => {
     tl.tracks.push(captions);
     const losses = handoffLosses(project, tl);
     expect(losses.map(l => l.what)).toEqual([
-      "How the captions look, and their word highlighting: they come in as plain text",
+      "How the captions look, and their word highlighting: the SubRip files carry plain text",
       "LUT on “Intro”",
       "Rounded corners on “cam.mov”",
     ]);
