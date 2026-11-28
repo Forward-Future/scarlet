@@ -25,6 +25,7 @@ it("gives each source, generated solid and subtitle file a distinct name in the 
       captions("first", "First caption"), captions("second", "Second\n  \ncaption"),
     ];
 
+    timeline.tracks[1]!.captionStyle = { color: "#ff000080", fontFamily: "Inter", y: 0.5, uppercase: true };
     const folder = join(root, "Transfer");
     const { files } = await buildHandoff(ctx, project, timeline, folder);
     const paths = files.map(file => file.path.toLowerCase());
@@ -36,8 +37,12 @@ it("gives each source, generated solid and subtitle file a distinct name in the 
     }
     const subtitleFiles = files.filter(file => file.path.endsWith(".srt"));
     expect(subtitleFiles).toMatchObject([{ text: expect.stringContaining("First caption") }, { text: expect.stringContaining("Second\ncaption") }]);
+    const styled = files.filter(file => file.path.endsWith(".ass"));
+    expect(styled).toHaveLength(1);
+    expect(styled[0]).toMatchObject({ text: expect.stringContaining("&H7F0000FF") });
+    expect(styled[0]).toMatchObject({ text: expect.stringContaining("{\\pos(32,32)}FIRST CAPTION") });
     const readme = files.find(file => file.path === "Read me.txt");
-    for (const file of subtitleFiles) expect(readme).toMatchObject({ text: expect.stringContaining(file.path) });
+    for (const file of [...subtitleFiles, ...styled]) expect(readme).toMatchObject({ text: expect.stringContaining(file.path) });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
