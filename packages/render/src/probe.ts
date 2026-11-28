@@ -130,6 +130,15 @@ export function parseRate(rate: string | undefined): number {
 export const storedAsShown = (probe: Pick<ProbeResult, "rotation" | "displayMatrix" | "isStillImage">) =>
   !probe.isStillImage && !probe.displayMatrix && Math.abs(probe.rotation) % 360 === 0;
 
+/** The video stream's sample aspect ratio as shown (what FFmpeg's `sar` is after autorotate): 1 when absent or unknown. A still asset renders with square pixels whatever this says (`setsar=1`). */
+export function sampleAspectRatio(probe: ProbeResult | undefined): number {
+  if (!probe) return 1;
+  const stream = (probe.raw as FfprobeOutput | undefined)?.streams?.find(s => s.codec_type === "video" && !s.disposition?.attached_pic);
+  const parsed = parseRate(stream?.sample_aspect_ratio?.replace(":", "/"));
+  const sar = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  return Math.abs(probe.rotation) % 180 === 90 ? 1 / sar : sar;
+}
+
 /** The unaltered source must carry the same picture and display properties as the compositor's square-pixel canvas. */
 export function matchesCanvasFormat(probe: ProbeResult): boolean {
   const stream = (probe.raw as FfprobeOutput | undefined)?.streams?.find(s => s.codec_type === "video");

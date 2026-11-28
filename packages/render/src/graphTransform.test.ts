@@ -83,6 +83,23 @@ describe("smooth animated transforms", () => {
     expect(stages.animate).toContain("scale=960:540:flags=bicubic");
   });
 
+  it("fits non-square pixels by their displayed shape on the perspective path", () => {
+    const tf = resolveTransform({
+      id: "dv",
+      keyframes: [
+        { time: 0, transform: { scale: 1 }, ease: "linear" },
+        { time: 2, transform: { scale: 1.05 }, ease: "linear" },
+      ],
+    }, () => {});
+    // 720x480 at SAR 8:9 shows 640x480, so on a 720x480 canvas it leaves bars and needs the transparent pad.
+    const narrow = smoothTransformStages(tf, 720, 480, { fps: 30, startTime: 0, source: { width: 720, height: 480, hasAlpha: false, sar: 8 / 9 } });
+    expect(narrow.prepare[0]).toBe("scale=w='max(2,trunc(iw*sar*min(720/(iw*sar),480/ih)/2+1e-9)*2)':h='max(2,trunc(ih*min(720/(iw*sar),480/ih)/2+1e-9)*2)':flags=bicubic");
+    expect(narrow.prepare.some((f) => f.startsWith("pad="))).toBe(true);
+    // 720x480 at SAR 32:27 shows 16:9, so it fills a 960x540 canvas and keeps the fast unpadded path.
+    const wide = smoothTransformStages(tf, 960, 540, { fps: 30, startTime: 0, source: { width: 720, height: 480, hasAlpha: false, sar: 32 / 27 } });
+    expect(wide.prepare.some((f) => f.startsWith("pad="))).toBe(false);
+  });
+
   it("uses premultiplied transparent padding when edges, alpha, portrait aspect, corners or rotation can show", () => {
     const cases: Array<{ name: string; clip: Parameters<typeof resolveTransform>[0]; source?: { width?: number; height?: number; hasAlpha?: boolean } }> = [
       {

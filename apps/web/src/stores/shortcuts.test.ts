@@ -6,6 +6,7 @@ import {
   formatBinding,
   matchesBinding,
   matchesShortcut,
+  matchesShortcutRelease,
   resetShortcutsStore,
   SHORTCUT_PRESETS,
   useShortcutsStore,
@@ -113,4 +114,32 @@ it("normalizes keyboard events including macOS Option+X and matches bindings acc
   expect(bindingTokens("Mod+Shift+L", false)).toEqual(["Ctrl", "Shift", "L"]);
   expect(formatBinding("Alt+X", true)).toBe("⌥ X");
   expect(formatBinding("Alt+X", false)).toBe("Alt+X");
+});
+
+it("handles shortcuts bound to + with and without modifiers", () => {
+  expect(eventToBinding({ key: "+", code: "Equal", metaKey: false, ctrlKey: false, altKey: false, shiftKey: true })).toBe("+");
+  expect(eventToBinding({ key: "+", code: "Equal", metaKey: true, ctrlKey: false, altKey: false, shiftKey: true })).toBe("Mod++");
+  expect(eventToBinding({ key: "+", code: "Equal", metaKey: false, ctrlKey: false, altKey: true, shiftKey: true })).toBe("Alt++");
+
+  expect(bindingTokens("+", true)).toEqual(["+"]);
+  expect(bindingTokens("Mod++", true)).toEqual(["⌘", "+"]);
+  expect(bindingTokens("Alt++", true)).toEqual(["⌥", "+"]);
+  expect(bindingTokens("Mod++", false)).toEqual(["Ctrl", "+"]);
+  expect(bindingTokens("Alt++", false)).toEqual(["Alt", "+"]);
+
+  expect(matchesBinding({ key: "+", code: "Equal", metaKey: false, ctrlKey: false, altKey: false, shiftKey: true }, "+")).toBe(true);
+  expect(matchesBinding({ key: "=", code: "Equal", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false }, "+")).toBe(false);
+  expect(matchesBinding({ key: "+", code: "Equal", metaKey: true, ctrlKey: false, altKey: false, shiftKey: true }, "Mod++")).toBe(true);
+  expect(matchesBinding({ key: "=", code: "Equal", metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, "Mod++")).toBe(false);
+  expect(matchesBinding({ key: "+", code: "Equal", metaKey: false, ctrlKey: false, altKey: false, shiftKey: true }, "Mod++")).toBe(false);
+  expect(matchesBinding({ key: "+", code: "Equal", metaKey: false, ctrlKey: false, altKey: true, shiftKey: true }, "Alt++")).toBe(true);
+  expect(matchesBinding({ key: "=", code: "Equal", metaKey: false, ctrlKey: false, altKey: true, shiftKey: false }, "Alt++")).toBe(false);
+
+  useShortcutsStore.getState().setBinding("voiceHold", "+");
+  expect(matchesShortcutRelease({ key: "+", code: "Equal", altKey: false }, "voiceHold")).toBe(true);
+  expect(matchesShortcutRelease({ key: "=", code: "Equal", altKey: false }, "voiceHold")).toBe(false);
+
+  useShortcutsStore.getState().setBinding("voiceHold", "Mod++");
+  expect(matchesShortcutRelease({ key: "+", code: "Equal", altKey: false }, "voiceHold")).toBe(true);
+  expect(matchesShortcutRelease({ key: "=", code: "Equal", altKey: false }, "voiceHold")).toBe(false);
 });

@@ -7,7 +7,7 @@ import type { Clip, MediaAsset, MediaClip, Timeline, TimeRange } from "@scarlet/
 import { effectKind } from "./effects.js";
 import { fnum } from "./exec.js";
 import { clipPlacement, type Placement } from "./graphTransform.js";
-import { hasIndexedAvc, matchesCanvasFormat, type ProbeResult } from "./probe.js";
+import { hasIndexedAvc, matchesCanvasFormat, sampleAspectRatio, type ProbeResult } from "./probe.js";
 import type { TransitionMotion } from "./transitions.js";
 
 export function hasIndexedClock(source: ProbeResult | undefined, fps: number | undefined): source is ProbeResult {
@@ -71,7 +71,7 @@ export async function adjacentPictureReads(
 function fittedSize(iw: number, ih: number, W: number, H: number, scale: number) {
   const fit = Math.min(W / iw, H / ih);
   const s = Number(fnum(scale));
-  return { w: Math.max(2, Math.trunc(iw * fit * s / 2) * 2), h: Math.max(2, Math.trunc(ih * fit * s / 2) * 2) };
+  return { w: Math.max(2, Math.trunc(iw * fit * s / 2 + 1e-9) * 2), h: Math.max(2, Math.trunc(ih * fit * s / 2 + 1e-9) * 2) };
 }
 
 /**
@@ -102,7 +102,9 @@ function coversCanvas(clip: Clip, p: Placement, media: Map<string, MediaAsset>, 
     if (picture?.videoStart === undefined || !picture.videoDuration || !asset.duration ||
         sourceStart < picture.videoStart - 1e-6 || sourceEnd > Math.min(asset.duration, picture.videoStart + picture.videoDuration) + 1e-6) return false;
   }
-  const { w, h } = fittedSize(asset.width, asset.height, W, H, tf.scale);
+  // A still renders with square pixels (`setsar=1`), as image viewers show it.
+  const sar = asset.kind === "image" ? 1 : sampleAspectRatio(picture);
+  const { w, h } = fittedSize(asset.width * sar, asset.height, W, H, tf.scale);
   return w >= W && h >= H;
 }
 
