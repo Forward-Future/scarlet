@@ -7,6 +7,8 @@ Add one line under today's date for each change an editor would notice. Leave ou
 ## November 27, 2026
 
 - Footage with non-square pixels, such as DV or HDV, now renders and exports at its true shape instead of squeezed or stretched.
+- While you preview Before, K and L from the Video editor (J/K/L) preset and a changed play key now work; next and previous edit keys set with ⌘ or ⌥ work on edit and call cards; and a shortcut set to + shows its key, and works with ⌘.
+- A style guide named in a skill or chat message is now used when its name is in bold, code or quotes, or has 's after it, instead of the default style guide.
 - Gemini can now read a style guide and bring in its sound effects instead of being refused.
 - Scarlet has a new app icon: an ink-painted moth in front of a red sun.
 - Keep, Revise, and Reject now look and animate the same across Needs review and Safe edits in both workspace layouts, including keeping timestamps, popping in a red ×, and lingering cleanly through refreshes before fading to Done or Working.
