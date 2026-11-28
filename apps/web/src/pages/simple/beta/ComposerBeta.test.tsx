@@ -152,3 +152,18 @@ it("always leaves dictated words in the box, after the draft and focused, and se
   });
   expect(createTask).toHaveBeenCalledWith(PRJ, expect.objectContaining({ instruction: "Make it punchy. Add a title at the start" }));
 });
+
+it("leaves focus where it is when a stretch's times change with stay, and still focuses the box without it", async () => {
+  useUiStore.setState({ agentDraft: "0:04 – 0:09 " });
+  await show();
+  const field = container.querySelector<HTMLTextAreaElement>(".composer-input textarea")!;
+  const handle = document.createElement("button");
+  container.append(handle);
+  handle.focus();
+  expect(document.activeElement).toBe(handle);
+  await act(async () => insertInDraft("0:04 – 0:10", "0:04 – 0:09", true));
+  expect([useUiStore.getState().agentDraft, document.activeElement === handle]).toEqual(["0:04 – 0:10 ", true]);
+  // Without stay, replacing a stretch still puts the cursor in the message box.
+  await act(async () => insertInDraft("0:04 – 0:11", "0:04 – 0:10"));
+  expect([useUiStore.getState().agentDraft, document.activeElement === field]).toEqual(["0:04 – 0:11 ", true]);
+});

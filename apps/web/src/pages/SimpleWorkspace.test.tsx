@@ -23,7 +23,7 @@ import { useShownCutStore } from "../stores/shownCut";
 import { useProjectStore, type ProjectData } from "../stores/project";
 import { resetShortcutsStore, useShortcutsStore } from "../stores/shortcuts";
 import { useSkillsStore } from "../stores/skills";
-import { useUiStore, type AgentContext } from "../stores/ui";
+import { draftInserter, useUiStore, type AgentContext } from "../stores/ui";
 import { SimpleWorkspace } from "./SimpleWorkspace";
 import { cutOnWorkingCut, keepGoesTo } from "../lib/passCalls";
 import { cutAudition } from "../lib/cutAudition";
@@ -16320,5 +16320,29 @@ it("leaves the times a marked stretch wrote into the message when the stretch is
     await act(async () => { container.querySelector<HTMLButtonElement>(".timeline-range-clear")!.click(); });
     expect(marked()).toBeUndefined();
     expect(useUiStore.getState().agentDraft).toBe(written);
+  });
+});
+
+it("tells the message box to leave focus where it is when ← or → steps a marked stretch's end, not when a drag marks it", async () => {
+  await inNewLayout(async () => {
+    idle();
+    await show();
+    const wasInsert = draftInserter.insert;
+    const insert = vi.fn();
+    draftInserter.insert = insert;
+    try {
+      await markOnRuler(4, 10);
+      expect(insert).toHaveBeenCalledTimes(1);
+      expect([insert.mock.calls[0]![0], insert.mock.calls[0]![1], !!insert.mock.calls[0]![2]]).toEqual(["0:04 – 0:10", undefined, false]);
+      const handle = container.querySelector<HTMLButtonElement>(".timeline-range-handle.is-end")!;
+      handle.focus();
+      for (let i = 0; i < 60 && insert.mock.calls.length === 1; i++) {
+        await act(async () => { handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })); });
+      }
+      expect(insert).toHaveBeenCalledTimes(2);
+      expect(insert).toHaveBeenLastCalledWith("0:04 – 0:11", "0:04 – 0:10", true);
+    } finally {
+      draftInserter.insert = wasInsert;
+    }
   });
 });
