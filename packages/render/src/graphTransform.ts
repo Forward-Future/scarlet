@@ -287,7 +287,8 @@ export interface SmoothTransformContext {
   fps: number;
   /** Clip-local time in seconds at `perspective`'s first frame (`on = 1`). */
   startTime: number;
-  source?: { width?: number; height?: number; hasAlpha?: boolean };
+  /** Stored size, alpha and sample aspect ratio (`sampleAspectRatio`; 1 when absent). */
+  source?: { width?: number; height?: number; hasAlpha?: boolean; sar?: number };
 }
 
 export interface SmoothTransformStages {
@@ -322,7 +323,8 @@ export function smoothTransformStages(
   }
   const croppedSource = ctx.source?.width && ctx.source?.height
     ? {
-      width: Math.max(1, Math.trunc(ctx.source.width * (hasCrop ? cropW : 1))),
+      // Displayed width, as the fit below sees it.
+      width: Math.max(1, Math.trunc(ctx.source.width * (hasCrop ? cropW : 1))) * (ctx.source.sar ?? 1),
       height: Math.max(1, Math.trunc(ctx.source.height * (hasCrop ? cropH : 1))),
     }
     : undefined;
@@ -340,8 +342,8 @@ export function smoothTransformStages(
     croppedSource
   ) {
     const fitP = Math.min(Wp / croppedSource.width, Hp / croppedSource.height);
-    const fittedW = Math.max(2, Math.trunc(croppedSource.width * fitP / 2) * 2);
-    const fittedH = Math.max(2, Math.trunc(croppedSource.height * fitP / 2) * 2);
+    const fittedW = Math.max(2, Math.trunc(croppedSource.width * fitP / 2 + 1e-9) * 2);
+    const fittedH = Math.max(2, Math.trunc(croppedSource.height * fitP / 2 + 1e-9) * 2);
     if (fittedW === Wp && fittedH === Hp) {
       const fwFrac = (croppedSource.width * fitP) / Wp;
       const fhFrac = (croppedSource.height * fitP) / Hp;
@@ -353,10 +355,11 @@ export function smoothTransformStages(
     }
   }
 
-  const fit = `min(${Wp}/iw,${Hp}/ih)`;
+  // Contain-fit uses the displayed width (iw*sar) so non-square pixels keep their true shape.
+  const fit = `min(${Wp}/(iw*sar),${Hp}/ih)`;
   const sRelStr = sRel === 1 ? "" : `*${fnum(sRel)}`;
   prepare.push(
-    `scale=w='max(2,trunc(iw*${fit}${sRelStr}/2)*2)':h='max(2,trunc(ih*${fit}${sRelStr}/2)*2)':flags=bicubic`,
+    `scale=w='max(2,trunc(iw*sar*${fit}${sRelStr}/2+1e-9)*2)':h='max(2,trunc(ih*${fit}${sRelStr}/2+1e-9)*2)':flags=bicubic`,
   );
 
   const B = opaqueFullCanvas ? 0 : 2;
@@ -434,12 +437,13 @@ export function transformChain(tf: AnimatedTransform, W: number, H: number, roun
       `crop=w='trunc(iw*${fnum(w)})':h='trunc(ih*${fnum(h)})':x='trunc(iw*${fnum(base.cropLeft)})':y='trunc(ih*${fnum(base.cropTop)})'`,
     );
   }
-  const fit = `min(${W}/iw,${H}/ih)`;
+  // Contain-fit uses the displayed width (iw*sar) so non-square pixels keep their true shape.
+  const fit = `min(${W}/(iw*sar),${H}/ih)`;
   // In scale expressions `t` is the input frame's timestamp (clip-local after setpts).
   const s = tf.scale ? `(${tf.scale.replaceAll(T, "t")})` : fnum(base.scale);
   const eval_ = tf.scale ? ":eval=frame" : "";
   chain.push(
-    `scale=w='max(2,trunc(iw*${fit}*${s}/2)*2)':h='max(2,trunc(ih*${fit}*${s}/2)*2)'${eval_}:flags=bicubic`,
+    `scale=w='max(2,trunc(iw*sar*${fit}*${s}/2+1e-9)*2)':h='max(2,trunc(ih*${fit}*${s}/2+1e-9)*2)'${eval_}:flags=bicubic`,
   );
   chain.push("format=yuva420p");
   if (base.cornerRadius) {
