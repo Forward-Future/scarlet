@@ -211,4 +211,41 @@ describe("TimelineWaveform", () => {
     expect(loading).not.toHaveBeenCalledWith(true);
     expect(api.waveform).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps its bar count when resized while hidden in full screen and re-measures on a visible resize", async () => {
+    let width = 240;
+    let onResize = () => {};
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private cb: () => void) {}
+      observe() { onResize = this.cb; }
+      disconnect() {}
+    });
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(() => width);
+    const resize = (next: number) => act(async () => { width = next; onResize(); });
+
+    const timeline = timelineOf("wave_hidden_resize");
+    await act(async () => root.render(createElement(TimelineWaveform, { timeline, media: [asset("wave_hidden_resize")], start: 0, duration: 20 })));
+
+    const barCount = () => container.querySelector(".timeline-waveform line")?.getAttribute("x2");
+    const initialPath = drawn();
+    expect(initialPath).toBeTruthy();
+    expect(barCount()).toBe("100");
+
+    // Entering full screen hides the lane and widens it to the full window.
+    container.style.visibility = "hidden";
+    await resize(1440);
+    expect(barCount()).toBe("100");
+    expect(drawn()).toBe(initialPath);
+
+    // Leaving full screen restores visibility at the original width with no redraw.
+    container.style.visibility = "";
+    await resize(240);
+    expect(barCount()).toBe("100");
+    expect(drawn()).toBe(initialPath);
+
+    // A visible width change still re-measures and rebuilds the bars.
+    await resize(480);
+    expect(barCount()).toBe("200");
+    expect(drawn()).not.toBe(initialPath);
+  });
 });

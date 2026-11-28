@@ -69,10 +69,13 @@ const Filmstrip = memo(function Filmstrip({ start, duration, pictureAspect, fram
   useLayoutEffect(() => {
     const el = strip.current!;
     const measure = () => {
+      const hidden = getComputedStyle(el).visibility === "hidden";
       const width = el.clientWidth;
       const frameWidth = el.clientHeight * pictureAspect;
       // Even very narrow formats get a legible thumbnail.
-      setCount(width && frameWidth ? Math.max(1, Math.round(width / Math.max(24, frameWidth))) : 0);
+      const next = width && frameWidth ? Math.max(1, Math.round(width / Math.max(24, frameWidth))) : 0;
+      // Full screen hides the widened lane; keep its stills until it is visible again.
+      setCount(current => current && hidden ? current : next);
     };
     measure();
     // Wait for panel resizing to settle before requesting a new set of stills.
