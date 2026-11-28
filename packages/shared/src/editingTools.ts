@@ -20,8 +20,8 @@ export const EDITING_TOOL_GROUPS = [
     tools: ["media_frame", "frame_contact_sheet", "frame_contact_sheet_batch", "screen_area"] },
   { title: "Edit comparison", description: "Listen to source audio, or have a model that hears listen for one that can't, and compare both sides of a suggested edit.",
     tools: ["change_review_cut", "source_audio", "listen"] },
-  { title: "Caption generation", description: "Build a caption track from the transcript.",
-    tools: ["captions_generate"] },
+  { title: "Caption generation", description: "Build captions from the transcript or import timed SubRip text.",
+    tools: ["captions_generate", "captions_import_srt"] },
   { title: "Asset import and timeline export", description: "Bring in new assets and export a timeline to another editor.",
     tools: ["asset_add", "export_otio"] },
 ] as const satisfies ReadonlyArray<{ title: string; description: string; tools: readonly string[] }>;

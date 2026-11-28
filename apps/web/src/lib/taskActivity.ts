@@ -42,6 +42,7 @@ const toolActivity: Record<string, string> = {
   timeline_framing: "Framing the picture",
   screen_area: "Marking what viewers may see",
   timeline_first_cut: "Building the first version of the video",
+  captions_import_srt: "Importing timed captions",
   captions_generate: "Generating captions",
   change_get: "Looking over the change",
   change_list: "Looking through your edits",

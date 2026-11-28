@@ -1816,6 +1816,25 @@ describe("timeline_at and captions_generate", () => {
     expect(add.track!.clips[0]!.words.length).toBeGreaterThan(0);
   });
 
+  it("imports supplied SubRip as a separate track in one proposal", async () => {
+    const original = mock.state.timeline;
+    const args = { intent: "requested", trackName: "French", reason: "The editor supplied a timed translation." };
+    try {
+      const before = mock.requests.length;
+      const invalid = await client.callTool({ name: "captions_import_srt", arguments: { ...args, srt: "invalid" } }) as CallToolResult;
+      expect(invalid.isError).toBe(true);
+      expect(mock.requests.slice(before).some(r => r.method === "POST" && r.path.endsWith("/changes"))).toBe(false);
+      const result = await client.callTool({ name: "captions_import_srt", arguments: {
+        ...args, srt: "1\n00:00:00,250 --> 00:00:01,500\nBonjour",
+      } }) as CallToolResult;
+      expect(result.isError, textOf(result)).toBeFalsy();
+      const post = mock.requests.slice(before).find(r => r.method === "POST" && r.path.endsWith("/changes"));
+      expect(post?.body).toMatchObject({ fromVersion: original!.version, ops: [{ op: "addTrack", track: {
+        name: "French", kind: "caption", clips: [{ timelineIn: 0.25, timelineOut: 1.5, text: "Bonjour" }],
+      } }] });
+    } finally { mock.state.timeline = original; }
+  });
+
   it("prepares source speech when captioning a cut without cached transcripts", async () => {
     const timeline = mock.state.timeline;
     delete mock.state.transcripts.m1;
