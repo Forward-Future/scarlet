@@ -173,7 +173,7 @@ export function handoffLosses(project: Project, timeline: Timeline, sources?: Ma
   if (captionTracks(timeline).length) {
     const styled = timeline.captionStyle || timeline.tracks.some(t => t.kind === "caption" && (t.captionStyle ||
       t.clips.some(c => c.kind === "caption" && (c.style || c.words?.length))));
-    losses.push({ what: `How the captions look${styled ? ", and their word highlighting" : ""}: they come in as plain text` });
+    losses.push({ what: `How the captions look${styled ? ", and their word highlighting" : ""}: the SubRip files carry plain text` });
   }
   for (const asset of usedMedia(project, timeline)) {
     const streams = sources?.get(asset.id)?.audioStreams ?? 0;
@@ -204,6 +204,7 @@ export interface ReadMeInput {
   projectName: string;
   timelineFiles: { fcpxml: string; otio: string };
   captionFiles: string[];
+  styledFiles?: string[];
   losses: HandoffLoss[];
   warnings: string[];
 }
@@ -230,6 +231,8 @@ export function handoffReadMe(input: ReadMeInput): string {
     "The footage is in the Media folder. If you move this folder and an app can't find a clip, relink it to the Media folder: the files keep their names.",
   ];
   if (input.captionFiles.length) lines.push("", `Captions: ${input.captionFiles.join(", ")}`);
+  if (input.styledFiles?.length) lines.push("", "Styled subtitles (.ass)",
+    ...input.styledFiles, "Open these in a subtitle editor such as Aegisub to keep caption fonts, colours and positions. Install the same fonts on the receiving machine. Word-by-word highlighting is omitted.");
   if (input.warnings.length) lines.push("", "Check", ...input.warnings.map(w => `  ${w}`));
   if (input.losses.length) {
     lines.push("", "What doesn't carry over", ...input.losses.map(l => `  ${l.at !== undefined ? `${clock(l.at)}  ` : ""}${l.what}`));

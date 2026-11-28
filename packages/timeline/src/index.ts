@@ -30,3 +30,4 @@ export * from "./handoff.js";
 export * from "./fcpxml.js";
 export * from "./splitJoin.js";
 export * from "./multicam.js";
+export * from "./ass.js";

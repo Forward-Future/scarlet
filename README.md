@@ -90,7 +90,7 @@ Write your own in **Settings → Tools & skills**, or turn an edit you liked int
 
 - **MP4** of the whole cut or a range, in Compressed, High (hardware-accelerated) or Original quality.
 - **Captions** as `.srt` or `.vtt`.
-- **Finish in Resolve, Final Cut or Premiere.** A handoff folder with `.fcpxml`, `.otio`, the footage it uses, captions and a plain-English Read me.
+- **Finish in Resolve, Final Cut or Premiere.** A handoff folder with `.fcpxml`, `.otio`, the footage it uses, captions and a plain-English Read me. Styled caption tracks also include an editable Advanced SubStation Alpha (`.ass`) file alongside their plain SubRip text.
 - **Publish to YouTube** as a private draft, with chapters from the final cut. Connect your channel in **Settings → General**.
 
 ## Your first edit

@@ -21,6 +21,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "color-name": "2.0.0",
     "zod": "4.6.6"
+  },
+  "devDependencies": {
+    "@types/color-name": "^2.0.0"
   }
 }
