@@ -18,6 +18,7 @@ import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
 import { ariaKeyShortcut, matchesShortcut, shortKeyLabel, useShortcutsStore } from "../../stores/shortcuts";
 import { useKeepSelectedInView } from "../../lib/uiHooks";
 import { useAgentAvailability } from "../agent/AgentChip";
+import { inFullScreen } from "../../pages/simple/types";
 import type { AgentContext } from "../../stores/ui";
 
 /** What Scarlet is asked to do when the editor rejects an edit the engine can't put back itself. One × is one edit. */
@@ -85,7 +86,7 @@ export function RejectEdit({ projectId, thread, target, edits, editsOn, titleOve
   const rejectLabel = shortKeyLabel(rejectBinding);
   // Reject shortcut (X by default), as on a call: the same key on every card.
   useHotkeys(event => {
-    if (busy || event.repeat || !matchesShortcut(event, "reject")) return;
+    if (busy || event.repeat || !matchesShortcut(event, "reject") || inFullScreen()) return;
     event.preventDefault();
     void reject();
   });
@@ -146,7 +147,7 @@ export function AddTodo({ projectId, thread, target, ask, onPress, onSent, onFai
     }
   }
   useHotkeys(event => {
-    if (busy || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "a") return;
+    if (busy || event.repeat || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== "a" || inFullScreen()) return;
     event.preventDefault();
     void add();
   });

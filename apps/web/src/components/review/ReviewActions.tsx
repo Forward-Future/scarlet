@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { blurOnPointerClick, useHotkeys } from "../../lib/hotkeys";
+import { inFullScreen } from "../../pages/simple/types";
 import { ariaKeyShortcut, matchesBinding, shortKeyLabel, useShortcutsStore } from "../../stores/shortcuts";
 
 /**
@@ -19,8 +20,9 @@ export function ReviewActions({ lead, approve, revise, disabled, approvalDisable
   const shownRevise = shortKeyLabel(effectiveRevise);
   useHotkeys(event => {
     if (disabled || event.repeat) return;
+    // Full screen hides the card, so only Revise (which leaves full screen for the message box) acts there.
     const action = matchesBinding(event, effectiveRevise) ? revise
-      : matchesBinding(event, effectiveApprove) && !approvalDisabled ? approve : undefined;
+      : !approvalDisabled && matchesBinding(event, effectiveApprove) && !inFullScreen() ? approve : undefined;
     if (action) { event.preventDefault(); action(); }
   });
   return <div className="review-actions">
