@@ -14222,7 +14222,7 @@ it("leaves full screen when Revise hands the keyboard to the message box, which 
   const stage = container.querySelector<HTMLElement>(".cut-preview")!;
   await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
   expect(stage.dataset.expanded).toBe("true");
-  // The card's keys still work while full screen hides it. R aims the box at the edit and puts the caret in it.
+  // Revise still works while full screen hides the card. R aims the box at the edit and puts the caret in it.
   useUiStore.setState({ composerFocus: 0 });
   await press("r");
   expect(useUiStore.getState().composerFocus).toBe(1);
@@ -14255,6 +14255,122 @@ it("leaves full screen when holding V starts talking to the message box", async 
   } finally {
     await act(async () => useUiStore.getState().setVoiceHold(false));
   }
+});
+
+it("ignores hidden edit card and undo keys in full screen while keeping Before/After working", async () => {
+  appliedEdits();
+  const rejectEdits = vi.fn(async () => "ver_back");
+  const createTask = vi.fn(async () => ({ id: "task_x" }));
+  useProjectStore.setState({ createTask: createTask as never, rejectEdits: rejectEdits as never });
+  const unkeep = vi.spyOn(api, "unkeepEdits").mockResolvedValue(undefined);
+  await show();
+  await click(rowNamedIn(turnFor("chg_approved_2"), "music bed"));
+  await act(async () => {});
+  // One Keep before full screen so ⌘Z has a step on the undo stack.
+  await press("k");
+  await act(async () => {});
+  const reviews = () => vi.mocked(api.recordEditReview).mock.calls.length;
+  const keptBefore = reviews();
+  const open = openTitle();
+  const stepsBefore = useUndoStore.getState().steps.length;
+  expect(stepsBefore).toBeGreaterThan(0);
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
+  expect(stage.dataset.expanded).toBe("true");
+
+  await press("ArrowUp");
+  expect(openTitle()).toBe(open);
+  await press("ArrowDown");
+  expect(openTitle()).toBe(open);
+
+  await press("k");
+  await act(async () => {});
+  expect(reviews()).toBe(keptBefore);
+  expect(openTitle()).toBe(open);
+
+  await press("x");
+  await act(async () => {});
+  expect(rejectEdits).not.toHaveBeenCalled();
+  expect(createTask).not.toHaveBeenCalled();
+
+  const undoEvent = new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true });
+  await act(async () => { window.dispatchEvent(undoEvent); });
+  await act(async () => {});
+  expect(undoEvent.defaultPrevented).toBe(false);
+  expect(useUndoStore.getState().steps.length).toBe(stepsBefore);
+  expect(unkeep).not.toHaveBeenCalled();
+
+  // Before/After still switches sides in full screen because its label shows on the monitor.
+  const sideBefore = sideShown();
+  await press("\\");
+  expect(sideShown()).not.toBe(sideBefore);
+  expect(stage.dataset.expanded).toBe("true");
+
+  // Leaving full screen brings Keep back.
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Exit full screen"]')!);
+  expect(stage.dataset.expanded).toBeUndefined();
+  await press("k");
+  await act(async () => {});
+  expect(reviews()).toBeGreaterThan(keptBefore);
+});
+
+it("keeps a marked stretch through Delete, Backspace and Alt+X while full screen hides the timeline", async () => {
+  idle();
+  await show();
+  await markOnRuler(11, 16);
+  const marked = () => (useUiStore.getState().agentContext as AgentContext | null)?.markedRange;
+  expect(marked()).toBeDefined();
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
+  expect(stage.dataset.expanded).toBe("true");
+
+  await press("Delete");
+  expect(marked()).toBeDefined();
+  await press("Backspace");
+  expect(marked()).toBeDefined();
+  await act(async () => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "x", code: "KeyX", altKey: true, bubbles: true, cancelable: true }));
+  });
+  expect(marked()).toBeDefined();
+  expect(stage.dataset.expanded).toBe("true");
+
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Exit full screen"]')!);
+  expect(stage.dataset.expanded).toBeUndefined();
+  await press("Delete");
+  expect(marked()).toBeUndefined();
+});
+
+it("ignores hidden call card Keep, Reject edit and arrow stepping while full screen is on", async () => {
+  const save = flagged();
+  const approve = vi.fn().mockResolvedValue({ outcome: "applied" });
+  useProjectStore.setState({ current: data, approve });
+  await show();
+  await act(async () => {});
+  await press("ArrowDown");
+  expect(call()).not.toBeNull();
+  const callTitle = () => call().querySelector(".edit-card-title")?.textContent;
+  const firstCall = callTitle();
+  const stage = container.querySelector<HTMLElement>(".cut-preview")!;
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Full screen"]')!);
+  expect(stage.dataset.expanded).toBe("true");
+
+  await press("ArrowDown");
+  expect(callTitle()).toBe(firstCall);
+
+  await press("k");
+  await act(async () => {});
+  await press("x");
+  await act(async () => {});
+  expect(save).not.toHaveBeenCalled();
+  expect(approve).not.toHaveBeenCalled();
+  expect(callTitle()).toBe(firstCall);
+  expect(stage.dataset.expanded).toBe("true");
+
+  await click(container.querySelector<HTMLButtonElement>('.monitor-controls [aria-label="Exit full screen"]')!);
+  expect(stage.dataset.expanded).toBeUndefined();
+  await press("k");
+  await act(async () => {});
+  expect(save).toHaveBeenCalledTimes(1);
 });
 
 it("takes a clip that's already showing back to its start, and plays it, when it is played from Media again", async () => {

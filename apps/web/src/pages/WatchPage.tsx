@@ -37,6 +37,7 @@ import type { CutPlaybackWindow, PreparedCut } from "../components/review/usePre
 import { FramingPreview } from "../components/review/FramingPreview";
 import { useNotePositions } from "../lib/useNotePositions";
 import type { ProgressFocus } from "../components/player/SimpleProgress";
+import { inFullScreen } from "./simple/types";
 import { editFocus } from "../lib/editKind";
 import { editPlaybackRange } from "../lib/editPlaybackRange";
 import { momentRange } from "../lib/editMoments";
@@ -522,7 +523,7 @@ export function CutPreview({ threadView, workingCache, draftVersion, draft, draf
 
   useHotkeys((e) => {
     if (!active || useUiStore.getState().notePopover) return;
-    if (cutReview && handleCutArrow(e, stepCut)) return;
+    if (cutReview && !inFullScreen() && handleCutArrow(e, stepCut)) return;
     if (matchesShortcut(e, "playPause")) {
       if (playingBefore) return;
       e.preventDefault();

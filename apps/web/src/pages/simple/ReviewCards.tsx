@@ -21,7 +21,7 @@ import { isRecheck, type Thread } from "../../lib/threads";
 import { useClippedExpand } from "../../lib/uiHooks";
 import { useUndoStore } from "../../lib/undo";
 import type { AgentContext } from "../../stores/ui";
-import { approves, checkSpan, letGo, type Listening, type Side } from "./types";
+import { approves, checkSpan, inFullScreen, letGo, type Listening, type Side } from "./types";
 
 /**
  * Scarlet's note in the card's row: up to two lines, and a longer note opens in full on a click and folds again on the
@@ -73,7 +73,8 @@ function CallActions({ choice, proposes = "cut", disabled, decide, revise }: { c
     if (disabled || event.repeat) return;
     if (matchesShortcut(event, "revise")) { event.preventDefault(); revise(); return; }
     const chosen = matchesShortcut(event, "keep") ? proposes : matchesShortcut(event, "reject") ? skips : undefined;
-    if (chosen) { event.preventDefault(); decide(chosen); }
+    // Full screen hides the call's card, so Keep and Reject edit do not decide unseen.
+    if (chosen && !inFullScreen()) { event.preventDefault(); decide(chosen); }
   });
   // The decisions stay on the card for the next call. Clicked, one lets go of the focus (WebView2 leaves it there), or
   // Space would press it again on the next call while the video is paused. Pressed by keyboard, it keeps it.
@@ -198,7 +199,7 @@ export function AppliedEditCard({ projectId, focusThread, reviewingEdit, editPla
 }) {
   const inBatch = !!batch && batch.count > 1;
   useHotkeys(event => {
-    if (!workspaceActive || !inBatch || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (!workspaceActive || !inBatch || inFullScreen() || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
     if (event.key === "[" && batch.index > 0) { event.preventDefault(); batch.onPrev(); }
     else if (event.key === "]" && batch.index < batch.count - 1) { event.preventDefault(); batch.onNext(); }
   });

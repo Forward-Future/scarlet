@@ -296,6 +296,8 @@ export function useUndoShortcut(workspaceActive: boolean, projectId: string, und
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key.toLowerCase() !== "z" || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.defaultPrevented) return;
+      // Full screen hides the edits column and timeline, so ⌘Z does not take a step back unseen.
+      if (inFullScreen()) return;
       // Words being written keep their own ⌘Z. The message box, once empty, leaves it here when it had no tag to put back.
       const box = e.target instanceof HTMLTextAreaElement && e.target.closest(".composer-box") && !e.target.value && !emptiedByHand.has(e.target);
       if (isEditableTarget(e.target) && !box) return;
@@ -320,7 +322,9 @@ export function useUndoShortcut(workspaceActive: boolean, projectId: string, und
 /** Previous/next edit step when the key is allowed on an open card, including modified bindings like ⌥↓ or ⌘↓. */
 function cardEditStep(e: KeyboardEvent): -1 | 0 | 1 {
   const step = matchesShortcut(e, "nextEdit") ? 1 : matchesShortcut(e, "prevEdit") ? -1 : 0;
-  if (!step || !ignorePageShortcut(e)) return step;
+  // Full screen hides the card and timeline, so stepping between edits does not move them unseen.
+  if (!step || inFullScreen()) return 0;
+  if (!ignorePageShortcut(e)) return step;
   if (e.defaultPrevented || isEditableTarget(e.target) || !(e.metaKey || e.ctrlKey || e.altKey)) return 0;
   if (document.querySelector('dialog[open], [role="dialog"], [role="menu"], [data-shortcut-overlay]')) return 0;
   return step;
@@ -425,7 +429,7 @@ export function useOutsideClearMarkedRange(hasMarkedRange: boolean, onClear: () 
       const erase = plain && !e.shiftKey && (e.key === "Delete" || e.key === "Backspace");
       const clearInOut = matchesClearRangeKey(e);
       if (!escape && !erase && !clearInOut) return;
-      if ((escape && inFullScreen()) || marksTakeEscape(e)) return;
+      if (inFullScreen() || marksTakeEscape(e)) return;
       e.preventDefault();
       appLog("timeline", "range-cleared", { via: "key", key: clearInOut ? "alt+x" : e.key });
       clearRef.current();
