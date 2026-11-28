@@ -15,6 +15,15 @@ export const ASPECT_PRESETS: Record<string, { width: number; height: number }> =
   "4:5": { width: 1080, height: 1350 },
 };
 
+/** Dimensions for an aspect preset scaled to keep the project's resolution class (at least 1080 on the short side). */
+export function aspectSize(aspect: string | undefined, current: { width: number; height: number }): { width: number; height: number } | undefined {
+  const preset = aspect && Object.hasOwn(ASPECT_PRESETS, aspect) ? ASPECT_PRESETS[aspect] : undefined;
+  if (!preset) return undefined;
+  const k = Math.max(1, Math.min(current.width, current.height) / 1080);
+  const even = (v: number) => Math.round((v * k) / 2) * 2;
+  return { width: even(preset.width), height: even(preset.height) };
+}
+
 /** Display size and clock of a video that can supply the project format. */
 export function videoFormat({ kind, width, height, fps }: MediaAsset): Partial<ProjectSettings> | undefined {
   if (kind !== "video" || !width || !height) return;
